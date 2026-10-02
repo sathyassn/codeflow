@@ -37,8 +37,21 @@ pub struct TestArgs {
     pub since: Option<String>,
 
     /// Run every target, including the binary determinism check at epic close.
+    /// With `--only`, the named targets keep that full-strength check.
     #[arg(long)]
     pub all: bool,
+
+    /// Run only these targets and their prerequisites, comma separated or
+    /// repeated, to split one gate across parallel CI jobs. A limited run
+    /// is never recorded as complete evidence, and an unknown name is
+    /// refused before any target starts.
+    #[arg(
+        long,
+        value_name = "TARGET",
+        value_delimiter = ',',
+        conflicts_with = "since"
+    )]
+    pub only: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -92,6 +105,7 @@ pub fn run(args: &TestArgs) -> i32 {
         &GateOptions {
             since: args.since.clone(),
             all: args.all,
+            only: args.only.clone(),
         },
     ) {
         Ok(GateOutcome::NoTargets { reason }) => {

@@ -13,20 +13,42 @@ def read(path):
 class GateContracts(unittest.TestCase):
     def test_publication_requires_the_five_existing_floors(self):
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        self.assertEqual(set(checks), {'codeflow gates', 'windows (build + test + clippy)', 'secret scan', 'security review', 'release state'})
+        self.assertEqual(set(checks), {'codeflow gates', 'windows', 'secret scan', 'security review', 'release state'})
         self.assertEqual(len(checks), 5)
 
-    def test_windows_job_is_a_gate(self):
-        # 3.0.1 restores native Windows (TSK-197): a Windows failure fails
-        # the workflow run, and publication requires the job by its name.
+    def test_windows_jobs_are_a_gate_behind_one_verdict(self):
+        # Native Windows is a release target (TSK-197). TSK-203 splits the
+        # referee into test partitions, the other checks and the journey gate
+        # over every partition's results; none of them may forgive a failure,
+        # and one `windows` verdict, never skipped, passes only when all three
+        # succeeded. Publication requires that verdict by its name.
         workflow = read('.github/workflows/codeflow-ci.yml')
-        job = re.split(r'\n  [A-Za-z0-9_-]+:\n', workflow.split('\n  windows:\n', 1)[1], maxsplit=1)[0]
-        self.assertIn('journey-gate.py', job)
-        self.assertIn('runs-on: windows-latest', job)
-        self.assertNotIn('continue-on-error', job)
-        name = job.split('name: ', 1)[1].split('\n', 1)[0]
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
+        self.assertEqual(set(windows), {'windows', 'windows-tests', 'windows-journeys', 'windows-verdict'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        self.assertIn(name, checks)
+        for key in ('windows', 'windows-tests', 'windows-journeys'):
+            with self.subTest(job=key):
+                job = windows[key]
+                self.assertIn('runs-on: windows-latest', job)
+                self.assertNotIn('continue-on-error', job)
+                name = job.split('name: ', 1)[1].split('\n', 1)[0]
+                self.assertNotIn('advisory', name)
+                self.assertNotIn(name, checks)
+        self.assertIn('journey-gate.py --results target/nextest/partitions', windows['windows-journeys'])
+        self.assertIn('needs: windows-tests', windows['windows-journeys'])
+        self.assertIn('pattern: windows-junit-*', windows['windows-journeys'])
+        self.assertIn('name: windows-junit-${{ matrix.partition }}', windows['windows-tests'])
+        verdict = windows['windows-verdict']
+        self.assertTrue(verdict.startswith('    if: always() && ('), verdict)
+        self.assertIn('    name: windows\n', verdict)
+        self.assertIn('    needs: [windows, windows-tests, windows-journeys]\n', verdict)
+        self.assertNotIn('continue-on-error', verdict)
+        for result in ('needs.windows.result', 'needs.windows-tests.result', 'needs.windows-journeys.result'):
+            self.assertIn(result, verdict)
+        self.assertIn('[ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ]', verdict)
+        self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_one_target_source_build_judges_policy_and_registry_without_cancellation(self):
         workflow = read('.github/workflows/codeflow-policy.yml')

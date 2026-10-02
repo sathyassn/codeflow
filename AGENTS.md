@@ -12,7 +12,7 @@ This file is the canonical instruction set for any agent or human working in thi
 repo. The block between the codeflow markers below is maintained by
 `codeflow update`; everything outside it is project-owned — extend freely.
 
-<!-- codeflow:managed:begin scaffold=3.0.1 -->
+<!-- codeflow:managed:begin scaffold=3.1.0 -->
 <!-- Owned by `codeflow update`; project text goes below the end marker. -->
 
 ## How to use this map

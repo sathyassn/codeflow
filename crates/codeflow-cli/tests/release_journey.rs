@@ -17,14 +17,19 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-/// The published version the adopted project starts from: the built
-/// binary's own, so the scaffold stamps `init` writes agree with it.
+/// The published baseline the adopted fixture records: the version of the
+/// binary under test, whose `init` stamps the scaffold with it.
 const BASE: &str = env!("CARGO_PKG_VERSION");
 
-/// The patch release after [`BASE`].
-fn next_patch() -> String {
-    let (head, patch) = BASE.rsplit_once('.').unwrap();
-    format!("{head}.{}", patch.parse::<u64>().unwrap() + 1)
+/// The patch release the journey prepares on top of the baseline.
+fn next() -> String {
+    let mut parts = BASE.split('.').map(|part| part.parse::<u64>().unwrap());
+    let (major, minor, patch) = (
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+        parts.next().unwrap(),
+    );
+    format!("{major}.{minor}.{}", patch + 1)
 }
 
 fn workspace() -> PathBuf {
@@ -305,15 +310,16 @@ impl Adopted {
             &format!("{}\n", serde_json::to_string_pretty(&config).unwrap()),
         );
         landed(&root, "chore: adopt the release calculator");
-        let host = serde_json::json!({
+        let mut host = serde_json::json!({
             "schema_version": 1,
             "drafts_visible": false,
-            "tags": {format!("v{BASE}"): baseline},
+            "tags": {},
             "releases": [{
                 "tag": format!("v{BASE}"), "draft": false, "prerelease": false, "target": baseline,
                 "body": "", "assets": [{"name": "source.tar.gz", "digest": format!("sha256:{}", "a".repeat(64))}],
             }],
         });
+        host["tags"][format!("v{BASE}").as_str()] = baseline.clone().into();
         write(
             &root,
             ".git/host.json",
@@ -451,16 +457,14 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     // A labelled pending entry with its stamps: no warning, and the pull
     // request job accepts it.
     git(root, &["switch", "-q", "feat/tool"]);
-    let next = next_patch();
     let changelog = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let next = next();
     write(
         root,
         "CHANGELOG.md",
         &changelog.replace(
             &format!("## [{BASE}] - 2026-01-01"),
-            &format!(
-                "## [{next}]\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [{BASE}] - 2026-01-01"
-            ),
+            &format!("## [{next}]\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [{BASE}] - 2026-01-01"),
         ),
     );
     for path in ["Cargo.toml", "Cargo.lock"] {
@@ -475,7 +479,7 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
         );
     }
     let broken = commit(root, "docs(changelog): add the tool entry");
-    // The scaffold stamps are still the base version: this push breaks a release tree
+    // The scaffold stamps are still the baseline: this push breaks a release tree
     // its base kept valid, so the preflight blocks it.
     let blocked = project.push("feat/tool", None);
     let text = stderr(&blocked);

@@ -17,15 +17,25 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
-## [3.0.1]
+## [3.1.0]
 
 ### Added
+
+<!-- codeflow:release-impact minor -->
+- **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
+  the named targets and their prerequisites, comma separated or repeated,
+  so one gate can be split across parallel CI jobs. A limited run is
+  recorded as not complete, so it never serves as a green base for
+  `--since`, and a name that is not an enabled target of the mode is
+  refused before any target starts. With `--all`, the named targets keep
+  the full-strength checks of the epic close.
 
 <!-- codeflow:release-impact patch -->
 - **Native Windows support returns.** The release publishes an x86-64
   Windows archive with `codeflow.exe` and a PowerShell installer again,
   beside the macOS and Linux builds; 3.0.0 published neither. The Windows
-  test job gates every pull request to `main` and every publication again.
+  jobs gate every pull request to `main` and every publication again,
+  behind one `windows` check.
   The defects it found are fixed: the guards, `codeflow doctor` and the
   Codex and Grok trust checks now treat the short (`RUNNER~1`), long and
   `\\?\` spellings of one Windows path as the same file; the full-gate lock
@@ -35,7 +45,35 @@ erratum below, never an edit of the section.
   evaluation kit no longer refuses its key folder for POSIX mode bits
   Windows does not have.
 
+### Changed
+
+<!-- codeflow:release-impact minor -->
+- **The managed model roster adds Claude Sonnet 5.5 and adopts GPT-6.1 Sol.**
+  The primary seats do not change: the Claude primary seat is Opus 5.5, then
+  Fable 5.1, and the Codex primary seat is GPT-6 Astra, then the Sol line.
+  After `codeflow update`, the catalog has a `sonnet` worker line
+  (`claude-sonnet-5-5`, medium and high effort) that holds no seat. Among
+  workers it is tried before Opus for bounded execution, evidence
+  collection and the Claude fallback in engineering implementation, and it
+  never serves orchestration, planning, design or review. The Sol line
+  adopts GPT-6.1 Sol (`gpt-6.1-sol`), designated for `codex-primary` on
+  2026-10-02; GPT-6 Sol and GPT-5.6 Sol stay as its fallback versions.
+  Orchestration, technical planning and review stay with the Claude
+  primary seat, Opus first and Fable second. Design stays with Opus alone:
+  Fable takes design only under a task's operator override, so without
+  Opus the design duty stays open. Fable comes first for consultation and
+  reasoning support.
+  No new version has a qualification record yet, so `codeflow doctor
+  --check model-bindings` also warns for GPT-6.1 Sol.
+
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The release binary reports a clean build.** The 3.0.0 binaries print
+  `dirty=true` in `codeflow --version` although they were built from the
+  tagged source: the release job writes cargo-dist's manifest into the
+  checkout before it builds, and the build counted that untracked file.
+  The file is now ignored, so a release build reports `dirty=false`.
 
 <!-- codeflow:release-impact patch -->
 - **A double-quoted backslash stays in the guards' reading.** Inside double

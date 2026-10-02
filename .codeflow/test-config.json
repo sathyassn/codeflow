@@ -262,15 +262,29 @@
       }
     },
     {
+      "name": "docs-portal-deps",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
+        }
+      },
+      "timeout_seconds": 300
+    },
+    {
       "name": "visual-eval-controls",
       "enabled": true,
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test evals/model-artifacts/visual_controls.test.mjs\""
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test evals/model-artifacts/visual_controls.test.mjs\""
         }
       },
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "requires": [
+        "docs-portal-deps"
+      ]
     },
     {
       "name": "skill-triggers",
@@ -370,12 +384,13 @@
       "runner": "custom",
       "modes": {
         "full": {
-          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal && node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }
       },
       "timeout_seconds": 300,
       "requires": [
-        "codeflow-bin"
+        "codeflow-bin",
+        "docs-portal-deps"
       ],
       "narrow": [
         "docs-portal/**",

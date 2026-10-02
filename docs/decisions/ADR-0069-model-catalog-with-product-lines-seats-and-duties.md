@@ -269,3 +269,50 @@ opinion remains advisory. The managed catalog applies the epic's broader
 rule: its independent alternatives are the Grok, Codex and Claude seats in
 that order, filtered by opposite lineage, so for Claude-authored work with
 Grok excluded the Codex seat fills the gap.
+
+## Note (2026-10-02)
+
+The operator set the roster for the 3.0.x line on 2026-10-02. Opus 5.5
+stays the preferred Claude primary. Sonnet 5.5 is added for execution and
+routine work where Opus is not needed. Fable 5.1 is for design,
+architecture, technical planning and consultation. GPT-6 Astra stays,
+GPT-6.1 Sol is the Sol version to use, GPT-6 Luna serves low-level tasks,
+and Grok 4.7 is unchanged. TSK-204 applies it to the managed catalog as a
+data change:
+
+| Family | Line | Version and pinned id | Lifecycle | Seat use and designation |
+|---|---|---|---|---|
+| Claude | `sonnet` | Sonnet 5.5, `claude-sonnet-5-5` | active | worker line, medium and high; first Claude alternative for `bounded-execution`, `evidence-collection` and the Claude fallback of `engineering-implementation`, ahead of Opus; none |
+| Codex | `sol` | GPT-6.1 Sol, `gpt-6.1-sol` | active | adopted; `codex-primary` second line; designated 2026-10-02 |
+| Codex | `sol` | GPT-6 Sol, `gpt-6-sol` | fallback-only | `codex-primary` fallback; designated 2026-09-23 |
+
+The other rows of the roster table stand. Sonnet holds no seat, design,
+review or orchestration duty. Every new version's qualification field is
+empty.
+
+The Fable part of the direction (design, architecture and technical
+planning) is not applied. `design`, `independent-plan` design-primary and
+`body-review` design-primary resolve to the `claude-primary` seat, Opus
+first and Fable second, as before. Only `consultation` and
+`reasoning-support` route to Fable first, as they already did.
+
+No catalog-only route exists. In `crates/codeflow-core/src/model_catalog`:
+
+- Validation accepts only the design owner seat as a `design` target
+  (`validate.rs:333-335`), and resolution fills `design` only from that
+  seat's first line (`resolve.rs:228-232`); a line with no seat never holds
+  direction or fidelity approval (`resolve.rs:233-238`).
+- A line target on `independent-plan` or `body-review` is a worker, and
+  outside the candidate duties (`resolve.rs:168-181`) a worker needs scoped
+  qualification evidence for the exact tuple (`resolve.rs:291-295`), so
+  Fable there stays open.
+- The seat order cannot change instead: there are exactly two standing
+  seats (`validate.rs:154`), the design owner must be the standing Claude
+  seat (`validate.rs:171-176`), and the host seat is the first seat of the
+  host family (`resolve.rs:395-401`). Putting Fable first in
+  `claude-primary` would make Fable orchestrate too.
+
+Moving design, architecture and technical planning to Fable while Opus
+keeps orchestration is an engine change and a change to "Launch identity
+and design authority" above. It was offered to the operator on 2026-10-02
+as their decision. Until then the Fable row above stands.

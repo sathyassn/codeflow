@@ -62,7 +62,7 @@ call it.
 
 | Release | Platforms | Assets |
 |---|---|---|
-| 3.0.1 and later | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` | A `.tar.xz` archive per macOS and Linux target, a `.zip` archive for Windows, a `.sha256` file per archive, a `sha256.sum`, a shell installer, a PowerShell installer and a source archive |
+| 3.1.0 and later | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` | A `.tar.xz` archive per macOS and Linux target, a `.zip` archive for Windows, a `.sha256` file per archive, a `sha256.sum`, a shell installer, a PowerShell installer and a source archive |
 | 3.0.0 | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` | A `.tar.xz` archive per target, a `.sha256` file per archive, a `sha256.sum`, a shell installer and a source archive; no Windows asset |
 | Before 3.0.0 | Varies by release | Check a release's asset list before pinning it |
 
@@ -72,7 +72,7 @@ Linux-native tooling or Claude sandboxing.
 | Path | Use it when |
 |---|---|
 | The shell installer | You install the latest release on macOS or Linux |
-| The PowerShell installer | You install the latest release, 3.0.1 or later, on native Windows; Git for Windows is required |
+| The PowerShell installer | You install the latest release, 3.1.0 or later, on native Windows; Git for Windows is required |
 | `cargo install --path crates/codeflow-cli` | You build from a checkout and have a Rust toolchain |
 | One platform archive checked against its `.sha256` file | You are pinning a version or scripting the install |
 

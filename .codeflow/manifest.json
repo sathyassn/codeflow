@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scaffold_version": "3.0.1",
+  "scaffold_version": "3.1.0",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
@@ -347,7 +347,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "6191bbcdd42ef937bc11ccab227d7ffc1ee65291280fbced8326d3bba88ebc57",
+      "sha256": "397bd93ad4b3d2c833765152a1765334ca620732cad419b3a541dda61aa5b233",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -479,7 +479,7 @@
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "1ef495c039298b970ce8462a5bcaa41293420e20da8c8a0bdb605dd16611e2d8",
+      "sha256": "73720d144c9a8e0db6ae9ec4b7c295986faaf92c8754374cf8398a2d48c9feef",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -1163,7 +1163,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "6191bbcdd42ef937bc11ccab227d7ffc1ee65291280fbced8326d3bba88ebc57",
+      "sha256": "397bd93ad4b3d2c833765152a1765334ca620732cad419b3a541dda61aa5b233",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -1295,7 +1295,7 @@
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "1ef495c039298b970ce8462a5bcaa41293420e20da8c8a0bdb605dd16611e2d8",
+      "sha256": "73720d144c9a8e0db6ae9ec4b7c295986faaf92c8754374cf8398a2d48c9feef",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -1781,13 +1781,13 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "0e6c4c1743356c44b2acd1b3fc20b720603acd661ddd4378058f8138ec45256d",
+      "sha256": "4869755f178a23059431acf3ee8e1e99e5b2333c884de59a8228008ae12445f4",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "2a7a2eea145746f7a3237924368409a9912eb121b48f43a52a0951526fb0bb7e",
+      "sha256": "fbf58f2361dc46c072d5f401f426e5d7ebb3abe9e8c49518cb737cb00e1cddd3",
       "exec": false
     },
     "docs/architecture.md": {

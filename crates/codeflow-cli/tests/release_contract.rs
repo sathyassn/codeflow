@@ -26,7 +26,7 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .iter()
         .map(|value| value.as_str().expect("target must be a string"))
         .collect::<Vec<_>>();
-    // 3.0.1 restores native Windows (TSK-197).
+    // 3.1.0 restores native Windows (TSK-197).
     assert_eq!(
         targets,
         [
@@ -433,5 +433,93 @@ fn windows_cross_check_lints_target_specific_code() {
              x86_64-pc-windows-msvc -- -D warnings\""
         ),
         "the host-agnostic Windows check must lint target-specific code, not only compile it"
+    );
+}
+
+/// TSK-203: the published binary reported `dirty=true`. The build script
+/// marks a build dirty when `git status` lists any untracked file, and the
+/// release job writes files into its checkout before `dist build` compiles:
+/// it redirects the manifest to `dist-manifest.json` at the root and downloads
+/// the plan into `target/distrib/`. Every path the job writes must be ignored,
+/// judged by the build's own dirty check on a repository carrying this
+/// `.gitignore` and nothing from the host's git configuration.
+#[test]
+fn the_release_build_writes_only_ignored_paths_so_its_binary_is_clean() {
+    let root = workspace_root();
+    let workflow: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(root.join(".github/workflows/release.yml"))
+            .expect("release workflow must be readable"),
+    )
+    .expect("release workflow must be YAML");
+    let job = &workflow["jobs"]["build-local-artifacts"];
+    let expression = regex::Regex::new(r"\$\{\{[^}]*\}\}").unwrap();
+    let redirect = regex::Regex::new(r#">>?\s*"?([^\s"]+)"#).unwrap();
+    let mut written: Vec<String> = Vec::new();
+    if let Some(manifest) = job["env"]["BUILD_MANIFEST_NAME"].as_str() {
+        written.push(manifest.to_string());
+    }
+    for step in job["steps"].as_sequence().expect("release build steps") {
+        let uses = step["uses"].as_str().unwrap_or_default();
+        if uses.starts_with("actions/download-artifact@") {
+            written.push(step["with"]["path"].as_str().unwrap_or(".").to_string());
+        }
+        for capture in redirect.captures_iter(step["run"].as_str().unwrap_or_default()) {
+            // Paths in the checkout; a variable, descriptor or /dev/null is not.
+            let path = &capture[1];
+            if !path.starts_with(['$', '&', '/']) {
+                written.push(path.to_string());
+            }
+        }
+    }
+    let written: Vec<String> = written
+        .iter()
+        .map(|path| {
+            let path = expression.replace_all(path, "x");
+            // A directory the job fills gets a file inside it.
+            match path.strip_suffix('/') {
+                Some(directory) => format!("{directory}/downloaded"),
+                None => path.into_owned(),
+            }
+        })
+        .collect();
+    assert!(
+        written.iter().any(|path| path == "dist-manifest.json"),
+        "the release build's root manifest must be among the written paths: {written:?}"
+    );
+
+    let repo = tempfile::tempdir().unwrap();
+    let make = || {
+        let mut command = std::process::Command::new("git");
+        command
+            .env("GIT_CONFIG_GLOBAL", repo.path().join("no-global-config"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.test")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.test");
+        command
+    };
+    fs::copy(root.join(".gitignore"), repo.path().join(".gitignore")).unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["add", ".gitignore"],
+        &["commit", "-qm", "base"],
+    ] {
+        let out = make().args(args).current_dir(repo.path()).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for path in &written {
+        let file = repo.path().join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "written by the release job").unwrap();
+    }
+    let (_, dirty, _) = codeflow_core::hooks::source_identity::revision(repo.path(), None, &make);
+    assert_eq!(
+        dirty, "false",
+        "the release job writes a path .gitignore does not cover: {written:?}"
     );
 }

@@ -6,6 +6,10 @@ __pycache__/
 lcov.info
 *.profraw
 
+# The release job writes cargo-dist's build manifest here before it builds;
+# an untracked file would mark the published binary dirty (TSK-203).
+/dist-manifest.json
+
 # CodeFlow repository-local agent/runtime state (not scaffolded to consumers).
 /.state/
 /.claude/memory/

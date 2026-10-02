@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Controls for scripts/gate-parity.py (TSK-134).
+"""Controls for scripts/gate-parity.py (TSK-134, TSK-203).
 
 Each control mutates a copy of the real test config and checks the guard
 against the real CI workflow. The coverage and doctest pair stands for CI's
@@ -11,6 +11,7 @@ import copy
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -247,6 +248,234 @@ class WindowsRefereeControls(unittest.TestCase):
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
+
+
+class WindowsPartitionControls(unittest.TestCase):
+    """TSK-203 AC-2: the partitioned Windows suite stands for the whole
+    suite only when its matrix runs every partition from 1 to N once."""
+
+    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6]"
+    RUN = "--partition count:${{ matrix.partition }}/6"
+
+    def test_the_committed_partitions_run_the_whole_suite(self):
+        self.assertIn(self.PARTITIONS, WORKFLOW)
+        self.assertIn(self.RUN, WORKFLOW)
+        self.assertIn(parity.SUITE, CI)
+
+    def test_a_partition_set_that_misses_or_exceeds_n_is_drift(self):
+        for changed in (("partition: [1, 2, 3, 4, 5]", self.RUN),
+                        ("partition: [1, 2, 3, 4, 5, 6, 7]", self.RUN),
+                        ("partition: [1, 1, 2, 3, 4, 5]", self.RUN),
+                        (self.PARTITIONS, "--partition count:${{ matrix.partition }}/7"),
+                        (self.PARTITIONS, "--partition hash:${{ matrix.partition }}/6")):
+            with self.subTest(changed=changed):
+                workflow = (WORKFLOW.replace(self.PARTITIONS, changed[0])
+                            .replace(self.RUN, changed[1]))
+                self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
+                self.assertNotEqual(parity.local_rust_commands(CONFIG),
+                                    parity.ci_rust_job_commands(workflow))
+
+
+class GatePartControls(unittest.TestCase):
+    """TSK-203 AC-1: the parts of the Linux full gate together run every
+    full-mode target with the same strictness, and one `codeflow gates` job
+    judges them all and is never skipped."""
+
+    def problems(self, workflow: str = WORKFLOW, cfg: dict = CONFIG) -> list[str]:
+        return parity.gate_part_problems(cfg, workflow)
+
+    def assert_problem(self, workflow: str, *needles: str, cfg: dict = CONFIG) -> None:
+        self.assertNotEqual(workflow, WORKFLOW, "the control must change the workflow")
+        problems = self.problems(workflow, cfg)
+        self.assertTrue(any(all(n in p for n in needles) for p in problems),
+                        f"{needles} not in {problems}")
+
+    def test_the_committed_parts_run_every_full_mode_target(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_a_target_no_part_names_is_refused(self):
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
+                            "no gate part runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-gate\n", "\n"),
+                            "no gate part runs", "journey-gate")
+
+    def test_a_new_full_mode_target_must_join_a_part(self):
+        def add(c):
+            c["targets"].append({"name": "new-check", "runner": "custom",
+                                 "modes": {"full": {"command": "true"}}})
+        problems = self.problems(cfg=mutated(add))
+        self.assertTrue(any("new-check" in p for p in problems), problems)
+
+    def test_an_unknown_or_twice_named_target_is_refused(self):
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: read-benchmark,rust-lint"),
+                            "no enabled full mode", "rust-lint")
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: read-benchmark,rust-format"),
+                            "more than one gate part", "rust-format")
+
+    def test_a_part_with_less_strictness_is_refused(self):
+        for weaker in ("codeflow test --mode full --all --only ${{ matrix.only }}",
+                       "codeflow test --mode full --strict --only ${{ matrix.only }}",
+                       "codeflow test --mode essential --strict --all --only ${{ matrix.only }}"):
+            with self.subTest(weaker=weaker):
+                self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
+
+    VERDICT_IF = ("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), "
+                  "github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n")
+    EXACT = "must be exactly the verdict job"
+
+    def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
+        self.assertIn(self.VERDICT_IF, WORKFLOW)
+        self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
+                            "exactly one job must be named")
+        self.assert_problem(WORKFLOW.replace("    needs: gates\n", "    needs: windows\n"), self.EXACT)
+        self.assert_problem(WORKFLOW.replace(self.VERDICT_IF,
+                                             "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
+                            self.EXACT)
+        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ]; then', 'if false; then'), self.EXACT)
+
+    def test_a_verdict_that_could_pass_a_failed_part_is_refused(self):
+        """The four forms the TSK-203 review showed a substring check accepting."""
+        controls = {
+            "a condition that never runs": WORKFLOW.replace(
+                "    if: always() && (github.event_name", "    if: always() && false && (github.event_name"),
+            "a forgiven exit": WORKFLOW.replace(
+                "            exit 1\n          fi\n          echo \"every part",
+                "            exit 0\n          fi\n          echo \"every part"),
+            "continue-on-error on the verdict": WORKFLOW.replace(
+                "    needs: gates\n", "    needs: gates\n    continue-on-error: true\n"),
+        }
+        for label, workflow in controls.items():
+            with self.subTest(label):
+                self.assert_problem(workflow, self.EXACT)
+
+    STEP = "      - name: codeflow test --mode full --strict\n"
+    GATE_STEP_EXACT = "the gate step must be exactly"
+    OWN_KEYS = "own keys must be exactly"
+    TOP_LEVEL = "top level must be exactly"
+    STRATEGY = "the gates strategy must be"
+
+    def assert_all(self, controls: dict) -> None:
+        for label, (workflow, needle) in controls.items():
+            with self.subTest(label):
+                self.assert_problem(workflow, needle)
+
+    def test_a_skippable_forgiven_or_moved_gate_step_is_refused(self):
+        """Key order cannot hide a key (TSK-203 review round two)."""
+        step = self.STEP
+        self.assertIn(step + "        shell: bash\n", WORKFLOW)
+        self.assert_all({
+            "if": (WORKFLOW.replace(step, step + "        if: false\n"), self.GATE_STEP_EXACT),
+            "if first": (WORKFLOW.replace(step, "      - if: false\n        name: codeflow test --mode full --strict\n"),
+                         self.GATE_STEP_EXACT),
+            "continue-on-error first": (WORKFLOW.replace(step, "      - continue-on-error: true\n"
+                                                               "        name: codeflow test --mode full --strict\n"),
+                                        self.GATE_STEP_EXACT),
+            "step continue-on-error": (WORKFLOW.replace(step, step + "        continue-on-error: true\n"),
+                                       self.GATE_STEP_EXACT),
+            "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
+                                  self.GATE_STEP_EXACT),
+            "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step), self.GATE_STEP_EXACT),
+            "job continue-on-error": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                       "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
+                                      self.OWN_KEYS),
+        })
+
+    def test_alternate_yaml_spellings_are_refused(self):
+        """Quoted, spaced or escaped keys decode to the same key (TSK-203 review round three)."""
+        step = self.STEP
+        self.assert_all({
+            "quoted if": (WORKFLOW.replace(step, step + "        'if': false\n"), self.GATE_STEP_EXACT),
+            "spaced if": (WORKFLOW.replace(step, step + "        if : false\n"), self.GATE_STEP_EXACT),
+            "quoted continue-on-error": (WORKFLOW.replace(step, step + "        'continue-on-error': true\n"),
+                                         self.GATE_STEP_EXACT),
+            "quoted job key": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                "    runs-on: ubuntu-24.04\n    'continue-on-error': true\n    strategy:\n"),
+                               self.OWN_KEYS),
+            "escaped BASH_ENV": (WORKFLOW.replace("\njobs:\n", "\nenv:\n  \"BASH\\u005fENV\": ./skip.sh\n\njobs:\n"),
+                                 self.TOP_LEVEL),
+        })
+
+    def test_an_indented_root_cannot_hide_a_workflow_env(self):
+        """Indenting every root key by one space still parses, and left a
+        column-zero check nothing to read (TSK-203 review round four)."""
+        lines = WORKFLOW.splitlines(keepends=True)
+        shifted = "".join(" " + line if re.match(r"^[a-z-]+:", line) else line for line in lines)
+        shifted = shifted.replace("\n jobs:\n", "\n env:\n  SHELLOPTS: noexec\n jobs:\n")
+        self.assertIn(" env:\n  SHELLOPTS: noexec\n", shifted)
+        self.assert_problem(shifted, self.TOP_LEVEL)
+        missing = WORKFLOW.replace("\nconcurrency:\n", "\n# concurrency removed\nx-concurrency:\n")
+        self.assert_problem(missing, self.TOP_LEVEL)
+
+    def test_a_continued_matrix_value_is_refused(self):
+        """A continuation line joins `|| true` onto the command (round three)."""
+        only = "            only: rust-coverage,journey-gate\n"
+        self.assertIn(only, WORKFLOW)
+        self.assert_problem(WORKFLOW.replace(only, only + "              || true\n"), self.STRATEGY)
+        self.assert_problem(WORKFLOW.replace(only, "            only: 'rust-coverage,journey-gate || true'\n"),
+                            self.STRATEGY)
+
+    def test_a_second_command_in_a_script_is_refused(self):
+        """A heredoc can carry the expected text while bash runs something else (round three)."""
+        step = self.STEP
+        decoy = ("      - name: decoy\n        shell: bash\n        run: |\n          cat <<'X'\n"
+                 "          run: codeflow test --mode full --strict --all --only ${{ matrix.only }}\n"
+                 "          X\n          true\n")
+        self.assert_problem(WORKFLOW.replace(step, decoy + step), self.GATE_STEP_EXACT)
+
+    def test_nothing_in_the_workflow_may_reshape_the_gate_or_verdict(self):
+        """`defaults.run.shell: bash -n {0}` made the verdict exit 0 on a failed
+        part without changing its text (round two)."""
+        top = "\njobs:\n"
+        self.assertIn(top, WORKFLOW)
+        self.assert_all({
+            "workflow defaults": (WORKFLOW.replace(top, "\ndefaults:\n  run:\n    shell: bash -n {0}\n" + top),
+                                  self.TOP_LEVEL),
+            "workflow env": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), self.TOP_LEVEL),
+            "gates job defaults": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
+                                                    "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n"
+                                                    "        shell: bash -n {0}\n    strategy:\n"),
+                                   self.OWN_KEYS),
+            "merge key": (WORKFLOW.replace("        shell: bash\n        env:\n          LLVM",
+                                           "        <<: *skipped\n        shell: bash\n        env:\n          LLVM"),
+                          self.GATE_STEP_EXACT),
+            "flow mapping": (WORKFLOW.replace("        env:\n          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw\n",
+                                              "        env: {LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw}\n"),
+                             self.GATE_STEP_EXACT),
+            "verdict without its shell": (WORKFLOW.replace(
+                "      - name: Every part of the full gate passed\n        shell: bash\n",
+                "      - name: Every part of the full gate passed\n"), self.EXACT),
+        })
+
+    def test_comments_and_blank_lines_in_the_verdict_are_allowed(self):
+        workflow = WORKFLOW.replace("    needs: gates\n", "    needs: gates\n\n    # the parts\n")
+        self.assertNotEqual(workflow, WORKFLOW)
+        self.assertEqual(self.problems(workflow), [])
+
+
+class SharedInstallControls(unittest.TestCase):
+    """TSK-203 review: one target installs the portal workspace, and every
+    other target on its Node pin waits for it, so no two `npm ci` runs overlap."""
+
+    @staticmethod
+    def target(cfg: dict, name: str) -> dict:
+        return next(t for t in cfg["targets"] if t["name"] == name)
+
+    def test_the_committed_config_installs_each_workspace_once(self):
+        self.assertEqual(parity.shared_install_problems(CONFIG), [])
+
+    def test_a_second_installer_is_refused(self):
+        def reinstall(c):
+            full = self.target(c, "visual-eval-controls")["modes"]["full"]
+            full["command"] = full["command"].replace('"node --test', '"npm run deps:install --prefix docs-portal && node --test')
+        problems = parity.shared_install_problems(mutated(reinstall))
+        self.assertTrue(any("more than one target installs docs-portal" in p for p in problems), problems)
+
+    def test_a_portal_target_that_does_not_wait_for_the_install_is_refused(self):
+        def unordered(c):
+            self.target(c, "docs-portal")["requires"] = ["codeflow-bin"]
+        problems = parity.shared_install_problems(mutated(unordered))
+        self.assertTrue(any("'docs-portal'" in p and "does not require 'docs-portal-deps'" in p for p in problems),
+                        problems)
 
 
 if __name__ == "__main__":
