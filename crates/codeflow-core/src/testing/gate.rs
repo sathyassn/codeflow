@@ -208,6 +208,7 @@ fn run_gate_resolved(
     } else {
         delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
     };
+    delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(
         project_dir,

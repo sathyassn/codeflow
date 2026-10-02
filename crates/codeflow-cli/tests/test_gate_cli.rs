@@ -832,3 +832,106 @@ fn a_ci_skipped_target_is_never_proved_by_the_ci_run() {
     assert_eq!(output.status.code(), Some(1), "{err}");
     assert!(!err.contains("skipped local-required"), "{err}");
 }
+
+/// TSK-203 AC-4: `--only` runs the named targets and their prerequisites,
+/// skips and names the rest, and records the run as not complete, so a
+/// split gate is judged by all of its parts together and no part alone
+/// can serve as a green base.
+#[cfg(unix)]
+#[test]
+fn only_runs_the_named_targets_with_prerequisites_and_is_never_complete() {
+    let (dir, home, _) = selection_repo();
+    let output = run(
+        dir.path(),
+        home.path(),
+        &[
+            "test",
+            "--mode",
+            "full",
+            "--strict",
+            "--all",
+            "--only",
+            "docs,release",
+        ],
+    );
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
+    let mut ran: Vec<&str> = runs.lines().collect();
+    ran.sort_unstable();
+    assert_eq!(ran, ["docs", "producer", "release"], "{err}");
+    assert!(
+        err.contains("skipped present: --only: the named targets and their prerequisites"),
+        "{err}"
+    );
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["complete"], false, "{raw}");
+    assert_eq!(raw["passed"], true, "{raw}");
+
+    // The parts together are the whole gate: naming every target is complete.
+    std::fs::remove_file(dir.path().join("runs")).unwrap();
+    let output = run(
+        dir.path(),
+        home.path(),
+        &[
+            "test",
+            "--only",
+            "docs",
+            "--only",
+            "present,release,producer",
+        ],
+    );
+    let err = stderr(&output);
+    assert!(output.status.success(), "{err}");
+    let artifact = err
+        .lines()
+        .find_map(|line| line.strip_prefix("[codeflow test] durable artifact: "))
+        .unwrap();
+    let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(artifact).unwrap()).unwrap();
+    assert_eq!(raw["complete"], true, "{raw}");
+}
+
+/// TSK-203 AC-4: a name that is not an enabled target of the mode is
+/// refused before any target starts, so a typo cannot shrink a CI part.
+#[test]
+fn only_refuses_an_unknown_or_disabled_name_before_any_target_starts() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"unit","runner":"custom","modes":{"full":{"command":"echo unit > started"}}},
+      {"name":"off","runner":"custom","enabled":false,"modes":{"full":{"command":"echo off > started"}}},
+      {"name":"light","runner":"custom","modes":{"quick":{"command":"echo light > started"}}}]}"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    for name in ["unti", "off", "light"] {
+        let output = run(
+            dir.path(),
+            home.path(),
+            &["test", "--only", &format!("unit,{name}")],
+        );
+        let err = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{name}: {err}");
+        assert!(
+            err.contains(&format!(
+                "--only names {name}, which is no enabled target with a full mode"
+            )),
+            "{name}: {err}"
+        );
+        assert!(!err.contains("starting target"), "{name}: {err}");
+        assert!(!dir.path().join("started").exists(), "{name}");
+    }
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "--only", "unit", "--since", "HEAD"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot be used with"),
+        "{}",
+        stderr(&output)
+    );
+}
