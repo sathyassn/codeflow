@@ -145,7 +145,6 @@ class Repository:
             "required_publication_checks": [
                 "release state",
                 "codeflow gates",
-                "windows (build + test + clippy)",
                 "secret scan",
                 "security review",
             ],
@@ -1156,6 +1155,12 @@ class PublicationTests(unittest.TestCase):
         state.write_text(json.dumps([{"check_runs": good}]))
         runs_state.write_text(json.dumps([{"workflow_runs": [successful_push]}]))
         args = self.repo.args(state=state, runs_state=runs_state, source=source)
+        release.verify_checks(args)
+        # A failed check outside the required set, such as the advisory
+        # Windows job until TSK-197, does not block publication.
+        advisory = "windows advisory (build + test + clippy, TSK-197)"
+        good.append({**good[0], "id": 50, "name": advisory, "conclusion": "failure"})
+        state.write_text(json.dumps([{"check_runs": good}]))
         release.verify_checks(args)
         good[1]["head_sha"] = "f" * 40
         state.write_text(json.dumps([{"check_runs": good}]))

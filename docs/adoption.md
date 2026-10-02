@@ -62,13 +62,17 @@ call it.
 
 | Release | Platforms | Assets |
 |---|---|---|
-| 3.0.0 and later | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` | A `.tar.xz` archive per macOS and Linux target, a `.zip` archive for Windows, a `.sha256` file per archive, a `sha256.sum`, a shell installer, a PowerShell installer and a source archive |
-| Before 3.0.0 | Fewer | Fewer assets; check a release's asset list before pinning it |
+| 3.0.0 | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` | A `.tar.xz` archive per target, a `.sha256` file per archive, a `sha256.sum`, a shell installer and a source archive |
+| Before 3.0.0 | Varies by release | Check a release's asset list before pinning it |
+
+Native Windows is not supported in 3.0.0: no Windows archive, PowerShell
+installer or `codeflow.exe` is published, and native Windows support is
+planned for 3.0.1. On Windows, use WSL2, which installs the Linux archive;
+WSL2 has not been separately qualified for 3.0.0.
 
 | Path | Use it when |
 |---|---|
 | The shell installer | You install the latest release on macOS or Linux |
-| The PowerShell installer | You install the latest release on native Windows; Git for Windows is required |
 | `cargo install --path crates/codeflow-cli` | You build from a checkout and have a Rust toolchain |
 | One platform archive checked against its `.sha256` file | You are pinning a version or scripting the install |
 
@@ -79,12 +83,6 @@ call it.
    curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
    ```
 
-   On native Windows, in PowerShell:
-
-   ```powershell
-   powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
-   ```
-
    Or build from a checkout:
 
    ```sh
@@ -92,7 +90,7 @@ call it.
    ```
 
    Or pin one archive. Substitute the version you pin and your platform's
-   target (the Windows archive is a `.zip`). Each archive unpacks to a
+   target. Each archive unpacks to a
    directory of the same name that holds the `codeflow` binary. The commands
    run in a subshell that stops at the first failure, so nothing is extracted
    or installed unless the download and the checksum pass; `D` must be a
