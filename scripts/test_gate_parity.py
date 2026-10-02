@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Controls for scripts/gate-parity.py (TSK-134).
+"""Controls for scripts/gate-parity.py (TSK-134, TSK-203).
 
 Each control mutates a copy of the real test config and checks the guard
 against the real CI workflow. The coverage and doctest pair stands for CI's
@@ -247,6 +247,87 @@ class WindowsRefereeControls(unittest.TestCase):
                         'RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps']:
             with self.subTest(command=command):
                 self.assertNotEqual(parity.local_rust_commands(CONFIG), parity.ci_rust_job_commands(WORKFLOW.replace("run: " + command, "run: echo removed")))
+
+
+class WindowsPartitionControls(unittest.TestCase):
+    """TSK-203 AC-2: the partitioned Windows suite stands for the whole
+    suite only when its matrix runs every partition from 1 to N once."""
+
+    PARTITIONS = "partition: [1, 2, 3, 4, 5, 6]"
+    RUN = "--partition count:${{ matrix.partition }}/6"
+
+    def test_the_committed_partitions_run_the_whole_suite(self):
+        self.assertIn(self.PARTITIONS, WORKFLOW)
+        self.assertIn(self.RUN, WORKFLOW)
+        self.assertIn(parity.SUITE, CI)
+
+    def test_a_partition_set_that_misses_or_exceeds_n_is_drift(self):
+        for changed in (("partition: [1, 2, 3, 4, 5]", self.RUN),
+                        ("partition: [1, 2, 3, 4, 5, 6, 7]", self.RUN),
+                        ("partition: [1, 1, 2, 3, 4, 5]", self.RUN),
+                        (self.PARTITIONS, "--partition count:${{ matrix.partition }}/7"),
+                        (self.PARTITIONS, "--partition hash:${{ matrix.partition }}/6")):
+            with self.subTest(changed=changed):
+                workflow = (WORKFLOW.replace(self.PARTITIONS, changed[0])
+                            .replace(self.RUN, changed[1]))
+                self.assertNotIn(parity.SUITE, parity.ci_rust_job_commands(workflow))
+                self.assertNotEqual(parity.local_rust_commands(CONFIG),
+                                    parity.ci_rust_job_commands(workflow))
+
+
+class GatePartControls(unittest.TestCase):
+    """TSK-203 AC-1: the parts of the Linux full gate together run every
+    full-mode target with the same strictness, and one `codeflow gates` job
+    judges them all and is never skipped."""
+
+    def problems(self, workflow: str = WORKFLOW, cfg: dict = CONFIG) -> list[str]:
+        return parity.gate_part_problems(cfg, workflow)
+
+    def assert_problem(self, workflow: str, *needles: str, cfg: dict = CONFIG) -> None:
+        self.assertNotEqual(workflow, WORKFLOW, "the control must change the workflow")
+        problems = self.problems(workflow, cfg)
+        self.assertTrue(any(all(n in p for n in needles) for p in problems),
+                        f"{needles} not in {problems}")
+
+    def test_the_committed_parts_run_every_full_mode_target(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_a_target_no_part_names_is_refused(self):
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: rust-format"),
+                            "no gate part runs", "read-benchmark")
+        self.assert_problem(WORKFLOW.replace(",journey-gate\n", "\n"),
+                            "no gate part runs", "journey-gate")
+
+    def test_a_new_full_mode_target_must_join_a_part(self):
+        def add(c):
+            c["targets"].append({"name": "new-check", "runner": "custom",
+                                 "modes": {"full": {"command": "true"}}})
+        problems = self.problems(cfg=mutated(add))
+        self.assertTrue(any("new-check" in p for p in problems), problems)
+
+    def test_an_unknown_or_twice_named_target_is_refused(self):
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: read-benchmark,rust-lint"),
+                            "no enabled full mode", "rust-lint")
+        self.assert_problem(WORKFLOW.replace("only: read-benchmark", "only: read-benchmark,rust-format"),
+                            "more than one gate part", "rust-format")
+
+    def test_a_part_with_less_strictness_is_refused(self):
+        for weaker in ("codeflow test --mode full --all --only ${{ matrix.only }}",
+                       "codeflow test --mode full --strict --only ${{ matrix.only }}",
+                       "codeflow test --mode essential --strict --all --only ${{ matrix.only }}"):
+            with self.subTest(weaker=weaker):
+                self.assert_problem(WORKFLOW.replace(parity.PART_RUN, weaker), "must run exactly")
+
+    def test_the_verdict_must_exist_need_the_parts_and_never_be_skipped(self):
+        self.assert_problem(WORKFLOW.replace("    name: codeflow gates\n", "    name: gates verdict\n"),
+                            "exactly one job must be named")
+        self.assert_problem(WORKFLOW.replace("    needs: gates\n", "    needs: windows\n"),
+                            "must need the gates job")
+        self.assert_problem(WORKFLOW.replace("    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push')\n    name: codeflow gates\n",
+                                             "    if: github.event_name == 'push'\n    name: codeflow gates\n"),
+                            "always()")
+        self.assert_problem(WORKFLOW.replace('if [ "$PARTS" != success ]; then', 'if false; then'),
+                            "needs.gates.result is success")
 
 
 if __name__ == "__main__":

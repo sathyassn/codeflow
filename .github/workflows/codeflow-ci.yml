@@ -24,11 +24,33 @@ jobs:
   # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
   # under these jobs without a commit here. Move the label deliberately, after
   # a green run on the new image. Actions are on the node24 runtime.
-  # The Windows job keeps windows-latest; this pin covers Ubuntu only.
+  # The Windows jobs keep windows-latest; this pin covers Ubuntu only.
+  #
+  # The full gate runs as parallel parts on separate runners. Each part runs
+  # `codeflow test --mode full --strict --all --only <targets>`, which also
+  # runs the named targets' prerequisites. Together the parts name every
+  # full-mode target in .codeflow/test-config.json; scripts/gate-parity.py
+  # refuses a target no part names. The `codeflow gates` job below is the one
+  # verdict that branch rules and the release authority read.
   gates:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
-    name: codeflow gates
+    name: codeflow gates (${{ matrix.part }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The instrumented suite is the longest part; the journey gate
+          # reads its results, so it runs on the same runner.
+          - part: coverage
+            only: rust-coverage,journey-gate
+          # Exclusive: the benchmark times reads, so it runs alone.
+          - part: benchmark
+            only: read-benchmark
+          - part: present
+            only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
+          - part: checks
+            only: rust-format,rust-clippy,rust-doctest,rustdoc,release-automation,gate-parity,model-eval-kit,visual-eval-controls,skill-triggers,herdr-delivery,docs-validation,docs-portal
     steps:
       - uses: actions/checkout@v6
         with:
@@ -41,7 +63,11 @@ jobs:
       # floating stable clippy cannot break CI out from under a green local run.
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
+      # Each part builds different things (instrumented, release, debug), so
+      # each keeps its own cache.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.part }}
       # Each Node target pins its version in a version file, and the full
       # gate runs it through scripts/with-node.py, which finds that version
       # here in the tool cache (TSK-142). gate-parity holds these pins to
@@ -63,7 +89,8 @@ jobs:
       # The present browser checks launch Firefox and WebKit through
       # Playwright's own builds, which a clean runner does not have. The
       # renderer's locked playwright-core installs them, so the browsers match
-      # the version both Node workspaces lock (checked equal here).
+      # the version both Node workspaces lock (checked equal here). Every part
+      # gets the same environment the single gate had.
       - name: Read the locked Playwright version
         id: playwright
         run: |
@@ -91,8 +118,9 @@ jobs:
           cargo build --release -p codeflow-cli
           echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
 
-      # The Linux candidate has one full gate. Windows independently runs raw
-      # Rust checks; Unix-only journeys and the read benchmark remain Linux-only.
+      # The Linux candidate has one full gate, split into the parts above.
+      # Windows independently runs raw Rust checks; Unix-only journeys and the
+      # read benchmark remain Linux-only.
       # The coverage run starts about 31,000 instrumented processes.
       # One profile per process filled 27.5 GB on Linux, more than the
       # runner's free disk; a merge pool of four per binary keeps under 100 MB
@@ -100,14 +128,71 @@ jobs:
       - name: codeflow test --mode full --strict
         env:
           LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
-        run: codeflow test --mode full --strict --all
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
 
+  # The required check. It runs even when a part fails or is cancelled, so
+  # the check is never skipped, and it passes only when every part passed.
+  gates-verdict:
+    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    name: codeflow gates
+    needs: gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every part of the full gate passed
+        env:
+          PARTS: ${{ needs.gates.result }}
+        run: |
+          if [ "$PARTS" != success ]; then
+            echo "::error::the full gate's parts concluded ${PARTS}; see the codeflow gates (part) jobs"
+            exit 1
+          fi
+          echo "every part of the full gate passed"
 
   # Advisory until TSK-197: 3.0.0 ships without native Windows (operator
-  # decision 2026-10-01). The job keeps running so Windows evidence builds up,
-  # and its own result still shows failures. continue-on-error keeps a Windows
-  # failure from failing the workflow run, and .release/config.json does not
-  # require this check for publication. TSK-197 restores it as a gate.
+  # decision 2026-10-01). These jobs keep running so Windows evidence builds
+  # up, and their own results still show failures. continue-on-error keeps a
+  # Windows failure from failing the workflow run, and .release/config.json
+  # does not require these checks for publication. TSK-197 restores them as
+  # a gate. The raw referee is split in three: the nextest suite in
+  # partitions that together run every test once, the other Rust and Node
+  # checks beside them, and the journey gate over every partition's results.
+  windows-tests:
+    if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
+    name: windows advisory tests (${{ matrix.partition }} of 6, TSK-197)
+    runs-on: windows-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+      # Saved even when tests fail: while TSK-197 is open the suite fails, and
+      # without this every run would rebuild the dependencies from scratch.
+      # The cache holds dependencies only, never workspace crates.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install nextest
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-nextest@0.9.129
+
+      - name: cargo nextest run (one partition)
+        run: cargo nextest run --workspace --no-fail-fast --profile codeflow --partition count:${{ matrix.partition }}/6
+
+      - name: Keep this partition's results for the journey gate
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-junit-${{ matrix.partition }}
+          path: target/nextest/codeflow/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   windows:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
     name: windows advisory (build + test + clippy, TSK-197)
@@ -118,23 +203,11 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-
-      - name: Install nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
-          tool: cargo-nextest@0.9.129
+          cache-on-failure: true
 
       - name: cargo fmt --all --check
         run: cargo fmt --all -- --check
-
-      - name: Begin raw referee run
-        shell: bash
-        run: |
-          rm -f target/nextest/codeflow/junit.xml
-          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
-
-      - name: cargo nextest run
-        run: cargo nextest run --workspace --no-fail-fast --profile codeflow
 
       - name: cargo doctests
         run: cargo test --workspace --doc
@@ -145,12 +218,6 @@ jobs:
 
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
-
-      # Consume this raw run's exact results. Unix-only journeys and the own
-      # read-benchmark target are disclosed as skipped on Windows.
-      - name: journey gate
-        shell: bash
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark
 
       - uses: actions/setup-node@v6
         with:
@@ -165,6 +232,34 @@ jobs:
 
       - name: Windows Node target through cmd.exe
         run: python scripts/test_gate_parity.py
+
+  # Consume this raw run's exact results from every partition. Unix-only
+  # journeys and the own read-benchmark target are disclosed as skipped on
+  # Windows. It runs when a partition fails, so the journeys still report.
+  windows-journeys:
+    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    name: windows advisory journeys (TSK-197)
+    needs: windows-tests
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Begin journey check
+        shell: bash
+        run: |
+          rm -rf target/nextest/partitions
+          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
+
+      - name: Fetch every partition's results from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-junit-*
+          path: target/nextest/partitions
+
+      - name: journey gate
+        shell: bash
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark
 
   secret-scan:
     name: secret scan

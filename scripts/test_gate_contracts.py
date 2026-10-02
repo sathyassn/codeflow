@@ -16,19 +16,29 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(set(checks), {'codeflow gates', 'secret scan', 'security review', 'release state'})
         self.assertEqual(len(checks), 4)
 
-    def test_windows_job_is_advisory_until_tsk_197(self):
-        # 3.0.0 ships without native Windows: the job keeps running, cannot
-        # fail the workflow run, and is not a publication check.
+    def test_windows_jobs_are_advisory_until_tsk_197(self):
+        # 3.0.0 ships without native Windows: the jobs keep running, cannot
+        # fail the workflow run, and are not publication checks. TSK-203
+        # splits the referee into test partitions, the other checks and the
+        # journey gate over every partition's results.
         workflow = read('.github/workflows/codeflow-ci.yml')
-        job = re.split(r'\n  [A-Za-z0-9_-]+:\n', workflow.split('\n  windows:\n', 1)[1], maxsplit=1)[0]
-        self.assertIn('journey-gate.py', job)
-        self.assertIn('runs-on: windows-latest', job)
-        self.assertIn('continue-on-error: true', job)
-        name = job.split('name: ', 1)[1].split('\n', 1)[0]
-        self.assertIn('advisory', name)
-        self.assertIn('TSK-197', name)
+        parts = re.split(r'^  ([A-Za-z0-9_-]+):\n', workflow.split('\njobs:\n', 1)[1], flags=re.M)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
+        self.assertEqual(set(windows), {'windows', 'windows-tests', 'windows-journeys'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        self.assertNotIn(name, checks)
+        for key, job in windows.items():
+            with self.subTest(job=key):
+                self.assertIn('runs-on: windows-latest', job)
+                self.assertIn('continue-on-error: true', job)
+                name = job.split('name: ', 1)[1].split('\n', 1)[0]
+                self.assertIn('advisory', name)
+                self.assertIn('TSK-197', name)
+                self.assertNotIn(name, checks)
+        self.assertIn('journey-gate.py --results target/nextest/partitions', windows['windows-journeys'])
+        self.assertIn('needs: windows-tests', windows['windows-journeys'])
+        self.assertIn('pattern: windows-junit-*', windows['windows-journeys'])
+        self.assertIn('name: windows-junit-${{ matrix.partition }}', windows['windows-tests'])
         self.assertFalse(any('windows' in check for check in checks))
 
     def test_one_target_source_build_judges_policy_and_registry_without_cancellation(self):
