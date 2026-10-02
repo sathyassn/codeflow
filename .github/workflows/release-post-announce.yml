@@ -29,9 +29,11 @@ jobs:
       - name: Verify public source and asset digests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PLAN_JSON: ${{ inputs.plan }}
+          # Only the tag is passed: the whole plan carries the release notes
+          # and can exceed the 128 KiB limit on one variable.
+          PLAN_TAG: ${{ fromJSON(inputs.plan).announcement_tag }}
         run: |
-          tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
+          tag=$PLAN_TAG
           if [ -z "$tag" ] || [ "$tag" = "null" ]; then
             echo "::error::The completed cargo-dist plan has no announcement tag."
             exit 1
