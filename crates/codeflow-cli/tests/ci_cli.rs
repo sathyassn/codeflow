@@ -1614,3 +1614,46 @@ fn ci_names_a_git_upgrade_when_check_attr_has_no_source() {
     );
     assert!(!finding.contains("fetch the whole range"), "{finding}");
 }
+
+/// Every CI platform variable the product reads is blank in the test
+/// environment (`.cargo/config.toml` `[env]`), so a pull request run's real
+/// event never reaches a codeflow the tests start; a test that needs one sets
+/// it on its own command. A new variable read in the sources fails here until
+/// it is blanked too.
+#[test]
+fn the_test_environment_blanks_every_ci_variable_the_product_reads() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = std::fs::read_to_string(workspace.join(".cargo/config.toml")).unwrap();
+    let name = regex::Regex::new(r#""((?:GITHUB|GITLAB|BITBUCKET|CI)_[A-Z_]+|CI)""#).unwrap();
+    let mut read = std::collections::BTreeSet::new();
+    let mut pending = vec![
+        workspace.join("crates/codeflow-cli/src"),
+        workspace.join("crates/codeflow-core/src"),
+    ];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                read.extend(name.captures_iter(&text).map(|found| found[1].to_string()));
+            }
+        }
+    }
+    assert!(
+        read.contains("GITHUB_BASE_REF") && read.contains("CI"),
+        "{read:?}"
+    );
+    for variable in &read {
+        assert!(
+            config.contains(&format!("\n{variable} = {{ value = \"\", force = true }}")),
+            "{variable} is not blanked in .cargo/config.toml"
+        );
+        assert_eq!(
+            std::env::var(variable).unwrap_or_default(),
+            "",
+            "{variable}"
+        );
+    }
+}

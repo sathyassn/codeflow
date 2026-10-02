@@ -16,3 +16,28 @@ CODEX_SESSION_ID = { value = "", force = true }
 CODEX_THREAD_ID = { value = "", force = true }
 CODEX_CI = { value = "", force = true }
 GROK_SESSION_ID = { value = "", force = true }
+# Tests run the same on a laptop and in any CI event: `codeflow ci` and the
+# gate read these CI platform variables, so a pull request run would hand the
+# real event (its body, base, head and actor) to every codeflow the tests
+# start. Empty counts as unset; a test that needs one sets it itself. Only
+# this repository's tests see this; an adopter's `codeflow test` still reads
+# its CI.
+CI = { value = "", force = true }
+GITHUB_ACTIONS = { value = "", force = true }
+GITHUB_EVENT_NAME = { value = "", force = true }
+GITHUB_EVENT_PATH = { value = "", force = true }
+GITHUB_ACTOR = { value = "", force = true }
+GITHUB_BASE_REF = { value = "", force = true }
+GITHUB_HEAD_REF = { value = "", force = true }
+CI_PIPELINE_SOURCE = { value = "", force = true }
+CI_MERGE_REQUEST_IID = { value = "", force = true }
+CI_MERGE_REQUEST_DIFF_BASE_SHA = { value = "", force = true }
+CI_MERGE_REQUEST_TARGET_BRANCH_NAME = { value = "", force = true }
+CI_MERGE_REQUEST_SOURCE_BRANCH_NAME = { value = "", force = true }
+CI_COMMIT_SHA = { value = "", force = true }
+CI_COMMIT_REF_NAME = { value = "", force = true }
+BITBUCKET_PR_ID = { value = "", force = true }
+BITBUCKET_PR_DESTINATION_COMMIT = { value = "", force = true }
+BITBUCKET_PR_DESTINATION_BRANCH = { value = "", force = true }
+BITBUCKET_COMMIT = { value = "", force = true }
+BITBUCKET_BRANCH = { value = "", force = true }
