@@ -139,7 +139,10 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
         ),
     ] {
         let (project, home) = codex_case(base, label);
-        let path = project.join(".codex/hooks.json");
+        // One component at a time: on Windows `join(".codex/hooks.json")`
+        // keeps the `/`, while the key Codex records names the file with
+        // `\` throughout, as doctor does.
+        let path = project.join(".codex").join("hooks.json");
         fs::write(&path, hook).unwrap();
         let config = if body.is_empty() {
             String::new()
@@ -185,7 +188,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
         ),
     ] {
         let (project, home) = codex_case(base, label);
-        let path = project.join(".codex/hooks.json");
+        let path = project.join(".codex").join("hooks.json");
         fs::write(&path, format!(r#"{{"hooks":{{"{event_key}":{hooks}}}}}"#)).unwrap();
         fs::write(
             home.join(".codex/config.toml"),
@@ -242,7 +245,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
         ),
     ] {
         let (project, home) = codex_case(base, label);
-        let path = project.join(".codex/hooks.json");
+        let path = project.join(".codex").join("hooks.json");
         let timeout = timeout.map_or_else(String::new, |t: u64| format!(r#","timeout":{t}"#));
         let matcher_field = matcher.map_or_else(String::new, |m| format!(r#""matcher":"{m}","#));
         fs::write(
@@ -273,7 +276,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
 
     // Round 3: a duplicate event key, which Codex's typed reader rejects.
     let (project, home) = codex_case(base, "duplicate-event");
-    let path = project.join(".codex/hooks.json");
+    let path = project.join(".codex").join("hooks.json");
     fs::write(
         &path,
         format!(r#"{{"hooks":{{"PreToolUse":[],"PreToolUse":{GROUP}}}}}"#),
@@ -297,7 +300,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
 
     // Round 3: a project marked untrusted keeps its approved hook hash.
     let (project, home) = codex_case(base, "explicitly-untrusted-project");
-    let path = project.join(".codex/hooks.json");
+    let path = project.join(".codex").join("hooks.json");
     fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":{GROUP}}}}}"#)).unwrap();
     fs::write(
         home.join(".codex/config.toml"),
@@ -322,7 +325,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
         let (project, home) = codex_case(base, "symlinked-hook-file");
         let target = project.join("hook-declarations.json");
         fs::write(&target, format!(r#"{{"hooks":{{"PreToolUse":{GROUP}}}}}"#)).unwrap();
-        let path = project.join(".codex/hooks.json");
+        let path = project.join(".codex").join("hooks.json");
         std::os::unix::fs::symlink(&target, &path).unwrap();
         let hash = ident("pre_tool_use", None, 10);
         fs::write(
@@ -366,7 +369,7 @@ fn probes(base: &Path) -> Vec<(String, CheckResult)> {
     let mut config = project_trust(&root, "trusted") + &project_trust(&linked, "trusted");
     for (checkout, enabled) in [(&root, false), (&linked, true)] {
         fs::create_dir_all(checkout.join(".codex")).unwrap();
-        let path = checkout.join(".codex/hooks.json");
+        let path = checkout.join(".codex").join("hooks.json");
         fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":{GROUP}}}}}"#)).unwrap();
         config += &state(&path, "pre_tool_use", &hash, enabled);
     }
