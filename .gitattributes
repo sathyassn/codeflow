@@ -11,3 +11,8 @@ crates/codeflow-present/assets/service/*.gz binary
 crates/codeflow-present/assets/export/*.gz binary
 # Captured delegate prompts are compared byte for byte; never convert line ends.
 crates/codeflow-core/tests/fixtures/delegate/** -text
+
+# Retained evidence (renders, screenshots, transcripts) stays in the
+# repository and out of the published source archive, which cargo-dist builds
+# with `git archive`: building and using CodeFlow needs none of it.
+docs/verification/** export-ignore
