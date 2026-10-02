@@ -248,6 +248,7 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "scripts/release.py host-state",
         "scripts/release.py verify-host-state",
         "scripts/release.py release-notes",
+        "--repository \"$GITHUB_REPOSITORY\" --output /tmp/release-notes.md",
         "gh release create",
         "--draft",
         "github.event.inputs.tag == 'dry-run'",
@@ -311,6 +312,77 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
             "post-announce workflow is missing {required}"
         );
     }
+}
+
+/// Run a command in the workspace, whatever repository a calling hook points
+/// git at.
+fn workspace_output(program: &str, args: &[&str]) -> String {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(workspace_root())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("command must run");
+    assert!(output.status.success(), "{program} {args:?} failed");
+    String::from_utf8(output.stdout).expect("output must be UTF-8")
+}
+
+#[test]
+fn source_archive_leaves_out_only_retained_evidence() {
+    // cargo-dist builds source.tar.gz with `git archive`. Compare what it
+    // actually writes with the tracked files: only the retained evidence may
+    // be left out, so an exclusion on any parent folder also fails here.
+    let archive = std::env::temp_dir().join(format!("codeflow-source-{}.tar", std::process::id()));
+    let path = archive.to_str().expect("temporary path must be UTF-8");
+    workspace_output(
+        "git",
+        &[
+            "archive",
+            "--worktree-attributes",
+            "--format=tar",
+            "-o",
+            path,
+            "HEAD",
+        ],
+    );
+    let listed = workspace_output("tar", &["-tf", path]);
+    fs::remove_file(&archive).expect("temporary archive must be removable");
+    let archived = listed
+        .lines()
+        .filter(|entry| !entry.ends_with('/'))
+        .collect::<std::collections::BTreeSet<_>>();
+    // Raw names: git quotes unusual names in its display form.
+    let tracked = workspace_output(
+        "git",
+        &[
+            "-c",
+            "core.quotePath=false",
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "HEAD",
+        ],
+    );
+    let mut evidence = 0;
+    let mut wrong = Vec::new();
+    for file in tracked.split('\0').filter(|name| !name.is_empty()) {
+        let is_evidence = file.starts_with("docs/verification/");
+        evidence += usize::from(is_evidence);
+        if is_evidence == archived.contains(file) {
+            wrong.push(file);
+        }
+    }
+    assert!(
+        evidence > 0,
+        "docs/verification/ must hold the retained evidence"
+    );
+    assert!(
+        wrong.is_empty(),
+        "the source archive must leave out exactly docs/verification/: {wrong:?}"
+    );
 }
 
 #[test]

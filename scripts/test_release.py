@@ -1297,7 +1297,7 @@ class PublicationTests(unittest.TestCase):
     def test_release_notes_strip_internal_markers_and_bind_source(self) -> None:
         self.repo.pending("2.0.1", [("patch", "reviewed fix")])
         head = self.repo.commit("fix: notes")
-        notes = release.release_notes(self.repo.root, head, "v2.0.1", head)
+        notes = release.release_notes(self.repo.root, head, "v2.0.1", head, "owner/repo")
         self.assertIn("reviewed fix", notes)
         self.assertNotIn("release-impact", notes)
         self.assertIn(release.SOURCE_MARKER.format(source=head), notes)
@@ -1311,7 +1311,7 @@ class PublicationTests(unittest.TestCase):
             f"{release.LEGACY_END}\n\n## [2.0.0] - 2026-01-01\n\n- public\n",
         )
         head = self.repo.commit("docs: bind legacy notes")
-        notes = release.release_notes(self.repo.root, head, "v3.0.0", head)
+        notes = release.release_notes(self.repo.root, head, "v3.0.0", head, "owner/repo")
         self.assertIn("reviewed backlog", notes)
         self.assertNotIn("legacy-group", notes)
         self.assertNotIn("legacy-group-end", notes)
@@ -1322,7 +1322,7 @@ class PublicationTests(unittest.TestCase):
             f"# Changelog\n\n## [3.0.0]\n\n{section}\n## [2.0.0] - 2026-01-01\n\n- public\n",
         )
         head = self.repo.commit("docs: notes fixture")
-        return release.release_notes(self.repo.root, head, "v3.0.0", head)
+        return release.release_notes(self.repo.root, head, "v3.0.0", head, "owner/repo")
 
     def test_release_notes_strip_one_line_and_wrapped_staging_notes(self) -> None:
         for note in [
@@ -1361,18 +1361,74 @@ class PublicationTests(unittest.TestCase):
             ):
                 self.notes_for(leftover)
 
+    def test_release_notes_over_the_host_limit_keep_labels_notes_and_link(self) -> None:
+        detail = "Long detail. " * 400
+        entries = "".join(
+            f"- **Entry {index} label\n  wraps.** {detail}\n\n  More detail.\n\n" for index in range(40)
+        )
+        notes = self.notes_for(
+            "> **Upgrading.** Do this first.\n\n### Fixed\n\n" + entries
+            + "> **Breaking migrations.** Before installing:\n>\n> - repair the records\n\n"
+            "- an unlabelled bullet\n\n### Added\n\n- **Added thing.** detail\n"
+        )
+        head = notes.rsplit("codeflow-release-source: ", 1)[1].split(" ")[0]
+        self.assertLessEqual(release.body_size(notes), release.GITHUB_RELEASE_BODY_LIMIT)
+        self.assertNotIn("Long detail", notes)
+        self.assertIn(f"https://github.com/owner/repo/blob/{head}/CHANGELOG.md", notes)
+        body = notes.split("\n\n", 1)[1].split("\n\n<!-- codeflow-release-source")[0]
+        self.assertEqual(
+            body,
+            "> **Upgrading.** Do this first.\n\n### Fixed\n\n"
+            + "".join(f"- **Entry {index} label wraps.**\n" for index in range(40))
+            + "\n> **Breaking migrations.** Before installing:\n>\n> - repair the records\n\n"
+            "- an unlabelled bullet\n\n### Added\n\n- **Added thing.**",
+        )
+
+    def test_entry_labels_end_entries_where_entry_extent_does(self) -> None:
+        self.assertEqual(
+            release.entry_labels(
+                "### Fixed\n\n- **Lazy.** first line\ncontinued lazily\n> a quote right after\n"
+                "- **Next.** body\n  indented\n\n  second paragraph\n- plain bullet\n### Added\n- **Last.** x"
+            ),
+            "### Fixed\n\n- **Lazy.**\n\n> a quote right after\n\n- **Next.**\n\n- plain bullet"
+            "\n\n### Added\n\n- **Last.**",
+        )
+
+    def test_release_notes_within_the_host_limit_stay_whole(self) -> None:
+        notes = self.notes_for("### Fixed\n\n- **Small fix.** " + "detail " * 100 + "\n")
+        self.assertIn("detail detail", notes)
+        self.assertNotIn("CHANGELOG.md", notes)
+
+    def test_release_notes_fail_closed_when_labels_alone_are_too_long(self) -> None:
+        entries = "".join(f"- **{index} {'label ' * 200}.** body\n" for index in range(130))
+        with self.assertRaisesRegex(release.ReleaseError, "even with each entry cut to its label"):
+            self.notes_for(f"### Fixed\n\n{entries}")
+
     def test_working_tree_changelog_renders_clean_3_0_0_notes(self) -> None:
         # Renders the real CHANGELOG.md this checkout carries, not a fixture.
         text = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text()
         self.repo.write("CHANGELOG.md", text)
         head = self.repo.commit("docs: real changelog")
-        notes = release.release_notes(self.repo.root, head, "v3.0.0", head)
+        notes = release.release_notes(self.repo.root, head, "v3.0.0", head, "owner/repo")
         self.assertNotIn("Staging evidence", notes)
         self.assertNotIn("staged on 2026-08-02", notes)
         self.assertNotRegex(notes, r"<!--\s*codeflow:")
         headings = [line for line in notes.splitlines() if line.startswith("### ")]
         self.assertTrue(headings)
         self.assertEqual(len(headings), len(set(headings)), headings)
+        self.assertLessEqual(release.body_size(notes), release.GITHUB_RELEASE_BODY_LIMIT)
+        # The bound covers the plan the 3.0.0 dry run produced (run
+        # 37003474977: 714,658 UTF-16 bytes) and stays under GitHub's limit.
+        planned = release.plan_output_size(release.section_bytes(text, "3.0.0"))
+        self.assertGreaterEqual(planned, 714_658)
+        self.assertLessEqual(planned, release.GITHUB_JOB_OUTPUT_LIMIT)
+        dist = tomllib.loads((REPOSITORY / "dist-workspace.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            dist["dist"]["cargo-dist-version"],
+            release.PLAN_MEASURED_DIST,
+            "cargo-dist changed: measure a dry-run plan's job output again (copies of the "
+            "section and the reserve), then update PLAN_MEASURED_DIST",
+        )
         # The legacy group opens with entries under no heading of its own; they
         # stay under the Changed heading placed before the group.
         kind = next(
@@ -1633,6 +1689,17 @@ class EntryEditTests(unittest.TestCase):
                 self.repo.args(base=base, head=head, target_ref=base, body_file=body_path, body_env=None)
             )
         return json.loads(output.getvalue())
+
+    def test_a_pull_request_whose_notes_github_would_refuse_fails(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        base = self.repo.commit("fix: a crash")
+        self.repo.pending(
+            "2.0.1",
+            [("patch", "Fix a crash")] + [("patch", f"Fix {index} {'word ' * 200}") for index in range(130)],
+        )
+        head = self.repo.commit("fix: many fixes")
+        with self.assertRaisesRegex(release.ReleaseError, "even with each entry cut to its label"):
+            self.check(base, head, self.repo.body("patch"))
 
     def test_a_body_edit_with_code_is_assessed_at_the_entry_impact(self) -> None:
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
@@ -2231,6 +2298,25 @@ class PreflightTests(unittest.TestCase):
             release.check_state(self.repo.args(ref="HEAD", structural=True))
         result = json.loads(output.getvalue())
         self.assertEqual((result["status"], result["host"]), ("ok", "not checked against the host"))
+
+    def test_check_state_refuses_a_section_the_plan_cannot_carry(self) -> None:
+        # About 235 KB of section, whose quotes and line ends JSON escapes,
+        # takes well over 1 MB of UTF-16 job output when carried twice.
+        detail = 'a "quoted" word\n  ' * 100
+        self.repo.pending("2.0.1", [("patch", f"Fix {index}", detail) for index in range(130)])
+        self.repo.commit("fix: a very long section")
+        with self.assertRaisesRegex(release.ReleaseError, "release plan's job output"):
+            release.check_state(self.repo.args(ref="HEAD", structural=True))
+
+    def test_check_state_refuses_pending_notes_github_would_refuse(self) -> None:
+        self.repo.pending("2.0.1", [("patch", f"Fix {index} {'word ' * 200}") for index in range(130)])
+        self.repo.commit("fix: many fixes")
+        with self.assertRaisesRegex(release.ReleaseError, "even with each entry cut to its label"):
+            release.check_state(self.repo.args(ref="HEAD", structural=True))
+        self.repo.pending("2.0.1", [("patch", f"Fix {index}", "detail " * 200) for index in range(130)])
+        self.repo.commit("fix: shorter labels")
+        with contextlib.redirect_stdout(io.StringIO()):
+            release.check_state(self.repo.args(ref="HEAD", structural=True))
 
 
 class BehaviourPathTests(unittest.TestCase):
