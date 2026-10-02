@@ -101,10 +101,9 @@ Work through each section below that your release touches.
 ### Cross-build toolchain
 
 Release CI uses native cargo-dist runners for macOS and Linux, so each binary
-links against its platform SDK and can be exercised there. 3.0.0 publishes no
-Windows target; the Windows aliases below stay for the TSK-197 work that
-restores it. For an earlier host-agnostic target lint and build check, the
-repository also provides Cargo aliases.
+links against its platform SDK and can be exercised there. The Windows aliases
+below stay for TSK-197. For an earlier host-agnostic target lint and build
+check, the repository also provides Cargo aliases.
 
 ```sh
 cargo install --locked cargo-xwin --version 0.23.0
