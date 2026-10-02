@@ -252,9 +252,10 @@ fn the_gate_runs_on_the_linux_gate_job_and_the_windows_job() {
         "the full gate runs the journey gate: {gate}"
     );
     let workflow = read(".github/workflows/codeflow-ci.yml");
+    // TSK-203: the Windows suite runs in partitions; one job reads them all.
     assert!(
-        job(&workflow, "windows").contains("scripts/journey-gate.py"),
-        "the Windows job runs the journey gate"
+        job(&workflow, "windows-journeys").contains("scripts/journey-gate.py"),
+        "the Windows journeys job runs the journey gate"
     );
     assert!(
         read("scripts/journey-gate.py").contains("journey_gate.toml"),
@@ -269,7 +270,13 @@ fn candidate_jobs_follow_the_event_matrix_and_keep_security_on_every_pr() {
     assert!(trigger.contains("  pull_request:\n  push:"));
     assert!(trigger.contains("integration/**"));
     let condition = "github.event_name == 'pull_request' && contains(fromJSON('[\"main\",\"master\"]'), github.event.pull_request.base.ref) || github.event_name == 'push'";
-    for id in ["gates", "windows"] {
+    for id in [
+        "gates",
+        "gates-verdict",
+        "windows-tests",
+        "windows",
+        "windows-journeys",
+    ] {
         assert!(
             job(&workflow, id).contains(condition),
             "{id} must run for protected-base PRs and line pushes"
@@ -332,7 +339,11 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
         .as_str()
         .unwrap()
         .contains("--results"));
-    assert!(job(&read(".github/workflows/codeflow-ci.yml"), "windows").contains("--results"));
+    assert!(job(
+        &read(".github/workflows/codeflow-ci.yml"),
+        "windows-journeys"
+    )
+    .contains("--results target/nextest/partitions"));
 }
 
 /// The quick gate, which the pre-push hook runs on every push, is the light

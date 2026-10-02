@@ -10,11 +10,14 @@ use sha2::{Digest, Sha256};
 use super::config::{ExecutionConfig, TargetConfig};
 use super::error::TestingError;
 
-/// Public selection controls. Neither control can remove an owed check.
+/// Public selection controls. `since` and `all` never remove an owed check;
+/// `only` limits a run to named targets, and such a run is never complete.
 #[derive(Debug, Default)]
 pub struct GateOptions {
     pub since: Option<String>,
     pub all: bool,
+    /// Named targets to run with their prerequisites; empty means no limit.
+    pub only: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -156,6 +159,14 @@ pub fn select(
         skipped: BTreeSet::new(),
         reason: reason.into(),
     };
+    if !options.only.is_empty() {
+        let selected = with_prerequisites(targets, options.only.iter().cloned().collect());
+        return Selection {
+            skipped: eligible.difference(&selected).cloned().collect(),
+            selected,
+            reason: "--only: the named targets and their prerequisites".into(),
+        };
+    }
     if options.all {
         return all("--all: every target");
     }
@@ -214,14 +225,29 @@ pub fn select(
     {
         return all("unmatched input: every target");
     }
-    let mut selected: BTreeSet<String> = targets
-        .iter()
-        .filter(|t| {
-            eligible.contains(&t.name)
-                && (t.narrow.is_empty() || paths.iter().any(|p| matches(&t.narrow, p)))
-        })
-        .map(|t| t.name.clone())
-        .collect();
+    let selected = with_prerequisites(
+        targets,
+        targets
+            .iter()
+            .filter(|t| {
+                eligible.contains(&t.name)
+                    && (t.narrow.is_empty() || paths.iter().any(|p| matches(&t.narrow, p)))
+            })
+            .map(|t| t.name.clone())
+            .collect(),
+    );
+    Selection {
+        skipped: eligible.difference(&selected).cloned().collect(),
+        selected,
+        reason: format!("unchanged declared inputs against green base {base_sha}"),
+    }
+}
+
+/// Add every target the selection requires, transitively.
+fn with_prerequisites(
+    targets: &[TargetConfig],
+    mut selected: BTreeSet<String>,
+) -> BTreeSet<String> {
     loop {
         let before = selected.len();
         for target in targets {
@@ -230,13 +256,42 @@ pub fn select(
             }
         }
         if selected.len() == before {
-            break;
+            return selected;
         }
     }
-    Selection {
-        skipped: eligible.difference(&selected).cloned().collect(),
-        selected,
-        reason: format!("unchanged declared inputs against green base {base_sha}"),
+}
+
+/// Refuse an `--only` name that is not an enabled target with this mode, so
+/// a mistyped or retired name cannot shrink a run without a trace.
+///
+/// # Errors
+/// Names each unknown, disabled or mode-less target.
+pub fn check_only(
+    root: &Path,
+    targets: &[TargetConfig],
+    mode: &str,
+    only: &[String],
+) -> Result<(), TestingError> {
+    let unknown: Vec<&str> = only
+        .iter()
+        .filter(|name| {
+            !targets
+                .iter()
+                .any(|t| &t.name == *name && t.enabled && t.modes.contains_key(mode))
+        })
+        .map(String::as_str)
+        .collect();
+    if unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid(
+            root,
+            format!(
+                "--only names {}, which {} no enabled target with a {mode} mode",
+                unknown.join(", "),
+                if unknown.len() == 1 { "is" } else { "are" }
+            ),
+        ))
     }
 }
 

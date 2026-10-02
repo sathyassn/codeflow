@@ -298,7 +298,7 @@ epics: [EPC-001]
 adrs: [ADR-0021, ADR-0031]
 ```
 
-`codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all]`
+`codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
 runs the generic test engine against the targets in `.codeflow/test-config.json`
 or a detected stack. With no stack detected it is a loud no-op that exits 0, and `--strict`
 turns that into a non-zero exit for unattended callers. With a stack it is a
@@ -319,6 +319,7 @@ populated ones.
 |---|---|
 | Scheduling | a target may declare `requires`, `outputs`, `narrow` inputs and `exclusive`: producers and prerequisites run first, targets with no producer and consumer relation run in parallel up to `max_parallel`, a dependent of a red target reports "not run: prerequisite failed", and a missing or cyclic prerequisite fails the run before any target starts. The run names its candidate tree after the producers ran and fails when generation changed tracked bytes |
 | Change-aware selection | a target is skipped only when its declared inputs are unchanged since a `--since` base that has a recorded green run for the same config; an unmatched path, a Rust, asset, build, config or workflow change, a rename or deletion, no base, and `--all` (the epic close) run every target, and the run prints what it selected and skipped and why |
+| Split across runners | `--only` runs the named targets and their prerequisites, so one gate can run as parallel CI jobs; a limited run is recorded as not complete, so no single part serves as a green base, and a name that is not an enabled target of the mode is refused before any target starts. CodeFlow's own CI runs its full gate in four such parts behind one `codeflow gates` check, and `scripts/gate-parity.py` refuses a full-mode target no part runs |
 | Preflight | refuses before any target when the temp directory is not writable, a configured lock cannot be taken, or a tool a selected target needs is missing |
 | Concurrency | one full gate runs at a time on a machine; a second refuses, naming the holder |
 | Cargo | a gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the worktree |

@@ -19,6 +19,17 @@ erratum below, never an edit of the section.
 
 ## [3.1.0]
 
+### Added
+
+<!-- codeflow:release-impact minor -->
+- **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
+  the named targets and their prerequisites, comma separated or repeated,
+  so one gate can be split across parallel CI jobs. A limited run is
+  recorded as not complete, so it never serves as a green base for
+  `--since`, and a name that is not an enabled target of the mode is
+  refused before any target starts. With `--all`, the named targets keep
+  the full-strength checks of the epic close.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -39,6 +50,15 @@ erratum below, never an edit of the section.
   reasoning support.
   No new version has a qualification record yet, so `codeflow doctor
   --check model-bindings` also warns for GPT-6.1 Sol.
+
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The release binary reports a clean build.** The 3.0.0 binaries print
+  `dirty=true` in `codeflow --version` although they were built from the
+  tagged source: the release job writes cargo-dist's manifest into the
+  checkout before it builds, and the build counted that untracked file.
+  The file is now ignored, so a release build reports `dirty=false`.
 
 ## [3.0.0]
 

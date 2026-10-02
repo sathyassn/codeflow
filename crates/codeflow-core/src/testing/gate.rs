@@ -208,6 +208,7 @@ fn run_gate_resolved(
     } else {
         delivery::digest(&serde_json::to_vec(&(&targets, &execution))?)
     };
+    delivery::check_only(project_dir, &targets, &effective_mode, &options.only)?;
     let home = crate::registry::codeflow_home();
     let selection = delivery::select(
         project_dir,
@@ -373,7 +374,11 @@ fn run_gate_resolved(
         Err(error) => vec![format!("repository unavailable: {error}")],
     };
     let clean = dirty_paths.is_empty();
-    let complete = selection.skipped.is_empty()
+    // A run limited by `--only` is one part of a split gate, never the
+    // whole gate's evidence, even when its names happen to cover every
+    // target: only an unlimited run is recorded complete.
+    let complete = options.only.is_empty()
+        && selection.skipped.is_empty()
         && ci_skipped.is_empty()
         && results.len() == targets.len()
         && effective_mode == "full";

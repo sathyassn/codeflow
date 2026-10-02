@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Compare the local instrumented Rust suite with the Windows raw referee.
 
-Windows independently runs fmt, nextest, doctests, clippy and rustdoc.
-Unix-only journeys and the ignored read benchmark remain Linux-only.
-Node versions and coordinator-owned binary paths are also checked.
+Windows independently runs fmt, nextest (in partitions), doctests, clippy and
+rustdoc. Unix-only journeys and the ignored read benchmark remain Linux-only.
+Node versions, coordinator-owned binary paths and the parts of the split
+Linux full gate are also checked.
 """
 
 import json
@@ -70,20 +71,228 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
     return out
 
 
+# TSK-203: the Windows suite runs in nextest partitions. A partitioned run
+# stands for the whole suite only when its matrix runs every partition from
+# 1 to N exactly once.
+PARTITION = re.compile(r"^(.+) --partition count:\$\{\{ matrix\.partition \}\}/(\d+)$")
+
+
+def matrix_partitions(job: str) -> list[int]:
+    """The `partition: [..]` matrix values of a job, in order."""
+    found = re.search(r"^\s*partition:\s*\[([^\]]*)\]\s*$", job, re.M)
+    if not found:
+        return []
+    values = [v.strip() for v in found.group(1).split(",") if v.strip()]
+    return [int(v) for v in values] if all(v.isdigit() for v in values) else []
+
+
 def ci_rust_job_commands(workflow: str) -> set[str]:
-    """Rust verification `run:` commands inside the Windows raw referee job."""
+    """Rust verification `run:` commands inside the Windows raw referee jobs
+    (every job whose id starts with `windows`)."""
     out = set()
-    in_rust = False
-    for line in workflow.splitlines():
-        job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
-        if job:  # a top-level job key (2-space indent)
-            in_rust = job.group(1) == "windows"
+    for name, text in workflow_jobs(workflow).items():
+        if not name.startswith("windows"):
             continue
-        if in_rust:
-            run = re.match(r"^\s*run:\s*(.+?)\s*$", line)
-            if run and is_rust_verification_command(run.group(1)):
-                out.add(norm(run.group(1)))
+        partitions = matrix_partitions(text)
+        for run in re.finditer(r"^\s*run:\s*(.+?)\s*$", text, re.M):
+            cmd = norm(run.group(1))
+            if not is_rust_verification_command(cmd):
+                continue
+            split = PARTITION.match(cmd)
+            if split:
+                count = int(split.group(2))
+                if partitions == list(range(1, count + 1)):
+                    cmd = split.group(1)
+                else:
+                    cmd = f"{cmd} (partitions {partitions} do not cover 1 to {count})"
+            out.add(cmd)
     return out
+
+
+# TSK-203: the Linux full gate runs as matrix parts, each
+# `codeflow test --mode full --strict --all --only <targets>`, behind one
+# aggregate check named `codeflow gates`.
+PART_RUN = "codeflow test --mode full --strict --all --only ${{ matrix.only }}"
+VERDICT = "codeflow gates"
+
+
+def requires_closure(cfg: dict, names: set[str]) -> set[str]:
+    targets = {t["name"]: t for t in cfg.get("targets", [])}
+    found: set[str] = set()
+    pending = list(names)
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        found.add(name)
+        pending.extend(targets.get(name, {}).get("requires", []))
+    return found
+
+
+def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
+    """The parts of the Linux full gate must together run every full-mode
+    target with the same strictness, and one verdict must judge them all."""
+    jobs = workflow_jobs(workflow)
+    gate = jobs.get("gates", "")
+    problems: list[str] = []
+    runs = [norm(r) for r in re.findall(r"^\s*run:\s*(codeflow test .+?)\s*$", gate, re.M)]
+    if runs != [PART_RUN]:
+        problems.append(f"the gates job must run exactly `{PART_RUN}` once; it runs {runs}")
+    parts = re.findall(r"^\s*only:\s*(\S+)\s*$", gate, re.M)
+    named = [n for part in parts for n in part.split(",") if n]
+    owed = {
+        t["name"] for t in cfg.get("targets", [])
+        if applicable(t) and t.get("modes", {}).get("full")
+    }
+    unknown = sorted(set(named) - owed)
+    if unknown:
+        problems.append(f"gate parts name targets with no enabled full mode: {unknown}")
+    missing = sorted(owed - requires_closure(cfg, set(named)))
+    if missing:
+        problems.append(f"no gate part runs these full-mode targets: {missing}")
+    twice = sorted({n for n in named if named.count(n) > 1})
+    if twice:
+        problems.append(f"more than one gate part names: {twice}")
+    problems.extend(gate_step_problems(gate, workflow))
+    verdicts = [
+        (name, text) for name, text in jobs.items()
+        if re.search(rf"^ {{4}}name:\s*{re.escape(VERDICT)}\s*$", text, re.M)
+    ]
+    if len(verdicts) != 1:
+        problems.append(f"exactly one job must be named `{VERDICT}`; found {[n for n, _ in verdicts]}")
+    else:
+        name, text = verdicts[0]
+        condition = re.search(r"^ {4}if:\s*(.+?)\s*$", gate, re.M)
+        expected = verdict_job(condition.group(1) if condition else "")
+        if norm_job(text) != norm_job(expected):
+            problems.append(
+                f"`{VERDICT}` ({name}) must be exactly the verdict job: run "
+                "`if: always() && (<the gates job's condition>)`, need the gates job, "
+                "and fail unless needs.gates.result is success; any other form could "
+                "let a skipped, failed or cancelled part read as passed. Expected:\n"
+                + expected)
+    return problems
+
+
+# The one accepted form of the verdict job. A substring check let a false
+# condition, a forgiven exit or `continue-on-error` through (TSK-203 review),
+# so the job must match this text exactly, apart from blank lines, comments
+# and trailing spaces; `{condition}` is the gates job's own `if:` condition.
+VERDICT_JOB = """\
+    if: always() && ({condition})
+    name: codeflow gates
+    needs: gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every part of the full gate passed
+        shell: bash
+        env:
+          PARTS: ${{{{ needs.gates.result }}}}
+        run: |
+          if [ "$PARTS" != success ]; then
+            echo "::error::the full gate's parts concluded ${{PARTS}}; see the codeflow gates (part) jobs"
+            exit 1
+          fi
+          echo "every part of the full gate passed"
+"""
+
+
+def verdict_job(condition: str) -> str:
+    return VERDICT_JOB.format(condition=condition)
+
+
+def norm_job(text: str) -> list[str]:
+    """A job's lines without blank lines, comment lines or trailing spaces."""
+    return [line.rstrip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+# A text check can only judge the forms it knows, so the workflow's top
+# level, the gates job's own keys, its strategy and its gate step are
+# allowlisted. Any other spelling (a quoted or escaped key, a continued
+# value, a second `codeflow test` command, defaults or env that a bash step
+# inherits) is refused rather than read past. This catches drift in a
+# reviewed edit; it is not a boundary against someone who also edits this
+# script in the same change.
+TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
+GATES_KEYS = ("if", "name", "runs-on", "strategy", "steps")
+STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
+PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
+ONLY_LINE = re.compile(r"^            only: [a-z0-9-]+(?:,[a-z0-9-]+)*$")
+GATE_STEP = """\
+      - name: codeflow test --mode full --strict
+        shell: bash
+        env:
+          LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw
+        run: codeflow test --mode full --strict --all --only ${{ matrix.only }}
+"""
+
+
+def gate_step_problems(gate: str, workflow: str = "") -> list[str]:
+    """The workflow top level, the gates job's keys, its strategy and its
+    gate step must each take their one accepted form."""
+    problems = []
+    # The root keys must sit at column zero: an indented root still parses,
+    # and a column-zero check would then examine nothing (TSK-203 review).
+    top = [line for line in workflow.splitlines() if re.match(r"^[^\s#]", line)]
+    names = [m.group(1) if (m := re.match(r"^([a-z-]+):(?:\s|$)", line)) else line for line in top]
+    if sorted(names) != sorted(TOP_KEYS):
+        problems.append(f"the workflow's top level must be exactly {list(TOP_KEYS)}, each once at column "
+                        f"zero; a top-level env or defaults reaches every bash step; found {names}")
+    lines = gate.splitlines()
+    own = [line.rstrip() for line in lines if re.match(r"^ {4}[^\s#]", line)]
+    keys = [re.match(r"^ {4}([a-z-]+):(?:\s|$)", line) for line in own]
+    if any(key is None for key in keys) or [key.group(1) for key in keys] != list(GATES_KEYS):
+        problems.append(f"the gates job's own keys must be exactly {list(GATES_KEYS)} in that order, "
+                        f"so it cannot be forgiven, defaulted or given env; found {own}")
+    if "    strategy:" in lines and "    steps:" in lines:
+        block = [line.rstrip() for line in lines[lines.index("    strategy:"):lines.index("    steps:")]
+                 if line.strip() and not line.lstrip().startswith("#")]
+        entries = block[len(STRATEGY_HEAD):]
+        pairs_ok = (len(entries) % 2 == 0 and entries
+                    and all(PART_LINE.match(a) and ONLY_LINE.match(b) for a, b in zip(entries[::2], entries[1::2])))
+        if block[:len(STRATEGY_HEAD)] != STRATEGY_HEAD or not pairs_ok:
+            problems.append("the gates strategy must be `fail-fast: false` and a matrix `include` of "
+                            "`- part: <name>` / `only: <target>,...` pairs, one line each; refused: "
+                            f"{[line for line in block if line not in STRATEGY_HEAD and not PART_LINE.match(line) and not ONLY_LINE.match(line)]}")
+    else:
+        problems.append("the gates job must have a `strategy:` block before `steps:`")
+    steps = [s for s in re.split(r"\n(?= {6}- )", gate) if "codeflow test" in "\n".join(norm_job(s))]
+    if len(steps) != 1 or norm_job(steps[0]) != norm_job(GATE_STEP):
+        problems.append("the gate step must be exactly this, and the only step that names `codeflow "
+                        "test`; any other form could skip, forgive or replace the command:\n" + GATE_STEP)
+    return problems
+
+
+# TSK-203: `npm run deps:install` runs `npm ci`, which deletes and rewrites
+# the workspace's node_modules. Two targets installing the same workspace can
+# overlap under max_parallel and delete each other's packages, so one target
+# installs each workspace and every other target on that workspace's Node pin
+# requires it.
+INSTALL = re.compile(r"npm run deps:install --prefix (\S+?)(?:\s|\"|$)")
+
+
+def shared_install_problems(cfg: dict) -> list[str]:
+    targets = [t for t in cfg.get("targets", []) if applicable(t)]
+    commands = {t["name"]: norm(t.get("modes", {}).get("full", {}).get("command", "")) for t in targets}
+    installers: dict[str, list[str]] = {}
+    for name, cmd in commands.items():
+        for prefix in INSTALL.findall(cmd):
+            installers.setdefault(prefix, []).append(name)
+    problems = []
+    for prefix, names in sorted(installers.items()):
+        if len(names) != 1:
+            problems.append(f"more than one target installs {prefix} dependencies: {sorted(names)}; "
+                            "concurrent installs delete each other's packages, so keep one installer")
+            continue
+        installer = names[0]
+        for name, cmd in sorted(commands.items()):
+            if name == installer or node_pin(cmd) != f"{prefix}/.node-version":
+                continue
+            if installer not in requires_closure(cfg, {name}) - {name}:
+                problems.append(f"target '{name}' runs on {prefix}'s Node pin but does not require "
+                                f"'{installer}', so it can start before or during the install")
+    return problems
 
 
 # TSK-142 AC-1: a Node target names its version file to the launcher.
@@ -255,15 +464,17 @@ def gate_binary_problems(cfg: dict) -> list[str]:
 def main() -> int:
     cfg = json.loads(CONFIG.read_text())
     workflow = WORKFLOW.read_text()
-    pins = node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
+    pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
+            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()
     if pins:
         return 1
     if status == 0:
-        print("gate-parity OK: Node targets run on their CI pins, and the "
-              "real-browser check runs the gate's binary")
+        print("gate-parity OK: Node targets run on their CI pins, the "
+              "real-browser check runs the gate's binary, and the gate parts "
+              "run every full-mode target")
     return status
 
 
@@ -272,22 +483,22 @@ def rust_parity() -> int:
     local = local_rust_commands(json.loads(CONFIG.read_text()), notes)
     ci = ci_rust_job_commands(WORKFLOW.read_text())
     if not ci:
-        print("gate-parity: could not find the Windows `windows` job cargo commands — "
+        print("gate-parity: could not find the Windows jobs' cargo commands; "
               "the workflow layout changed; update this guard.", file=sys.stderr)
         return 1
     if local != ci:
-        print("GATE PARITY DRIFT — local test gate and Windows `windows` job disagree.",
+        print("GATE PARITY DRIFT: local test gate and Windows jobs disagree.",
               file=sys.stderr)
         print(f"  only in local (.codeflow/test-config.json, full): "
               f"{sorted(local - ci)}", file=sys.stderr)
-        print(f"  only in CI (.github/workflows/codeflow-ci.yml, windows job): "
+        print(f"  only in CI (.github/workflows/codeflow-ci.yml, windows jobs): "
               f"{sorted(ci - local)}", file=sys.stderr)
         for note in notes:
             print(f"  note: {note}", file=sys.stderr)
         print("  fix: make both run the same cargo commands so local "
               "`codeflow test` matches CI.", file=sys.stderr)
         return 1
-    print(f"gate-parity OK — local and Windows `windows` job run the same: {sorted(local)}")
+    print(f"gate-parity OK: local and the Windows jobs run the same: {sorted(local)}")
     return 0
 
 
