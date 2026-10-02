@@ -88,19 +88,61 @@ mod fixture_data;
 
 const CATALOG: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json";
-/// The operator's seat designation of the managed roster (EPC-018 Q2).
-const OPERATOR_DESIGNATION: &str = "2026-09-23";
-/// Versions the operator designated on a later decision, with its date: the
-/// 2026-10-02 roster refresh (ADR-0069 Note, TSK-204). Every other
-/// designated version carries `OPERATOR_DESIGNATION`.
-const LATER_DESIGNATIONS: [(&str, &str); 1] = [("gpt-6.1-sol", "2026-10-02")];
+/// The roster decision record. Its acceptance date and the date of each of
+/// its dated Notes are the operator decisions a designation may carry.
+const ROSTER_ADR: &str = "ADR-0069-";
 
-fn designation_date(version: &str) -> &'static str {
-    LATER_DESIGNATIONS
-        .iter()
-        .find(|(id, _)| *id == version)
-        .map_or(OPERATOR_DESIGNATION, |(_, date)| date)
+/// `YYYY-MM-DD`, the only date shape the decision records use.
+fn is_date(text: &str) -> bool {
+    text.len() == 10
+        && text.char_indices().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                c == '-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
 }
+
+/// The accepted date in the roster ADR's front matter plus every
+/// `## Note (YYYY-MM-DD)` heading in it, read from the record.
+fn roster_decision_dates() -> BTreeSet<String> {
+    let decisions = repo_root().join("docs/decisions");
+    let path = std::fs::read_dir(&decisions)
+        .expect("decision records")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(ROSTER_ADR))
+        })
+        .expect("roster ADR");
+    let text = std::fs::read_to_string(&path).expect("read roster ADR");
+    let (front, body) = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .expect("roster ADR front matter");
+    assert!(
+        front.lines().any(|line| line.trim() == "status: accepted"),
+        "the roster ADR is accepted"
+    );
+    let accepted = front
+        .lines()
+        .find_map(|line| line.strip_prefix("date: "))
+        .map(str::trim)
+        .filter(|date| is_date(date))
+        .expect("roster ADR acceptance date");
+    let mut dates = BTreeSet::from([accepted.to_string()]);
+    dates.extend(body.lines().filter_map(|line| {
+        line.strip_prefix("## Note (")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .filter(|date| is_date(date))
+            .map(str::to_string)
+    }));
+    dates
+}
+
 const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
 
 fn managed_catalog() -> Catalog {
@@ -113,6 +155,16 @@ fn fictional_catalog() -> Catalog {
     // TSK-079's fixture keeps a design-implementation duty that is open until
     // scoped evidence exists; the managed catalog defines no such duty.
     catalog.duties.remove("design-implementation");
+    // Its designation records name a file only; cite the decision date as
+    // the managed catalog's records do.
+    for designation in catalog
+        .lines
+        .iter_mut()
+        .flat_map(|line| &mut line.versions)
+        .flat_map(|version| &mut version.designations)
+    {
+        designation.record = format!("{}, {}", designation.record, designation.date);
+    }
     catalog
 }
 
@@ -264,8 +316,11 @@ fn design_owner_is_claude(catalog: &Catalog) -> Result<(), String> {
 }
 
 /// Only non-retired versions in seat-listed lines carry the operator's
-/// designation; qualification starts empty everywhere.
+/// designation, dated on a decision the roster ADR records and citing that
+/// date in its record; qualification starts empty everywhere. Which versions
+/// a given decision covered is the ADR's table, checked in review.
 fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
+    let decisions = roster_decision_dates();
     for line in &catalog.lines {
         let seats: Vec<_> = catalog
             .seats
@@ -284,17 +339,25 @@ fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
                 .iter()
                 .map(|d| d.seat.as_str())
                 .collect();
-            let date = designation_date(&version.id);
-            if actual != expected
-                || version
-                    .designations
-                    .iter()
-                    .any(|d| d.date != date || d.record.trim().is_empty())
-            {
+            if actual != expected {
                 return Err(format!(
-                    "{} designated {actual:?}, expected {expected:?} dated {date}",
+                    "{} designated {actual:?}, expected {expected:?}",
                     version.id
                 ));
+            }
+            for designation in &version.designations {
+                if !decisions.contains(&designation.date) {
+                    return Err(format!(
+                        "{} designated on {}, not a roster decision date {decisions:?}",
+                        version.id, designation.date
+                    ));
+                }
+                if !designation.record.contains(&designation.date) {
+                    return Err(format!(
+                        "{} designation record {:?} does not cite its date {}",
+                        version.id, designation.record, designation.date
+                    ));
+                }
             }
             if !version.qualification.is_empty() {
                 return Err(format!("{} carries qualification evidence", version.id));
@@ -373,12 +436,14 @@ fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
             line.versions[0].designations = designations;
         }),
         ("designations", |c| {
-            // A designation dated outside the operator's recorded decisions.
-            c.lines[2].versions[0].designations[0].date = "2026-09-30".into();
+            // A date no roster decision records, cited by its own record.
+            let designation = &mut c.lines[2].versions[0].designations[0];
+            designation.date = "2026-09-30".into();
+            designation.record = "fixture decision, 2026-09-30".into();
         }),
         ("designations", |c| {
-            // A real decision date on a version that decision did not cover.
-            c.lines[2].versions[0].designations[0].date = "2026-10-02".into();
+            // A recorded decision date whose record cites another date.
+            c.lines[2].versions[0].designations[0].record = "fixture decision, 2026-10-01".into();
         }),
         ("designations", |c| {
             let mut retired = c.lines[2].versions[0].clone();
