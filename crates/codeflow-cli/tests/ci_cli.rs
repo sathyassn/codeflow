@@ -1624,12 +1624,14 @@ fn ci_names_a_git_upgrade_when_check_attr_has_no_source() {
 fn the_test_environment_blanks_every_ci_variable_the_product_reads() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config = std::fs::read_to_string(workspace.join(".cargo/config.toml")).unwrap();
-    let name = regex::Regex::new(r#""((?:GITHUB|GITLAB|BITBUCKET|CI)_[A-Z_]+|CI)""#).unwrap();
+    let name = regex::Regex::new(r#""((?:GITHUB|GITLAB|BITBUCKET|CI)_[A-Z0-9_]+|CI)""#).unwrap();
     let mut read = std::collections::BTreeSet::new();
-    let mut pending = vec![
-        workspace.join("crates/codeflow-cli/src"),
-        workspace.join("crates/codeflow-core/src"),
-    ];
+    let mut pending: Vec<_> = std::fs::read_dir(workspace.join("crates"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("src"))
+        .filter(|src| src.is_dir())
+        .collect();
+    assert!(pending.len() >= 3, "{pending:?}");
     while let Some(dir) = pending.pop() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
