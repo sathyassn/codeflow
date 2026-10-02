@@ -45,10 +45,13 @@ GITHUB_RELEASE_BODY_LIMIT = 125_000
 # The longest `owner/name` GitHub allows (39 + 1 + 100): notes that fit with
 # it fit under any repository, so the tree check needs no host name.
 LONGEST_REPOSITORY = "o" * 39 + "/" + "r" * 100
-# cargo-dist embeds the pending section twice in its plan manifest, which the
-# release workflow passes between jobs as one job output, and GitHub caps a
-# job's outputs at 1 MB. A section under this size leaves room for the rest.
-PLAN_SECTION_LIMIT = 400_000
+# GitHub caps one job's outputs at 1 MB, counted in UTF-16. cargo-dist's plan
+# and host jobs each output the whole manifest, which carries the pending
+# section twice as JSON strings (the changelog and the GitHub body); the
+# reserve covers the rest of it, about 13,000 UTF-16 bytes for 3.0.0.
+GITHUB_JOB_OUTPUT_LIMIT = 1_000_000
+PLAN_SECTION_COPIES = 2
+PLAN_RESERVE = 100_000
 
 
 class ReleaseError(RuntimeError):
@@ -1414,11 +1417,11 @@ def check_publishable(root: Path, ref: str, release: dict[str, Any]) -> None:
         return
     version = release["version"]
     text = file_at_ref(ref, "CHANGELOG.md", cwd=root).decode()
-    size = body_size(section_bytes(text, version))
-    if size > PLAN_SECTION_LIMIT:
+    size = plan_output_size(section_bytes(text, version))
+    if size > GITHUB_JOB_OUTPUT_LIMIT:
         fail(
-            f"the {version} changelog section is {size:,} bytes; the release plan carries it "
-            f"twice in one job output, so keep it under {PLAN_SECTION_LIMIT:,}"
+            f"the {version} changelog section would make the release plan's job output about "
+            f"{size:,} UTF-16 bytes; GitHub accepts {GITHUB_JOB_OUTPUT_LIMIT:,}"
         )
     # Rendered as the release authority will, under any repository name.
     release_notes(root, ref, f"v{version}", "0" * 40, LONGEST_REPOSITORY)
@@ -1623,6 +1626,13 @@ def release_notes(root: Path, ref: str, tag: str, source: str, repository: str) 
             f"entry cut to its label; GitHub accepts {GITHUB_RELEASE_BODY_LIMIT:,} characters"
         )
     return notes
+
+
+def plan_output_size(section: str) -> int:
+    """An upper bound on the UTF-16 bytes of the plan job output carrying
+    `section`: ASCII-escaped JSON never has fewer UTF-16 units than GitHub
+    counts."""
+    return 2 * PLAN_SECTION_COPIES * len(json.dumps(section)) + PLAN_RESERVE
 
 
 def body_size(text: str) -> int:

@@ -1417,6 +1417,11 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(headings)
         self.assertEqual(len(headings), len(set(headings)), headings)
         self.assertLessEqual(release.body_size(notes), release.GITHUB_RELEASE_BODY_LIMIT)
+        # The bound covers the plan the 3.0.0 dry run produced (run
+        # 37003474977: 714,658 UTF-16 bytes) and stays under GitHub's limit.
+        planned = release.plan_output_size(release.section_bytes(text, "3.0.0"))
+        self.assertGreaterEqual(planned, 714_658)
+        self.assertLessEqual(planned, release.GITHUB_JOB_OUTPUT_LIMIT)
         # The legacy group opens with entries under no heading of its own; they
         # stay under the Changed heading placed before the group.
         kind = next(
@@ -2288,9 +2293,12 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual((result["status"], result["host"]), ("ok", "not checked against the host"))
 
     def test_check_state_refuses_a_section_the_plan_cannot_carry(self) -> None:
-        self.repo.pending("2.0.1", [("patch", f"Fix {index}", "detail " * 500) for index in range(130)])
+        # About 235 KB of section, whose quotes and line ends JSON escapes,
+        # takes well over 1 MB of UTF-16 job output when carried twice.
+        detail = 'a "quoted" word\n  ' * 100
+        self.repo.pending("2.0.1", [("patch", f"Fix {index}", detail) for index in range(130)])
         self.repo.commit("fix: a very long section")
-        with self.assertRaisesRegex(release.ReleaseError, "carries it twice in one job output"):
+        with self.assertRaisesRegex(release.ReleaseError, "release plan's job output"):
             release.check_state(self.repo.args(ref="HEAD", structural=True))
 
     def test_check_state_refuses_pending_notes_github_would_refuse(self) -> None:

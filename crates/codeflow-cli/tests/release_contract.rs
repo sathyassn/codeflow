@@ -314,55 +314,53 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
     }
 }
 
-/// Run git in the workspace, whatever repository a calling hook points at.
-fn workspace_git(args: &[&str], input: Option<&[u8]>) -> Vec<u8> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new("git")
+/// Run a command in the workspace, whatever repository a calling hook points
+/// git at.
+fn workspace_output(program: &str, args: &[&str]) -> String {
+    let output = std::process::Command::new(program)
         .args(args)
         .current_dir(workspace_root())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("git must run");
-    // Feed stdin from its own thread: git writes output while it reads, and a
-    // full output pipe would otherwise block both sides.
-    let mut stdin = child.stdin.take().expect("git stdin");
-    let input = input.unwrap_or_default().to_vec();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let output = child.wait_with_output().expect("git must finish");
-    writer
-        .join()
-        .expect("git stdin writer must not panic")
-        .expect("git stdin must accept the input");
-    assert!(output.status.success(), "git {args:?} failed");
-    output.stdout
+        .output()
+        .expect("command must run");
+    assert!(output.status.success(), "{program} {args:?} failed");
+    String::from_utf8(output.stdout).expect("output must be UTF-8")
 }
 
 #[test]
 fn source_archive_leaves_out_only_retained_evidence() {
-    // cargo-dist builds source.tar.gz with `git archive`, which drops every
-    // `export-ignore` path. Only the retained evidence may be dropped; every
-    // other tracked file is source that a build or a reader needs.
-    let files = workspace_git(&["ls-files", "-z"], None);
-    let attributes = workspace_git(
-        &["check-attr", "-z", "--stdin", "export-ignore"],
-        Some(&files),
+    // cargo-dist builds source.tar.gz with `git archive`. Compare what it
+    // actually writes with the tracked files: only the retained evidence may
+    // be left out, so an exclusion on any parent folder also fails here.
+    let archive = std::env::temp_dir().join(format!("codeflow-source-{}.tar", std::process::id()));
+    let path = archive.to_str().expect("temporary path must be UTF-8");
+    workspace_output(
+        "git",
+        &[
+            "archive",
+            "--worktree-attributes",
+            "--format=tar",
+            "-o",
+            path,
+            "HEAD",
+        ],
     );
-    let fields = attributes
-        .split(|byte| *byte == 0)
-        .map(|field| String::from_utf8_lossy(field).into_owned())
-        .collect::<Vec<_>>();
-    let mut misplaced = Vec::new();
+    let listed = workspace_output("tar", &["-tf", path]);
+    fs::remove_file(&archive).expect("temporary archive must be removable");
+    let archived = listed
+        .lines()
+        .filter(|entry| !entry.ends_with('/'))
+        .collect::<std::collections::BTreeSet<_>>();
+    let tracked = workspace_output("git", &["ls-tree", "-r", "--name-only", "HEAD"]);
     let mut evidence = 0;
-    for record in fields.chunks_exact(3) {
-        let is_evidence = record[0].starts_with("docs/verification/");
+    let mut wrong = Vec::new();
+    for file in tracked.lines() {
+        let is_evidence = file.starts_with("docs/verification/");
         evidence += usize::from(is_evidence);
-        if is_evidence != (record[2] == "set") {
-            misplaced.push(record[0].clone());
+        if is_evidence == archived.contains(file) {
+            wrong.push(file);
         }
     }
     assert!(
@@ -370,8 +368,8 @@ fn source_archive_leaves_out_only_retained_evidence() {
         "docs/verification/ must hold the retained evidence"
     );
     assert!(
-        misplaced.is_empty(),
-        "export-ignore must cover exactly docs/verification/: {misplaced:?}"
+        wrong.is_empty(),
+        "the source archive must leave out exactly docs/verification/: {wrong:?}"
     );
 }
 
