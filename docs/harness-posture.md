@@ -43,10 +43,10 @@ dated evidence.
 
 ### Platform assurance
 
-CodeFlow 3.0.0 publishes macOS and Linux builds. Native Windows is not
-supported in 3.0.0 and is planned for 3.0.1. On Windows, run the Linux build
-inside WSL2, which is also the route for Claude work that needs OS-enforced
-sandboxing; WSL2 has not been separately qualified for 3.0.0. The native
+CodeFlow publishes macOS and Linux builds. Native Windows is not supported
+yet and is planned for a later release (TSK-197). On Windows, run the Linux
+build inside WSL2, which is also the route for Claude work that needs
+OS-enforced sandboxing; WSL2 has not been separately qualified. The native
 Windows rows below record each harness's posture for that planned support, not
 a 3.0.0 support claim.
 

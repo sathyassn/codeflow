@@ -401,6 +401,70 @@ class PendingVersionTests(unittest.TestCase):
             "2.0.1",
         )
 
+    def sync_with_updater_line(self, line: str) -> None:
+        """Run sync at a pending 2.0.1 with an updater whose `--version`
+        prints `line`, read from a file so one test can vary it."""
+        self.repo.pending("2.0.1", [("patch", "updater version line")])
+        lock = self.repo.root / "Cargo.lock"
+        lock.write_text(lock.read_text().replace('version = "2.0.1"', 'version = "9.9.9"', 1))
+        cargo = self.repo.root / "fake-cargo"
+        self.repo.write("fake-cargo", "#!/bin/sh\nexit 0\n")
+        cargo.chmod(0o755)
+        self.repo.write("version-line.txt", line)
+        binary = self.repo.root / "target/debug/codeflow"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        self.repo.write(
+            "target/debug/codeflow",
+            "#!/usr/bin/env python3\n"
+            "from pathlib import Path\n"
+            "import sys\n"
+            "if sys.argv[1:] == ['--version']:\n"
+            "    sys.stdout.write(Path('version-line.txt').read_text())\n"
+            "elif sys.argv[1:] == ['update']:\n"
+            "    path = Path('Cargo.lock')\n"
+            "    path.write_text(path.read_text().replace('9.9.9', '2.0.1'))\n"
+            "else:\n"
+            "    raise SystemExit(2)\n",
+        )
+        binary.chmod(0o755)
+        release.sync(self.repo.args(cargo=str(cargo)))
+
+    def test_sync_accepts_the_updater_version_with_provenance(self) -> None:
+        # Since 3.0.0, `codeflow --version` appends its source provenance.
+        self.sync_with_updater_line(
+            "codeflow 2.0.1 source=0123abcd dirty=true inputs=6bfa4843\n"
+        )
+        self.assertEqual(
+            release.validate_version_stamps(
+                {path: (self.repo.root / path).read_bytes() for path in release.VERSION_STAMP_PATHS}
+            ),
+            "2.0.1",
+        )
+
+    def test_sync_rejects_another_updater_version(self) -> None:
+        for line in ["codeflow 2.0.2 source=0123abcd dirty=false\n", "codeflow 2.0.10\n"]:
+            with self.subTest(line=line), self.assertRaisesRegex(
+                release.ReleaseError, "rebuilt updater version disagrees"
+            ):
+                self.sync_with_updater_line(line)
+
+    def test_sync_rejects_a_malformed_updater_version_line(self) -> None:
+        for line in [
+            "",
+            "\n",
+            "codeflow\n",
+            "codeflow2.0.1\n",
+            "codeflow-cli 2.0.1\n",
+            "other 2.0.1\n",
+            "2.0.1 codeflow\n",
+            "codeflow 2.0.1-rc1\n",
+            "\ncodeflow 2.0.1\n",
+        ]:
+            with self.subTest(line=line), self.assertRaisesRegex(
+                release.ReleaseError, "rebuilt updater version disagrees"
+            ):
+                self.sync_with_updater_line(line)
+
     def test_published_section_must_match_exact_public_source(self) -> None:
         self.repo.write(
             "CHANGELOG.md",

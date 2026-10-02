@@ -65,10 +65,10 @@ call it.
 | 3.0.0 | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` | A `.tar.xz` archive per target, a `.sha256` file per archive, a `sha256.sum`, a shell installer and a source archive |
 | Before 3.0.0 | Varies by release | Check a release's asset list before pinning it |
 
-Native Windows is not supported in 3.0.0: no Windows archive, PowerShell
+Native Windows is not supported yet: no Windows archive, PowerShell
 installer or `codeflow.exe` is published, and native Windows support is
-planned for 3.0.1. On Windows, use WSL2, which installs the Linux archive;
-WSL2 has not been separately qualified for 3.0.0.
+planned for a later release (TSK-197). On Windows, use WSL2, which installs
+the Linux archive; WSL2 has not been separately qualified.
 
 | Path | Use it when |
 |---|---|

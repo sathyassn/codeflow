@@ -106,7 +106,7 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
 | 3.2 | The latest exact-source main-push results come from `codeflow-ci` and `codeflow-release`; the release-state check runs in `codeflow-release` |
 | 3.3 | A dry run creates no draft and performs no hosting. Recheck timing and the one-publication-at-a-time rule are in [the Architecture bullets](releasing.md#architecture) |
 | 3.4 | Every asset name, size and SHA-256 digest matches the same-run staged artifact set, with no missing, duplicate or extra asset |
-| 3.6, 3.8, 3.10, 3.13 | 3.0.0 publishes no native Windows target (operator decision 2026-10-01). TSK-197 restores the Windows archive, the PowerShell installer and the Windows rows of these boxes for 3.0.1. The `windows` CI job keeps running as an advisory check and is not a release gate |
+| 3.6, 3.8, 3.10, 3.13 | 3.0.0 publishes no native Windows target (operator decision 2026-10-01). TSK-197 restores the Windows archive, the PowerShell installer and the Windows rows of these boxes in a later release. The `windows` CI job keeps running as an advisory check and is not a release gate |
 | 3.7 | These are static-analysis, compile and link evidence only ([cross-build toolchain](releasing.md#cross-build-toolchain)) |
 | 3.9 | The platform opens only a task-owned isolated browser and profile, passes the qualified Brotli and full review journey, preserves light, dark and system themes and accessibility behavior, exports offline, and proves close, crash and retention teardown. `--no-launch` remains usable |
 | 3.11 | Budget exhaustion leaves escaped source and does not block feedback, export, close or cleanup |
