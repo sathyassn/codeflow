@@ -353,10 +353,22 @@ fn source_archive_leaves_out_only_retained_evidence() {
         .lines()
         .filter(|entry| !entry.ends_with('/'))
         .collect::<std::collections::BTreeSet<_>>();
-    let tracked = workspace_output("git", &["ls-tree", "-r", "--name-only", "HEAD"]);
+    // Raw names: git quotes unusual names in its display form.
+    let tracked = workspace_output(
+        "git",
+        &[
+            "-c",
+            "core.quotePath=false",
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "HEAD",
+        ],
+    );
     let mut evidence = 0;
     let mut wrong = Vec::new();
-    for file in tracked.lines() {
+    for file in tracked.split('\0').filter(|name| !name.is_empty()) {
         let is_evidence = file.starts_with("docs/verification/");
         evidence += usize::from(is_evidence);
         if is_evidence == archived.contains(file) {
