@@ -87,7 +87,7 @@ The test gate evaluates file and aggregate coverage rules through one verdict.
 | candidate tree | named only after the producers ran; the run fails when generation changed tracked bytes |
 | change-aware selection | skips a target only when its declared inputs are unchanged against a base that has a recorded green run for the same config digest; a path no set matches, a change to the run-everything set (Rust, assets, build, config, workflows, gate scripts), a rename or deletion, an unknown base, and an epic close (`--all`) run every target; the run prints what it selected and skipped and why |
 | result artifact | bound to its revision, tree hash and config digest; a full run copies it to `~/.codeflow/gate-runs/<repo>/<run-id>/`, outside any worktree, where PR bodies cite it |
-| CodeFlow's own full gate | runs the Rust suite once, instrumented (`cargo llvm-cov nextest` with a 90% aggregate line floor), and its journey check reads that run's results by exact test name; the doctest target still runs, and on GitHub the Windows job's raw steps re-run the suite independently of the runner; that job is advisory, not a release gate, until TSK-197 |
+| CodeFlow's own full gate | runs the Rust suite once, instrumented (`cargo llvm-cov nextest` with a 90% aggregate line floor), and its journey check reads that run's results by exact test name; the doctest target still runs, and on GitHub the Windows job's raw steps are the independent referee for the runner |
 
 Delegation has two engine surfaces: the legacy `delegate-turn --result`
 adapter, and the transport-neutral delegate lifecycle in `delegate.rs`, surfaced

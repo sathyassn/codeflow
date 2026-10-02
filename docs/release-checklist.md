@@ -88,11 +88,11 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
 - [ ] 3.3 Generated host dependencies reject a failed or cancelled authority or main-recheck job, so publishing cannot skip either. Evidence: the generated workflow and a run log.
 - [ ] 3.4 The post-announce verifier binds the public tag and release to the selected main source and matches every asset exactly. Evidence: the verifier log.
 - [ ] 3.5 A stopped attempt is retried or recovered only as [when publication stops](releasing.md#when-publication-stops) allows. Evidence: the attempt record.
-- [ ] 3.6 `cargo dist plan --output-format=json` lists both macOS archives, the Linux x86-64 archive and the shell installer on native runners, and no Windows archive or PowerShell installer. Evidence: the pasted plan.
+- [ ] 3.6 `cargo dist plan --output-format=json` lists both macOS archives, the Linux x86-64 archive, the Windows x86-64 MSVC archive and both installers on native runners. Evidence: the pasted plan.
 - [ ] 3.7 Optional `cargo-xwin` and `cargo-zigbuild` target checks pass. Evidence: their output, with tool versions and host recorded.
-- [ ] 3.8 Native macOS and Linux build and test canaries pass. Evidence: OS, architecture, Rust version and exact command, with WSL2 recorded as Linux.
+- [ ] 3.8 Native macOS, Linux and Windows build and test canaries pass. Evidence: OS, architecture, Rust version and exact command, with WSL2 recorded as Linux.
 - [ ] 3.9 Each claimed presentation platform passes the isolated browser review journey and teardown, and an unqualified adapter fails closed. Evidence: journey output per platform.
-- [ ] 3.10 Presentation platform evidence covers every [native case](releasing.md#presentation-renderer-assets) for Linux and WSL2, and macOS. Evidence: native run output per platform.
+- [ ] 3.10 Presentation platform evidence covers every [native case](releasing.md#presentation-renderer-assets) for Windows, Linux and WSL2, and macOS. Evidence: native run output per platform.
 - [ ] 3.11 Browser evidence covers long-task behavior, including budget exhaustion. Evidence: browser run output.
 - [ ] 3.12 Presentation adversarial evidence covers every case in the adversarial table below. Evidence: test output per case.
 - [ ] 3.13 Each installer selects the right artifact, and each installed binary reports the release version and passes `codeflow doctor` in a disposable greenfield repo. Evidence: installer canary output.
@@ -106,12 +106,11 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
 | 3.2 | The latest exact-source main-push results come from `codeflow-ci` and `codeflow-release`; the release-state check runs in `codeflow-release` |
 | 3.3 | A dry run creates no draft and performs no hosting. Recheck timing and the one-publication-at-a-time rule are in [the Architecture bullets](releasing.md#architecture) |
 | 3.4 | Every asset name, size and SHA-256 digest matches the same-run staged artifact set, with no missing, duplicate or extra asset |
-| 3.6, 3.8, 3.10, 3.13 | 3.0.0 publishes no native Windows target (operator decision 2026-10-01). TSK-197 restores the Windows archive, the PowerShell installer and the Windows rows of these boxes for 3.0.1. The `windows` CI job keeps running as an advisory check and is not a release gate |
 | 3.7 | These are static-analysis, compile and link evidence only ([cross-build toolchain](releasing.md#cross-build-toolchain)) |
 | 3.9 | The platform opens only a task-owned isolated browser and profile, passes the qualified Brotli and full review journey, preserves light, dark and system themes and accessibility behavior, exports offline, and proves close, crash and retention teardown. `--no-launch` remains usable |
 | 3.11 | Budget exhaustion leaves escaped source and does not block feedback, export, close or cleanup |
-| 3.13 | The shell installer selects the correct macOS or Linux artifact, and WSL2 selects the Linux artifact |
-| 3.15 | Portal starter bytes, archive-equivalent bytes and release-binary delta stay within ADR-0048. A non-adopter receives no portal workspace, lockfile or baseline. An adopter passes setup, update, conflict and idempotence; locked install, build, audit and upgrade; `validate --portal`; source and manifest negative fixtures; and Chromium, Firefox and WebKit accessibility journeys. CodeFlow itself runs the `docs-portal` target through `codeflow test --mode full --strict` locally and on Ubuntu, selected when its inputs change and always under `--all` at epic close, plus the authority and path suite in the advisory Windows job. Generic consumer CI stays portal-free until adoption. These checks publish no generated output |
+| 3.13 | The shell installer selects the correct macOS or Linux artifact, the PowerShell installer selects `codeflow.exe` on native Windows, and WSL2 selects the Linux artifact |
+| 3.15 | Portal starter bytes, archive-equivalent bytes and release-binary delta stay within ADR-0048. A non-adopter receives no portal workspace, lockfile or baseline. An adopter passes setup, update, conflict and idempotence; locked install, build, audit and upgrade; `validate --portal`; source and manifest negative fixtures; and Chromium, Firefox and WebKit accessibility journeys. CodeFlow itself runs the `docs-portal` target through `codeflow test --mode full --strict` locally and on Ubuntu, selected when its inputs change and always under `--all` at epic close, plus the authority and path suite on Windows. Generic consumer CI stays portal-free until adoption. These checks publish no generated output |
 
 Presentation adversarial cases for box 3.12:
 
