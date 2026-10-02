@@ -4325,9 +4325,11 @@ def evaluator_key(*, create: bool = False) -> bytes | None:
     folder, key = path.parent.stat(), path.stat()
     if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
         raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
-    if stat.S_IMODE(folder.st_mode) & 0o022:
+    # Windows has no POSIX mode bits (every folder reads as 0o777 there);
+    # the key's privacy rests on the user profile's access list instead.
+    if os.name == "posix" and stat.S_IMODE(folder.st_mode) & 0o022:
         raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
-    if stat.S_IMODE(key.st_mode) & 0o077:
+    if os.name == "posix" and stat.S_IMODE(key.st_mode) & 0o077:
         raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
     return bytes.fromhex(path.read_text(encoding="utf-8").strip())
 
