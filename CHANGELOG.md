@@ -17,6 +17,33 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
+## [3.0.1]
+
+### Added
+
+<!-- codeflow:release-impact patch -->
+- **Native Windows support returns.** The release publishes an x86-64
+  Windows archive with `codeflow.exe` and a PowerShell installer again,
+  beside the macOS and Linux builds; 3.0.0 published neither. The Windows
+  test job gates every pull request to `main` and every publication again.
+  The defects it found are fixed: the guards, `codeflow doctor` and the
+  Codex and Grok trust checks now treat the short (`RUNNER~1`), long and
+  `\\?\` spellings of one Windows path as the same file; the full-gate lock
+  can be read by a second gate on Windows; a directory in the way of a
+  ledger file is named as a directory there; a shipped spec checked out
+  with CRLF line endings no longer counts as edited; and the model
+  evaluation kit no longer refuses its key folder for POSIX mode bits
+  Windows does not have.
+
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **A double-quoted backslash stays in the guards' reading.** Inside double
+  quotes Bash removes a backslash only before `$`, a backquote, `"` or
+  another backslash. The git guard removed it everywhere, so
+  `git -C "C:\Users\a\repo" commit` was judged against a path that does not
+  exist and refused. It now reads the path the shell passes.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
