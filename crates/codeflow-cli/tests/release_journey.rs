@@ -17,6 +17,16 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// The published version the adopted project starts from: the built
+/// binary's own, so the scaffold stamps `init` writes agree with it.
+const BASE: &str = env!("CARGO_PKG_VERSION");
+
+/// The patch release after [`BASE`].
+fn next_patch() -> String {
+    let (head, patch) = BASE.rsplit_once('.').unwrap();
+    format!("{head}.{}", patch.parse::<u64>().unwrap() + 1)
+}
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -238,29 +248,34 @@ impl Adopted {
         write(
             &root,
             "Cargo.toml",
-            "[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"3.0.0\"\n",
+            &format!("[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"{BASE}\"\n"),
         );
         let packages: String = ["codeflow-cli", "codeflow-core", "codeflow-present"]
             .iter()
             .fold(String::new(), |mut out, name| {
-                let _ = write!(out, "[[package]]\nname = \"{name}\"\nversion = \"3.0.0\"\n");
+                let _ = write!(
+                    out,
+                    "[[package]]\nname = \"{name}\"\nversion = \"{BASE}\"\n"
+                );
                 out
             });
         write(&root, "Cargo.lock", &format!("version = 4\n\n{packages}"));
         write(
             &root,
             "CHANGELOG.md",
-            "# Changelog\n\n## [3.0.0] - 2026-01-01\n\n- public\n",
+            &format!("# Changelog\n\n## [{BASE}] - 2026-01-01\n\n- public\n"),
         );
         let baseline = landed(&root, "chore: published baseline");
-        git(&root, &["tag", "v3.0.0"]);
+        git(&root, &["tag", &format!("v{BASE}")]);
         let tree = git(&root, &["rev-parse", "HEAD^{tree}"]);
         let snapshot = Command::new("python3")
             .args([
                 "-c",
-                "import sys, hashlib; sys.path.insert(0, 'scripts'); import release; \
-                 text = open('CHANGELOG.md').read(); \
-                 print(hashlib.sha256(release.published_snapshot(text, '3.0.0').encode()).hexdigest())",
+                &format!(
+                    "import sys, hashlib; sys.path.insert(0, 'scripts'); import release; \
+                     text = open('CHANGELOG.md').read(); \
+                     print(hashlib.sha256(release.published_snapshot(text, '{BASE}').encode()).hexdigest())"
+                ),
             ])
             .current_dir(&root)
             .output()
@@ -271,10 +286,10 @@ impl Adopted {
             "release_unit": "codeflow",
             "main_branch": "main",
             "bootstrap": {
-                "comparison": {"tag": "v3.0.0", "commit": baseline, "tree": tree},
+                "comparison": {"tag": format!("v{BASE}"), "commit": baseline, "tree": tree},
                 "published": {
                     "changelog_sha256": snapshot,
-                    "version": "3.0.0",
+                    "version": BASE,
                     "source_commit": baseline,
                     "release_target_commit": baseline,
                     "source_archive_sha256": "a".repeat(64),
@@ -293,9 +308,9 @@ impl Adopted {
         let host = serde_json::json!({
             "schema_version": 1,
             "drafts_visible": false,
-            "tags": {"v3.0.0": baseline},
+            "tags": {format!("v{BASE}"): baseline},
             "releases": [{
-                "tag": "v3.0.0", "draft": false, "prerelease": false, "target": baseline,
+                "tag": format!("v{BASE}"), "draft": false, "prerelease": false, "target": baseline,
                 "body": "", "assets": [{"name": "source.tar.gz", "digest": format!("sha256:{}", "a".repeat(64))}],
             }],
         });
@@ -436,24 +451,31 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     // A labelled pending entry with its stamps: no warning, and the pull
     // request job accepts it.
     git(root, &["switch", "-q", "feat/tool"]);
+    let next = next_patch();
     let changelog = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
     write(
         root,
         "CHANGELOG.md",
         &changelog.replace(
-            "## [3.0.0] - 2026-01-01",
-            "## [3.0.1]\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [3.0.0] - 2026-01-01",
+            &format!("## [{BASE}] - 2026-01-01"),
+            &format!(
+                "## [{next}]\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [{BASE}] - 2026-01-01"
+            ),
         ),
     );
-    for (path, from, to) in [
-        ("Cargo.toml", "version = \"3.0.0\"", "version = \"3.0.1\""),
-        ("Cargo.lock", "version = \"3.0.0\"", "version = \"3.0.1\""),
-    ] {
+    for path in ["Cargo.toml", "Cargo.lock"] {
         let text = std::fs::read_to_string(root.join(path)).unwrap();
-        write(root, path, &text.replace(from, to));
+        write(
+            root,
+            path,
+            &text.replace(
+                &format!("version = \"{BASE}\""),
+                &format!("version = \"{next}\""),
+            ),
+        );
     }
     let broken = commit(root, "docs(changelog): add the tool entry");
-    // The scaffold stamps are still 3.0.0: this push breaks a release tree
+    // The scaffold stamps are still the base version: this push breaks a release tree
     // its base kept valid, so the preflight blocks it.
     let blocked = project.push("feat/tool", None);
     let text = stderr(&blocked);
@@ -475,17 +497,20 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
         let text = std::fs::read_to_string(root.join(path)).unwrap();
         let text = text
             .replace(
-                "scaffold_version = \"3.0.0\"",
-                "scaffold_version = \"3.0.1\"",
+                &format!("scaffold_version = \"{BASE}\""),
+                &format!("scaffold_version = \"{next}\""),
             )
             .replace(
-                "\"scaffold_version\": \"3.0.0\"",
-                "\"scaffold_version\": \"3.0.1\"",
+                &format!("\"scaffold_version\": \"{BASE}\""),
+                &format!("\"scaffold_version\": \"{next}\""),
             )
-            .replace("scaffold=3.0.0 -->", "scaffold=3.0.1 -->");
+            .replace(
+                &format!("scaffold={BASE} -->"),
+                &format!("scaffold={next} -->"),
+            );
         write(root, path, &text);
     }
-    let fixed = commit(root, "chore(release): stamp 3.0.1");
+    let fixed = commit(root, &format!("chore(release): stamp {next}"));
     let pushed = project.push("feat/tool", None);
     let text = stderr(&pushed);
     assert!(pushed.status.success(), "{text}");
