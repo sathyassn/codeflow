@@ -24,15 +24,17 @@ jobs:
       - name: Keep dry runs non-publishing
         if: github.event.inputs.tag == 'dry-run'
         env:
-          PLAN_JSON: ${{ inputs.plan }}
+          # Only the fields read here are passed: the whole plan carries the
+          # release notes and can exceed the 128 KiB limit on one variable.
+          PLAN_PR_RUN_MODE: ${{ fromJSON(inputs.plan).ci.github.pr_run_mode }}
         run: |
-          printf '%s' "$PLAN_JSON" | jq -e '.ci.github.pr_run_mode == "plan"' >/dev/null
+          test "$PLAN_PR_RUN_MODE" = plan
           echo "Dry-run plan accepted; no hosted state changed."
       - name: Verify deliberate current-main authority
         if: github.event.inputs.tag != 'dry-run'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PLAN_JSON: ${{ inputs.plan }}
+          PLAN_TAG: ${{ fromJSON(inputs.plan).announcement_tag }}
           REQUESTED_TAG: ${{ github.event.inputs.tag }}
         run: |
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
@@ -83,8 +85,7 @@ jobs:
           python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
             --main-source "$main_sha" --tag "$REQUESTED_TAG" \
             --host-state /tmp/release-host-state.json
-          plan_tag=$(printf '%s' "$PLAN_JSON" | jq -r .announcement_tag)
-          test "$plan_tag" = "$REQUESTED_TAG"
+          test "$PLAN_TAG" = "$REQUESTED_TAG"
           python3 scripts/release.py release-notes --ref "$GITHUB_SHA" \
             --source "$GITHUB_SHA" --tag "$REQUESTED_TAG" --output /tmp/release-notes.md
 

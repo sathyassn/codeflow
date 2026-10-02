@@ -252,7 +252,8 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
         "--draft",
         "github.event.inputs.tag == 'dry-run'",
         "github.event.inputs.tag != 'dry-run'",
-        "plan_tag=",
+        "PLAN_TAG: ${{ fromJSON(inputs.plan).announcement_tag }}",
+        "test \"$PLAN_TAG\" = \"$REQUESTED_TAG\"",
         "REQUESTED_TAG:",
         "pull-requests: read",
         "checks: read",
@@ -281,6 +282,19 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
     assert!(recheck.contains("--main-source \"$main_sha\""));
     assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));
     assert!(recheck.contains("collaborators/${login}/permission"));
+
+    // The cargo-dist plan carries the release notes, and 3.0.0's plan
+    // exceeded the 128 KiB limit on one variable, so no workflow passes the
+    // whole plan into the environment; each takes only the fields it reads.
+    for entry in fs::read_dir(root.join(".github/workflows")).expect("workflows must be readable") {
+        let path = entry.expect("workflow entry").path();
+        let text = fs::read_to_string(&path).expect("workflow must be readable");
+        assert!(
+            !text.contains(": ${{ inputs.plan }}"),
+            "{} passes the whole plan into the environment",
+            path.display()
+        );
+    }
 
     let published = fs::read_to_string(root.join(".github/workflows/release-post-announce.yml"))
         .expect("post-announce verification workflow must be readable");
