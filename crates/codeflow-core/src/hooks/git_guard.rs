@@ -646,11 +646,17 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
             idx += 1; // some other harmless assignment prefix — keep scanning
             continue;
         }
-        // `command`/`builtin` just prefix another simple command — skip and
-        // re-examine the word they wrap (`command env VAR=…`).
-        if t == "command" || t == "builtin" {
-            idx += 1;
-            continue;
+        // `command`/`builtin`/`exec` just prefix another simple command —
+        // skip them and their options and re-examine the word they wrap
+        // (`command env VAR=…`, `command -p env VAR=…`).
+        if is_prefix_launcher(t) {
+            match skip_launcher_options(t, tokens, idx + 1) {
+                Some(next) => {
+                    idx = next;
+                    continue;
+                }
+                None => break,
+            }
         }
         // `env` (any path form), `export`, and the declaration builtins all
         // carry the assignment in their arguments.
@@ -4483,9 +4489,15 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
             }
         }
         let t = tokens.get(idx)?.as_str();
-        if t == "command" || t == "builtin" || t == "exec" {
-            idx += 1;
-            continue;
+        if is_prefix_launcher(t) {
+            match skip_launcher_options(t, tokens, idx + 1) {
+                Some(next) => {
+                    idx = next;
+                    continue;
+                }
+                // `command -v git` only looks the name up; nothing runs.
+                None => return Some((t, &tokens[idx + 1..])),
+            }
         }
         if basename(t) == "env" {
             idx += 1;
@@ -4508,6 +4520,37 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
         }
         return Some((t, &tokens[idx + 1..]));
     }
+}
+
+/// `true` for the shell builtins that run the simple command after them.
+fn is_prefix_launcher(t: &str) -> bool {
+    matches!(t, "command" | "builtin" | "exec")
+}
+
+/// Skip the options of a prefix launcher starting at `idx` and return the
+/// index of the command it runs: `command -p`, `exec -c -l -a NAME`, and
+/// `--` for all three. `None` when the options make `command` only look the
+/// name up (`-v`, `-V`), so nothing after it runs.
+fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+    while let Some(a) = tokens.get(idx).map(String::as_str) {
+        if a == "--" {
+            return Some(idx + 1);
+        }
+        if !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        if launcher == "command" && a.contains(['v', 'V']) {
+            return None;
+        }
+        // `exec -a NAME` (alone or last in a cluster such as `-ca`) takes
+        // the next word as the name it runs the command under.
+        idx += if launcher == "exec" && a.ends_with('a') {
+            2
+        } else {
+            1
+        };
+    }
+    Some(idx)
 }
 
 /// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
@@ -6330,6 +6373,11 @@ mod tests {
             "command git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push origin main'",
             "env GIT_TRACE=0 git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
             "/usr/bin/git config --global alias.x '!CODEFLOW_INTEGRATE_TOKEN=x git push'",
+            // Launcher options do not hide the program either.
+            "command -p git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "command -- git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "exec -a probe git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "command -p env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/y",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(
@@ -6337,6 +6385,23 @@ mod tests {
                 "{cmd}: {v:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_launcher_options_do_not_hide_git() {
+        let p = default_policy();
+        for cmd in [
+            "command -p git push origin main",
+            "command -- git push origin main",
+            "builtin -- git push origin main",
+            "exec -a probe git push origin main",
+            "exec -cl git push origin main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.push_to_protected"), "{cmd}: {v:?}");
+        }
+        // `command -v git` only looks git up.
+        assert!(evaluate("command -v git", &ctx(&p, "main")).is_empty());
     }
 
     #[test]
