@@ -60,6 +60,19 @@ erratum below, never an edit of the section.
   checkout before it builds, and the build counted that untracked file.
   The file is now ignored, so a release build reports `dirty=false`.
 
+<!-- codeflow:release-impact patch -->
+- **The scaffold passes its own secret scan.** In every repository
+  scaffolded by 3.0.0, the CI secret scan failed from the first commit:
+  gitleaks' `generic-api-key` rule took the words "vulnerable/malicious" in
+  the pipeline workflow's security stage (line 209 of
+  `.claude/workflows/pipeline.workflow.js` and its baseline copy) for a key.
+  New scaffolds word it differently. For repositories that already hold the
+  3.0.0 line, the CI workflow `codeflow update` installs scans with your own
+  `.gitleaks.toml`, or gitleaks' defaults, plus an allowance for that exact
+  value in those two paths only, so the scan passes without editing history.
+  Anything else on the line or in the file is still reported. A wrapper that
+  runs gitleaks itself adds the same entry; the CI README shows it.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a

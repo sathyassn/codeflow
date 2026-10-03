@@ -134,5 +134,22 @@ API — see CodeFlow ADR-0017.
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`
+- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
+  The GitHub workflow scans with a config it builds at run time: your own
+  `.gitleaks.toml` when you have one (it extends it, never replaces it), else
+  gitleaks' default rules, plus one allowance for the security-stage prose
+  CodeFlow 3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js`
+  and its baseline copy, which the `generic-api-key` rule mistakes for a key.
+  The allowance covers that exact value in those two paths only. A wrapper
+  that runs gitleaks itself on a repository scaffolded by 3.0.0 needs the
+  same entry in its `.gitleaks.toml`:
+
+  ```toml
+  [[allowlists]]
+  description = "CodeFlow 3.0.0 seeded pipeline workflow: security-stage prose, not a credential"
+  condition = "AND"
+  paths = ['''^(?:\.codeflow/\.baseline/)?\.claude/workflows/pipeline\.workflow\.js$''']
+  regexTarget = "secret"
+  regexes = ['''^vulnerable/malicious$''']
+  ```
 - **osv-scanner** — dependency/supply-chain audit: `osv-scanner scan -r .`
