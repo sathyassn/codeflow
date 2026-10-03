@@ -1093,10 +1093,23 @@ fn an_invalid_target_policy_does_not_turn_the_check_off() {
 }
 
 /// Land a default-branch policy that fails strict validation and turns the
-/// push check off. The local hooks refuse to commit it, so it lands with
-/// them off, as a change made elsewhere would arrive; the checkout returns
-/// to `feat/x`.
+/// push check off.
 fn land_invalid_policy(root: &Path, dest: &Path) {
+    land_unchecked_policy(root, dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("test_gate_on_push", "off".into()),
+                ("no_such_key", true.into()),
+            ],
+        );
+    });
+}
+
+/// Land `change` to the default branch's policy. The local hooks refuse to
+/// commit a policy they cannot use, so it lands with them off, as a change
+/// made elsewhere would arrive; the checkout returns to `feat/x`.
+fn land_unchecked_policy(root: &Path, dest: &Path, change: impl FnOnce(&Path)) {
     let target = default_branch(dest);
     git(
         root,
@@ -1108,13 +1121,7 @@ fn land_invalid_policy(root: &Path, dest: &Path) {
             &format!("origin/{target}"),
         ],
     );
-    set_policy(
-        root,
-        &[
-            ("test_gate_on_push", "off".into()),
-            ("no_such_key", true.into()),
-        ],
-    );
+    change(root);
     git(
         root,
         &[
@@ -1248,6 +1255,7 @@ fn a_protected_alias_does_not_lend_its_referent_s_policy() {
 
 /// Advance the destination's default branch by a commit this clone does
 /// not have, so judging a push needs a fetch.
+#[cfg(unix)]
 fn advance_unseen(dest: &Path) {
     let target = default_branch(dest);
     let made = run(
@@ -1321,4 +1329,80 @@ fn a_failed_authority_fetch_is_tried_once_in_both_tracking_modes() {
         assert!(out.contains("SPC-013 R-120"), "{tier}: {out}");
         assert_eq!(fetches, 1, "{tier}: {out}");
     }
+}
+
+/// A default-branch policy whose bytes are not UTF-8 is content this
+/// codeflow cannot read, not a missing authority: the push is refused
+/// (review round four, finding 2).
+#[test]
+fn a_default_policy_that_is_not_utf8_refuses_the_push() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    write(&root, "x.txt", "x\n");
+    commit_all(&root, "feat: add x");
+    land_unchecked_policy(&root, &dest, |root| {
+        let mut bytes = std::fs::read(root.join(POLICY)).unwrap();
+        bytes.extend_from_slice(b"\n\xff\n");
+        std::fs::write(root.join(POLICY), bytes).unwrap();
+    });
+    let out = pushed(&root);
+    assert!(out.contains("cannot be read by this codeflow"), "{out}");
+    not_landed(&dest, &out, "feat/x", &head_sha(&root));
+}
+
+/// A commit the destination already holds under a tag is still checked
+/// when a branch carries it: the advertised tag would leave the range
+/// empty (review round four, finding 1).
+#[test]
+fn a_commit_published_as_a_tag_is_still_checked_on_its_branch() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    four_bullets(&root);
+    let tagged = push(&root, &["origin", "HEAD:refs/tags/v0.0.1-bad"]);
+    let there = text(&run("git", &dest, &["rev-parse", "v0.0.1-bad^{commit}"]));
+    assert_eq!(there.trim(), head_sha(&root), "{tagged}");
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// A commit an earlier push carried, which the default branch's policy
+/// has since come to forbid, is checked again on the next push, as the
+/// hosted job checks the whole branch from the target tip (review round
+/// four, finding 1).
+#[test]
+fn an_earlier_push_is_checked_again_after_the_default_tightens() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    four_bullets(&root);
+    let first = pushed(&root);
+    let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    write(&root, "z.txt", "z\n");
+    commit_all(&root, "feat: add z");
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
 }

@@ -199,10 +199,14 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
 /// judged from the default target's tip, as its pull request is; another
 /// branch from the boundary of what the destination holds, or noted when
 /// that is unresolved; a push whose scope cannot be read is refused (see
-/// [`release_base`]). The range's boundary only bounds the commits: the
-/// policy that judges them, and whether and at what level the check gates
-/// the push, come from the candidate authority (see [`judged_by`]). A
-/// malformed authority refuses every pushed branch, range or not.
+/// [`release_base`]). The range's boundary bounds the checks other than
+/// the commit checks; those run from the candidate authority's tip, so no
+/// history the destination holds hides a commit from them, except where
+/// the boundary is already the pull request's range: a release branch's,
+/// or a declared target's. The policy,
+/// and whether and at what level the check gates the push, come from that
+/// authority (see [`judged_by`]). An authority whose policy cannot be read
+/// or validated refuses every pushed branch, range or not.
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -238,14 +242,14 @@ fn run_ci_ranges(
                     ),
                 )
             }
-            Judged::Invalid { target, tip } => {
+            Judged::Invalid { target, tip, why } => {
                 report.violations.push(Violation::always_blocking(
                     "git.policy_authority",
                     format!(
-                        "the policy at {target} {}, the destination's default branch, is not valid for this codeflow, so '{branch}' is refused: the hosted job refuses a range judged by it",
+                        "the policy at {target} {}, the destination's default branch, {why}, so '{branch}' is refused",
                         short(tip)
                     ),
-                    "fix the policy on the destination's default branch through a reviewed pull request, or update codeflow to a version that reads it, then push again",
+                    "if a newer codeflow wrote that policy, upgrade this codeflow and push again; if the policy itself is malformed, repair it on the destination's default branch through a reviewed pull request",
                 ));
                 continue;
             }
@@ -262,25 +266,8 @@ fn run_ci_ranges(
             }
         };
         let policy = &policy;
-        let base = match release_base(root, r, branch, destination, report) {
-            Scoped::Refused => None,
-            Scoped::Release(tip) => Some(tip),
-            Scoped::Ordinary => {
-                let mut notices = Vec::new();
-                let range = range_base(root, r, destination, &mut notices);
-                report
-                    .status
-                    .extend(notices.into_iter().map(|text| format!("note: {text}")));
-                if let Some(RangeBase { base, note }) = range {
-                    report.notes.extend(note);
-                    Some(base)
-                } else {
-                    report.notes.push(unresolved(branch, destination));
-                    None
-                }
-            }
-        };
-        if let Some(base) = base {
+        let base = ci_base(root, r, branch, destination, report);
+        if let Some((base, targeted)) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec![
@@ -300,8 +287,17 @@ fn run_ci_ranges(
             if let Some(tip) = existing_tip(root, r) {
                 args.extend(["--baseline-from", tip]);
             }
+            // Unless the base already bounds the pull request's range, the
+            // commit checks run over everything the head adds to the
+            // candidate authority's tip, as the hosted job's range from the
+            // target tip does: history the destination already holds under
+            // another name, or commits an earlier push carried that the tip
+            // now forbids, are not left out.
             if let Judged::Target { tip, .. } = &judged {
                 args.extend(["--policy-from", tip]);
+                if !targeted {
+                    args.extend(["--commits-from", tip]);
+                }
             }
             // The release scope reads the policy at this destination's
             // default target (SPC-013 R-120), from the advertisement the
@@ -315,6 +311,42 @@ fn run_ci_ranges(
                 }
             }
             run_check_with(exe, root, &args, input, policy, report, steps);
+        }
+    }
+}
+
+/// The base of a pushed branch's `codeflow ci` range, and whether it
+/// already bounds the range its pull request is judged on (a release
+/// branch's default tip, or a declared target's boundary); `None` when the
+/// push is refused or the range is unresolved, both reported.
+fn ci_base(
+    root: &Path,
+    r: &PushRef,
+    branch: &str,
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> Option<(String, bool)> {
+    match release_base(root, r, branch, destination, report) {
+        Scoped::Refused => None,
+        Scoped::Release(tip) => Some((tip, true)),
+        Scoped::Ordinary => {
+            let mut notices = Vec::new();
+            let range = range_base(root, r, destination, &mut notices);
+            report
+                .status
+                .extend(notices.into_iter().map(|text| format!("note: {text}")));
+            if let Some(RangeBase {
+                base,
+                note,
+                declared,
+            }) = range
+            {
+                report.notes.extend(note);
+                Some((base, declared))
+            } else {
+                report.notes.push(unresolved(branch, destination));
+                None
+            }
         }
     }
 }
@@ -600,10 +632,15 @@ enum Judged {
         tip: String,
         policy: Box<GitPolicy>,
     },
-    /// The default branch's policy fails strict validation: the push is
-    /// refused, whether or not its range resolves, as the hosted job
-    /// refuses a range judged by it.
-    Invalid { target: String, tip: String },
+    /// The default branch's tip is here, and its policy cannot be read or
+    /// fails strict validation: the push is refused, whether or not its
+    /// range resolves. `why` says which, for this codeflow; a newer one
+    /// may accept a policy this one rejects.
+    Invalid {
+        target: String,
+        tip: String,
+        why: String,
+    },
     /// No candidate authority could be read: the check runs where a range
     /// resolves, at block level, and says it is not the hosted verdict.
     Unverified(String),
@@ -624,21 +661,31 @@ enum TargetPolicy {
     Valid(Box<GitPolicy>),
     /// The tip carries no policy yet (the change that adopts `CodeFlow`).
     Missing,
-    Malformed,
+    /// Why the policy at a tip that is here cannot be used: it cannot be
+    /// read (bytes that are not UTF-8, an unreadable tree or blob) or it
+    /// fails strict validation. Content, never acquisition: the tip is
+    /// already here, so this refuses the push.
+    Malformed(String),
 }
 
-fn target_policy(root: &Path, tip: &str) -> Result<TargetPolicy, String> {
-    let Some(text) = codeflow_core::hooks::landed_policy::policy_text_at(root, tip)? else {
-        return Ok(TargetPolicy::Missing);
+fn target_policy(root: &Path, tip: &str) -> TargetPolicy {
+    let version = env!("CARGO_PKG_VERSION");
+    let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, tip) {
+        Ok(Some(text)) => text,
+        Ok(None) => return TargetPolicy::Missing,
+        Err(why) => {
+            return TargetPolicy::Malformed(format!(
+                "cannot be read by this codeflow {version} ({why})"
+            ))
+        }
     };
+    let invalid = || TargetPolicy::Malformed(format!("is not valid for this codeflow {version}"));
     if codeflow_core::hooks::policy_schema::validate_policy_str(&text).is_err() {
-        return Ok(TargetPolicy::Malformed);
+        return invalid();
     }
-    Ok(
-        serde_json::from_str::<codeflow_core::hooks::policy::Policy>(&text)
-            .map_or(TargetPolicy::Malformed, |policy| {
-                TargetPolicy::Valid(Box::new(policy.git))
-            }),
+    serde_json::from_str::<codeflow_core::hooks::policy::Policy>(&text).map_or_else(
+        |_| invalid(),
+        |policy| TargetPolicy::Valid(Box::new(policy.git)),
     )
 }
 
@@ -684,7 +731,11 @@ fn judged_by(root: &Path, destination: &Destination<'_>, steps: &mut Vec<PushSte
             tip,
             policy: policy.clone(),
         },
-        TargetPolicy::Malformed => Judged::Invalid { target, tip },
+        TargetPolicy::Malformed(why) => Judged::Invalid {
+            target,
+            tip,
+            why: why.clone(),
+        },
         TargetPolicy::Missing => Judged::Unverified(format!(
             "the destination's default branch {target} has no policy yet"
         )),
@@ -791,7 +842,7 @@ impl Destination<'_> {
                     let tip = tip.to_string();
                     Ok(Anchor {
                         name: name.clone(),
-                        policy: target_policy(root, &tip)?,
+                        policy: target_policy(root, &tip),
                         tip,
                     })
                 })();
@@ -995,6 +1046,10 @@ fn advertised_commits(root: &Path, listed: &str) -> Advertised {
 struct RangeBase {
     base: String,
     note: Option<Finding>,
+    /// The base is the boundary with the advertised tip of the target the
+    /// branch's task record declares: the range its pull request into that
+    /// target is judged on, so the commit checks keep it.
+    declared: bool,
 }
 
 /// Select a range without excluding any destination-missing commit:
@@ -1038,7 +1093,11 @@ fn range_base(
                 None,
                 line.as_deref(),
             )
-            .map(|base| RangeBase { base, note: None });
+            .map(|base| RangeBase {
+                base,
+                note: None,
+                declared: false,
+            });
         }
         Advertised::Tips(_) => None,
         Advertised::Failed(why) => Some(Finding::new(
@@ -1092,33 +1151,34 @@ fn target_base(
     notices: &mut Vec<String>,
 ) -> Option<RangeBase> {
     let branch = r.remote_branch()?;
-    let (base, target) =
-        if policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX) {
-            let old = existing_tip(root, r)?;
-            git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
-            (old.to_string(), branch.to_string())
-        } else {
-            let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
-                root,
-                branch,
-                &r.local_sha,
-            )
-            .ok()??;
-            if !codeflow_core::workgraph::is_stable_work_target(&target) {
-                return None;
-            }
-            let target = target.trim();
-            let tip = tips.branches.get(target)?;
-            if tips.commits.binary_search(tip).is_err() {
-                notices.push(format!(
-                    "declared target '{target}' advertised at {tip} is not fetched here; \
+    let line = policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
+    let declared = !line;
+    let (base, target) = if line {
+        let old = existing_tip(root, r)?;
+        git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
+        (old.to_string(), branch.to_string())
+    } else {
+        let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+            root,
+            branch,
+            &r.local_sha,
+        )
+        .ok()??;
+        if !codeflow_core::workgraph::is_stable_work_target(&target) {
+            return None;
+        }
+        let target = target.trim();
+        let tip = tips.branches.get(target)?;
+        if tips.commits.binary_search(tip).is_err() {
+            notices.push(format!(
+                "declared target '{target}' advertised at {tip} is not fetched here; \
                      falling back to advertised-history range selection for '{branch}'"
-                ));
-                return None;
-            }
-            let base = git(root, &["merge-base", &r.local_sha, tip])?;
-            (base.trim().to_string(), target.to_string())
-        };
+            ));
+            return None;
+        }
+        let base = git(root, &["merge-base", &r.local_sha, tip])?;
+        (base.trim().to_string(), target.to_string())
+    };
     notices.push(format!(
         "range of '{branch}' uses advertised target '{target}': `codeflow ci --base {base} --head {}`",
         r.local_sha
@@ -1143,7 +1203,11 @@ fn target_base(
             ));
         }
     }
-    Some(RangeBase { base, note })
+    Some(RangeBase {
+        base,
+        note,
+        declared,
+    })
 }
 
 /// The destination's advertised sha for a branch it already has, when that
@@ -1207,7 +1271,11 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
             ))
         }
     };
-    RangeBase { base, note }
+    RangeBase {
+        base,
+        note,
+        declared: false,
+    }
 }
 
 /// The exclusive base of `local_sha` against the `known` commits the
@@ -1329,6 +1397,7 @@ fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<Rang
         return Some(RangeBase {
             base: local_sha.to_string(),
             note,
+            declared: false,
         });
     }
     listed
@@ -1337,6 +1406,7 @@ fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<Rang
         .map(|base| RangeBase {
             base: base.to_string(),
             note,
+            declared: false,
         })
 }
 

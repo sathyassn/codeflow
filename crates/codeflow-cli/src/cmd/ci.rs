@@ -85,11 +85,20 @@ pub struct CiArgs {
     pub baseline_from: Option<String>,
 
     /// The commit whose `.codeflow/policy.json` judges the range (default:
-    /// the base). The pre-push hook passes the tip of the branch the pull
-    /// request merges into, where the hosted job reads its policy, since a
-    /// range's base can be an old fork point or the branch's own last push.
+    /// the base). The pre-push hook passes its candidate authority, the
+    /// destination default branch's tip, since a range's base can be an
+    /// old fork point or the branch's own last push.
     #[arg(long, value_name = "REF", hide = true)]
     pub policy_from: Option<String>,
+
+    /// The base of the commit checks alone (default: the base): they run
+    /// over `<REF>..head`, while every other check keeps the base. The
+    /// pre-push hook passes its candidate authority's tip, so history the
+    /// destination already holds under another name, or that an earlier
+    /// push carried, is still checked, as the hosted job's range from the
+    /// target tip checks it.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub commits_from: Option<String>,
 
     /// The level of the rule of a plane that runs this check (pre-push
     /// passes `git.test_gate_on_push`): each finding prints at the lower of
@@ -310,7 +319,11 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- commit-range checks ---------------------------------------------
     // Every path the range touches, for the PR-structure docs-only test.
     // `None` = the range could not be resolved (unknown = code, conservative).
-    let range = evaluate_commit_range(&root, &base_candidates, &head, &range_source, git);
+    let (commit_bases, commit_source) = args.commits_from.clone().map_or_else(
+        || (base_candidates.clone(), range_source.clone()),
+        |from| (vec![from], "--commits-from".to_string()),
+    );
+    let range = evaluate_commit_range(&root, &commit_bases, &head, &commit_source, git);
     tagged.extend(range.violations);
     if range.ran {
         ran.push("commit");
@@ -426,7 +439,7 @@ pub fn run(args: &CiArgs) -> i32 {
         let body = adopter::supply_sections(adoption.profile.as_ref(), body);
         // One checked tree diff decides what the body may leave out; a range
         // that could not be listed is code (TSK-135).
-        let class = range.base_sha.as_deref().map_or(ChangeClass::CODE, |base| {
+        let class = base_sha.as_deref().map_or(ChangeClass::CODE, |base| {
             let inventory = change_class::range_inventory(&root, base, &head);
             change_class::classify(
                 inventory.as_deref(),

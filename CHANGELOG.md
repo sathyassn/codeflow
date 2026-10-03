@@ -107,12 +107,21 @@ erratum below, never an edit of the section.
   the host may judge it differently. The policy is strictly validated,
   sets the rules, and decides whether and at what level `codeflow ci`
   gates the push (`git.test_gate_on_push`), so neither the head nor the
-  working copy can lower or turn off that check. A malformed policy there
-  refuses the push, whether or not its range resolves. With no candidate
-  authority (a destination that does not answer, a failed fetch, or a
-  default branch with no policy yet), the hook says so and still runs
-  `codeflow ci` at block level with the policy at the range's base, as a
-  best-effort check. When an `upstream` remote points elsewhere than the
+  working copy can lower or turn off that check. Its commit checks run
+  over everything the pushed head adds to that tip, as the hosted job's
+  range from the target tip does, so a commit the destination already
+  holds under a tag or another branch, or one an earlier push carried
+  before the policy tightened, is still checked. A task branch whose
+  record declares an advertised integration line keeps that line's
+  boundary, the range its pull request into the line is judged on. A
+  policy there
+  that this codeflow cannot read or validate refuses the push, whether or
+  not its range resolves; when a newer codeflow wrote it, upgrade the
+  local one. With no candidate authority (a destination that does not
+  answer, a failed fetch, or a default branch with no policy yet), the
+  hook says so and, where a range resolves, still runs `codeflow ci` at
+  block level with the policy at the range's base, as a best-effort
+  check. When an `upstream` remote points elsewhere than the
   push, the hook notes that a pull request may target the upstream, whose
   policy can differ. The tree checks in the pre-push hook
   (`codeflow validate --docs` and the quick targets) and the release
