@@ -1,0 +1,11 @@
+id = "TSK-217"
+uid = "d72fa75e-a10a-4142-b7fa-a3da972461ac"
+kind = "TSK"
+title = "Remove three small defects adopters see"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T08:26:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
