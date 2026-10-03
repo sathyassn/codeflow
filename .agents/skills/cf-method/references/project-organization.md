@@ -200,7 +200,9 @@ target; a standalone task's record is allocated on its own task branch:
 - `codeflow task new --epic EPC-NNN --into <target> "<title>"` allocates a
   task; `--standalone-reason "<why>"` replaces `--epic` for a standalone task,
   and `codeflow task new --follow-up-of TSK-NNN "<title>"` files a follow-up
-  that inherits its epic and target.
+  that inherits its epic and target. A standalone task's follow-up is
+  standalone too: file it off a `plan/` branch, and `work claim` moves it to
+  its own task branch, where its record lands with its work.
 - `codeflow adr new "<title>"` allocates a decision record.
 
 The epic's one planning change is validated with `codeflow validate --docs`,
@@ -208,9 +210,9 @@ reviewed once, and merged into each task's declared `integration_target`
 before implementation; it anchors every task of the epic, and an epic task
 never authorizes its own record from its task branch. A standalone task's
 record and code land in one independently reviewed PR, where CI admits that
-one record and no other. Later follow-ups, re-sizing and other tasks'
-criteria ride in one batched epic amendment on a `plan/` branch; a task's own
-criteria amendment and status ride in its own PR. The target is a protected
+one record and no other. Later follow-ups of epic tasks, re-sizing and other
+tasks' criteria ride in one batched epic amendment on a `plan/` branch; a
+task's own criteria amendment and status ride in its own PR. The target is a protected
 release branch or a body-of-work `integration/` branch, never a task branch,
 and it resolves to a real local or remote-tracking branch, never `HEAD`, a
 tag, an object ID, or a revision expression.
@@ -285,14 +287,25 @@ table does not list is refused, whoever writes it:
 `in_progress` stays readable on older records, but no verb writes it: a
 visible task branch shows the work in progress. The acceptance block is the
 completion record; each follow-up gets one real home, filed with
-`--follow-up-of` in the batched epic amendment.
+`--follow-up-of` in the batched epic amendment, or as its own standalone task
+when it follows a standalone task.
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
 revision replaces it. `implemented` is derived when every consumer is
 complete; nobody writes it. An epic closes with `codeflow epic status EPC-NNN
 complete --acceptance <file>` once every task is terminal and every criterion
-is verified; `cancelled` and `archived` are its other terminal acts. A
+is verified. A cancelled task never verifies a criterion: one that only
+cancelled tasks serve, like one no task serves, is verified in the epic's own
+acceptance block with its evidence. That block binds as a task's does: it
+names the reviewed commit, after which only the epic's status and Closeout
+change, and a waiver names the planning amendment of that criterion that
+the reviewed commit contains. When it does not bind, correct the block and
+have it reviewed: an open epic reruns `codeflow epic status EPC-NNN complete
+--acceptance <file>`, and an epic the pull request already completes gets
+the corrected block in its Closeout in that pull request, since an epic is
+never reopened. `cancelled` and `archived` are its other
+terminal acts. A
 multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
