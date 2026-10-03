@@ -1,0 +1,11 @@
+id = "ADR-0077"
+uid = "46deb2fd-7fa7-4c80-93b6-c802c988783c"
+kind = "ADR"
+title = "Another model family is reached through an interactive seat in a Herdr tab"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T06:56:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
