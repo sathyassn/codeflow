@@ -619,6 +619,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "For red or unfinished CI jobs, follow",
         "only when a CI job is red or unfinished",
     ),
+    // TSK-218: release integration loads only after an epic-line landing
+    // in a project that configures a release branch and its workflow.
+    conditional(
+        "cf-ship/SKILL.md",
+        "cf-ship/references/release-integration.md",
+        "only when the project configures a release branch matching its release pattern",
+        "only after an epic-line landing with a configured release branch and workflow",
+    ),
     conditional(
         "cf-ship/references/pr-evidence.md",
         "cf-ship/references/pr-checks.md",

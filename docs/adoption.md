@@ -221,7 +221,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | Profile rule | Behavior |
 |---|---|
 | When it applies | In `codeflow ci` only, when the actor the workflow passes (`--actor`) and the branch both match, and only as the target branch's policy states it, so a pull request cannot add a profile for itself |
-| What it skips | Branch naming and the commit message shape rules |
+| What it skips | Branch naming, the commit message shape rules and the PR Summary shape (`git.pr_summary`), since the bot writes its body to its own format |
 | What still runs | Tests, the secret scan, AI attribution, emoji, the dash rule, the release declaration, and PR sections at their configured level; `sections` only supplies the headings the bot body leaves out |
 | Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request the actor is `unknown`, whatever `--actor` says, and no profile applies |
 | `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none; a profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
@@ -245,6 +245,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | A pull request that changes only Markdown under `docs/` or `project-management/`, outside your product and watched contract paths and the other shared contract surfaces | Whatever the decision, it needs just Summary and Changes of your required list, under the template's headings when the mapping is accepted, and may leave out Release impact |
 | A run without a terminal (`--yes`, CI) | Leaves the state `diagnosed`, and `codeflow doctor` repeats it |
 | While the mapping is diagnosed | The PR-section check runs at `warn` only on a fresh install whose policy file `init` created; a `pr_sections` value already in your policy file stays in force, even when it equals the default |
+| The Summary shape while diagnosed | The Summary shape check (`git.pr_summary`) runs at `warn` at most while the mapping is diagnosed, whatever `pr_sections` says; a lower `pr_summary` level stays as you set it |
 | `codeflow ci` | Prints each check's effective level and where it comes from (`configured`, `shipped default` or `diagnosed`) |
 | These policy edits, and the keys `codeflow update` adds | Spliced into the file as you wrote it, so no other byte changes; a policy with no `git` object gains one |
 | A template reached through a symlink out of the repository | Never read or written |

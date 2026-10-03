@@ -334,6 +334,268 @@ pub fn has_section(body: &str, heading: &str) -> bool {
     section(body, heading).is_some()
 }
 
+/// Whether a task record names what it delivers (sathyassn/codeflow#40):
+/// its `## Deliverables` section has a substantive entry, or its
+/// `## Description` names a path. Both are read as Markdown, and comments
+/// never count.
+///
+/// The warning this feeds is advisory, so the reading errs toward
+/// silence: anything that plausibly names a path counts, and only a
+/// section with no real entry fails. A token with `/` or `\` counts unless
+/// it is a URL, a version or a slash word such as and/or; a file name with
+/// an extension counts; a link target counts with its fragment and query
+/// removed; and common extensionless files (README, CHANGELOG, LICENSE and
+/// the like) count. In Deliverables, a heading is never an entry, and an
+/// empty or checkbox-only item, a placeholder such as `TODO`, or the
+/// template's `<output>` and `<path>` tokens fill nothing.
+#[must_use]
+pub fn names_deliverables(body: &str) -> bool {
+    section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
+        || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
+}
+
+/// The Markdown of a section as written, with its comment lines blank;
+/// inline HTML stays, so a placeholder such as `<path>` is still seen.
+fn section_markdown(body: &str, heading: &str) -> Option<String> {
+    let lines: Vec<&str> = body.lines().collect();
+    let scanned = scan(&lines);
+    let (start, end) = section_span(&scanned, heading)?;
+    Some(
+        (start + 1..end)
+            .map(|index| {
+                if scanned[index].kind == LineKind::Hidden {
+                    ""
+                } else {
+                    lines[index].trim_end_matches('\r')
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Words that hold a place rather than name an output.
+const PLACEHOLDERS: &[&str] = &[
+    "todo",
+    "tbd",
+    "tba",
+    "fixme",
+    "xxx",
+    "placeholder",
+    "output",
+    "path",
+];
+
+/// Whether a Deliverables section has one substantive entry: a list item,
+/// paragraph or fenced block, never a heading, with words other than
+/// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
+/// and possibly spanning lines, never reaches the entry, so it never
+/// changes the result; other inline HTML is dropped too, except the
+/// template's `<output>` and `<path>` tokens, which empty their entry.
+fn has_entry(markdown: &str) -> bool {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
+
+    let mut entry = String::new();
+    let mut filled = false;
+    let mut in_heading = false;
+    let mut in_comment = false;
+    for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
+        match event {
+            Event::Start(Tag::Heading { .. }) => {
+                filled |= is_entry(&entry);
+                entry.clear();
+                in_heading = true;
+            }
+            Event::End(TagEnd::Heading(_)) => in_heading = false,
+            _ if in_heading => {}
+            Event::InlineHtml(html) => {
+                if in_comment {
+                    in_comment = !html.contains("-->");
+                } else if let Some(rest) = html.strip_prefix("<!--") {
+                    in_comment = !rest.contains("-->");
+                } else if is_template_token(&html) {
+                    entry.push_str(&html);
+                    entry.push(' ');
+                }
+            }
+            Event::Text(text) | Event::Code(text) => {
+                entry.push_str(&text);
+                entry.push(' ');
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                entry.push_str(&dest_url);
+                entry.push(' ');
+            }
+            Event::Start(Tag::Item)
+            | Event::End(TagEnd::Item | TagEnd::Paragraph | TagEnd::CodeBlock) => {
+                filled |= is_entry(&entry);
+                entry.clear();
+            }
+            _ => {}
+        }
+    }
+    filled || is_entry(&entry)
+}
+
+/// Whether inline HTML is one of the template's placeholder tokens.
+fn is_template_token(html: &str) -> bool {
+    let html = html.trim().to_lowercase();
+    html == "<output>" || html == "<path>"
+}
+
+/// Whether one entry is substantive: an entry holding the template's
+/// `<output>` or `<path>` token is not, whatever else it says.
+fn is_entry(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if lower.contains("<output>") || lower.contains("<path>") {
+        return false;
+    }
+    let visible = text.trim_start();
+    let visible = ["[ ]", "[x]", "[X]"]
+        .iter()
+        .find_map(|checkbox| visible.strip_prefix(checkbox))
+        .unwrap_or(visible);
+    let words: Vec<String> = visible
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect();
+    !words.is_empty()
+        && !words
+            .iter()
+            .all(|word| PLACEHOLDERS.contains(&word.as_str()))
+}
+
+/// Whether a Description names a path, read from the parsed Markdown: a
+/// word of the text, a code span or a link target.
+fn names_path(markdown: &str) -> bool {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TextMergeStream};
+
+    TextMergeStream::new(Parser::new_ext(markdown, Options::empty())).any(|event| match event {
+        Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+            let local = dest_url.split(['#', '?']).next().unwrap_or_default();
+            is_path(local)
+        }
+        Event::Code(text) | Event::Text(text) => text.split_whitespace().any(is_path),
+        _ => false,
+    })
+}
+
+/// Slash words that are prose, never paths.
+const NOT_PATHS: &[&str] = &[
+    "and/or",
+    "either/or",
+    "yes/no",
+    "true/false",
+    "on/off",
+    "read/write",
+    "input/output",
+    "client/server",
+    "he/she",
+    "s/he",
+    "his/her",
+    "w/o",
+    "n/a",
+    "i/o",
+    "pass/fail",
+];
+
+/// Dotted names that are products, never files.
+const NOT_FILES: &[&str] = &[
+    "node.js", "next.js", "nuxt.js", "vue.js", "react.js", "three.js", "chart.js", "d3.js",
+    "asp.net",
+];
+
+/// Top-level domains: `example.com` is a host, not a file.
+const DOMAINS: &[&str] = &[
+    "com", "org", "net", "io", "dev", "ai", "app", "co", "gov", "edu",
+];
+
+/// Files commonly named without an extension.
+const BARE_FILES: &[&str] = &[
+    "README",
+    "CHANGELOG",
+    "LICENSE",
+    "NOTICE",
+    "AUTHORS",
+    "CODEOWNERS",
+    "Makefile",
+    "Dockerfile",
+    "Containerfile",
+    "Justfile",
+    "Procfile",
+    "Gemfile",
+    "Rakefile",
+];
+
+/// Whether one word names a path, by the broad reading
+/// [`names_deliverables`] describes.
+fn is_path(raw: &str) -> bool {
+    let mut word = raw
+        .trim_start_matches(['(', '[', '{', '<', '"', '\''])
+        .trim_end_matches([')', ']', '}', '>', '"', '\'', ',', ';', ':', '.', '!', '?']);
+    // A line reference such as `lib.rs:42` or `lib.rs:42:7` names the file.
+    for _ in 0..2 {
+        if let Some((head, line)) = word.rsplit_once(':') {
+            if !line.is_empty() && line.chars().all(|c| c.is_ascii_digit()) {
+                word = head;
+            }
+        }
+    }
+    // A drive prefix such as `C:\` or `C:/` starts a Windows path.
+    let bytes = word.as_bytes();
+    let drive = bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    let rest = if drive { &word[2..] } else { word };
+    // A URL, a scheme or an anchor is no path.
+    if rest.is_empty() || rest.contains(':') || rest.starts_with('#') {
+        return false;
+    }
+    let lower = rest.to_lowercase();
+    if NOT_PATHS.contains(&lower.as_str()) || NOT_FILES.contains(&lower.as_str()) {
+        return false;
+    }
+    let unversioned = rest.strip_prefix(['v', 'V']).unwrap_or(rest);
+    if unversioned
+        .chars()
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | '/' | '\\' | '-'))
+    {
+        return false;
+    }
+    if BARE_FILES.contains(&rest) {
+        return true;
+    }
+    if rest.contains(['/', '\\']) {
+        return rest
+            .split(['/', '\\'])
+            .any(|segment| segment.chars().any(char::is_alphanumeric));
+    }
+    let host = rest
+        .rsplit_once('.')
+        .is_some_and(|(_, tld)| DOMAINS.contains(&tld.to_lowercase().as_str()));
+    names_file(rest) && !host
+}
+
+/// Whether a word is a file name with an extension: `guide.md`,
+/// `a.markdown` or `.gitignore`, never an abbreviation such as e.g, a
+/// version such as 2.x, or a number.
+fn names_file(segment: &str) -> bool {
+    let Some((stem, extension)) = segment.rsplit_once('.') else {
+        return false;
+    };
+    !extension.is_empty()
+        && !extension.eq_ignore_ascii_case("x")
+        && extension.chars().all(char::is_alphanumeric)
+        && extension.chars().any(char::is_alphabetic)
+        && (stem.is_empty() || stem.chars().any(char::is_alphanumeric))
+        && !segment.split('.').all(|part| part.chars().count() <= 1)
+}
+
 fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

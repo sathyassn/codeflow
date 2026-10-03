@@ -208,6 +208,9 @@ catalog! {
     /// A standalone task delivered by several pull requests.
     STANDALONE_SPLIT = Step::Edit("{path}"),
         "give {path} an `epic_id`: work that takes several pull requests belongs to an epic (SPC-013 R-66)";
+    /// An open task that names no deliverables (sathyassn/codeflow#40).
+    TASK_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -394,6 +397,9 @@ catalog! {
     /// A PR body over the presentation guidelines.
     PR_PRESENTATION = Step::Codeflow("codeflow ci"),
         "keep the body concise and link detailed evidence; retain necessary verification; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A Summary that is not one prose lead, then a list or table.
+    PR_SUMMARY_SHAPE = Step::Codeflow("codeflow ci"),
+        "open the Summary with one short prose paragraph that anchors the reader, put the details after it as `-` bullets or a table, and end with at most one closing paragraph (`.codeflow/rules/writing.md` \"Summaries\"); `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A Release impact section that does not declare the release.
     PR_RELEASE_IMPACT = Step::Codeflow("codeflow ci"),
         "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level; `codeflow ci --pr-body-file <body.md>` checks the new text";

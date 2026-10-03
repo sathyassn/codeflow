@@ -88,6 +88,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("BASELINE_HISTORY", Runs),
     ("DUAL_IDENTITY", Runs),
     ("STANDALONE_SPLIT", Runs),
+    ("TASK_DELIVERABLES", Runs),
     ("DOCS_LAYER_ABSENT", Runs),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
@@ -144,6 +145,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_SECTION_MISSING", Runs),
     ("PR_TEMPLATE_REMNANT", Runs),
     ("PR_PRESENTATION", Runs),
+    ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
     ("CI_BASE_REFUSED", Runs),
@@ -783,7 +785,8 @@ fn clears_conflict_marker() {
 // Pull request bodies: edit the body, then `codeflow ci --pr-body-file`.
 // ---------------------------------------------------------------------------
 
-const BODY: &str = "## Summary\n\nAdds a thing.\n\nTask: TSK-001\n\n## Changes\n\n- one change\n\n\
+const BODY: &str =
+    "## Summary\n\nAdds a thing.\n\n- the thing\n\nTask: TSK-001\n\n## Changes\n\n- one change\n\n\
                     ## Testing\n\n- cargo test: 12 passed\n- Not tested: Windows.\n\n\
                     ## Reviews\n\nNone: pending review.\n\n## Release impact\n\n\
                     - Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n\
@@ -898,7 +901,7 @@ fn clears_pr_section_missing() {
     prove_body(
         "PR_SECTION_MISSING",
         DEFAULTS,
-        &BODY.replace("## Summary\n\nAdds a thing.\n\n", ""),
+        &BODY.replace("## Summary\n\nAdds a thing.\n\n- the thing\n\n", ""),
         BODY,
         "missing required section '## Summary'",
     );
@@ -929,6 +932,17 @@ fn clears_pr_presentation() {
         &BODY.replace("- Not tested: Windows.\n", ""),
         BODY,
         "has no Not tested: line",
+    );
+}
+
+#[test]
+fn clears_pr_summary_shape() {
+    prove_body(
+        "PR_SUMMARY_SHAPE",
+        DEFAULTS,
+        &BODY.replace("- the thing\n", "It also does more.\n"),
+        BODY,
+        "git.pr_summary",
     );
 }
 
@@ -1235,6 +1249,42 @@ fn clears_dual_identity() {
                 .collect::<Vec<_>>()
                 .join("\n");
             write(&root, TASK, &format!("{text}\n"));
+        },
+    );
+}
+
+/// sathyassn/codeflow#40: a task fresh from `task new` carries an empty
+/// `## Deliverables` section after its Description, and `validate --docs`
+/// warns until the section names an output and its home.
+#[test]
+fn clears_task_deliverables() {
+    let dir = planned();
+    let root = project(&dir);
+    let record = read(&root, TASK);
+    let (description, deliverables, criteria) = (
+        record.find("\n## Description\n"),
+        record.find("\n## Deliverables\n"),
+        record.find("\n## Acceptance Criteria\n"),
+    );
+    assert!(
+        description < deliverables && deliverables < criteria && description.is_some(),
+        "the record carries Description, Deliverables, Acceptance Criteria in order:\n{record}"
+    );
+    prove(
+        "TASK_DELIVERABLES",
+        "open task names no deliverables",
+        || validate(&root),
+        |printed| {
+            assert!(
+                printed.contains(&format!("in {TASK}, list each output")),
+                "{printed}"
+            );
+            let filled = read(&root, TASK).replacen(
+                "\n## Acceptance Criteria\n",
+                "\n- the guide: `docs/guide.md`\n\n## Acceptance Criteria\n",
+                1,
+            );
+            write(&root, TASK, &filled);
         },
     );
 }
