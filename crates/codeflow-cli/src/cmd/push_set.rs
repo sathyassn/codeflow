@@ -74,7 +74,10 @@ pub(super) fn run(
                 && !r.is_delete()
         })
         .collect();
-    if pushed.is_empty() || !policy.test_gate_on_push.is_active() {
+    // The working copy's gate decides the tree checks; each branch's
+    // `codeflow ci` is gated by the policy at its target (see
+    // [`policy_authority`]), so a head cannot turn that check off.
+    if pushed.is_empty() {
         return;
     }
     let started = Instant::now();
@@ -110,16 +113,11 @@ pub(super) fn run(
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
-    run_ci_ranges(
-        &exe,
-        root,
-        &pushed,
-        &destination,
-        policy,
-        report,
-        &mut steps,
-    );
+    run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps);
 
+    if !policy.test_gate_on_push.is_active() {
+        return;
+    }
     if codeflow_core::release_local::adopted(root) {
         let remote = remote.unwrap_or("origin");
         for r in &pushed {
@@ -196,18 +194,40 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
 /// judged from the default target's tip, as its pull request is; another
 /// branch from the boundary of what the destination holds, or noted when
 /// that is unresolved; a push whose scope cannot be read is refused (see
-/// [`release_base`]).
+/// [`release_base`]). The range's boundary only bounds the commits: the
+/// policy that judges them, and whether and at what level the check gates
+/// the push, come from the branch's target (see [`policy_authority`]).
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
     pushed: &[&PushRef],
     destination: &Destination<'_>,
-    policy: &GitPolicy,
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
+        let authority = policy_authority(root, r, branch, destination);
+        let policy = match &authority {
+            Ok(authority) => {
+                report.status.push(format!(
+                    "`codeflow ci` judges '{branch}' with the policy at {} {}, the target the hosted job reads it from",
+                    authority.target,
+                    short(&authority.tip)
+                ));
+                authority.policy.clone()
+            }
+            Err(why) => {
+                report.status.push(format!(
+                    "hosted parity unverified for '{branch}': {why}; `codeflow ci` judges it with the policy at its range's base, and the working copy's gate applies"
+                ));
+                destination.policy.clone()
+            }
+        };
+        let policy = &policy;
+        if !policy.test_gate_on_push.is_active() {
+            continue;
+        }
         let base = match release_base(root, r, branch, destination, report) {
             Scoped::Refused => None,
             Scoped::Release(tip) => Some(tip),
@@ -244,6 +264,9 @@ fn run_ci_ranges(
             // which can be another line's tip. A new branch keeps the base.
             if let Some(tip) = existing_tip(root, r) {
                 args.extend(["--baseline-from", tip]);
+            }
+            if let Ok(authority) = &authority {
+                args.extend(["--policy-from", &authority.tip]);
             }
             // The release scope reads the policy at this destination's
             // default target (SPC-013 R-120), from the advertisement the
@@ -526,6 +549,76 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
         let (_, dst) = spec.trim().trim_start_matches('+').split_once(':')?;
         let prefix = dst.strip_suffix('*')?;
         prefix.starts_with("refs/").then(|| prefix.to_string())
+    })
+}
+
+/// The policy authority of a pushed branch (sathyassn/codeflow#22).
+struct Authority {
+    /// The branch its pull request merges into.
+    target: String,
+    /// That branch's tip as the destination advertises it, present here.
+    tip: String,
+    /// The git policy recorded at `tip`: the working copy's when the tip
+    /// carries none yet, the built-in defaults when it is invalid (CI then
+    /// refuses the range).
+    policy: GitPolicy,
+}
+
+/// The commit whose policy judges a pushed branch, gates its `codeflow ci`
+/// and sets the level that check runs at: the tip of the branch its pull
+/// request merges into, as the destination advertises it, which is where
+/// the hosted policy job reads its policy. The target is the branch itself
+/// for an existing protected or `integration/` branch, the declared target
+/// for a branch whose task record names one, and the destination's default
+/// branch otherwise. `Err` says why no target tip could be established; the
+/// range's boundary never stands in for it, since it can be an old fork
+/// point or the pushed branch's own previous tip.
+fn policy_authority(
+    root: &Path,
+    r: &PushRef,
+    branch: &str,
+    destination: &Destination<'_>,
+) -> Result<Authority, String> {
+    let protected = destination.policy.branch_is_protected(branch)
+        || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
+    let (target, tip) = if let Some(old) = existing_tip(root, r).filter(|_| protected) {
+        (branch.to_string(), old.to_string())
+    } else {
+        let asked = match destination.answer(root) {
+            Ok(Ok(asked)) => asked,
+            Ok(Err(why)) => return Err(why.clone()),
+            Err(why) => return Err(format!("the destination did not answer ({why})")),
+        };
+        let declared = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+            root,
+            branch,
+            &r.local_sha,
+        )
+        .ok()
+        .flatten()
+        .map(|target| target.trim().to_string())
+        .filter(|target| codeflow_core::workgraph::is_stable_work_target(target));
+        let target = match declared {
+            Some(target) => target,
+            None => match &asked.default {
+                Some((name, _)) => name.clone(),
+                None => return Err("the destination has no default branch yet".to_string()),
+            },
+        };
+        let tip = release_line::advertised_tip_here(root, asked, &target)?;
+        (target, tip.to_string())
+    };
+    let policy = match codeflow_core::hooks::landed_policy::policy_text_at(root, &tip) {
+        Ok(None) => destination.policy.clone(),
+        Ok(Some(text)) => serde_json::from_str::<codeflow_core::hooks::policy::Policy>(&text)
+            .map(|policy| policy.git)
+            .unwrap_or_default(),
+        Err(why) => return Err(why),
+    };
+    Ok(Authority {
+        target,
+        tip,
+        policy,
     })
 }
 

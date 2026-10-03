@@ -70,8 +70,13 @@ fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
         said.contains("verifying against .codeflow/policy.json at base "),
         "{said}"
     );
+    // A caller-chosen base is not presented as the hosted verdict.
     assert!(
-        said.contains("the working copy's .codeflow/policy.json differs from the base's"),
+        said.contains("only when that is the pull request's target tip"),
+        "{said}"
+    );
+    assert!(
+        said.contains("the working copy's .codeflow/policy.json differs from the one judging"),
         "{said}"
     );
 }
@@ -86,6 +91,7 @@ fn the_base_policy_also_lets_through_what_it_allows() {
     commit(root, FOUR_BULLETS);
     let out = ci(root);
     let said = said(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(!said.contains("git.commit_body"), "{said}");
 }
 
@@ -100,6 +106,7 @@ fn a_base_without_a_policy_keeps_the_working_copy() {
     commit(root, FOUR_BULLETS);
     let out = ci(root);
     let said = said(&out);
+    assert_eq!(out.status.code(), Some(0), "{said}");
     assert!(!said.contains("git.commit_body"), "{said}");
     assert!(
         said.contains("codeflow ci: verifying against .codeflow/policy.json\n"),
@@ -116,7 +123,7 @@ fn an_invalid_base_policy_verifies_nothing() {
     let out = ci(root);
     let said = said(&out);
     assert_eq!(out.status.code(), Some(2), "{said}");
-    assert!(said.contains("judged with the policy at base"), "{said}");
+    assert!(said.contains("judged with the policy at "), "{said}");
 }
 
 /// Point a replace ref for `main`'s commit at an object that does not
@@ -154,4 +161,44 @@ fn a_base_git_refuses_is_reported_with_git_s_cause() {
         "{said}"
     );
     assert!(!said.contains("fetch the base branch"), "{said}");
+}
+
+/// `--policy-from` names the target tip apart from the range's base, so a
+/// range that starts at an older fork point is judged by the target's
+/// current policy, as the pre-push hook passes it.
+#[test]
+fn policy_from_judges_with_the_target_tip_not_the_fork_point() {
+    let dir = fixture(Some(LOOSER));
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    write(root, POLICY, "{}");
+    commit(root, "chore: tighten the commit body rules");
+    git(root, &["switch", "-q", "feat/x"]);
+    write(root, "y.txt", "y\n");
+    commit(root, FOUR_BULLETS);
+    let fork = run_in(
+        root,
+        &[
+            "ci", "--base", "main~1", "--head", "HEAD", "--branch", "feat/x",
+        ],
+    );
+    assert_eq!(fork.status.code(), Some(0), "{}", said(&fork));
+    let out = run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main~1",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--policy-from",
+            "main",
+        ],
+    );
+    let said = said(&out);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("git.commit_body"), "{said}");
+    assert!(said.contains("the commit --policy-from names"), "{said}");
 }

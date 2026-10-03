@@ -92,17 +92,27 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
-- **Local `codeflow ci` and the pre-push hook give the hosted verdict.**
-  They judged commit, branch and PR-body standards with the branch's own
-  `.codeflow/policy.json`, while the hosted policy job reads the policy of
-  the base it checks out. A branch that loosened its own rules, such as
-  more commit-body bullets, passed locally and failed after the push. When
-  a base resolves, `codeflow ci` now reads the policy recorded at that base
-  as git data, says so in its banner, and notes when the working copy's
-  differs; a base with no policy yet, as in the change that adopts
-  CodeFlow, still uses the working copy's. A branch that changes the
-  policy now lands that change before commits that rely on it. The
-  commit-msg hook still reads the working copy, so such a commit is made
+- **A branch can no longer loosen the policy that judges its own push.**
+  `codeflow ci` and the pre-push hook judged commit, branch and PR-body
+  standards with the branch's own `.codeflow/policy.json`, while the hosted
+  policy job reads the policy of the target tip it checks out. A branch
+  that loosened its own rules, such as more commit-body bullets, passed
+  locally and failed after the push. The pre-push hook now finds the
+  branch its pull request merges into (the branch itself for an existing
+  protected or `integration/` branch, the task record's declared target,
+  else the destination's default branch) and judges the range with the
+  policy at that branch's advertised tip, fetching the tip when this clone
+  lacks it. That policy also decides whether `codeflow ci` gates the push
+  and at what level (`git.test_gate_on_push`), so a head cannot lower or
+  turn off the check. When no target tip can be established, the hook
+  says hosted parity is unverified and judges with the policy at the
+  range's base. Run directly, `codeflow ci` judges with the policy at the
+  base it is given, as the hosted templates pass the target tip, and its
+  banner says the result is the hosted verdict only in that case. A base
+  with no policy yet, as in the change that adopts CodeFlow, still uses
+  the working copy's. A branch that changes the policy now lands that
+  change before commits that rely on it. The commit-msg hook and the other
+  local hook stages still read the working copy, so such a commit is made
   and then refused at push, before it leaves the clone.
   When a local target branch is behind its upstream, `codeflow work start`
   and `codeflow ci` no longer print a note asking you to fast-forward it:

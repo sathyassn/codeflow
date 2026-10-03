@@ -84,6 +84,13 @@ pub struct CiArgs {
     #[arg(long, value_name = "REF", hide = true)]
     pub baseline_from: Option<String>,
 
+    /// The commit whose `.codeflow/policy.json` judges the range (default:
+    /// the base). The pre-push hook passes the tip of the branch the pull
+    /// request merges into, where the hosted job reads its policy, since a
+    /// range's base can be an old fork point or the branch's own last push.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub policy_from: Option<String>,
+
     /// The level of the rule of a plane that runs this check (pre-push
     /// passes `git.test_gate_on_push`): each finding prints at the lower of
     /// its own level and this one where its rule permits a downgrade
@@ -256,7 +263,19 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     let base_sha = resolve_base(&root, &base_candidates);
-    let Some(judging) = judging_policy(&root, base_sha.as_deref(), working) else {
+    let authority = match &args.policy_from {
+        Some(rev) => {
+            let Some(sha) = rev_parse(&root, rev) else {
+                eprintln!(
+                    "codeflow ci: error: --policy-from '{rev}' does not name a commit — nothing was verified"
+                );
+                return 2;
+            };
+            Some(Authority::Named(sha))
+        }
+        None => base_sha.clone().map(Authority::Base),
+    };
+    let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
         return 2;
     };
     let configured = &judging.policy.git;
@@ -411,7 +430,11 @@ pub fn run(args: &CiArgs) -> i32 {
             let inventory = change_class::range_inventory(&root, base, &head);
             change_class::classify(
                 inventory.as_deref(),
-                &change_class::project_paths(&root, base),
+                // The target side's paths come from the policy authority.
+                &change_class::project_paths(
+                    &root,
+                    authority.as_ref().map_or(base, Authority::sha),
+                ),
             )
         });
         // The hosted workflows pass the base as a commit id, so the branch
@@ -977,6 +1000,33 @@ fn evaluate_work_start(
     }
 }
 
+/// The commit whose policy judges the range.
+enum Authority {
+    /// `--policy-from`: the target tip the pre-push hook established.
+    Named(String),
+    /// The resolved base, which the caller chose: the hosted templates pass
+    /// the pull request's target tip, but a local caller can name any commit.
+    Base(String),
+}
+
+impl Authority {
+    fn sha(&self) -> &str {
+        match self {
+            Self::Named(sha) | Self::Base(sha) => sha,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::Named(sha) => format!("{}, the commit --policy-from names", short(sha)),
+            Self::Base(sha) => format!(
+                "base {}, the commit this run was given; it is the hosted verdict only when that is the pull request's target tip, which the hosted jobs pass",
+                short(sha)
+            ),
+        }
+    }
+}
+
 /// The policy a run judges with, and its raw form for the level origins.
 struct Judging {
     policy: Policy,
@@ -984,13 +1034,20 @@ struct Judging {
 }
 
 /// The policy a range is judged with (sathyassn/codeflow#22): the one
-/// recorded at the resolved base, read as git data, which is what the hosted
-/// job reads from its base checkout, so a head that loosens its own policy
-/// gets the hosted verdict before the push. Without a resolved base, or when
-/// the base carries no policy yet (the adoption change itself), the working
-/// copy's. `None` (after naming each error) when the base's policy is
-/// unreadable or invalid, which verifies nothing.
-fn judging_policy(root: &Path, base: Option<&str>, working: Policy) -> Option<Judging> {
+/// recorded at `authority`, read as git data, so a head that loosens its own
+/// policy cannot judge itself. The hosted templates run from a checkout of
+/// the target tip they pass as the base, so there the two are the same.
+/// Without an authority, or when it carries no policy yet (the adoption
+/// change itself), the working copy's. `None` (after naming each error) when
+/// the authority's policy is unreadable or invalid, which verifies nothing.
+///
+/// The policy judges the commit, branch, PR-body and work checks and their
+/// levels. Some inputs stay elsewhere, by design: the auto-detected range's
+/// protected branches come from the working copy (the range is found before
+/// any authority is known), the change class widens the authority's product
+/// and watched paths with the working copy's (neither side can narrow them),
+/// and the work-record baseline has its own source (`--baseline-from`).
+fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -> Option<Judging> {
     let from_working = |working: Policy| {
         print_source_banner(root);
         Judging {
@@ -998,15 +1055,16 @@ fn judging_policy(root: &Path, base: Option<&str>, working: Policy) -> Option<Ju
             raw: codeflow_core::hooks::adoption::raw_policy(root),
         }
     };
-    let Some(base) = base else {
+    let Some(authority) = authority else {
         return Some(from_working(working));
     };
+    let base = authority.sha();
     let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, base) {
         Ok(Some(text)) => text,
         Ok(None) => return Some(from_working(working)),
         Err(error) => {
             eprintln!(
-                "codeflow ci: error: cannot read .codeflow/policy.json at base {}: {error} — nothing was verified",
+                "codeflow ci: error: cannot read .codeflow/policy.json at {}: {error} — nothing was verified",
                 short(base)
             );
             return None;
@@ -1014,7 +1072,7 @@ fn judging_policy(root: &Path, base: Option<&str>, working: Policy) -> Option<Ju
     };
     if let Err(errors) = policy_schema::validate_policy_str(&text) {
         eprintln!(
-            "codeflow ci: the range is judged with the policy at base {}, which is invalid:",
+            "codeflow ci: the range is judged with the policy at {}, which is invalid:",
             short(base)
         );
         report_invalid_policy(&errors);
@@ -1027,19 +1085,19 @@ fn judging_policy(root: &Path, base: Option<&str>, working: Policy) -> Option<Ju
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!(
-                "codeflow ci: error: .codeflow/policy.json at base {} cannot be read: {error} — nothing was verified",
+                "codeflow ci: error: .codeflow/policy.json at {} cannot be read: {error} — nothing was verified",
                 short(base)
             );
             return None;
         }
     };
     println!(
-        "codeflow ci: verifying against .codeflow/policy.json at base {}, the target side the hosted job reads",
-        short(base)
+        "codeflow ci: verifying against .codeflow/policy.json at {}",
+        authority.describe()
     );
     if serde_json::to_value(&policy).ok() != serde_json::to_value(Policy::load(root)).ok() {
         println!(
-            "codeflow ci: the working copy's .codeflow/policy.json differs from the base's; its rules judge commits once it lands on the target"
+            "codeflow ci: the working copy's .codeflow/policy.json differs from the one judging; its rules judge commits once it lands on the target"
         );
     }
     Some(Judging {

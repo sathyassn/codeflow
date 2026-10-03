@@ -707,34 +707,179 @@ fn clears_secret_scan_incomplete() {
 }
 
 // ---------------------------------------------------------------------------
-// The destination's policy judges the push (sathyassn/codeflow#22).
+// The target's policy judges the push (sathyassn/codeflow#22).
 // ---------------------------------------------------------------------------
 
+const POLICY: &str = ".codeflow/policy.json";
+const FOUR_BULLETS: &str = "feat: add y\n\n- one\n- two\n- three\n- four\n";
+
+/// Set `git.<key>` in the working copy's policy.
+fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
+    let mut policy: serde_json::Value = serde_json::from_str(&read(root, POLICY)).unwrap();
+    for (key, value) in entries {
+        policy["git"][*key] = value.clone();
+    }
+    write(
+        root,
+        POLICY,
+        &serde_json::to_string_pretty(&policy).unwrap(),
+    );
+}
+
+fn loosen(root: &Path) {
+    set_policy(
+        root,
+        &[
+            ("commit_body_max_bullets", 10.into()),
+            ("commit_body_bullet_max_len", 100.into()),
+        ],
+    );
+}
+
+/// Commit a four-bullet change, which the working copy's policy lets in.
+fn four_bullets(root: &Path) {
+    write(root, "y.txt", "y\n");
+    let said = commit_all(root, FOUR_BULLETS);
+    let subject = text(&run("git", root, &["log", "-1", "--format=%s"]));
+    assert_eq!(subject.trim(), "feat: add y", "{said}");
+}
+
+/// The destination's default branch name.
+fn default_branch(dest: &Path) -> String {
+    String::from_utf8(run("git", dest, &["symbolic-ref", "--short", "HEAD"]).stdout)
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// Land a policy change on the destination's default branch, as a merged
+/// pull request would, and fetch it; the checkout stays where it was.
+fn land_on_default(root: &Path, dest: &Path, change: impl FnOnce(&Path)) {
+    let target = default_branch(dest);
+    let here = text(&run("git", root, &["branch", "--show-current"]));
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "land/policy",
+            &format!("origin/{target}"),
+        ],
+    );
+    change(root);
+    commit_all(root, "chore: change the policy");
+    git(
+        dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("land/policy:{target}"),
+        ],
+    );
+    git(root, &["switch", "-q", here.trim()]);
+    git(root, &["branch", "-q", "-D", "land/policy"]);
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+/// The push was refused for the commit-body rule and left the destination
+/// without `branch` at `local`.
+fn refused(dest: &Path, out: &str, local: &str) {
+    assert!(out.contains("git.commit_body"), "{out}");
+    let there = text(&run(
+        "git",
+        dest,
+        &["rev-parse", "--verify", "-q", "feat/x"],
+    ));
+    assert_ne!(there.trim(), local, "the push went through:\n{out}");
+}
+
+fn head_sha(root: &Path) -> String {
+    text(&run("git", root, &["rev-parse", "HEAD"]))
+        .trim()
+        .to_string()
+}
+
 /// A branch that loosens its own commit-body rules commits under them, but
-/// its push is judged by the policy the destination holds, as the hosted
-/// job judges the pull request from its base checkout.
+/// its first push is judged by the policy at its target.
 #[test]
 fn a_push_is_judged_by_the_policy_the_destination_holds() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
-    let mut policy: serde_json::Value =
-        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-    policy["git"]["commit_body_max_bullets"] = 10.into();
-    policy["git"]["commit_body_bullet_max_len"] = 100.into();
-    write(
-        &root,
-        ".codeflow/policy.json",
-        &serde_json::to_string_pretty(&policy).unwrap(),
-    );
+    loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
-    write(&root, "y.txt", "y\n");
-    let said = commit_all(&root, "feat: add y\n\n- one\n- two\n- three\n- four\n");
-    let subject = text(&run("git", &root, &["log", "-1", "--format=%s"]));
-    assert_eq!(subject.trim(), "feat: add y", "{said}");
+    four_bullets(&root);
     let out = pushed(&root);
-    assert!(out.contains("git.commit_body"), "{out}");
-    let landed = text(&run("git", &dest, &["branch", "--list", "feat/x"]));
-    assert!(landed.trim().is_empty(), "the push went through:\n{out}");
+    refused(&dest, &out, &head_sha(&root));
+    assert!(out.contains("judges 'feat/x' with the policy at"), "{out}");
+}
+
+/// A branch already at the destination with its own looser policy: the
+/// next push's range starts at that branch's own tip, which never judges
+/// it.
+#[test]
+fn a_second_push_is_not_judged_by_the_branch_s_own_last_push() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    let first = pushed(&root);
+    let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// The target tightens its policy after the branch forked: the merge base
+/// would let the change in, the target's tip does not.
+#[test]
+fn a_push_is_judged_by_the_target_s_tip_not_the_fork_point() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// A head cannot lower or turn off the gate its target sets for its
+/// `codeflow ci`: `git.test_gate_on_push` comes from the target too.
+#[test]
+fn a_head_cannot_lower_or_turn_off_the_target_s_push_gate() {
+    for level in ["warn", "off"] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+        loosen(&root);
+        set_policy(&root, &[("test_gate_on_push", level.into())]);
+        commit_all(&root, "chore: loosen the push gate");
+        four_bullets(&root);
+        let out = pushed(&root);
+        refused(&dest, &out, &head_sha(&root));
+        assert!(out.contains("(block)"), "{level}: {out}");
+    }
 }
