@@ -913,7 +913,8 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
         "{}",
         text(&still)
     );
-    // Once the policy has landed on the target, CI reports at warn.
+    // `--policy-from HEAD` names the commit carrying the change as the
+    // authority, so CI reads its levels and reports at warn; nothing lands.
     let warned = ci(&root, &["--policy-from", "HEAD"]);
     assert_eq!(warned.status.code(), Some(0), "{}", text(&warned));
     assert!(

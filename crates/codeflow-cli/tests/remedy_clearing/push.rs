@@ -843,6 +843,31 @@ fn declare(root: &Path, id: &str, target: &str) {
     );
 }
 
+/// Add `pattern` to the working copy's protected branches.
+fn protect(root: &Path, pattern: &str) {
+    let mut protected: Vec<serde_json::Value> =
+        serde_json::from_str::<serde_json::Value>(&read(root, POLICY)).unwrap()["git"]
+            ["protected_branches"]
+            .as_array()
+            .unwrap()
+            .clone();
+    protected.push(pattern.into());
+    set_policy(root, &[("protected_branches", protected.into())]);
+}
+
+/// Turn off the working copy's own protected-branch rules, so a branch it
+/// protects can be committed to and pushed from here.
+fn unguard(root: &Path) {
+    set_policy(
+        root,
+        &[
+            ("commit_to_protected", "off".into()),
+            ("push_to_protected", "off".into()),
+            ("local_ref_protection", "off".into()),
+        ],
+    );
+}
+
 fn head_sha(root: &Path) -> String {
     text(&run("git", root, &["rev-parse", "HEAD"]))
         .trim()
@@ -972,22 +997,8 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
     let first = pushed(&root);
     let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
     assert_eq!(there.trim(), head_sha(&root), "{first}");
-    let mut protected: Vec<serde_json::Value> =
-        serde_json::from_str::<serde_json::Value>(&read(&root, POLICY)).unwrap()["git"]
-            ["protected_branches"]
-            .as_array()
-            .unwrap()
-            .clone();
-    protected.push("feat/x".into());
-    set_policy(
-        &root,
-        &[
-            ("protected_branches", protected.into()),
-            ("commit_to_protected", "off".into()),
-            ("push_to_protected", "off".into()),
-            ("local_ref_protection", "off".into()),
-        ],
-    );
+    protect(&root, "feat/x");
+    unguard(&root);
     commit_all(&root, "chore: protect the branch");
     four_bullets(&root);
     let out = pushed(&root);
@@ -1041,11 +1052,11 @@ fn an_unknown_declared_target_does_not_let_the_head_skip_the_check() {
     refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
 }
 
-/// A push to a fork cannot know its pull request's target: the check
-/// still runs at block level, whatever the working copy's gate, and says
-/// it is not the hosted verdict.
+/// A push to a fork cannot know its pull request's target: it is judged
+/// by the fork's default branch, whatever the working copy's gate, and the
+/// hook says the upstream's policy can differ.
 #[test]
-fn a_push_to_a_fork_is_checked_but_not_called_hosted_parity() {
+fn a_push_to_a_fork_is_judged_by_a_named_candidate_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
@@ -1061,7 +1072,8 @@ fn a_push_to_a_fork_is_checked_but_not_called_hosted_parity() {
     four_bullets(&root);
     let out = pushed(&root);
     refused(&dest, &out, &head_sha(&root));
-    assert!(out.contains("not hosted parity for 'feat/x'"), "{out}");
+    assert!(out.contains("may target the upstream"), "{out}");
+    assert!(out.contains("a candidate authority"), "{out}");
 }
 
 /// A default branch whose policy fails strict validation cannot turn the
@@ -1074,11 +1086,20 @@ fn an_invalid_target_policy_does_not_turn_the_check_off() {
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     write(&root, "x.txt", "x\n");
     commit_all(&root, "feat: add x");
-    // The local hooks refuse to commit an invalid policy, so it lands with
-    // them off, as a change made elsewhere would arrive.
-    let target = default_branch(&dest);
+    land_invalid_policy(&root, &dest);
+    let out = pushed(&root);
+    assert!(out.contains("is not valid for this codeflow"), "{out}");
+    not_landed(&dest, &out, "feat/x", &head_sha(&root));
+}
+
+/// Land a default-branch policy that fails strict validation and turns the
+/// push check off. The local hooks refuse to commit it, so it lands with
+/// them off, as a change made elsewhere would arrive; the checkout returns
+/// to `feat/x`.
+fn land_invalid_policy(root: &Path, dest: &Path) {
+    let target = default_branch(dest);
     git(
-        &root,
+        root,
         &[
             "switch",
             "-q",
@@ -1088,14 +1109,14 @@ fn an_invalid_target_policy_does_not_turn_the_check_off() {
         ],
     );
     set_policy(
-        &root,
+        root,
         &[
             ("test_gate_on_push", "off".into()),
             ("no_such_key", true.into()),
         ],
     );
     git(
-        &root,
+        root,
         &[
             "-c",
             "core.hooksPath=/dev/null",
@@ -1106,7 +1127,7 @@ fn an_invalid_target_policy_does_not_turn_the_check_off() {
         ],
     );
     git(
-        &dest,
+        dest,
         &[
             "fetch",
             "-q",
@@ -1114,9 +1135,190 @@ fn an_invalid_target_policy_does_not_turn_the_check_off() {
             &format!("land/policy:{target}"),
         ],
     );
-    git(&root, &["switch", "-q", "feat/x"]);
-    git(&root, &["fetch", "-q", "origin"]);
-    let out = pushed(&root);
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+/// A malformed default policy refuses the push even when its range has no
+/// base and `codeflow ci` cannot run (review round three, finding 2).
+#[test]
+fn an_invalid_default_policy_refuses_a_push_with_no_range() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_invalid_policy(&root, &dest);
+    // A history the destination shares nothing with: a root commit of this
+    // tree, so no advertised tip bounds its range.
+    let made = run(
+        "git",
+        &root,
+        &[
+            "commit-tree",
+            "HEAD^{tree}",
+            "-m",
+            "feat: an unrelated root",
+        ],
+    );
+    let unrelated = text(&made).trim().to_string();
+    assert!(made.status.success(), "{unrelated}");
+    let out = push(
+        &root,
+        &["origin", &format!("{unrelated}:refs/heads/feat/unrelated")],
+    );
     assert!(out.contains("is not valid for this codeflow"), "{out}");
-    not_landed(&dest, &out, "feat/x", &head_sha(&root));
+    not_landed(&dest, &out, "feat/unrelated", &unrelated);
+}
+
+/// A protected wildcard does not make a branch the push creates its own
+/// authority: after a first push of a line that relaxes its own policy,
+/// the next push is still judged by the default branch (review round
+/// three, finding 1).
+#[test]
+fn a_protected_wildcard_does_not_make_a_branch_its_own_authority() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| protect(root, "integration/*"));
+    // The landed policy keeps a protected name from being made here, so
+    // the line is pushed to it from a branch of another name.
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "feat/self",
+            &format!("origin/{target}"),
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    unguard(&root);
+    set_policy(&root, &[("test_gate_on_push", "off".into())]);
+    commit_all(&root, "chore: relax the line's own policy");
+    let line = ["origin", "HEAD:refs/heads/integration/self"];
+    let first = push(&root, &line);
+    let there = text(&run("git", &dest, &["rev-parse", "integration/self"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    four_bullets(&root);
+    let out = push(&root, &line);
+    refused_at(&dest, &out, "integration/self", &head_sha(&root));
+}
+
+/// A protected symbolic branch at the destination does not lend the
+/// policy of the branch it points at to a push that declares it as its
+/// target (review round three, finding 1).
+#[test]
+fn a_protected_alias_does_not_lend_its_referent_s_policy() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| protect(root, "integration/*"));
+    land_branch(&root, &dest, "feat/lenient", |root| {
+        loosen(root);
+        set_policy(root, &[("test_gate_on_push", "off".into())]);
+    });
+    git(
+        &dest,
+        &[
+            "symbolic-ref",
+            "refs/heads/integration/alias",
+            "refs/heads/feat/lenient",
+        ],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-work",
+            "origin/feat/lenient",
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/alias");
+    commit_all(&root, "docs: plan the work");
+    four_bullets(&root);
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}
+
+/// Advance the destination's default branch by a commit this clone does
+/// not have, so judging a push needs a fetch.
+fn advance_unseen(dest: &Path) {
+    let target = default_branch(dest);
+    let made = run(
+        "git",
+        dest,
+        &[
+            "commit-tree",
+            &format!("{target}^{{tree}}"),
+            "-p",
+            &target,
+            "-m",
+            "chore: advance",
+        ],
+    );
+    let sha = text(&made).trim().to_string();
+    assert!(made.status.success(), "{sha}");
+    git(dest, &["update-ref", &format!("refs/heads/{target}"), &sha]);
+}
+
+/// Push with `args`, every object fetch from the destination refused by
+/// its upload-pack and recorded. `uploadpack.packObjectsHook` is read only
+/// from protected configuration, and git drops the command scope for a
+/// local transport, so it is set in the global file the hook's own git
+/// processes read. Returns the push's output and the number of fetches
+/// refused.
+#[cfg(unix)]
+fn push_refusing_fetches(root: &Path, args: &[&str]) -> (String, usize) {
+    let dir = root.parent().unwrap();
+    let log = dir.join("fetches.log");
+    write(
+        dir,
+        "refuse-pack",
+        &format!("#!/bin/sh\necho fetch >> '{}'\nexit 1\n", log.display()),
+    );
+    let made = run("chmod", dir, &["+x", "refuse-pack"]);
+    assert!(made.status.success(), "{}", text(&made));
+    write(
+        dir,
+        "refusing.gitconfig",
+        &format!(
+            "[uploadpack]\n\tpackObjectsHook = {}\n",
+            dir.join("refuse-pack").display()
+        ),
+    );
+    let out = command("git", root)
+        .env("GIT_CONFIG_GLOBAL", dir.join("refusing.gitconfig"))
+        .arg("push")
+        .arg("-q")
+        .args(args)
+        .output()
+        .unwrap();
+    let fetches = std::fs::read_to_string(&log).unwrap_or_default();
+    (text(&out), fetches.lines().count())
+}
+
+/// A failed fetch of the default branch's tip is tried once per push, with
+/// durable work tracking off and on: the release scope reuses the failure
+/// instead of fetching again (review round three, finding 3).
+#[cfg(unix)]
+#[test]
+fn a_failed_authority_fetch_is_tried_once_in_both_tracking_modes() {
+    for tier in ["--standard", "--full"] {
+        let dir = scaffolded(tier);
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        write(&root, "x.txt", "x\n");
+        commit_all(&root, "feat: add x");
+        advance_unseen(&dest);
+        let (out, fetches) = push_refusing_fetches(&root, &["origin", "HEAD"]);
+        not_landed(&dest, &out, "feat/x", &head_sha(&root));
+        assert!(out.contains("SPC-013 R-120"), "{tier}: {out}");
+        assert_eq!(fetches, 1, "{tier}: {out}");
+    }
 }

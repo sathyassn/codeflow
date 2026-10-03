@@ -92,39 +92,40 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
-- **A branch can no longer loosen the policy that judges its own push.**
+- **The pre-push hook judges a push by the default branch's policy.**
   `codeflow ci` and the pre-push hook judged commit, branch and PR-body
   standards with the branch's own `.codeflow/policy.json`, while the hosted
   policy job reads the policy of the target tip it checks out. A branch
   that loosened its own rules, such as more commit-body bullets, passed
-  locally and failed after the push. The pre-push hook now takes its
-  authority from the destination default branch's advertised tip, fetched
-  once per push when this clone lacks it, never from the working copy or
-  the pushed branch. Another branch judges the push only when that
-  default-tip policy protects it and the destination already has it: the
-  pushed branch itself, then the target its task record declares. The
-  chosen policy is strictly validated, sets the rules, and decides whether
-  and at what level `codeflow ci` gates the push (`git.test_gate_on_push`),
-  so a head cannot lower or turn off that check. When no authority can be
-  established (a fork, a destination that does not answer, a failed
-  fetch, or a default branch with no policy yet), the hook still runs
-  `codeflow ci` at block level, with the policy at the range's base, and
-  says the result is not hosted parity; an invalid target policy refuses
-  the push. The pull request's real target is known only to the host, so
-  a pull request into a branch the default's policy does not protect can
-  still be judged differently there; hosted CI stays the enforcement. The
-  tree checks in the pre-push hook (`codeflow validate --docs` and the
-  quick targets) and the release preflight still follow the working
-  copy's gate, and the commit-msg and other local hook stages still read
-  the working copy, so a commit relying on a loosened rule is made and
-  then refused at push, before it leaves the clone. Run directly,
-  `codeflow ci` judges with the policy at the base it is given, or at the
-  commit `--policy-from` names, as do its automation profiles; its banner
-  says the result is the hosted verdict only when that commit is the pull
-  request's target tip, which the hosted jobs pass. A base with no policy
-  yet, as in the change that adopts CodeFlow, still uses the working
-  copy's. A branch that changes the policy lands that change before
-  commits that rely on it.
+  locally and failed after the push. The pre-push hook now judges every
+  pushed branch with the policy at the destination default branch's
+  advertised tip, fetched at most once per push when this clone lacks it.
+  That policy is a candidate destination authority, not the known pull
+  request target, and hosted CI stays the enforcement: no other branch is
+  an authority, even a protected one, so a pull request into an
+  integration line is judged locally by the default branch's policy and
+  the host may judge it differently. The policy is strictly validated,
+  sets the rules, and decides whether and at what level `codeflow ci`
+  gates the push (`git.test_gate_on_push`), so neither the head nor the
+  working copy can lower or turn off that check. A malformed policy there
+  refuses the push, whether or not its range resolves. With no candidate
+  authority (a destination that does not answer, a failed fetch, or a
+  default branch with no policy yet), the hook says so and still runs
+  `codeflow ci` at block level with the policy at the range's base, as a
+  best-effort check. When an `upstream` remote points elsewhere than the
+  push, the hook notes that a pull request may target the upstream, whose
+  policy can differ. The tree checks in the pre-push hook
+  (`codeflow validate --docs` and the quick targets) and the release
+  preflight still follow the working copy's gate, and the commit-msg and
+  other local hook stages still read the working copy, so a commit relying
+  on a loosened rule is made and then refused at push, before it leaves
+  the clone. Run directly, `codeflow ci` judges with the policy at the base
+  it is given, or at the commit `--policy-from` names, as do its
+  automation profiles; its banner says the result is the hosted verdict
+  only when that commit is the pull request's target tip, which the hosted
+  jobs pass. A base with no policy yet, as in the change that adopts
+  CodeFlow, still uses the working copy's. A branch that changes the
+  policy lands that change before commits that rely on it.
   When a local target branch is behind its upstream, `codeflow work start`
   and `codeflow ci` no longer print a note asking you to fast-forward it:
   they already anchor on the upstream, `work start` names it, and the
