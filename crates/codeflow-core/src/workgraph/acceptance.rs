@@ -47,6 +47,9 @@ pub struct Finding {
     pub message: String,
     /// Informational evidence, never a refusal.
     pub note: bool,
+    /// The record path of the epic whose own acceptance block this finding
+    /// binds, so its remedy is the epic's, never a task's.
+    pub epic_record: Option<String>,
 }
 
 pub(super) fn finding(rule: &'static str, message: String) -> Finding {
@@ -54,6 +57,7 @@ pub(super) fn finding(rule: &'static str, message: String) -> Finding {
         rule,
         message,
         note: false,
+        epic_record: None,
     }
 }
 
@@ -318,6 +322,146 @@ pub(crate) fn bind_completion_with_amendment(
         }
     }
     findings.extend(leaf_journey(task, graph, &block));
+    findings
+}
+
+/// Bind an epic's own acceptance block (SPC-013 R-33, R-60), which proves
+/// the criteria no live task serves: its reviewed commit is in this
+/// repository and is the completion's commit or its ancestor, with only
+/// this record's status and Closeout changed after it, and each waiver
+/// names a planning amendment of that criterion of this epic that the
+/// reviewed commit contains. The amendment rides in the epic's batched
+/// amendment on its line, so the reviewed candidate, not one target branch,
+/// is where it must be found. An epic without an own block binds nothing.
+#[must_use]
+pub fn bind_epic_completion(
+    repo: &Repository,
+    epic: &RecordView,
+    landing: Landing<'_>,
+) -> Vec<Finding> {
+    let Some(block) = active_block(epic) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    let mut bind = |message: String| {
+        findings.push(Finding {
+            epic_record: Some(epic.path.clone()),
+            ..finding(BINDING_RULE, format!("{}: {message}", epic.id))
+        });
+    };
+    let reviewed = commit_of(repo, &block.reviewed);
+    match reviewed {
+        None => bind(format!(
+            "reviewed commit {} is not in this repository",
+            block.reviewed
+        )),
+        Some(reviewed) => {
+            if let Some(problem) = reviewed_span_problem(repo, epic, landing, reviewed, false) {
+                bind(problem);
+            }
+        }
+    }
+    for (id, result) in &block.criteria {
+        if result.outcome == "waived" {
+            if let Some(problem) = epic_waiver_problem(repo, epic, id, &result.evidence, reviewed) {
+                bind(format!("{id} waiver {problem}"));
+            }
+        }
+    }
+    findings
+}
+
+/// Why a waiver in an epic's own block does not name the planning
+/// amendment of criterion `id` of `epic` inside the reviewed commit, if it
+/// does not.
+fn epic_waiver_problem(
+    repo: &Repository,
+    epic: &RecordView,
+    id: &str,
+    evidence: &str,
+    reviewed: Option<Oid>,
+) -> Option<String> {
+    let named = evidence.trim();
+    let Some(amendment) = commit_of(repo, named) else {
+        return Some(format!("names {named}, which is not a commit here"));
+    };
+    let Some(reviewed) = reviewed else {
+        return Some(format!(
+            "names {named}, which cannot be checked without the reviewed commit"
+        ));
+    };
+    if !is_ancestor_or_same(repo, amendment, reviewed) {
+        return Some(format!(
+            "names {named}, which the reviewed commit {reviewed} does not contain; a waiver is a planning amendment the review saw"
+        ));
+    }
+    let Ok(commit) = repo.find_commit(amendment) else {
+        return Some(format!("names {named}, which cannot be read"));
+    };
+    let parent = commit.parent_id(0).ok();
+    match non_planning_change(repo, parent, amendment) {
+        Ok(None) => {}
+        Ok(Some(path)) => {
+            return Some(format!(
+                "names {named}, which also changes {path}; a planning amendment changes planning records only"
+            ));
+        }
+        Err(_) => return Some(format!("names {named}, whose change cannot be read")),
+    }
+    let criterion = |oid: Option<Oid>| {
+        oid.and_then(|oid| blob_at(repo, oid, &epic.path))
+            .and_then(|content| RecordView::parse(epic.kind, &epic.path, &content).ok())
+            .and_then(|record| {
+                record
+                    .criteria
+                    .items
+                    .into_iter()
+                    .find(|item| item.id == id)
+                    .map(|item| item.text)
+            })
+    };
+    match (criterion(parent), criterion(Some(amendment))) {
+        (Some(before), Some(after)) if before != after => None,
+        _ => Some(format!(
+            "names {named}, which does not amend {id} of {}",
+            epic.id
+        )),
+    }
+}
+
+/// The binding findings for every epic a range completes or whose active
+/// block it changes. A planning or line range (`amendable`) binds each at
+/// the commit that introduced its block; any other range owns all its
+/// changes and binds at `head`.
+pub(super) fn epic_completions_in_range(
+    repo: &Repository,
+    before: &Graph,
+    after: &Graph,
+    head: Oid,
+    amendable: bool,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for epic in after
+        .records
+        .values()
+        .filter(|record| record.kind == RecordKind::Epic && record.status == "complete")
+    {
+        let Some(block) = active_block(epic) else {
+            continue;
+        };
+        let unchanged = before.records.get(&epic.id).is_some_and(|then| {
+            then.status == "complete" && active_block(then).as_ref() == Some(&block)
+        });
+        if unchanged {
+            continue;
+        }
+        let origin = if amendable {
+            introduced_at(repo, epic, &block, head)
+        } else {
+            head
+        };
+        findings.extend(bind_epic_completion(repo, epic, Landing::Commit(origin)));
+    }
     findings
 }
 
@@ -786,7 +930,7 @@ fn waiver_problem(
     }
     let criterion = |oid: Option<Oid>| {
         oid.and_then(|oid| blob_at(repo, oid, &task.path))
-            .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
+            .and_then(|content| RecordView::parse(task.kind, &task.path, &content).ok())
             .map(|record| {
                 record
                     .criteria
@@ -930,6 +1074,7 @@ pub fn frozen_criteria(
             }
             if !delta.is_empty() {
                 found.push(Finding {
+                    epic_record: None,
                     rule: FROZEN_RULE,
                     message: format!("{} criteria delta: {}", record.id, delta.join("; ")),
                     note: true,
@@ -1112,6 +1257,7 @@ pub fn completions_in_range(
             };
             if amendable {
                 findings.push(Finding {
+                    epic_record: None,
                     rule: BINDING_RULE,
                     message: format!("{} completion bound at {origin}", task.id),
                     note: true,
@@ -1129,6 +1275,9 @@ pub fn completions_in_range(
             ));
         }
     }
+    findings.extend(epic_completions_in_range(
+        repo, &before, &after, head_oid, amendable,
+    ));
     Ok(findings)
 }
 
@@ -1164,7 +1313,7 @@ pub(super) fn introduced_at(
 ) -> Oid {
     let holds = |oid: Oid| {
         blob_at(repo, oid, &task.path)
-            .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
+            .and_then(|content| RecordView::parse(task.kind, &task.path, &content).ok())
             .is_some_and(|record| {
                 record.status == "complete"
                     && active_block(&record).as_ref() == Some(block)

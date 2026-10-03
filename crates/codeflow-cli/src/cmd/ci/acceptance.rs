@@ -67,6 +67,7 @@ pub(super) fn dispatch(
         Err(error) => tagged.push(violation(
             git,
             Finding {
+                epic_record: None,
                 rule: FROZEN_RULE,
                 note: false,
                 message: format!("cannot read the range to check acceptance: {error}"),
@@ -252,12 +253,13 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
             "another task's criteria change by its own PR or the epic amendment; a reopened task keeps its criteria",
         )
     } else {
-        Violation::new(
-            found.rule,
-            git.work_records_level(),
-            found.message,
-            codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
-        )
+        // An epic's own block has its own route: an epic is never reopened.
+        let remedy = match &found.epic_record {
+            Some(path) => codeflow_core::remedy::EPIC_ACCEPTANCE_BINDING
+                .with(&[("path", path), ("note", SCOPE_NOTE)]),
+            None => codeflow_core::remedy::ACCEPTANCE_BINDING.with(&[("note", SCOPE_NOTE)]),
+        };
+        Violation::new(found.rule, git.work_records_level(), found.message, remedy)
     };
     super::TaggedViolation {
         sha: None,
