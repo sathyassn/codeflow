@@ -1542,6 +1542,12 @@ fn judge(
             .into_values()
             .flat_map(|held| held.findings),
     );
+    // An epic closed on its line or on the release line binds where its
+    // own block was introduced, as on any line (R-33, R-60).
+    let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
+    findings.extend(super::acceptance::epic_completions_in_range(
+        &repo, &at_anchor, &graph, head_oid, true,
+    ));
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
     record_sources.retain(|path, _| !direct_records.contains(path));

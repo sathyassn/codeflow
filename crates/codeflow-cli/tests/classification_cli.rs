@@ -941,3 +941,162 @@ fn a_verified_line_is_recognized_from_a_sha_base() {
         "lands on 'main', not 'release/next'",
     );
 }
+
+fn run(root: &Path, args: &[&str]) -> (i32, String) {
+    let out = codeflow().args(args).current_dir(root).output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+fn head(root: &Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+/// An epic acceptance block, reviewed at `reviewed`, with AC-1's result.
+fn epic_block(reviewed: &str, ac1: &str) -> String {
+    format!("acceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/1\n  criteria:\n    AC-1: {ac1}\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none: done\n  verdict: approved\n")
+}
+
+/// TSK-214 (sathyassn/codeflow#25): an epic criterion served only by a
+/// cancelled task closes on the epic's own block, whose review and waiver
+/// bind as a task's do, through the verb, a hand edit judged by CI and a
+/// planning pull request. A live serving task is never replaced by it.
+#[test]
+#[allow(clippy::too_many_lines)] // One fixture walks the verb, the hand edit and CI in order.
+fn a_cancelled_only_epic_criterion_closes_only_on_a_bound_own_block() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    let scratch = tempfile::tempdir().unwrap();
+    let file = scratch.path().join("acceptance.yaml");
+    let epic_path = "project-management/epics/EPC-001.md";
+    let serving = task("TSK-001", "feat", "todo").replace(
+        "- AC-1 When run, the system shall work.",
+        "- AC-1 When run, the system shall work (serves EPC-001 AC-1)",
+    );
+    branch_with(
+        root,
+        "plan/close",
+        &[("project-management/tasks/TSK-001.md", &serving)],
+    );
+
+    // Negative control: a live serving task is not replaced by the block.
+    std::fs::write(&file, epic_block(&head(root), "verified | the release PR")).unwrap();
+    let (code, out) = run(
+        root,
+        &[
+            "epic",
+            "status",
+            "EPC-001",
+            "complete",
+            "--acceptance",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("no complete serving task verified it"),
+        "{out}"
+    );
+
+    // Cancel both tasks, then amend AC-1 in a planning change.
+    for id in ["TSK-001", "TSK-002"] {
+        let (code, out) = run(
+            root,
+            &[
+                "task",
+                "status",
+                id,
+                "cancelled",
+                "--reason",
+                "replaced",
+                "--scope",
+                "the epic's own evidence",
+            ],
+        );
+        assert_eq!(code, 0, "{out}");
+    }
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(tasks): cancel the tasks"]);
+    let epic = std::fs::read_to_string(root.join(epic_path)).unwrap();
+    std::fs::write(
+        root.join(epic_path),
+        epic.replace("shall deliver.", "shall deliver, or is waived."),
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(epics): amend AC-1"]);
+    let amendment = head(root);
+    let reviewed = head(root);
+
+    // The verb refuses a waiver that names no commit.
+    std::fs::write(&file, epic_block(&reviewed, "waived | deadbee")).unwrap();
+    let (code, out) = run(
+        root,
+        &[
+            "epic",
+            "status",
+            "EPC-001",
+            "complete",
+            "--acceptance",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(code, 0, "{out}");
+    assert!(
+        out.contains("AC-1 waiver names deadbee, which is not a commit here"),
+        "{out}"
+    );
+
+    // The same block written by hand: CI refuses it.
+    let epic = std::fs::read_to_string(root.join(epic_path)).unwrap();
+    let by_hand = format!(
+        "{}\n## Closeout\n\n```yaml\n{}```\n",
+        epic.replace("status: planning", "status: complete"),
+        epic_block(&reviewed, "waived | deadbee")
+    );
+    std::fs::write(root.join(epic_path), &by_hand).unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(epics): close by hand"]);
+    assert_blocks(
+        &ci(root, "plan/close", &body("Task: EPC-001")),
+        "hand-written fabricated waiver",
+        "AC-1 waiver names deadbee",
+    );
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // A real planning amendment the review saw: the verb closes, CI passes.
+    std::fs::write(
+        &file,
+        epic_block(&reviewed, &format!("waived | {amendment}")),
+    )
+    .unwrap();
+    let (code, out) = run(
+        root,
+        &[
+            "epic",
+            "status",
+            "EPC-001",
+            "complete",
+            "--acceptance",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(epics): close the epic"]);
+    assert_passes(
+        &ci(root, "plan/close", &body("Task: EPC-001")),
+        "bound own block",
+    );
+}

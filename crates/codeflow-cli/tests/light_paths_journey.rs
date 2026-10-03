@@ -274,3 +274,163 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
     let (code, out) = pull_request(&root, "docs/adr", line, "Task: TSK-002");
     assert_eq!(code, 0, "{out}");
 }
+
+/// Complete `id` on the current branch: an acceptance block reviewed at
+/// HEAD, written by `task status`, then committed.
+fn complete(root: &Path, scratch: &Path, id: &str) {
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    let evidence = scratch.join(format!("{id}-acceptance.yaml"));
+    std::fs::write(
+        &evidence,
+        format!(
+            "acceptance:\n  reviewed: {reviewed}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: verified | journey step\n  journey: verified | light paths journey\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n"
+        ),
+    )
+    .unwrap();
+    ok(
+        &codeflow(
+            root,
+            &[
+                "task",
+                "status",
+                id,
+                "complete",
+                "--acceptance",
+                evidence.to_str().unwrap(),
+            ],
+        ),
+        "task status complete",
+    );
+    commit(root, &format!("docs(tasks): complete {id}"));
+}
+
+/// Journey (TSK-214 AC-1, sathyassn/codeflow#21): a follow-up of a
+/// standalone task is itself a standalone task. Filed off a `plan/` branch,
+/// its record lands with its work on its own task branch in one tracked pull
+/// request, as its source did; on a `plan/` branch, where no epic exists to
+/// name, the command refuses and names that route.
+#[test]
+#[allow(clippy::too_many_lines)] // One journey keeps the source and its follow-up in the order a project lives them.
+fn a_follow_up_of_a_standalone_task_lands_with_its_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let main = git(&root, &["branch", "--show-current"]);
+
+    // The standalone source: its record and code in one pull request.
+    git(&root, &["switch", "-q", "-c", "task/source"]);
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "task",
+                "new",
+                "--standalone-reason",
+                "one bounded outcome",
+                "--into",
+                &main,
+                "Source",
+            ],
+        ),
+        "task new --standalone-reason",
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-001.md",
+        "- AC-1\n",
+        "- AC-1 (journey) When run, the system shall work.\n",
+    );
+    commit(&root, "docs(tasks): plan the source");
+    ok(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "work claim",
+    );
+    let source = git(&root, &["branch", "--show-current"]);
+    assert!(source.starts_with("task/TSK-001-"), "{source}");
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/source.rs"), "pub fn source() {}\n").unwrap();
+    commit(&root, "feat: add the source");
+    complete(&root, dir.path(), "TSK-001");
+    let (code, out) = pull_request(&root, &source, &main, "Task: TSK-001");
+    assert_eq!(code, 0, "{out}");
+    // The hosted merge of that pull request: the installed hooks refuse a
+    // merge commit on a protected branch, so only this step runs without them.
+    git(&root, &["switch", "-q", &main]);
+    git(
+        &root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge",
+            "-q",
+            "--no-ff",
+            &source,
+            "-m",
+            "chore: land the source",
+        ],
+    );
+
+    // Off a planning branch: one command, then the claim names its branch.
+    git(&root, &["switch", "-q", "-c", "task/tidy", &main]);
+    let follow = ok(
+        &codeflow(&root, &["task", "new", "--follow-up-of", "TSK-001", "Tidy"]),
+        "task new --follow-up-of a standalone task",
+    );
+    assert!(follow.contains("TSK-002"), "{follow}");
+    let record = std::fs::read_to_string(root.join("project-management/tasks/TSK-002.md")).unwrap();
+    assert!(record.contains("\nfollow_up_of: TSK-001 "), "{record}");
+    assert!(record.contains("\nepic_id: null "), "{record}");
+    assert!(
+        record.contains("standalone_reason: \"follow-up of standalone task TSK-001\""),
+        "{record}"
+    );
+    assert!(
+        record.contains(&format!("integration_target: \"{main}\"")),
+        "{record}"
+    );
+    edit(
+        &root,
+        "project-management/tasks/TSK-002.md",
+        "- AC-1\n",
+        "- AC-1 (journey) When run, the system shall be tidy.\n",
+    );
+    commit(&root, "docs(tasks): file the follow-up");
+    ok(
+        &codeflow(&root, &["work", "claim", "TSK-002"]),
+        "work claim",
+    );
+    let branch = git(&root, &["branch", "--show-current"]);
+    assert!(branch.starts_with("task/TSK-002-"), "{branch}");
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-002"]),
+        "work start",
+    );
+    std::fs::write(root.join("src/source.rs"), "pub fn source() { }\n").unwrap();
+    commit(&root, "fix: tidy the source");
+    complete(&root, dir.path(), "TSK-002");
+    let (code, out) = pull_request(&root, &branch, &main, "Task: TSK-002");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("class: tracked TSK-002 (from the Task: line)"),
+        "{out}"
+    );
+
+    // On a planning branch there is no epic to name: refused, with the route.
+    git(&root, &["switch", "-q", "-c", "plan/tidy", &main]);
+    let refused = codeflow(&root, &["task", "new", "--follow-up-of", "TSK-001", "More"]);
+    assert_eq!(refused.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("its own task branch"), "{stderr}");
+    assert!(
+        !root.join("project-management/tasks/TSK-003.md").exists(),
+        "a refused follow-up writes no record"
+    );
+}

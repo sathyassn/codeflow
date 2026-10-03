@@ -643,6 +643,122 @@ fn clears_acceptance_binding() {
     );
 }
 
+/// An epic acceptance block for AC-1 reviewing `reviewed`, written beside
+/// the project; returns its path.
+fn epic_block(root: &Path, reviewed: &str, ac1: &str) -> String {
+    let path = root.parent().unwrap().join("epic-acceptance.yaml");
+    std::fs::write(&path, epic_yaml(reviewed, ac1)).unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+fn epic_yaml(reviewed: &str, ac1: &str) -> String {
+    format!(
+        "acceptance:\n  reviewed: {reviewed}\n  review: session:proof@sha256:00\n  criteria:\n    \
+         AC-1: {ac1}\n  journey: none | no journey criterion\n  not_verified: none\n  \
+         follow_ups: none: a fixture\n  verdict: approved\n"
+    )
+}
+
+/// Plan epic `id` with one criterion no task serves, committed; returns
+/// its record path.
+fn plan_epic(root: &Path, title: &str) -> String {
+    let out = codeflow(root, &["epic", "new", title]);
+    // The printed path is native: Windows separates it with `\`.
+    let path = out
+        .split_whitespace()
+        .map(|word| word.replace('\\', "/"))
+        .find(|word| word.contains("project-management/epics/"))
+        .unwrap_or_else(|| panic!("no epic path in:\n{out}"));
+    let rel = path[path.find("project-management/").unwrap()..].to_string();
+    let epic =
+        read(root, &rel).replacen("- AC-1\n", "- AC-1 When used, the system shall work.\n", 1);
+    write(root, &rel, &epic);
+    commit_all(root, &format!("docs: plan {title}"));
+    rel
+}
+
+/// TSK-214: an epic's own block that does not bind prints the epic's
+/// route, never a task's reopen. A completed epic is repaired by replacing
+/// its block in the Closeout, as printed; an open epic is closed again by
+/// the printed `codeflow epic status` command.
+#[test]
+fn clears_epic_acceptance_binding() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    // A task record turns durable tracking on in a standard project.
+    hosted.plan_task("plan/outcome");
+    hosted.seed();
+    let epic = plan_epic(root, "the outcome");
+    let planned = rev(root, "HEAD");
+
+    // An epic completed by hand with a waiver that names no commit.
+    let closed = read(root, &epic).replacen("status: draft", "status: complete", 1);
+    let closed = closed.replacen("status: planning", "status: complete", 1);
+    write(
+        root,
+        &epic,
+        &format!(
+            "{closed}\n## Closeout\n\n```yaml\n{}```\n",
+            epic_yaml(&planned, "waived | deadbee")
+        ),
+    );
+    commit_all(root, "docs: close the epic by hand");
+    prove(
+        "EPIC_ACCEPTANCE_BINDING",
+        "AC-1 waiver names deadbee",
+        || hosted.ci("plan/outcome", &[]),
+        |printed| {
+            assert!(!printed.contains("codeflow task status"), "{printed}");
+            assert!(
+                printed.contains(&format!("Closeout of {epic}")),
+                "{printed}"
+            );
+            // The printed route for a completed epic: replace the block in
+            // its Closeout with a corrected one, reviewed at the plan.
+            let text = read(root, &epic);
+            let start = text.find("```yaml\n").unwrap();
+            let fixed = format!(
+                "{}```yaml\n{}```\n",
+                &text[..start],
+                epic_yaml(&planned, "verified | the plan's criterion holds")
+            );
+            write(root, &epic, &fixed);
+            commit_all(root, "docs: correct the epic's acceptance block");
+        },
+    );
+    let after = hosted.ci("plan/outcome", &[]);
+    // The corrected completed epic is clean under every records check.
+    assert!(after.contains("codeflow ci: clean"), "{after}");
+
+    // An open epic: the verb refuses the block and prints the route; the
+    // printed command closes it with the corrected block.
+    let open = plan_epic(root, "the second outcome");
+    let head = rev(root, "HEAD");
+    let bad = epic_block(root, &head, "waived | deadbee");
+    let refused = codeflow(
+        root,
+        &[
+            "epic",
+            "status",
+            "EPC-002",
+            "complete",
+            "--acceptance",
+            &bad,
+        ],
+    );
+    assert!(refused.contains("AC-1 waiver names deadbee"), "{refused}");
+    assert!(!refused.contains("codeflow task status"), "{refused}");
+    let step = printed_command(
+        block(&refused, "clear it:"),
+        "EPIC_ACCEPTANCE_BINDING",
+        Some("codeflow epic status"),
+    );
+    let good = epic_block(root, &head, "verified | the plan's criterion holds");
+    let said = run_printed(root, &step, &[("<id>", "EPC-002"), ("<file>", &good)], &[]);
+    assert!(said.contains("-> complete"), "{said}");
+    assert!(read(root, &open).contains("status: complete"));
+}
+
 #[test]
 fn clears_journey_criterion() {
     let hosted = Hosted::new();
