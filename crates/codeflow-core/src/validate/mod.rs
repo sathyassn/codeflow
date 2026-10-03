@@ -1093,6 +1093,87 @@ Criteria
         }
     }
 
+    /// Every case whose deliverables warning disagrees with `warns`, one
+    /// line each, so a run shows the result of every case at once.
+    fn wrong_cases(cases: &[&str], warns: bool, body: impl Fn(&str) -> String) -> Vec<String> {
+        cases
+            .iter()
+            .filter(|case| deliverables_warnings("todo", &body(case)).is_empty() == warns)
+            .map(|case| format!("{case:?} (expected warning: {warns})"))
+            .collect()
+    }
+
+    /// Review round 1 (PR 44): paths are read from the parsed Markdown, so
+    /// a link destination, emphasis, a double-backtick span, a bare file
+    /// name and a long extension all name a path, and a version, and/or or
+    /// a URL never does, in a code span or out of one.
+    #[test]
+    fn paths_are_read_from_the_markdown_and_non_paths_are_rejected() {
+        let description = |text: &str| task_body(text, None);
+        let mut wrong = wrong_cases(
+            &[
+                "Rewrites AGENTS.md.",
+                "Updates docs/a.markdown.",
+                "Edits [the guide](docs/guide.md).",
+                "Edits **docs/guide.md**.",
+                "Edits ``AGENTS.md``.",
+                "Edits docs/\u{65e5}\u{672c}\u{8a9e}.md.",
+                "Adds `.gitignore` entries.",
+                "Fixes `crates/codeflow-core/src/lib.rs:42`.",
+                "Moves code under `crates/codeflow-core` only.",
+                "Builds the Makefile target.",
+            ],
+            false,
+            description,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "Version `1.2/3`.",
+                "Choose `and/or`.",
+                "Plain 1.2/3 and and/or, e.g. for 3.1.0 or `v3.1.0`.",
+                "See https://example.com/a/b.md and <https://example.com/c.md>.",
+                "Links [the site](https://example.com/x.md) and [a heading](#notes).",
+                "Uses Node.js against example.com.",
+            ],
+            true,
+            description,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 1 (PR 44): an empty list or checklist item, a
+    /// placeholder or the template's own entry form fills nothing; a
+    /// substantive entry, provisional or not, does.
+    #[test]
+    fn empty_and_placeholder_deliverables_fill_nothing() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let mut wrong = wrong_cases(
+            &[
+                "1.",
+                "- [ ]",
+                "* [x]",
+                "TODO",
+                "- TBD",
+                "- <output>: <path>",
+                "- `<output>`: `<path>`",
+                "- `- <output>: <path>`",
+                "-\n-\n- ...",
+            ],
+            true,
+            section,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "- a decision record: provisional, decided by the structure review",
+                "- [ ] the guide: `docs/guide.md`",
+                "1. the research note, home provisional until the docs tree is agreed",
+            ],
+            false,
+            section,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
     /// sathyassn/codeflow#40: a complete or cancelled record never warns, so
     /// closed history stays quiet.
     #[test]
