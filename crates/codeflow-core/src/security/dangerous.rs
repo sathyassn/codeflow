@@ -1137,8 +1137,11 @@ mod tests {
             "rm -rf /home/alice/project/target",
             "rm -rf /Volumes/Data/project/target",
         ] {
-            assert!(
-                DangerousModule.check(&ctx(cmd)).is_none(),
+            // On native Windows a `/`-rooted path names no fixed place, so
+            // the deletion is refused there.
+            assert_eq!(
+                DangerousModule.check(&ctx(cmd)).is_some(),
+                cfg!(windows),
                 "project-scoped descendant should reach the harness boundary: {cmd}"
             );
         }
@@ -1255,9 +1258,8 @@ mod tests {
             "rm -rf ./build",
             "rm -rf target",
             "rm -rf node_modules",
-            "rm -f /etc/hosts.bak",             // not recursive
-            "rm -rf /home/user/proj/target/..", // == /home/user/proj, a project
-            "rm -rf ./scratch/..",              // relative, not protected
+            "rm -f /etc/hosts.bak", // not recursive
+            "rm -rf ./scratch/..",  // relative, not protected
             "rm -rf ~/code/app/target",
             "rm -rf $HOME/code/app/build",
             "rm -rf ${HOME}/work/project/node_modules",
@@ -1267,6 +1269,10 @@ mod tests {
                 "should allow: {cmd}"
             );
         }
+        // `/home/user/proj`, a project; on native Windows a `/`-rooted path
+        // names no fixed place, so the deletion is refused there.
+        let verdict = DangerousModule.check(&ctx("rm -rf /home/user/proj/target/.."));
+        assert_eq!(verdict.is_some(), cfg!(windows), "{verdict:?}");
     }
 
     // Over-block guard: when the quote attaches to the `rm` token itself (the

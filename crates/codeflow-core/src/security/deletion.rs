@@ -155,8 +155,16 @@ pub(super) fn composed_deletion(command: &str) -> Option<Found> {
 
 /// The protected deletion `command` performs when it starts in `base`.
 pub(super) fn composed_deletion_in(command: &str, base: Option<&Path>) -> Option<Found> {
+    read_deletion(command, base, cfg!(windows))
+}
+
+/// The protected deletion `command` performs when it starts in `base`;
+/// with `rooted_unplaced`, as on native Windows, a `/`-rooted path is
+/// placed nowhere, so deleting below one is unproven.
+fn read_deletion(command: &str, base: Option<&Path>, rooted_unplaced: bool) -> Option<Found> {
     let mut reader = Reader {
         base,
+        rooted_unplaced,
         found: None,
         depth: 0,
         pipe_input: None,
@@ -1872,6 +1880,8 @@ mod why {
     pub const CD: &str = "a `cd` form the guard does not model";
     pub const TRAP: &str = "a trap action the guard cannot resolve";
     pub const OUTPUT: &str = "the output of a shell command the guard does not resolve";
+    pub const ROOTED: &str = "a `/`-rooted path, which names no fixed place on Windows: \
+        the shell that runs it picks the root, and a junction can redirect any part of it";
 }
 
 /// A value that depends on `reason`, a construct the reader does not model
@@ -2505,6 +2515,8 @@ impl Output {
 
 struct Reader<'a> {
     base: Option<&'a Path>,
+    /// Set on native Windows: a `/`-rooted path names no fixed place.
+    rooted_unplaced: bool,
     found: Option<Found>,
     depth: usize,
     /// What the pipeline stage being read receives on its input.
@@ -4540,6 +4552,23 @@ impl Reader<'_> {
                 }
             }
             let path = resolve(cwd, operand);
+            if self.rooted_unplaced && path.starts_with('/') {
+                // Its spelling, or a name its glob may match, can still
+                // be protected; where it lands cannot be proven.
+                let named = dangerous_rm_target(&path).or_else(|| {
+                    self.glob_paths(&path)?
+                        .iter()
+                        .find_map(|p| dangerous_rm_target(p))
+                });
+                if let Some(target) = named {
+                    return Judged::Protected(target);
+                }
+                pending.get_or_insert_with(|| Unproven {
+                    reason: why::ROOTED.to_string(),
+                    cwd: false,
+                });
+                continue;
+            }
             let landed = |path: &str| {
                 dangerous_rm_target(path).or_else(|| {
                     self.real_path(path)
@@ -4588,10 +4617,9 @@ impl Reader<'_> {
     /// appended; `None` for a path the reader cannot place.
     fn real_path(&self, path: &str) -> Option<String> {
         // On native Windows a path that starts with `/` names no fixed
-        // place, so this reader cannot place it; resolving it against the
-        // current drive gives `\\?\C:\/…`. The temp check refuses such a
-        // deletion as an unresolved temp path (`dangerous::canonical_operand`).
-        if cfg!(windows) && path.starts_with('/') {
+        // place, so this reader cannot place it, and `judge_path` refuses
+        // a deletion below one as unproven.
+        if self.rooted_unplaced && path.starts_with('/') {
             return None;
         }
         real_prefix(&self.absolute(path)?)
@@ -7416,7 +7444,7 @@ mod tests {
         for command in PROJECT_DELETIONS {
             assert_eq!(refused(command), None, "{command}");
         }
-        for command in super::super::guard_forms::UNIX_TEMP_DELETIONS {
+        for command in super::super::guard_forms::ROOTED_DELETIONS {
             assert_eq!(refused(command).is_some(), cfg!(windows), "{command}");
         }
         // A form named as data is not run.
@@ -7427,6 +7455,33 @@ mod tests {
             "printf '%s' 'D=/; rm -rf $D'",
         ] {
             assert_eq!(refused(command), None, "{command}");
+        }
+    }
+
+    /// Native Windows places a `/`-rooted path nowhere, so a recursive
+    /// delete below one is unproven: `C:\scratch` may be a junction to
+    /// `C:\`, and `rm -r /scratch/Windows` would reach `C:\Windows`. A
+    /// protected spelling or glob stays protected, and a deletion inside the
+    /// project is judged as before. Read with the Windows rule on any host.
+    #[test]
+    fn a_rooted_deletion_is_unproven_where_rooted_paths_are_unplaced() {
+        let read = |command: &str| super::read_deletion(command, None, true);
+        let rooted = super::super::guard_forms::ROOTED_DELETIONS.iter().copied();
+        for command in rooted.chain(["rm -r /scratch/Windows", "rm -rf /c/Users/me/app/target"]) {
+            let reason = read(command)
+                .and_then(|found| found.unproven)
+                .map(|u| u.reason);
+            assert_eq!(reason.as_deref(), Some(super::why::ROOTED), "{command}");
+        }
+        for command in ["rm -rf /", "rm -rf /etc", "rm -rf /et?", "rm -rf /*"] {
+            let found = read(command);
+            assert!(
+                found.as_ref().is_some_and(|f| f.unproven.is_none()),
+                "{command}: {found:?}"
+            );
+        }
+        for command in PROJECT_DELETIONS {
+            assert!(read(command).is_none(), "{command}");
         }
     }
 
