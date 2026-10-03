@@ -87,7 +87,7 @@ pub(super) fn resolve(
     let mut effective = git.clone();
     let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
-    let pr_summary = adoption::pr_summary_effective(&raw, git, pr_sections);
+    let pr_summary = adoption::pr_summary_effective(raw, git, pr_sections);
     effective.pr_summary = pr_summary.level;
     effective.pr_required_sections = adoption::mapped_sections(git, &git.pr_required_sections);
     effective.pr_code_sections = adoption::mapped_sections(git, &git.pr_code_sections);
