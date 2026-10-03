@@ -51,9 +51,13 @@ the host a session starts in decides the transport, not the contract:
 
 | Host | How it reaches the other seat |
 |---|---|
-| Claude Code | Reaches Codex through the official plugin/app-server |
-| Codex App or interactive CLI | Reaches Claude through Herdr, the named-tab terminal host for an interactive peer CLI, with tmux as the degraded host |
-| Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr |
+| Claude Code | Reaches Codex through the interactive Codex CLI on its app-server, in a Herdr tab; the official plugin is an optional fallback |
+| Codex App or interactive CLI | Reaches Claude through the interactive Claude CLI in a Herdr tab, the named-tab terminal host for an interactive peer CLI |
+| Grok Build | Reaches Codex and Claude the same way, each in a Herdr tab |
+
+Any host may drive a reachable Herdr server, and tmux is the last fallback
+when none is reachable. The rule is stated once in
+`cf-model-orchestrator/resources/routing/transport.md` (ADR-0077).
 
 Grok-hosted lane canaries are in the repository at
 `docs/verification/grok-host-duo-canary-2026-09-07.md`; they are not a qualified

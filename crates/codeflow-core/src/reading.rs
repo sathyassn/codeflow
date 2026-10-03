@@ -398,23 +398,20 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "When authoring or editing a skill",
         "only when authoring or editing a skill",
     ),
+    // TSK-213: lanes follow the seat being called (ADR-0077). A Claude
+    // seat's lifecycle lane is read on a Codex or Grok host; the plugin is
+    // an optional fallback read only while it is in use.
     conditional(
         DELEGATE,
         LIFECYCLE_LANE,
-        "A Codex host follows its host and canary rules",
-        "the lifecycle lane is read on a Codex host",
+        "**A Claude seat, from a Codex or Grok host:**",
+        "the lifecycle lane is read when a Codex or Grok host calls a Claude seat",
     ),
     conditional(
         DELEGATE,
-        LIFECYCLE_LANE,
-        "**From codex:**",
-        "the lifecycle lane is read on a Codex host",
-    ),
-    conditional(
-        DELEGATE,
-        LIFECYCLE_LANE,
-        "**From codex (Codex host):**",
-        "the lifecycle lane is read on a Codex host",
+        "cf-delegate/resources/lane-plugin.md",
+        "**Only when the Codex plugin fallback is in use, on a Claude Code host:**",
+        "only while the optional Codex plugin fallback is in use",
     ),
     conditional(
         DELEGATE,
@@ -437,8 +434,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
     conditional(
         "cf-delegate/resources/lane-plugin.md",
         LIFECYCLE_LANE,
-        "A Codex host uses",
-        "the lifecycle lane is read on a Codex host",
+        "A Claude seat uses",
+        "the lifecycle lane is read when a Codex or Grok host calls a Claude seat",
+    ),
+    conditional(
+        "cf-model-orchestrator/resources/routing/transport.md",
+        "cf-method/references/autonomy.md",
+        "answers folder trust",
+        "only when a new seat raises a folder trust prompt",
     ),
     conditional(
         "cf-delegate/resources/lane-plugin.md",

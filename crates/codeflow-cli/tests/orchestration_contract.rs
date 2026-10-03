@@ -769,7 +769,7 @@ fn catalog_rules_and_routing_policy_keep_extra_family_review() {
         "implementer check",
         "Default UI assignment is Claude as responsible primary and executor",
         "Playwright remains the deterministic web driver",
-        "preferred plugin or qualified official native client",
+        "Codex QAs through Computer Use in the Codex seat that",
         "spawns same-family workers at that",
     ] {
         assert!(
@@ -1187,7 +1187,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "**Implementation:**",
         "**Review/verification:**",
         "**Substantive docs:**",
-        "/codex:rescue --model <primary-selector> --effort <primary-default>",
+        "at the primary's selector and default effort",
         "an unobserved user default is not selection evidence",
         "session in auto mode under the same fail-closed sandbox",
         "not plan or bypass",
@@ -1203,9 +1203,20 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         capability_routing.contains("spawns same-family workers at that effort"),
         "capability routing lost worker-effort ownership"
     );
+    // TSK-213: cf-herdr launches with the selector and effort, then the
+    // posture flags of the transport rule, which holds the Claude row.
     assert!(
-        herdr.contains("--model <selector> --effort <effort> --permission-mode bypassPermissions"),
-        "Herdr lost its Claude production launch contract"
+        herdr.contains("--model <selector> --effort <effort> <posture flags>"),
+        "Herdr lost its Claude launch contract"
+    );
+    let transport = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md",
+    ));
+    assert!(
+        transport.contains(
+            "| Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |"
+        ),
+        "the transport rule lost the Claude production launch contract"
     );
     for required in [
         "Consult and no-edit review keep",
@@ -1677,7 +1688,10 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D22 reviewer field", "remedy: <blocker and major: smallest evidenced fix and its verification criterion", TSK131_REVIEWER),
     ("D22 routing brief", "the remedy expected on every blocker and major finding, and the provenance the reply must carry", TSK131_FINDINGS),
     ("D22 routing return", "returns the verdict, the findings with their remedy, what was verified and what was not verified", TSK131_FINDINGS),
-    ("D22 routing scope", "Cross-lineage and Herdr briefs follow this contract.", TSK131_FINDINGS),
+    // TSK-213: the brief contract now covers every review and consult brief
+    // and asks for one holistic pass over the whole unit and its blast radius.
+    ("D22 routing scope", "Every review and consult brief, same-family or cross-family, follows this contract", TSK131_FINDINGS),
+    ("D22 holistic brief", "Findings from earlier rounds enter the brief as checks within that pass, never as its whole scope.", TSK131_FINDINGS),
     ("D22 consult", "the smallest evidenced remedy and its verification criterion, or the options when the fix is an operator decision", TSK131_CONSULT),
     ("D23 batch", "collects the findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
     ("D23 evaluation", "evaluates each proposed remedy against the diagnosed mechanism and the impact set", TSK131_FINDINGS),

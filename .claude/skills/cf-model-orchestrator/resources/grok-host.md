@@ -21,28 +21,25 @@ when Grok hosts Claude.
 Before a Grok seat takes work, `grok --version` succeeds and a short
 **interactive** Grok canary authenticates; an authentication failure stops
 for operator action. Take selector and effort from the current ensemble
-record. Production host:
+record:
 
 ```text
-grok --model <selector> --reasoning-effort <effort> --always-approve
+grok --model <selector> --reasoning-effort <effort> <posture flags>
 ```
 
-`--permission-mode auto` is the consult / no-edit alternative. Never
-`grok -p` / `--single` for a work session.
-
-`--sandbox <PROFILE>` when an OS sandbox is required. `grok --help` exposes
+The posture flags are the Grok row of
+[cross-family transport](routing/transport.md), which also rules out every
+headless form. Add `--sandbox <PROFILE>` when an OS sandbox is required. `grok --help` exposes
 the flag; the Grok Build user guide names `workspace` / `read-only` /
 `strict`. Profile names are VERIFY-ON-INSTALL against the installed CLI.
 
 ## Peer lanes
 
-A Grok host reaches Claude through Herdr (`claude` + schema-v2). It reaches
-Codex through the official `codex` CLI, which talks to the local app-server
-daemon: start `codex app-server daemon start` when the socket is missing,
-then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
-interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
-Claude-Code `codex-plugin-cc` is not a Grok-host lane. Neither lane is
-claimed complete until its own canary succeeds on this host.
+A Grok host reaches Claude and Codex through the interactive seats that
+[cross-family transport](routing/transport.md) names. Do not install
+third-party Grok Codex plugins; the Codex plugin fallback belongs to a Claude
+Code host only. Neither seat is claimed complete until its own canary
+succeeds on this host.
 
 Grok-started Claude schema-v2 (Herdr `send-text` of the armed file) and
 Codex Herdr consult canaries are recorded in the CodeFlow repository under

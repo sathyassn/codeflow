@@ -32,9 +32,9 @@ solo is a preflight-proven degradation, not an equivalent preference:
 
 - **Solo** (`/cf-develop`): always in play.
 - **Duo** (`/cf-model-orchestrator`): host-neutral when both native
-  interactive seats are available: Claude Code → Codex through the official
-  plugin/app-server, Codex → Claude through Herdr (tmux degraded), Grok →
-  Codex through official `codex` CLI + app-server (CodeFlow ADR-0023, ADR-0055).
+  interactive seats are available, each reached as
+  `cf-model-orchestrator/resources/routing/transport.md` states (CodeFlow
+  ADR-0023, ADR-0077).
 - **Batch**: the pipeline preset; single-vendor by design, even when its
   assurance stages resemble parts of the duo.
 
@@ -42,16 +42,18 @@ Then verify and **offer** remediation; never install silently.
 
 - **Core (every flow).** git, the `codeflow` binary, the active harness, and the
   stack test toolchain. Read inspectable health from **`codeflow doctor`**; its
-  `delegates` check covers both CLIs, Codex auth/MCP, the Claude plugin/MCP, and
-  tmux. Retain live interactive canaries because status commands cannot prove a
+  `delegates` check covers both CLIs, Codex auth/MCP, Claude MCP, `herdr`
+  (or `tmux`, the last fallback) and the optional Codex plugin. Retain live
+  interactive canaries because status commands cannot prove a
   native TTY session and its tools work.
 - **Duo flow** (codex configured / `cf-model-orchestrator` in use):
-  - **Lane preflight and canary:** run those of the lane this host uses, as
-    `cf-delegate` and its lane files set out: the plugin lane on a Claude host
-    (a missing plugin alone does not establish a missing Codex seat; qualify
-    the official native fallback), the lifecycle lane on a Codex host
-    (`herdr` when `HERDR_ENV=1`, else `tmux`, and one schema-v2 round trip
-    with the sibling Stop-hook preflight). `codeflow doctor` reports the
+  - **Lane preflight and canary:** run those of each seat this host calls,
+    as `cf-delegate` and its lane files set out: a Codex or Grok seat in a
+    Herdr tab from any host that reaches a Herdr server (a missing plugin or
+    `HERDR_ENV` alone does not establish a missing seat; qualify the native
+    fallback before recording one), and a Claude seat
+    through the lifecycle lane (one schema-v2 round trip with the sibling
+    Stop-hook preflight). `codeflow doctor` reports the
     inspectable part; the live canary proves the native session and its
     tools. Canary the current ensemble's primaries at default effort;
     escalation efforts are exercised by in-family workers. Never use
@@ -74,9 +76,9 @@ Then verify and **offer** remediation; never install silently.
       lifecycle session (its one immutable CLI settings file carries the
       hooks), then prove the composed boundary with a live canary.
     - `.codex/config.toml`: guarded workspace default, no legacy `sandbox_mode`,
-      public network/live search. Production combines `approval_policy = "never"`
-      and `--sandbox danger-full-access`: no prompts/OS sandbox; guards, hooks,
-      and CI remain floors, not task authority. A reviewer's `cf-guard` profile
+      public network/live search. A builder's launch flags (the transport
+      posture table) mean no prompts/OS sandbox; guards, hooks, and CI remain
+      floors, not task authority. A reviewer's `cf-guard` profile
       still denies root-level keys/certificates and `~/.codex/auth.json`;
       `ignore_default_excludes = false` retains secret-environment filtering.
       Verify the effective boundary: settings alone neither authorize external
@@ -88,7 +90,7 @@ Then verify and **offer** remediation; never install silently.
     GitHub/source-control; the project's format, lint, test, coverage,
     dependency, and security tools; one supported Playwright route in every
     native harness that will operate web UI; other-lineage Computer Use QA of
-    changed UI (Codex via app-server; Claude Code Computer Use when Claude
+    changed UI (Codex in its transport seat; Claude Code Computer Use when Claude
     reviews a Codex-authored UI); Computer Use or a surface-specific
     driver for native/mobile/desktop UI; design tools for UI work; and
     project-specific issue-tracker, database, cloud, or private-document MCPs.
@@ -119,16 +121,20 @@ installing or updating a system tool is privileged and reaches outside the repo,
 so it gets the same offer-and-confirm posture codeflow takes for any irreversible
 or outward action. The fixes:
 
-- codex-plugin-cc not installed → **from a Claude Code session only**:
+- herdr absent → offer Herdr's own installer from its documentation; until
+  then seats use `tmux`, the last fallback.
+- codex present but unauthenticated → `codex login`
+- the optional Codex plugin fallback is wanted on a Claude Code host →
+  **from a Claude Code session only**:
   `/plugin marketplace add openai/codex-plugin-cc` → `/plugin install
   codex@openai-codex` → `/reload-plugins` → `/codex:setup`. These are Claude
   Code slash commands; if this session is another harness, do **not** offer
-  them; report the gap for the user to fix from a Claude Code session.
-- codex present but unauthenticated → `codex login`
+  them. A missing plugin is not a gap.
 - outdated Codex or Claude CLI → present the vendor-supported update command
   after checking current release guidance; never rely on a version pinned here
-- tmux absent →
-  `brew install tmux` (or the platform's package manager)
+- neither herdr nor tmux present →
+  `brew install tmux` (or the platform's package manager) as the last
+  fallback host
 - no canaried Playwright route for a web-operating harness → choose the official
   CLI/skill when bounded high-throughput work and context economy dominate, or
   MCP when persistent browser state and rich iterative introspection are

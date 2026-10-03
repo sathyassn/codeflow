@@ -1917,15 +1917,21 @@ fn restored_audit_passages_stay_where_they_are_read() {
             &[
                 ("H06 naming examples", "`cf-codeflow-skills-rev-cx01`"),
                 ("H26 no external sandbox", "Herdr is not an external sandbox."),
+                // TSK-213 (ADR-0077): every host, not only a Grok or other
+                // non-Claude, non-Codex host, drives a reachable Herdr server.
                 (
-                    "H27 operator names the dangerous flag",
-                    "Never `--dangerously-skip-permissions` unless the operator named it.",
-                ),
-                (
-                    "H29 other qualified hosts",
-                    "From a Grok or another qualified non-Claude, non-Codex host",
+                    "H29 every host",
+                    "from any host, inside a Herdr pane or outside one",
                 ),
             ],
+        ),
+        (
+            // TSK-213: the launch flags, this rule among them, have one home.
+            base.join("agents/skills/cf-model-orchestrator/resources/routing/transport.md"),
+            &[(
+                "H27 operator names the dangerous flag",
+                "Never `--dangerously-skip-permissions` unless the operator named it",
+            )],
         ),
         (
             base.join("rules/git-rules.md"),

@@ -211,9 +211,12 @@ Unknown availability or usage stays unknown.
 `cf-reviewer` in Claude Code or, elsewhere, a separate read-only qualified
 interactive pass, never headless, against criteria and evidence.
 Self-review is not review. A review is one holistic pass over the whole
-unit (diff, criteria and acceptance evidence) on one revision, by a
-reviewer of the other lineage where a seat exists; a same-family
-fresh-context pass records the reduced assurance. The verdict gives each
+unit (its full diff against its base, criteria, acceptance evidence and blast
+radius) at one head, by a reviewer of the other lineage where a seat exists.
+Earlier findings are checks within that pass, never its whole scope, and a
+round after fixes or after merging the base reviews the whole unit again at
+the new head. A same-family fresh-context pass records the reduced
+assurance. The verdict gives each
 criterion with file:line, the gates, the findings ordered by consequence
 with severity and confidence stated apart, the nits with a disposition, and
 what was not verified. Look harder, and at the standard and full tiers add

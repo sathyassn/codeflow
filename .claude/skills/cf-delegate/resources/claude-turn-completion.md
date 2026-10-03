@@ -25,9 +25,10 @@ Code. It makes zero tmux calls; waiting is pure file polling.
 3. **The generated settings file is immutable.** Every later `arm`, `wait`,
    and hook invocation regenerates the expected content from exactly
    (run id, state-dir spelling) and rejects any difference as unsafe. Never
-   edit it or merge other keys into it. Production launches
-   `--permission-mode bypassPermissions`. Consult and no-edit review keep
-   `--permission-mode auto`. Make `autoMode.classifyAllShell` effective at
+   edit it or merge other keys into it. The launch flags are the Claude row
+   of the cross-family transport posture table, written out in the launch
+   below: production launches `--permission-mode bypassPermissions`. Consult
+   and no-edit review keep `--permission-mode auto`. Make `autoMode.classifyAllShell` effective at
    user scope (Claude ignores it at project scope, and repeated `--settings`
    flags are not a supported composition mechanism), then prove the composed
    boundary with the preflight canary.
@@ -78,6 +79,11 @@ delivery comes too late.
 
 ## Launch and drive one turn
 
+The block shows the tmux host, the last fallback of cross-family transport
+(`cf-model-orchestrator/resources/routing/transport.md`). In a Herdr tab,
+`cf-herdr`'s launch and delivery script replace the `tmux` lines, and every
+`codeflow delegate` step stays as written.
+
 ```sh
 # Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
@@ -125,8 +131,8 @@ already be non-empty UTF-8 text with internal LF line endings, no terminal line
 break, and no other control characters. `arm` rejects noncanonical input before
 creating durable turn
 state, then records the
-SHA-256 of the accepted file bytes. Deliver that same file through a uniquely
-named tmux buffer with a literal paste into the exact pane, wait a bounded
+SHA-256 of the accepted file bytes. On the tmux host, deliver that same file
+through a uniquely named tmux buffer with a literal paste into the exact pane, wait a bounded
 300 ms for the TUI to attach it, and send one separate Enter. Acceptance
 requires a `UserPromptSubmit` whose prompt matches the digest, recorded as
 `delivery: exact`. Claude Code folds a long or multi-line paste into a

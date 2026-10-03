@@ -126,7 +126,7 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
     assert_contains(
         ORCHESTRATOR,
         &[
-            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "Use `cf-delegate` for the seats and fallbacks of cross-family transport",
             "exact-byte delivery",
             "bounded cleanup",
         ],
@@ -203,7 +203,7 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
     assert_contains(
         ORCHESTRATOR,
         &[
-            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "Use `cf-delegate` for the seats and fallbacks of cross-family transport",
             "foreground-return contract",
         ],
     );
@@ -239,7 +239,7 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
         DELEGATE_SKILL,
         &[
             "native Codex thread ID",
-            "the resumable Codex thread forward",
+            "the resumable Codex thread or Grok session",
             "otherwise label them requested",
             "never silently upgrade requested to observed",
             "Grade inferred completion explicitly as inferred.",
@@ -541,7 +541,7 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     assert_contains(
         DELEGATE_SKILL,
         &[
-            "Evidence contract, both lanes",
+            "Evidence contract, every lane",
             "one five-obligation evidence contract",
             "routing/evidence.md",
         ],
@@ -598,7 +598,7 @@ fn consult_exhausts_qualified_fallback_without_weakening_auth_or_lineage() {
     assert_contains(
         CONSULT,
         &[
-            "missing or incompatible preferred plugin/CLI is a lane failure",
+            "missing or incompatible preferred CLI, Herdr server or plugin is a lane failure",
             "Exhaust the qualified native alternatives",
             "authentication failure still stops for operator action",
             "After every qualified other-vendor route is unavailable",
@@ -866,4 +866,123 @@ fn process_round_guidance_names_the_evidence_before_action() {
             "do not execute the action to obtain it",
         ],
     );
+}
+
+// TSK-213 (ADR-0077): how one model family calls another is stated once.
+const TRANSPORT: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md";
+
+/// Every passage of the issue 31 inventory that routes a seat; each cites
+/// the transport rule.
+const TRANSPORT_CITERS: &[&str] = &[
+    ORCHESTRATOR,
+    "assets/base/agents/skills/cf-model-orchestrator/resources/grok-host.md",
+    "assets/base/agents/skills/cf-model-orchestrator/resources/routing/design.md",
+    DELEGATE_SKILL,
+    DELEGATE_PLUGIN_LANE,
+    DELEGATE_LIFECYCLE_LANE,
+    "assets/base/claude/skills/cf-delegate/resources/native-fallback.md",
+    ADAPTER,
+    CONSULT,
+    HERDR,
+    CUSTOMIZE,
+    "assets/base/CLAUDE.md.tmpl",
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.full.md.tmpl",
+];
+
+/// Retired preferences, compared lower-case on normalized text.
+const STALE_ROUTES: &[&str] = &[
+    "codex-plugin-cc` preferred",
+    "prefer the official",
+    "official plugin (preferred)",
+    "preferred plugin",
+    "when `herdr_env=1`",
+    "use when herdr_env=1",
+    "do not use from outside herdr",
+    "tmux degraded",
+    "degraded tmux",
+    "still uses the official plugin",
+    "through the official codex plugin, or a herdr tab",
+];
+
+/// A seat's launch flags: stated in the transport table, and written out
+/// only in the adapter's literal tmux launch line.
+const POSTURE_FLAGS: &[&str] = &[
+    "danger-full-access",
+    "--always-approve",
+    "bypassPermissions",
+    "--ask-for-approval never",
+];
+
+fn transport_faults(path: &str, text: &str) -> Vec<String> {
+    let normal = normalized(text);
+    let lower = normal.to_lowercase();
+    let mut faults = Vec::new();
+    if !normal.contains("transport.md") {
+        faults.push(format!("{path} does not cite the transport rule"));
+    }
+    for stale in STALE_ROUTES {
+        if lower.contains(stale) {
+            faults.push(format!("{path} restates a retired route: {stale}"));
+        }
+    }
+    if path != ADAPTER {
+        for flag in POSTURE_FLAGS {
+            if normal.contains(flag) {
+                faults.push(format!("{path} restates a launch flag: {flag}"));
+            }
+        }
+    }
+    faults
+}
+
+#[test]
+fn cross_family_transport_is_stated_once_and_cited_everywhere() {
+    assert_contains(
+        TRANSPORT,
+        &[
+            "never runs as a separate CLI session or a Herdr tab",
+            "The interactive Codex CLI on the local Codex app-server",
+            "The interactive Claude Code CLI, its turns tracked by the `codeflow delegate` lifecycle",
+            "The interactive Grok Build CLI",
+            "Any host may drive any reachable Herdr server",
+            "the official Codex plugin, an optional fallback",
+            "tmux, the last fallback, only when no Herdr server is reachable",
+            "Never `codex exec`, `claude -p` / `--print`, `grok -p` / `--single`",
+            "| Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |",
+            "| Codex | `--ask-for-approval never --sandbox danger-full-access` | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |",
+            "| Grok | `--always-approve` | `--permission-mode auto` |",
+            "The Codex builder posture is ADR-0075 D1",
+            "The caller answers folder trust only for the task's own folder",
+            "Hook trust is the operator's (ADR-0075)",
+            "Skip a self-update offer.",
+        ],
+    );
+    let mut faults = Vec::new();
+    for path in TRANSPORT_CITERS {
+        faults.extend(transport_faults(path, &read(path)));
+    }
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+}
+
+#[test]
+fn a_restated_route_or_flag_fails_naming_it() {
+    let faults = transport_faults(
+        HERDR,
+        "Official `codex-plugin-cc` preferred. Use when HERDR_ENV=1. \
+         Codex: --ask-for-approval never --sandbox danger-full-access.",
+    );
+    for expected in [
+        "does not cite the transport rule",
+        "retired route: codex-plugin-cc` preferred",
+        "retired route: use when herdr_env=1",
+        "launch flag: danger-full-access",
+        "launch flag: --ask-for-approval never",
+    ] {
+        assert!(
+            faults.iter().any(|fault| fault.contains(expected)),
+            "{expected}: {faults:?}"
+        );
+    }
 }

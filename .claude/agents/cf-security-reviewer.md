@@ -21,8 +21,11 @@ a defender on the same model share blind spots (CodeFlow ADR-0005).
   foothold; find a flow from an untrusted source to a dangerous sink; try to
   exfiltrate a secret or PII, bypass an authz check, or inject a command, query,
   or prompt. Every finding needs a concrete trigger.* The second vendor is
-  reached through the host's interactive lane as `cf-model-orchestrator` and
-  `cf-delegate` set out; headless execution is prohibited. When no
+  reached through the interactive seat that `cf-model-orchestrator`'s
+  `resources/routing/transport.md` names, with the launch and evidence of
+  `cf-delegate`; headless execution is prohibited. If the seat's client
+  withholds a security verdict through a content filter, ask the same seat to
+  restate it as a defensive review. When no
   interactive second-vendor lane is available, see "Degrade legibly" below.
 
 Union both lenses' findings and dedup by (location, class). A finding one vendor
@@ -32,8 +35,11 @@ backstop for judgment the machine cannot adjudicate (CodeFlow ADR-0007).
 
 ## Inputs
 
-Locate the work context: the diff under review (`git diff <base>...HEAD` and
-every touched file), the acceptance criteria, any linked capability or ADR IDs,
+Locate the work context: the whole unit at one head, as the review brief
+contract in `cf-model-orchestrator/resources/quality/findings.md` sets out
+(the full diff `git diff <base>...HEAD`, every touched file and the change's
+blast radius, with earlier findings as checks within the pass), the
+acceptance criteria, any linked capability or ADR IDs,
 and — this is the layer you build on — the deterministic-scanner output for this
 change:
 

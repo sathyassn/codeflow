@@ -1,11 +1,12 @@
 # cf-delegate edit access (delegate tier)
 
-Read this before any write-enabled handoff, on either lane.
+Read this before any write-enabled handoff, on every lane.
 
 A delegate that edits works **only** inside a worktree on a feature branch,
-the same worktree-per-session discipline that binds every agent here. From
-Claude Code, scope `/codex:rescue` to the worktree; from codex, start the
-lifecycle claude session in the worktree. Let it commit conventionally.
+the same worktree-per-session discipline that binds every agent here. Start
+the seat with the worktree as its working directory: the Herdr tab's `cwd`
+(`cf-herdr`), or `/codex:rescue` scoped to the worktree when the plugin
+fallback is in use. Let it commit conventionally.
 
 Never grant edit access on the root checkout or a protected branch. The point
 of the doctrine: a delegate's commits pass through **CodeFlow's existing gates

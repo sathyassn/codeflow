@@ -1,10 +1,12 @@
 # Qualified native fallback
 
-Prefer the official integration. Its failure does not prove the other model is
-unavailable. Use an alternative official native App or interactive CLI only
-when it preserves the task's authority, tools and evidence contract. This
-supersedes the plugin-exclusive choice, not native-session or review duties
-(CodeFlow ADR-0059).
+Cross-family transport
+(`cf-model-orchestrator/resources/routing/transport.md`) names the preferred
+seat and orders its fallbacks. A failed route does not prove the other model
+is unavailable. Use a fallback client, such as the official Codex plugin from
+a Claude Code host or the official Codex App, only when it preserves the
+task's authority, tools and evidence contract. This changes the route, not
+native-session or review duties (CodeFlow ADR-0059, ADR-0077).
 
 ## One practical qualification
 
@@ -12,8 +14,8 @@ Verify the five obligations with one bounded task-scoped round trip: actual
 native launch/thread, required tool access, attributable result, legible failure
 and recheck. Use an owned session and exact worktree; preserve role,
 model/effort, read-only or edit scope, Git/secret controls and cleanup.
-Herdr/tmux may host the interactive CLI; pane stability alone never proves
-completion. A native App action must be exposed by the host, not an invented
+A Herdr tab hosts the interactive CLI, or tmux when no Herdr server is
+reachable; pane stability alone never proves completion. A native App action must be exposed by the host, not an invented
 API. Record the tested client, version, direction, launching host and capabilities
 in the orchestrator's run evidence ledger. A canary in one direction never
 qualifies the other. Required tools are checked for the task, not inferred
@@ -21,7 +23,9 @@ from earlier versions or a successful login.
 
 Use vendor-supported clients rather than a new broker. No headless peer,
 hand-rolled app-server JSON-RPC, generic same-lineage impersonation, private
-session-database parsing or authentication automation. Native status, exposed
+session-database parsing or authentication automation. Reading the seat's
+own Codex session record, as `cf-herdr` names it, is reading a native
+session surface for that one session, never a completion signal. Native status, exposed
 task/thread tools and supported result surfaces supply provenance; summaries
 that omit required actions are insufficient evidence for those actions.
 
