@@ -52,7 +52,7 @@ use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
 use super::settings_merge::{
-    merge_settings_from_baseline, merge_settings_from_prior_release, KEPT_REMOVAL,
+    is_standing_note, merge_settings_from_baseline, merge_settings_from_prior_release,
 };
 use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file,
@@ -502,9 +502,10 @@ fn update_entry(
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
-                    // A kept removal is reported on every run: the project
-                    // still runs without a shipped rule.
-                    lines.retain(|line| line.contains(KEPT_REMOVAL));
+                    // A standing condition is reported on every run: a kept
+                    // removal means the project still runs without a shipped
+                    // rule, and a malformed or partial `env` stays as it is.
+                    lines.retain(|line| is_standing_note(line));
                     report.file_with_notes(&entry.dest, Action::Unchanged, lines);
                 } else {
                     write_dest(root, entry, &merged)?;

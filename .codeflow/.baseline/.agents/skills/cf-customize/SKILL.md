@@ -283,7 +283,8 @@ confirms the final content.
   GitHub, docs, MCP, browser/UI, design, and project-service tools the project
   needs. Record actual selected versions and tool canaries as run evidence;
   keep fast-aging version pins out of shared doctrine.
-  Claude context/compaction: read
+  Claude context/compaction: init writes a compaction default; to change or
+  remove it so update keeps the choice, read
   [policy](references/claude-context-policy.md).
 - **Presentation utility**: leave `.codeflow/present/config.toml` and primitive
   tokens absent unless the project explicitly wants different closed-session
