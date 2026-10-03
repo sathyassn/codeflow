@@ -279,17 +279,7 @@ fn plan_check(
         .map(str::to_string)
         .or_else(|| declared_work_target(root, task_id));
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
-        Ok(resolved) => {
-            let resolved =
-                resolved.unwrap_or_else(|| codeflow_core::workgraph::ResolvedWorkTarget {
-                    target: "main".to_string(),
-                    note: None,
-                });
-            if let Some(note) = &resolved.note {
-                eprintln!("{}", note.line("work start", "note"));
-            }
-            resolved.target
-        }
+        Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
         Err(error) => return Err(vec![error.to_string()]),
     };
     let pins = resolve_pins(root, on).map_err(|error| vec![error])?;

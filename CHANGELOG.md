@@ -92,6 +92,71 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The pre-push hook judges a push by the default branch's policy.**
+  `codeflow ci` and the pre-push hook judged commit, branch and PR-body
+  standards with the branch's own `.codeflow/policy.json`, while the hosted
+  policy job reads the policy of the target tip it checks out. A branch
+  that loosened its own rules, such as more commit-body bullets, passed
+  locally and failed after the push. The pre-push hook now judges every
+  pushed branch with the policy at the destination default branch's
+  advertised tip, fetched at most once per push when this clone lacks it.
+  That policy is a candidate destination authority, not the known pull
+  request target, and hosted CI stays the enforcement: no other branch is
+  an authority, even a protected one, so a pull request into an
+  integration line is judged locally by the default branch's policy and
+  the host may judge it differently. The policy is strictly validated,
+  sets the rules, and decides whether and at what level `codeflow ci`
+  gates the push (`git.test_gate_on_push`), so neither the head nor the
+  working copy can lower or turn off that check. For a head that shares
+  history with that tip, the commit checks run over everything the head
+  adds to the tip, as the hosted job's range from the target tip does, so
+  a commit the destination already holds under a tag or another branch,
+  or one an earlier push carried before the policy tightened, is still
+  checked. A head whose recorded history shares nothing with the tip,
+  such as a `gh-pages` deployment branch, is never diffed against it: a
+  fast-forward of a branch the destination already has keeps its own new
+  commits as its commit range, and a new branch keeps the commits the
+  destination does not hold yet, under that policy, and the hook says
+  this is not default-target parity. A shallow clone, a graft or a
+  replace ref cannot show the histories are unrelated, so it keeps the
+  tip. A target the task record
+  declares bounds only the other checks: nothing local proves the pull
+  request goes there, so a branch built on an integration line has the
+  line's inherited commits judged by the default branch's current policy
+  as well. That is stricter than the hosted job for a pull request into
+  the line, for inherited commits only; those commits must pass that
+  policy when the line's pull request reaches the default branch anyway.
+  `codeflow ci` names both ranges when its commit checks run from another
+  commit than its base, and then does not call the run the hosted verdict.
+  A policy there that this codeflow cannot read or validate refuses the
+  push, whether or not its range resolves; when a newer codeflow wrote it, upgrade the
+  local one. With no candidate authority (a destination that does not
+  answer, a failed fetch, or a default branch with no policy yet), the
+  hook says so and, where a range resolves, still runs `codeflow ci` at
+  block level with the policy at the range's base, as a best-effort
+  check. When an `upstream` remote points elsewhere than the
+  push, the hook notes that a pull request may target the upstream, whose
+  policy can differ. The tree checks in the pre-push hook
+  (`codeflow validate --docs` and the quick targets) and the release
+  preflight still follow the working copy's gate, and the commit-msg and
+  other local hook stages still read the working copy, so a commit relying
+  on a loosened rule is made and then refused at push, before it leaves
+  the clone. Run directly, `codeflow ci` judges with the policy at the base
+  it is given, or at the commit `--policy-from` names, as do its
+  automation profiles; its banner says the result is the hosted verdict
+  only when that commit is the pull request's target tip, which the hosted
+  jobs pass. A base with no policy yet, as in the change that adopts
+  CodeFlow, still uses the working copy's. A branch that changes the
+  policy lands that change before commits that rely on it.
+  When a local target branch is behind its upstream, `codeflow work start`
+  and `codeflow ci` no longer print a note asking you to fast-forward it:
+  they already anchor on the upstream, `work start` names it, and the
+  guards refuse the fast-forward steps the note printed. When git itself
+  refuses the base, for example a `GIT_REPLACE_REF_BASE` without a trailing
+  slash on git 2.55 or later, `codeflow ci` now prints git's message in
+  place of the advice to fetch.
+
+<!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
   `dirty=true` in `codeflow --version` although they were built from the
   tagged source: the release job writes cargo-dist's manifest into the
@@ -133,6 +198,59 @@ erratum below, never an edit of the section.
   included, still fails the job, and so does a scan that logs an error,
   reads no commit, or whose git run fails part way. A wrapper that
   runs gitleaks itself can add the entry the CI README shows.
+
+<!-- codeflow:release-impact patch -->
+- **A pull request can no longer exempt its own leak from the secret
+  scan.** The CI template's gitleaks step read `.gitleaksignore`,
+  `.gitleaks.toml`, a `.gitleaks.json` beside it and inline
+  `gitleaks:allow` comments from the pull request's checkout, so the change
+  that added a secret could add its exemption too and pass. The step now
+  reads every exemption from the trusted commit: the pull request's base,
+  or the pushed commit on a push. A new exemption takes effect once its own
+  pull request merges, and an inline `gitleaks:allow` comment counts only
+  on a commit the trusted commit already holds. A file your configuration
+  extends by `[extend] path`, and a `GITLEAKS_CONFIG` file in the
+  repository, are read from the trusted commit as well. The step fails
+  with a message naming the fix when the trusted commit is not in the
+  checkout, when it does not hold an extended file, or when an extended
+  file is named by an absolute path into the checkout. gitleaks is now
+  downloaded and unpacked under the runner's temp directory, so a file or
+  link a pull request commits at that name is not written through. Nothing
+  from the checkout runs or steers the scan: its Python helpers run
+  isolated (Python 3.11 or later), git reads `.gitattributes` from the
+  trusted commit (git 2.41 or later), and no step before the scan runs
+  code from the checkout. If you add a step to the secret-scan job, add it
+  after the scan. **If you customised the workflow and the secret-scan job
+  already runs a step of yours before the gitleaks step, move that step
+  after the scan or into another job when you update:** the 3-way merge
+  keeps it, and `codeflow update` now warns about it on every run until it
+  moves. If you renamed the scan step, update cannot check the order and
+  says on every run that the job's step order needs your review. gitleaks
+  now reads the whole history of HEAD, the base's
+  included (on a pull request, the pull request merged into its base; on
+  a push, the pushed commit), instead of every fetched branch and tag, so
+  an unrelated branch can no longer fail a pull request's scan. This
+  narrows coverage on purpose: a branch with no pull request, or a tag, is
+  not scanned by this workflow unless its commits become reachable from a
+  scanned HEAD, so a repository-wide audit needs a scan of its own. The
+  refusals below check only the commits a pull request brings; on a push
+  that range is empty, since the pushed commit is the trusted commit, so a
+  push scan reads its history without them. gitleaks also reads what a merge
+  itself adds, files whose type changes and files git judges binary, which
+  gitleaks' default history scan leaves out, so a secret added in a merge
+  resolution, in a file that replaces a link or after a NUL byte is
+  reported, under the file's own path. In the commits a pull request
+  brings, git cannot show what an octopus merge adds, so the step refuses
+  one; merge the branches one at a time. It also refuses a path with a
+  backslash, a double quote or a control character that one of those
+  commits changes, or that either side of a merge among them changes,
+  since gitleaks cannot read such names reliably. Each refusal names the
+  commit and the refs that hold it; rewrite the pull request's commits, or
+  rebase onto the base when the change is on the base's side, since a
+  later rename leaves the name in the earlier commit. Names with spaces or
+  non-ASCII letters pass. The scan pins git's patch format, so git
+  configuration on the runner, such as `diff.noprefix`, cannot move a
+  finding to another path.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
@@ -206,11 +324,13 @@ erratum below, never an edit of the section.
   --follow-up-of` ran only on a `plan/` branch, but a planning pull request
   must name an epic, and a standalone task has none, so no branch or
   `Task:` line could land the record. A standalone task's follow-up is now
-  a standalone task too: file it off a `plan/` branch, `codeflow work
-  claim` moves it to its own task branch, and its record lands with its
-  work in one pull request. On a `plan/` branch the command now refuses and
-  names that route. A follow-up of an epic task still rides in the epic's
-  batched amendment on a `plan/` branch.
+  a standalone task too: cut a task branch from the target, file the
+  follow-up there, fill in and commit its record, then run `codeflow work
+  claim`, which renames that branch to `task/TSK-NNN-<slug>` and pushes it.
+  Its record lands with its work in one pull request. A standalone task
+  never uses a `plan/` branch, and the command now refuses on one and names
+  that route. A follow-up of an epic task still rides in the epic's batched
+  amendment on a `plan/` branch.
 
 <!-- codeflow:release-impact patch -->
 - **An epic criterion served only by cancelled tasks can close.** `codeflow

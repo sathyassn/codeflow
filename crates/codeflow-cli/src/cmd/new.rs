@@ -121,9 +121,11 @@ pub enum TaskCommand {
         #[arg(long = "into", value_name = "BRANCH")]
         integration_target: Option<String>,
         /// File a follow-up of this task: records `follow_up_of` and inherits
-        /// its target; an epic task's follow-up inherits the epic and runs on a
-        /// plan/ branch, a standalone task's is standalone and runs off one,
-        /// landing with its work on its own task branch.
+        /// its target. An epic task's follow-up inherits the epic and is filed
+        /// on a plan/ branch. A standalone task never uses a plan/ branch and
+        /// the command refuses one: its follow-up is a standalone task, filed
+        /// on a task branch cut from the target, with its record filled in and
+        /// committed, then claimed with `work claim`.
         #[arg(
             long,
             value_name = "TSK-NNN",
