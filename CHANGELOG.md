@@ -60,7 +60,11 @@ erratum below, never an edit of the section.
   reason update leaves it: a file update does not manage, such as
   `.claude/settings.local.json`, a file it skips as a symlink or through
   `[scaffold] ignore`, or an edit it keeps because the shipped version
-  has not changed. It names a `.new` file update left waiting. When the
+  has not changed. When both kinds of file are stale, it gives both
+  steps. When no exec-guard is bound at all, it offers `codeflow update`
+  only where update would bind the shipped guard again, and otherwise
+  quotes the shipped guard group to add to `.grok/hooks/codeflow.json`.
+  It names a `.new` file update left waiting. When the
   shipped exec-guard handler (its command, timeout and environment) is
   bound where Grok's shell tool hits it, matched as Grok matches, doctor
   judges a fixed canary dangerous command in the payload Grok sends with
