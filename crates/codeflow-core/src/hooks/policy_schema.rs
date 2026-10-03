@@ -115,14 +115,15 @@ pub const SCHEMA: [KeySpec; 64] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "A commit made directly on a protected branch.",
-        notes: "",
+        notes: "A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1.",
     },
     KeySpec {
         path: "git.push_to_protected",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "A push to a protected branch.",
-        notes: "",
+        notes: "A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1 for a \
+                fast-forward push; force pushes and deletions stay refused.",
     },
     KeySpec {
         path: "git.force_push_protected",

@@ -121,8 +121,11 @@ effective. Codex-driven work receives the git-hook plane where those hooks are
 installed and executed. CI becomes a merge gate when the remote requires its
 result. Protected-branch merges land via a PR **merged by a human**,
 or `codeflow integrate`; an agent never merges into protected. A human can
-override the git-hook plane locally with `CODEFLOW_HUMAN_OVERRIDE=1`; git-guard
-never honors that env and blocks agents from setting it. Plane-by-plane
+override the git-hook plane's protected-branch commit, merge and push rules
+from their own terminal with `CODEFLOW_HUMAN_OVERRIDE=1`, for example
+`CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main` for the first push to an
+empty remote; force pushes, deletions and the secret checks stay refused.
+git-guard never honors that env and blocks agents from setting it. Plane-by-plane
 detail: [the enforcement matrix](docs/architecture/enforcement-planes.md).
 
 ## Docs
