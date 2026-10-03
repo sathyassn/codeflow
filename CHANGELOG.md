@@ -268,13 +268,21 @@ erratum below, never an edit of the section.
   is never pulled, `codeflow ci` and the pre-push hook then refused the
   completion with `work.acceptance_binding`, because they read the task's
   target from the stale local branch, took the merge for foreign work and
-  asked for a new review. The binding now reads the target as `codeflow
-  work start` does: the local branch, or its configured upstream when the
-  local branch is strictly behind it. A merge whose second parent is on that
-  line and whose tree is git's clean merge of its parents keeps the
-  binding. A hand edit or conflict resolution in the merge, a merge of
-  another branch, or a later commit beyond the record's status and
-  Closeout still refuses, and the refusal now names that commit.
+  asked for a new review. The binding now checks the merge against the
+  target tip the run is judged against: the base `codeflow ci` is given,
+  which hosted CI sets to the pull request's base, and in the pre-push hook
+  also the destination default branch's advertised tip. A local branch, its
+  upstream configuration or a remote-tracking ref never decides it. A merge
+  whose second parent is on that tip's first-parent line, and whose
+  recorded result equals the conflict-free automatic merge of its parents,
+  keeps the binding. Any other merge, a merge of more than two parents, a
+  later commit beyond the record's status and Closeout, a graft or replace
+  ref, or a shallow cut on the walked chain refuses, even when the change
+  cancels out, and the refusal names that commit. A task completed,
+  reopened and completed again inside its own pull request may also change
+  its own criteria while its record is not yet on the target; before,
+  `codeflow task status complete` refused that as a reopened task's
+  criteria change.
 
 ## [3.0.0]
 

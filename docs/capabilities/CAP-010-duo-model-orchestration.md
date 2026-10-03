@@ -301,14 +301,21 @@ invalidate that source. Direct work and transported work use the same
 binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
 A task pull request that merges its moved target after the review keeps its
-binding when each merge brings a commit on the first-parent line of the
-task's declared target, read as `work start` reads it (the local branch, or
-its configured upstream when the local branch is strictly behind it, and
-`origin/<name>` in a clone without one), or of the range's base when the
-task declares none, and its tree equals git's clean merge of its parents
-(TSK-220). A hand edit or conflict resolution in such a merge, a merge of
-another branch, or a later commit beyond the record's status and Closeout
-still unbinds it, and the refusal names that commit.
+binding when each merge brings a commit on the first-parent line of a target
+tip the run is judged against, and the merge's recorded result equals the
+conflict-free automatic merge of its parents (TSK-220). The target tips come
+from the run, never from a local branch or its upstream configuration: the
+base `codeflow ci` is given (in hosted CI, the pull request's base commit),
+and in the pre-push hook also its candidate authority, the destination
+default branch's advertised tip; a planning or line range also accepts its
+own line. Any other merge, a merge of more than two parents, a later commit
+beyond the record's status and Closeout, a history overlay (grafts or
+replace refs) or a shallow cut on the walked chain refuses, even when the
+net change cancels out, and the refusal names that commit. The status verb,
+which has no run base, previews the same rule against the task's target as
+`work start` anchors it. A task completed, reopened and completed again
+inside its own pull request may change its own criteria while its record is
+not on the target, though it still reviews its own range.
 A task pull request may change its own criteria, and CI prints the change
 for the reviewer; a reopened task keeps its criteria, and another task's
 criteria change only in its own pull request, a planning-only change or a
