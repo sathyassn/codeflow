@@ -260,8 +260,9 @@ fn walk(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Windows has no mode bits, so the eval kit makes the evaluator key and its
-/// folder owner-only through their access lists and refuses the key once
-/// either list lets in another account.
+/// folder owner-only through their access lists, writes the key only once
+/// both are proven private, and refuses it once either lets in another
+/// account.
 #[cfg(windows)]
 #[test]
 fn the_windows_evaluator_key_is_refused_once_others_can_reach_it() {
@@ -289,20 +290,39 @@ fn the_windows_evaluator_key_is_refused_once_others_can_reach_it() {
             home.path(),
         )
     };
+    let folder = home.path().join("eval");
+    let icacls = |target: &Path, args: &[&str]| {
+        let out = Command::new("icacls")
+            .arg(target)
+            .args(args)
+            .output()
+            .expect("icacls runs");
+        assert!(out.status.success(), "{out:?}");
+    };
+    // A folder that passes read access to everyone on what it holds: the
+    // kit's own grant cannot remove that entry, so no key is written.
+    std::fs::create_dir_all(&folder).expect("key folder");
+    icacls(&folder, &["/grant", "*S-1-1-0:(OI)(IO)R"]);
+    let refused = record();
+    assert!(
+        !refused.status.success(),
+        "an inheritable grant to everyone"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("open to other accounts (S-1-1-0)"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!folder.join("judgement.key").exists());
+    icacls(&folder, &["/remove:g", "*S-1-1-0"]);
     let made = record();
     assert!(
         made.status.success(),
         "{}",
         String::from_utf8_lossy(&made.stderr)
     );
-    let folder = home.path().join("eval");
     for target in [folder.join("judgement.key"), folder] {
-        let grant = Command::new("icacls")
-            .arg(&target)
-            .args(["/grant", "*S-1-1-0:R"])
-            .output()
-            .expect("icacls runs");
-        assert!(grant.status.success(), "{grant:?}");
+        icacls(&target, &["/grant", "*S-1-1-0:R"]);
         let refused = record();
         assert!(!refused.status.success(), "{target:?} open to everyone");
         assert!(
@@ -310,12 +330,7 @@ fn the_windows_evaluator_key_is_refused_once_others_can_reach_it() {
             "{}",
             String::from_utf8_lossy(&refused.stderr)
         );
-        let reset = Command::new("icacls")
-            .arg(&target)
-            .args(["/remove:g", "*S-1-1-0"])
-            .output()
-            .expect("icacls runs");
-        assert!(reset.status.success(), "{reset:?}");
+        icacls(&target, &["/remove:g", "*S-1-1-0"]);
     }
     assert!(record().status.success());
 }

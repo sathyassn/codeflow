@@ -4988,6 +4988,29 @@ print(json.dumps(seen, sort_keys=True))
             with patch.object(eval_kit, "windows_access", side_effect=eval_kit.EvalError("cannot read the access list")):
                 with self.assertRaisesRegex(eval_kit.EvalError, "cannot read the access list"):
                     eval_kit.evaluator_key()
+            path.write_text("not hex\n", encoding="utf-8")
+            with self.assertRaisesRegex(eval_kit.EvalError, "not 32 bytes"):
+                eval_kit.evaluator_key()
+            # A grant the kit cannot remove, such as another account's
+            # explicit or inheritable entry, refuses the key before any of it
+            # is written, and leaves no key file behind.
+            for exposed in ("eval", "judgement.key"):
+                with self.subTest(exposed=exposed):
+                    path.unlink(missing_ok=True)
+                    written: list[str] = []
+
+                    def leaves_a_grant(target: Path, account: str) -> None:
+                        make_private(target, account)
+                        if target.name == exposed:
+                            written.append(target.read_text(encoding="utf-8") if target.is_file() else "")
+                            lists[str(target)] = (account, {account, "S-1-1-0"})
+
+                    with patch.object(eval_kit, "windows_make_private", side_effect=leaves_a_grant):
+                        with self.assertRaisesRegex(eval_kit.EvalError, r"open to other accounts \(S-1-1-0\)"):
+                            eval_kit.evaluator_key(create=True)
+                    self.assertFalse(path.exists())
+                    self.assertEqual([""], written)
+                    lists.clear()
 
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():

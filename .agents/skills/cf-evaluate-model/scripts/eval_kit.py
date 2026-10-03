@@ -4327,11 +4327,14 @@ def evaluator_key_path() -> Path:
 
 
 # Windows has no POSIX mode bits (every folder reads as 0o777 there), so the
-# key's privacy is its access list: the kit makes the folder and the key
-# owner-only, then reads each list back and refuses one it cannot prove
-# private. SYSTEM and the Administrators group can read any file anyway, so
-# their entries are no exposure.
+# key's privacy is its access list: the kit makes the folder and then the
+# empty key file owner-only, reads each list back, and writes the key only
+# once both are proven private. SYSTEM and the Administrators group can read
+# any file anyway, so their entries are no exposure.
 WINDOWS_TRUSTED = {"S-1-5-18", "S-1-5-32-544"}
+# CREATOR OWNER: an inheritable entry for it grants the account that creates
+# the child, so it exposes nothing of a key this account creates.
+WINDOWS_CREATOR_OWNER = "S-1-3-0"
 
 
 def windows_api():
@@ -4389,8 +4392,9 @@ def windows_user() -> str:
 
 def windows_access(path: Path) -> tuple[str, set[str]]:
     """The owner of `path` and every account its access list allows anything
-    to, read through the Windows security API. Refused when the list cannot be
-    read or holds an entry this check cannot judge."""
+    to, read through the Windows security API, counting the grants a folder
+    passes to what is created in it. Refused when the list cannot be read or
+    holds an entry this check cannot judge."""
 
     ctypes, _, advapi, kernel = windows_api()
     owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
@@ -4411,12 +4415,14 @@ def windows_access(path: Path) -> tuple[str, set[str]]:
             if not advapi.GetAce(dacl, index, ctypes.byref(ace)):
                 raise EvalError(f"cannot read the access list of {path} (error {ctypes.get_last_error()})")
             kind, flags = ctypes.string_at(ace.value, 2)
-            if flags & 0x08 or kind == 1:
-                continue  # inherit-only (judged on the child) or a denial
+            if kind == 1:
+                continue  # a denial
             if kind != 0:
                 raise EvalError(f"the access list of {path} holds an entry of type {kind} this check cannot judge")
             # ACCESS_ALLOWED_ACE: a 4-byte header and a 4-byte mask, then the SID.
-            allowed.add(windows_sid_text(ace.value + 8))
+            account = windows_sid_text(ace.value + 8)
+            if not (flags & 0x08 and account == WINDOWS_CREATOR_OWNER):
+                allowed.add(account)
         return windows_sid_text(owner.value), allowed
     finally:
         kernel.LocalFree(descriptor)
@@ -4442,6 +4448,12 @@ def windows_exposure(path: Path, user: str) -> str | None:
     return f"open to other accounts ({', '.join(others)})" if others else None
 
 
+def windows_require_private(path: Path, user: str, name: str) -> None:
+    exposure = windows_exposure(path, user)
+    if exposure is not None:
+        raise EvalError(f"{name} is {exposure}; make it owner-only, for example with icacls: {path}")
+
+
 def evaluator_key(*, create: bool = False) -> bytes | None:
     """The evaluator's signing key, made owner-only on first use when
     `create`; None when there is none. Refused when the key or its folder
@@ -4457,33 +4469,45 @@ def evaluator_key(*, create: bool = False) -> bytes | None:
     exposed += [GRADED_SUITE] if GRADED_SUITE is not None else []
     if any(nested(path, root.resolve()) for root in exposed):
         raise EvalError(f"the evaluator key must live outside the repository and the graded suite: {path}")
+    windows = sys.platform == "win32"
+    user = windows_user() if windows else ""
     if not path.exists():
         if not create:
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(path.parent, 0o700)
-        if sys.platform == "win32":
-            windows_make_private(path.parent, windows_user())
+        if windows:
+            windows_make_private(path.parent, user)
+            windows_require_private(path.parent, user, "the evaluator key's folder")
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            try:
+                if windows:
+                    windows_make_private(path, user)
+                    windows_require_private(path, user, "the evaluator key")
+            except EvalError:
+                handle.close()
+                path.unlink()
+                raise
             handle.write(secrets.token_hex(32) + "\n")
-        if sys.platform == "win32":
-            windows_make_private(path, windows_user())
-    if sys.platform == "win32":
-        user = windows_user()
-        for target, name in ((path.parent, "the evaluator key's folder"), (path, "the evaluator key")):
-            exposure = windows_exposure(target, user)
-            if exposure is not None:
-                raise EvalError(f"{name} is {exposure}; make it owner-only, for example with icacls: {target}")
-        return bytes.fromhex(path.read_text(encoding="utf-8").strip())
-    folder, key = path.parent.stat(), path.stat()
-    if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
-        raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
-    if stat.S_IMODE(folder.st_mode) & 0o022:
-        raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
-    if stat.S_IMODE(key.st_mode) & 0o077:
-        raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
-    return bytes.fromhex(path.read_text(encoding="utf-8").strip())
+    if windows:
+        windows_require_private(path.parent, user, "the evaluator key's folder")
+        windows_require_private(path, user, "the evaluator key")
+    else:
+        folder, key = path.parent.stat(), path.stat()
+        if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
+            raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
+        if stat.S_IMODE(folder.st_mode) & 0o022:
+            raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
+        if stat.S_IMODE(key.st_mode) & 0o077:
+            raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
+    try:
+        key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        key = b""
+    if len(key) != 32:
+        raise EvalError(f"the evaluator key is not 32 bytes in hexadecimal; remove it to make a new one: {path}")
+    return key
 
 
 def judgement_signature(key: bytes, judge: Judge, assertion: str, excerpt_digest: str, verdict: str) -> str:

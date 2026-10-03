@@ -43,11 +43,13 @@ erratum below, never an edit of the section.
   ledger file is named as a directory there; a shipped spec checked out
   with CRLF line endings no longer counts as edited; and the model
   evaluation kit keeps its signing key owner-only through the key's and
-  its folder's access lists, refusing either list that lets in another
-  account, since Windows has no POSIX mode bits.
-  On Windows the guards refuse a recursive delete under a `/`-rooted
-  temporary path such as `/tmp/scratch`: that path names no fixed place
-  there, and a junction can send the delete anywhere.
+  its folder's access lists, since Windows has no POSIX mode bits: it
+  writes the key only once both lists are proven private and refuses
+  either list that lets in another account.
+  On Windows the guards refuse a recursive delete below any `/`-rooted
+  path, such as `rm -r /tmp/scratch`: that path names no fixed place
+  there, and a junction can send the delete anywhere. A relative path is
+  judged as before.
 
 ### Changed
 
