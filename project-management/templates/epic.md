@@ -47,8 +47,11 @@ created: {{DATE}}
 
 <!-- Name the capabilities, user journeys, and material native build, runtime,
      release, data/trust, and shared-contract boundaries affected. This epic
-     owns the cross-area outcome, not a team or directory. Omit details already
-     owned by architecture or a linked authoritative source. -->
+     owns the cross-area outcome, not a team or directory. Name the repository
+     homes its tasks write (folders or files in the project's structure), or
+     point to the project's structure authority, the document that says where
+     things live; each task's `## Deliverables` names its own. Omit details
+     already owned by architecture or a linked authoritative source. -->
 
 ## Plan graph (when needed)
 

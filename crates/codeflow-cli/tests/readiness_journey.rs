@@ -100,7 +100,7 @@ fn edit(root: &Path, relative: &str, from: &str, to: &str) {
 
 fn body(task_line: &str) -> String {
     format!(
-        "## Summary\nA bounded change.\n\n{task_line}\n\n## Changes\n- one change\n\n## Testing\n- journey step\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n| journey | this range | approve |\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: journey fixture.\n- Migration: none\n"
+        "## Summary\nA bounded change.\n\n- one change\n\n{task_line}\n\n## Changes\n- one change\n\n## Testing\n- journey step\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n| journey | this range | approve |\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: journey fixture.\n- Migration: none\n"
     )
 }
 

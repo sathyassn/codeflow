@@ -22,6 +22,27 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Pull request Summaries open with a prose lead, then bullets.**
+  `codeflow ci` now checks the shape of a pull request body's Summary under
+  a new policy key, `git.pr_summary`, which blocks by default: one prose
+  paragraph that anchors the reader, then the details as a list or a table,
+  then at most one closing paragraph. Only visible blocks count, so text in
+  an HTML comment never supplies the lead or the list, and a heading, code
+  block, quote or HTML block in the Summary fails. It judges shape, never a
+  word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn
+  while a kept PR template is diagnosed, a trusted automation profile skips
+  it, and a project lowers it by setting `git.pr_summary` to `warn` or
+  `off`. The PR template, `writing.md` "Summaries" and cf-ship's PR
+  evidence reference teach the shape. The shipped policy file does not list
+  the key, so neither `init` nor `update` writes it and an older binary
+  never meets it; a project that sets it runs 3.1.0 or later locally and in
+  CI.
+  cf-ship also says that a pull request already reported ready goes back
+  to draft before any further change to its branch, and its release
+  integration steps move to their own reference, read only after an
+  epic-line landing with a configured release branch.
+
+<!-- codeflow:release-impact minor -->
 - **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
   the named targets and their prerequisites, comma separated or repeated,
   so one gate can be split across parallel CI jobs. A limited run is
@@ -79,6 +100,23 @@ erratum below, never an edit of the section.
   repository or is not the binary doctor started from. The canary does
   not exercise a shell, the command-line parsing, the `codeflow` on PATH
   or Grok's own hook call; a live session's hook lines prove those.
+
+<!-- codeflow:release-impact minor -->
+- **Task records name their deliverables and where they go.** The task
+  template has a `## Deliverables` section after Description: each output
+  (files or a folder, a decision record, a research note, evidence, a
+  record update, a human board) and its home as a path in the project's
+  structure, or a provisional home with what decides it. The epic
+  template's "Affected surfaces and interfaces" asks for the homes the
+  epic's tasks write, or a pointer to the project's structure authority,
+  and the `cf-method` clarity checklist that `cf-plan` applies checks every
+  task's deliverables and homes against that authority before records are
+  materialized. `codeflow validate --docs` warns about an open task with
+  no filled section and no path in its Description; the warning never
+  blocks, has no policy key, and never reads a complete or cancelled
+  record. It errs toward silence: anything that plausibly names a path,
+  Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
+  `project-management/templates/` carries the new section.
 
 ### Changed
 

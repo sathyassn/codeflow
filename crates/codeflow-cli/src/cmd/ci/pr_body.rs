@@ -1,7 +1,7 @@
 //! Markdown-aware PR sections and advisory presentation/release checks.
 
-use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use codeflow_core::hooks::{adoption, GitPolicy, PolicyLevel, Violation};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use super::SectionState;
 
@@ -405,8 +405,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
         ));
     }
-    // ADR-0071 rule 7: a Summary is judged by whether it anchors the reader,
-    // which review and evaluation grade; no count stands in for that.
+    // ADR-0071 rule 7: whether a Summary anchors the reader is judged by
+    // review and evaluation; no count stands in for that. Its block shape is
+    // checked mechanically under `git.pr_summary` (the note of 2026-10-03).
     for section in outline.sections {
         if section.matches("Testing")
             && !visible_text(section.content(), false)
@@ -417,6 +418,326 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         }
     }
     out
+}
+
+/// One top-level block of a Summary as a reader sees it rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    Paragraph,
+    List,
+    Table,
+    Heading,
+    Code,
+    Quote,
+    Html,
+    Rule,
+}
+
+impl Block {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Paragraph => "paragraph",
+            Self::List => "list",
+            Self::Table => "table",
+            Self::Heading => "heading",
+            Self::Code => "code block",
+            Self::Quote => "quote",
+            Self::Html => "HTML block",
+            Self::Rule => "rule",
+        }
+    }
+
+    /// The name with its article, for a sentence.
+    fn with_article(self) -> String {
+        let article = if self == Self::Html { "an" } else { "a" };
+        format!("{article} {}", self.name())
+    }
+
+    fn details(self) -> bool {
+        matches!(self, Self::List | Self::Table)
+    }
+}
+
+/// The Markdown options GitHub renders a pull request body with: tables,
+/// footnotes, strikethrough, task lists and alert quotes.
+fn github_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM
+}
+
+/// One top-level block of the Summary while the walk is inside it.
+struct OpenBlock {
+    /// `None` for a footnote definition, which is not a block of the shape.
+    kind: Option<Block>,
+    /// The visible text: `Text` and `Code` outside images, code blocks,
+    /// quotes, HTML and footnote definitions; breaks end a line.
+    text: String,
+    /// The raw HTML of an HTML block.
+    html: String,
+    /// How deep the walk is inside content a reader does not see as prose.
+    hidden: usize,
+}
+
+/// The visible top-level blocks of the Summary whose content spans
+/// `range` of `body`, in order, read from one parse of the whole body with
+/// GitHub's options. Reference definitions anywhere in the body resolve, so
+/// a reference image or an empty reference link shows no text wherever it
+/// is defined; reference and footnote definitions are never blocks. Left
+/// out, because a reader sees no prose in them: an HTML block of only
+/// comments or tags, a paragraph, list or table with no visible text, and a
+/// paragraph that is only the `Task:` line, a field the PR template puts
+/// above the Summary.
+fn summary_blocks(body: &str, range: std::ops::Range<usize>) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut depth = 0usize;
+    let mut open: Option<OpenBlock> = None;
+    for (event, span) in Parser::new_ext(body, github_options()).into_offset_iter() {
+        let at_top = depth == 0 && range.contains(&span.start);
+        match event {
+            Event::Start(tag) => {
+                if at_top {
+                    open = Some(OpenBlock {
+                        kind: block_kind(&tag),
+                        text: String::new(),
+                        html: String::new(),
+                        hidden: 0,
+                    });
+                }
+                if let Some(block) = open.as_mut() {
+                    if hides_text(&tag) {
+                        block.hidden += 1;
+                    }
+                }
+                depth += 1;
+            }
+            Event::End(tag) => {
+                depth = depth.saturating_sub(1);
+                if let Some(block) = open.as_mut() {
+                    if ends_hidden(tag) {
+                        block.hidden = block.hidden.saturating_sub(1);
+                    }
+                }
+                if depth == 0 {
+                    if let Some(block) = open.take() {
+                        if let Some(kind) = block.kind.filter(|kind| visible_block(*kind, &block)) {
+                            blocks.push(kind);
+                        }
+                    }
+                }
+            }
+            Event::Rule if at_top => blocks.push(Block::Rule),
+            Event::Html(value) => {
+                if let Some(block) = open.as_mut() {
+                    block.html.push_str(&value);
+                }
+            }
+            Event::Text(value) | Event::Code(value) => {
+                if let Some(block) = open.as_mut().filter(|block| block.hidden == 0) {
+                    block.text.push_str(&value);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(block) = open.as_mut().filter(|block| block.hidden == 0) {
+                    block.text.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks
+}
+
+/// The shape kind of a top-level tag; `None` for a footnote definition.
+fn block_kind(tag: &Tag<'_>) -> Option<Block> {
+    Some(match tag {
+        Tag::Paragraph => Block::Paragraph,
+        Tag::List(_) => Block::List,
+        Tag::Table(_) => Block::Table,
+        Tag::Heading { .. } => Block::Heading,
+        Tag::CodeBlock(_) => Block::Code,
+        Tag::BlockQuote(_) => Block::Quote,
+        Tag::FootnoteDefinition(_) => return None,
+        _ => Block::Html,
+    })
+}
+
+/// Content whose text a reader does not see as prose: an image's
+/// description (an `alt` attribute), code, a quote, raw HTML and a footnote
+/// definition, which renders at the end of the page.
+fn hides_text(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Image { .. }
+            | Tag::CodeBlock(_)
+            | Tag::BlockQuote(_)
+            | Tag::HtmlBlock
+            | Tag::FootnoteDefinition(_)
+    )
+}
+
+fn ends_hidden(tag: TagEnd) -> bool {
+    matches!(
+        tag,
+        TagEnd::Image
+            | TagEnd::CodeBlock
+            | TagEnd::BlockQuote(_)
+            | TagEnd::HtmlBlock
+            | TagEnd::FootnoteDefinition
+    )
+}
+
+fn visible_block(kind: Block, block: &OpenBlock) -> bool {
+    let text = block.text.trim();
+    match kind {
+        Block::Paragraph => {
+            let task_line = text.starts_with("Task:") && !text.contains('\n');
+            !text.is_empty() && !task_line
+        }
+        Block::List | Block::Table => !text.is_empty(),
+        Block::Html => !strip_markup(&block.html).trim().is_empty(),
+        Block::Heading | Block::Code | Block::Quote | Block::Rule => true,
+    }
+}
+
+/// The text of an HTML block a reader sees: without its comments, where an
+/// unclosed comment hides the rest as a browser does, and without its tags.
+/// A block of only markup, such as `<p align="center">`, shows no text.
+fn strip_markup(source: &str) -> String {
+    let mut text = String::new();
+    let mut rest = source;
+    while let Some(start) = rest.find("<!--") {
+        text.push_str(&rest[..start]);
+        let Some(end) = rest[start + 4..].find("-->") else {
+            rest = "";
+            break;
+        };
+        rest = &rest[start + 4 + end + 3..];
+    }
+    text.push_str(rest);
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in text.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// What is wrong with a Summary of these blocks, or `None` when it has the
+/// shape: one prose paragraph, then a list or table, then only lists,
+/// tables and at most one closing paragraph, which comes last.
+fn summary_problem(blocks: &[Block]) -> Option<String> {
+    let Some((lead, rest)) = blocks.split_first() else {
+        return Some("it has no visible prose lead".into());
+    };
+    if *lead != Block::Paragraph {
+        return Some(format!(
+            "it opens with {}, not a prose paragraph",
+            lead.with_article()
+        ));
+    }
+    let Some(first_details) = rest.iter().position(|block| block.details()) else {
+        return Some(
+            match rest.iter().find(|block| **block != Block::Paragraph) {
+                Some(other) => format!(
+                    "{} follows the lead and no list or table",
+                    other.with_article()
+                ),
+                None if rest.is_empty() => "no list or table follows the lead".into(),
+                None => format!(
+                    "it is {} prose paragraphs with no list or table",
+                    rest.len() + 1
+                ),
+            },
+        );
+    };
+    if let Some(between) = rest[..first_details].first() {
+        return Some(if *between == Block::Paragraph {
+            "a second prose paragraph comes before the first list or table".into()
+        } else {
+            format!(
+                "{} comes between the lead and the first list or table",
+                between.with_article()
+            )
+        });
+    }
+    let after = &rest[first_details + 1..];
+    if let Some(other) = after
+        .iter()
+        .find(|block| !block.details() && **block != Block::Paragraph)
+    {
+        return Some(format!(
+            "{} follows the list; only lists, tables and one closing paragraph may",
+            other.with_article()
+        ));
+    }
+    let prose = after
+        .iter()
+        .filter(|block| **block == Block::Paragraph)
+        .count();
+    if prose > 1 {
+        return Some(format!(
+            "{prose} prose paragraphs follow the list; at most one closing paragraph may"
+        ));
+    }
+    if prose == 1 && after.last() != Some(&Block::Paragraph) {
+        return Some(
+            "a prose paragraph sits between lists; the one closing paragraph comes last".into(),
+        );
+    }
+    None
+}
+
+/// The Summary shape check (`git.pr_summary`, ADR-0071 note of 2026-10-03):
+/// the body's one Summary section, under its mapped heading, opens with one
+/// prose paragraph that anchors the reader, then the details as a list or
+/// table, then at most one closing paragraph. Only the visible blocks
+/// count, so text hidden in an HTML comment or a code block never supplies
+/// the lead or the list. A missing, empty or repeated Summary is left to
+/// `git.pr_sections`.
+pub(super) fn summary_shape(git: &GitPolicy, body: &str) -> Vec<Violation> {
+    if !git.pr_summary.is_active() {
+        return Vec::new();
+    }
+    let heading = adoption::mapped_sections(git, &["Summary".to_string()])
+        .pop()
+        .unwrap_or_else(|| "Summary".to_string());
+    let parsed = sections(body);
+    let matched = matching_sections(&parsed, &heading);
+    let [section] = matched.as_slice() else {
+        return Vec::new();
+    };
+    if !has_content(section.content()) {
+        return Vec::new();
+    }
+    let blocks = summary_blocks(body, section.start..section.end);
+    let Some(problem) = summary_problem(&blocks) else {
+        return Vec::new();
+    };
+    let found = if blocks.is_empty() {
+        "nothing visible".to_string()
+    } else {
+        blocks
+            .iter()
+            .map(|block| block.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    vec![Violation::new(
+        "git.pr_summary",
+        git.pr_summary,
+        format!(
+            "PR '## {heading}' is not a prose lead then bullets: {problem} (found: {found}); expected one prose paragraph, then a list or table, then at most one closing paragraph"
+        ),
+        codeflow_core::remedy::PR_SUMMARY_SHAPE.remedy(),
+    )]
 }
 
 /// The body's one Release impact section's own fields, each `(key,
@@ -699,6 +1020,342 @@ fn substantive(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body whose Summary is `summary`, followed by a Changes section.
+    fn with_summary(summary: &str) -> String {
+        format!("Task: TSK-001\n\n## Summary\n\n{summary}\n\n## Changes\n\n- one change\n")
+    }
+
+    fn shape(summary: &str) -> Vec<Violation> {
+        summary_shape(&GitPolicy::default(), &with_summary(summary))
+    }
+
+    #[test]
+    fn summary_shape_passes_a_lead_then_details() {
+        for (case, summary) in [
+            (
+                "lead and bullets",
+                "Adds the shape check so a reader is anchored first.\n\n- one\n- two",
+            ),
+            (
+                "lead and a numbered list",
+                "Adds the shape check.\n\n1. first\n2. second",
+            ),
+            (
+                "lead and a table",
+                "Compares the two checks.\n\n| Check | Level |\n|---|---|\n| shape | block |",
+            ),
+            (
+                "lead, bullets and a closing line",
+                "Adds the shape check.\n\n- one\n- two\n\nMinor for 3.1.0.",
+            ),
+            (
+                "a list that interrupts the lead with no blank line",
+                "This PR closes that gap:\n- one\n- two\n\nA patch fix for 3.1.0.",
+            ),
+            (
+                "lead, bullets, table and a closing line",
+                "Adds the check.\n\n- one\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMinor.",
+            ),
+            (
+                "comments and the Task line are skipped",
+                "<!-- the template comment -->\n\nTask: TSK-001\n\nAdds the check.\n\n<!-- note -->\n\n- one",
+            ),
+            (
+                "prose and details that carry an image",
+                "Adds the check ![diagram](https://example.com/d.png) shown here.\n\n- one ![icon](https://example.com/i.png) change\n\n| A | B |\n|---|---|\n| ![x](https://example.com/x.png) cell | 2 |",
+            ),
+            (
+                "a tag-only HTML block shows no text",
+                "<p align=\"center\">\n\nAdds the check.\n\n- one\n\n</p>",
+            ),
+            (
+                "a long single lead is not counted",
+                &format!("{}\n\n- one", "A sentence that goes on. ".repeat(40)),
+            ),
+        ] {
+            assert!(shape(summary).is_empty(), "{case}: {:?}", shape(summary));
+        }
+    }
+
+    /// `summary` draws exactly one blocking `git.pr_summary` finding that
+    /// says `said` and names the expected shape.
+    fn assert_refused(case: &str, summary: &str, said: &str) {
+        let found = shape(summary);
+        assert_eq!(found.len(), 1, "{case}: {found:?}");
+        assert_eq!(found[0].rule, "git.pr_summary", "{case}");
+        assert_eq!(found[0].level, PolicyLevel::Block, "{case}");
+        assert!(
+            found[0].message.contains(said),
+            "{case}: {}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("expected one prose paragraph"),
+            "{case}: {}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn summary_shape_refuses_other_shapes() {
+        for (case, summary, said) in [
+            (
+                "prose only",
+                "Adds the check.",
+                "no list or table follows the lead",
+            ),
+            (
+                "a prose wall",
+                "One.\n\nTwo.\n\nThree.",
+                "it is 3 prose paragraphs with no list or table",
+            ),
+            (
+                "two lead paragraphs",
+                "Adds the check.\n\nIt also does more.\n\n- one",
+                "a second prose paragraph comes before the first list or table",
+            ),
+            (
+                "list first",
+                "- one\n- two\n\nAdds the check.",
+                "it opens with a list, not a prose paragraph",
+            ),
+            (
+                "table first",
+                "| A | B |\n|---|---|\n| 1 | 2 |",
+                "it opens with a table, not a prose paragraph",
+            ),
+            (
+                "prose wall after the list",
+                "Adds the check.\n\n- one\n\nMore.\n\nAnd more.",
+                "2 prose paragraphs follow the list",
+            ),
+            (
+                "prose between lists",
+                "Adds the check.\n\n- one\n\nAlso:\n\n- two",
+                "a prose paragraph sits between lists",
+            ),
+            (
+                "a heading in the Summary",
+                "Adds the check.\n\n- one\n\n### Detail\n\n- two",
+                "a heading follows the list",
+            ),
+            (
+                "a quote as the lead",
+                "> Adds the check.\n\n- one",
+                "it opens with a quote",
+            ),
+            (
+                "a code block after the list",
+                "Adds the check.\n\n- one\n\n```text\nout\n```",
+                "a code block follows the list",
+            ),
+            (
+                "prose inside an HTML block",
+                "Adds the check.\n\n- one\n\n<details>\n<summary>More</summary>\n\nA wall.\n</details>",
+                "follows the list",
+            ),
+            (
+                "only the Task line",
+                "Task: TSK-001",
+                "it has no visible prose lead",
+            ),
+        ] {
+            assert_refused(case, summary, said);
+        }
+    }
+
+    /// Footnotes and reference definitions resolve across the whole body, as
+    /// GitHub renders it: a definition is never a block of the shape, and a
+    /// reference image or empty reference link shows no prose, wherever its
+    /// definition sits.
+    #[test]
+    fn summary_shape_reads_footnotes_and_references_as_rendered() {
+        const DEF: &str = "[ref]: https://example.com/p.png";
+        let body = |summary: &str, inside: bool| {
+            if inside {
+                format!("Task: TSK-001\n\n## Summary\n\n{summary}\n\n{DEF}\n\n## Changes\n\n- one change\n")
+            } else {
+                format!("Task: TSK-001\n\n## Summary\n\n{summary}\n\n## Changes\n\n- one change\n\n{DEF}\n")
+            }
+        };
+        let notes = "This fixes startup[^a] and shutdown[^b].\n\n- Handles both cases.\n\n[^a]: Startup details belong here.\n\n[^b]: Shutdown details belong here.";
+        assert!(
+            summary_shape(&GitPolicy::default(), &with_summary(notes)).is_empty(),
+            "footnotes inside the Summary"
+        );
+        let elsewhere = "Task: TSK-001\n\n## Summary\n\nThis fixes startup[^a].\n\n- Handles it.\n\n## Changes\n\n- one change\n\n[^a]: Startup details.\n";
+        assert!(
+            summary_shape(&GitPolicy::default(), elsewhere).is_empty(),
+            "a footnote defined in another section"
+        );
+        let unreferenced = shape("[^a]: This definition is never referenced.\n\n- one");
+        assert_eq!(unreferenced.len(), 1, "{unreferenced:?}");
+        assert!(
+            unreferenced[0].message.contains("it opens with a list"),
+            "{}",
+            unreferenced[0].message
+        );
+        for (case, summary, said) in [
+            (
+                "a reference image lead",
+                "![Description][ref]\n\n- one",
+                "it opens with a list",
+            ),
+            (
+                "an empty reference link lead",
+                "[][ref]\n\n- one",
+                "it opens with a list",
+            ),
+            (
+                "a reference-image table",
+                "Adds the check.\n\n| ![a][ref] |  |\n|---|---|\n|  |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "an empty-reference-link list",
+                "Adds the check.\n\n- [][ref]\n- [][ref]",
+                "no list or table follows the lead",
+            ),
+        ] {
+            for inside in [true, false] {
+                let found = summary_shape(&GitPolicy::default(), &body(summary, inside));
+                assert_eq!(
+                    found.len(),
+                    1,
+                    "{case} (definition inside: {inside}): {found:?}"
+                );
+                assert!(
+                    found[0].message.contains(said),
+                    "{case}: {}",
+                    found[0].message
+                );
+            }
+        }
+        // A reference link with text and a reference image beside prose
+        // still read as prose.
+        for inside in [true, false] {
+            let text = body(
+                "See [the guide][ref] ![d][ref] for the steps.\n\n- one [step][ref]",
+                inside,
+            );
+            assert!(
+                summary_shape(&GitPolicy::default(), &text).is_empty(),
+                "{inside}"
+            );
+        }
+    }
+
+    /// Text in a comment, a code fence or an empty cell never supplies the
+    /// lead or the list.
+    #[test]
+    fn summary_shape_ignores_hidden_details() {
+        for (case, summary, said) in [
+            (
+                "a lead hidden in a comment",
+                "<!-- Adds the check. -->\n\n- one",
+                "it opens with a list",
+            ),
+            (
+                "a list hidden in a code fence",
+                "Adds the check.\n\n```\n- one\n- two\n```",
+                "a code block follows the lead and no list or table",
+            ),
+            (
+                "a list hidden in a comment",
+                "Adds the check.\n\n<!--\n- one\n-->",
+                "no list or table follows the lead",
+            ),
+            (
+                "a list of bare template bullets",
+                "Adds the check.\n\n-\n-",
+                "no list or table follows the lead",
+            ),
+            (
+                "a list whose items are only code",
+                "Adds the check.\n\n- ```\n  hidden\n  ```",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table with only empty cells",
+                "Adds the check.\n\n|  |  |\n|---|---|\n|  |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "a lead that is only an image description",
+                "![This text is only an image description](https://example.com/picture.png)\n\n- one change",
+                "it opens with a list",
+            ),
+            (
+                "a list whose items are only images",
+                "Adds the check.\n\n- ![one change](https://example.com/a.png)\n- ![two](https://example.com/b.png)",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table whose only content is an image",
+                "Adds the check.\n\n|  |  |\n|---|---|\n| ![a description](https://example.com/a.png) |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table whose cells hold only comments",
+                "Adds the check.\n\n| <!-- a --> | <!-- b --> |\n|---|---|\n| <!-- c --> | <!-- d --> |",
+                "no list or table follows the lead",
+            ),
+        ] {
+            assert_refused(case, summary, said);
+        }
+    }
+
+    #[test]
+    fn summary_shape_names_what_it_found() {
+        let found = shape("One.\n\nTwo.\n\n- three");
+        assert!(
+            found[0]
+                .message
+                .contains("(found: paragraph, paragraph, list)"),
+            "{}",
+            found[0].message
+        );
+        assert!(found[0].remedy.contains("writing.md` \"Summaries\""));
+        assert!(found[0].remedy.contains("codeflow ci --pr-body-file"));
+    }
+
+    #[test]
+    fn summary_shape_follows_its_level_and_heading() {
+        let body = with_summary("Adds the check.");
+        let mut git = GitPolicy {
+            pr_summary: PolicyLevel::Warn,
+            ..GitPolicy::default()
+        };
+        let found = summary_shape(&git, &body);
+        assert_eq!(found[0].level, PolicyLevel::Warn);
+        for level in [PolicyLevel::Off, PolicyLevel::Allow] {
+            git.pr_summary = level;
+            assert!(summary_shape(&git, &body).is_empty(), "{level}");
+        }
+        // A missing, empty or repeated Summary is the section check's.
+        let git = GitPolicy::default();
+        assert!(summary_shape(&git, "## Changes\n\n- one\n").is_empty());
+        assert!(summary_shape(&git, "## Summary\n\n<!-- c -->\n\n## Changes\n").is_empty());
+        assert!(summary_shape(&git, "## Summary\n\nOne.\n\n## Summary\n\nTwo.\n").is_empty());
+        // An example Summary inside a fence or a closed HTML block is not
+        // the section.
+        assert!(summary_shape(&git, "## Changes\n\n```md\n## Summary\n\nOne.\n```\n").is_empty());
+        // An accepted mapping checks the template's own heading.
+        let mapped = GitPolicy {
+            pr_section_mapping: Some(codeflow_core::hooks::policy::PrSectionMapping {
+                state: codeflow_core::hooks::policy::MappingState::Accepted,
+                headings: [("Summary".to_string(), "Description".to_string())]
+                    .into_iter()
+                    .collect(),
+                decided: "2026-10-03".into(),
+            }),
+            ..GitPolicy::default()
+        };
+        let found = summary_shape(&mapped, "## Description\n\nOne.\n\nTwo.\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("'## Description'"));
+    }
 
     fn declaration(impact: &str, breaking: &str, migration: &str) -> String {
         format!("## Release impact\n- Impact: {impact}\n- Breaking: {breaking}\n- Rationale: Preserve the public behavior.\n- Migration: {migration}\n- Unit: another-project\n- Evidence: manual assessment\n")

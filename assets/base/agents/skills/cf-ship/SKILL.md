@@ -91,7 +91,7 @@ description: Land finished work (docs and capability updates, then a PR through 
    capability state. After an epic-line landing, only when the project
    configures a release branch matching its release pattern, R-120, and a
    workflow integrating into it, follow
-   [release integration](references/pr-evidence.md#release-integration-after-landing).
+   [release integration](references/release-integration.md).
    Otherwise skip that step.
 10. Clean up after every landing, with proof, in the same step: whoever
     landed it runs cleanup, the primary after an integration-line landing

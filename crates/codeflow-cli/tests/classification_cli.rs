@@ -112,7 +112,7 @@ fn branch_with(root: &Path, branch: &str, files: &[(&str, &str)]) {
 
 fn body(task_line: &str) -> String {
     format!(
-        "## Summary\nA bounded change.\n\n{task_line}\n\n## Changes\n- one change\n\n## Testing\n- focused test\n"
+        "## Summary\nA bounded change.\n\n- one change\n\n{task_line}\n\n## Changes\n- one change\n\n## Testing\n- focused test\n"
     )
 }
 

@@ -145,3 +145,29 @@ warnings for a code span, a path or more than three sentences.
 The requirement is CF-OUT-007 here, where the source branch named it
 CF-OUT-006: TSK-130 had already landed a different CF-OUT-006, on naming
 each item by its outcome, and evaluation surfaces are append-only (R-118).
+
+## Note (2026-10-03): the pull request Summary shape is checked
+
+On 2026-10-03 the operator decided that a pull request Summary has a fixed
+shape that holds mechanically, not by judgment alone. The text above stays
+unchanged as the record of what was first decided. TSK-218 applies this
+note.
+
+- The Summary is one prose paragraph that anchors the reader, then the
+  details as a list or a table, then at most one closing paragraph, such as
+  the release impact in one line.
+- `codeflow ci` checks that shape under a new policy key, `git.pr_summary`,
+  which blocks by default; a project may lower it to `warn` or `off`.
+- The check reads the visible blocks of the one Summary section. HTML
+  comments and the `Task:` line are skipped, so hidden text never supplies
+  the lead or the list; a heading, code block, quote or HTML block in the
+  Summary fails.
+- Rule 7 still holds: whether the lead anchors the reader is judged by
+  review and evaluation, and no word, sentence or line count stands in for
+  that. The shape check counts blocks of a kind, never words or sentences.
+- While a kept PR template is diagnosed, the check runs at `warn` at most,
+  as the PR-section check does. A trusted automation profile skips it,
+  since a bot writes its body to its own format; a release or dependency
+  pull request written by a person or an agent is checked like any other.
+- Owners: `writing.md` "Summaries", `cf-ship/references/pr-evidence.md`,
+  the pull request template's Summary comment and the copy guide.
