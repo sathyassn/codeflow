@@ -133,7 +133,9 @@ A focused pack does not qualify a model binding, prove universal detection, or
 stand in for a full promotion or a real-service authorization test.
 
 For `guidance-retention`, the materializer sets the auto-compaction window in
-the disposable fixture's local settings and refuses a scaffold without the
+the disposable fixture's local settings, pins the compaction percentage there
+at 100 so the scaffold's default of 50 does not move the threshold, and
+refuses a scaffold without the
 rule map and re-injection hooks; `check-session` checks one session, the
 scripted turns and the compaction before extracting the probe turn, and
 `retention-report` applies the bar. Offline checks prove the kit, not live
