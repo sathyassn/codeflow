@@ -2655,6 +2655,19 @@ fn complete_reopen_complete(
     base: &str,
     admit: bool,
 ) -> [(i32, String); 2] {
+    complete_reopen_complete_with(root, path, shape, base, admit, &|_| {})
+}
+
+/// [`complete_reopen_complete`], calling `before_verb` with the reviewed
+/// fix committed and the branch checked out, just before the verb runs.
+fn complete_reopen_complete_with(
+    root: &Path,
+    path: &str,
+    shape: &dyn Fn(String) -> String,
+    base: &str,
+    admit: bool,
+    before_verb: &dyn Fn(&str),
+) -> [(i32, String); 2] {
     let branch = git_out(root, &["branch", "--show-current"]);
     write(
         root,
@@ -2682,6 +2695,7 @@ fn complete_reopen_complete(
     commit(root, "docs: reopen with one more criterion");
     write(root, "src/lib.rs", "pub fn fixed() {}\n");
     let reviewed = commit(root, "fix: keep working when rerun");
+    before_verb(&branch);
     let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
     write(
         root,
@@ -3052,4 +3066,122 @@ fn a_custom_default_branch_is_found_through_origin_head() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// The task's planning commit rewritten on the branch with its target
+/// changed to `main` cannot hide the original on its integration line:
+/// another branch adds the record outside this range, so the verb and CI
+/// both refuse the changed criteria and name that branch (TSK-217).
+#[test]
+fn a_rewritten_planning_commit_cannot_hide_the_line_record() {
+    let line = "integration/EPC-001-source";
+    let mut wrong = Vec::new();
+    for case in ["kept", "rewritten"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        git(root, &["switch", "-c", line]);
+        write(
+            root,
+            &path,
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")).replace(
+                "integration_target: main",
+                &format!("integration_target: {line}"),
+            ),
+        );
+        commit(root, "docs: plan the task on the integration line");
+        let admitted = codeflow()
+            .args(["ids", "admit", &path])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(admitted.status.success());
+        if case == "kept" {
+            git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        } else {
+            git(root, &["switch", "-c", "task/TSK-001-fix", "main"]);
+            write(
+                root,
+                &path,
+                &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+            );
+            commit(root, "docs: plan the task on the integration line");
+        }
+        let shape = |record: String| standalone_one(&record);
+        let results = complete_reopen_complete(root, &path, &shape, "main", false);
+        let needle = if case == "kept" {
+            "reopened task keeps its criteria"
+        } else {
+            "`integration/EPC-001-source` records this task outside this range"
+        };
+        wrong.extend(wrongly_accepted(case, results, needle));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// A stale branch that adds the task's record outside the range keeps a
+/// new task from changing its criteria on reopen; both paths name it, so a
+/// human can delete it if it is abandoned (TSK-217).
+#[test]
+fn a_stale_branch_holding_the_record_is_named() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    git(root, &["switch", "-c", "planning-draft"]);
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "A draft.\n")),
+    );
+    commit(root, "docs: draft the task");
+    let admitted = codeflow()
+        .args(["ids", "admit", &path])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(admitted.status.success());
+    git(root, &["switch", "-c", "task/TSK-001-fix", "main"]);
+    let shape = |record: String| standalone_one(&record);
+    let results = complete_reopen_complete(root, &path, &shape, "main", false);
+    let wrong = wrongly_accepted(
+        "stale branch",
+        results,
+        "`planning-draft` records this task outside this range",
+    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// Copies of the task's record that came from this range's own commits do
+/// not count as recorded elsewhere: a branch stacked on the reviewed fix
+/// and a remote copy of the task branch with an unrelated commit on top
+/// leave a new task free to change its criteria on reopen (TSK-217).
+#[test]
+fn copies_from_the_range_leave_a_new_task_new() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    let stack = |branch: &str| {
+        git(root, &["switch", "-c", "task/TSK-009-next"]);
+        write(root, "src/next.rs", "pub fn next() {}\n");
+        commit(root, "feat: start the next task");
+        git(root, &["switch", "-c", "pushed-copy", branch]);
+        write(root, ".github/notes.txt", "a human edit\n");
+        let copy = commit(root, "ci: a human edit on the pushed branch");
+        git(
+            root,
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{branch}"),
+                &copy,
+            ],
+        );
+        git(root, &["switch", branch]);
+        git(root, &["branch", "-D", "pushed-copy"]);
+    };
+    let shape = |record: String| standalone_one(&record);
+    let results =
+        complete_reopen_complete_with(root, &record_path("TSK-001"), &shape, "main", true, &stack);
+    for (who, result) in ["verb", "ci"].into_iter().zip(results) {
+        assert_eq!(result.0, 0, "{who}: {}", result.1);
+    }
 }
