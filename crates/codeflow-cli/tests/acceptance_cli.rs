@@ -185,7 +185,7 @@ fn ci_on(root: &Path, base: &str, branch: &str, task_line: &str) -> (i32, String
             branch,
             "--pr-body",
             &format!(
-                "## Summary\nA change.\n\n{task_line}\n\n## Changes\n- one\n\n## Testing\n- test\n"
+                "## Summary\nA change.\n\n- one change\n\n{task_line}\n\n## Changes\n- one\n\n## Testing\n- test\n"
             ),
         ])
         .current_dir(root)

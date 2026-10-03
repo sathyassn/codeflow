@@ -1187,7 +1187,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
-    let body = "Task: TSK-001\n\n## Summary\n\nAdds a starting guide.\n\n\
+    let body = "Task: TSK-001\n\n## Summary\n\nAdds a starting guide.\n\n- a guide\n\n\
                 ## Changes\n\n- a guide for new readers\n";
     let ci = codeflow(
         &root,
@@ -1372,7 +1372,7 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
     git_with_binary(&root, &["branch", "-m", "task/TSK-001-guide"]);
     git_with_binary(&root, &["add", "project-management/tasks/TSK-001.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: record guide task"]);
-    let body = "Task: TSK-001\n\n## Description\n\nAdds a guide.\n\n\
+    let body = "Task: TSK-001\n\n## Description\n\nAdds a guide.\n\n- a guide\n\n\
                 ## Changes\n\n- a guide\n";
     let ci = codeflow(
         &root,
@@ -2206,11 +2206,10 @@ fn installed_ship_reads_release_integration_only_when_configured() {
         let text =
             std::fs::read_to_string(dir.path().join(format!("{tree}/skills/cf-ship/SKILL.md")))
                 .unwrap();
-        assert!(text.contains("references/pr-evidence.md#release-integration-after-landing"));
-        let reference = std::fs::read_to_string(
-            dir.path()
-                .join(format!("{tree}/skills/cf-ship/references/pr-evidence.md")),
-        )
+        assert!(text.contains("references/release-integration.md"));
+        let reference = std::fs::read_to_string(dir.path().join(format!(
+            "{tree}/skills/cf-ship/references/release-integration.md"
+        )))
         .unwrap();
         let text = format!("{text}\n{reference}");
         for required in [
@@ -2331,7 +2330,7 @@ fn watched_path_settles_by_release_impact(root: &Path, tmp: &Path, base: &str) {
     let body = tmp.join("body.md");
     std::fs::write(
         &body,
-        "Task: a new api function\n\n## Summary\n\nAdds the api.\n\n\
+        "Task: a new api function\n\n## Summary\n\nAdds the api.\n\n- the api\n\n\
          ## Changes\n\n- the api\n\n## Testing\n\n- `codeflow ci` over the range\n\
          - Not tested: nothing else\n\n## Reviews\n\n- none yet\n\n\
          ## Release impact\n\n- Impact: minor\n- Breaking: no\n\

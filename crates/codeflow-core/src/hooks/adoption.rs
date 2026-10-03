@@ -106,6 +106,30 @@ pub fn pr_sections_effective(
     }
 }
 
+/// The effective `git.pr_summary` level: at most `warn`, with origin
+/// `diagnosed`, while `pr_section_mapping` is diagnosed, since the Summary
+/// it judges sits in a template the adopter has not yet decided on. The cap
+/// follows the mapping's state whatever `pr_sections` says, and a level
+/// already below warn stays as set; otherwise the configured or default
+/// level.
+#[must_use]
+pub fn pr_summary_effective(
+    raw: &Result<Option<Value>, String>,
+    git: &GitPolicy,
+) -> EffectiveLevel {
+    let diagnosed = git
+        .pr_section_mapping
+        .as_ref()
+        .is_some_and(|m| m.state == MappingState::Diagnosed);
+    if diagnosed && git.pr_summary == PolicyLevel::Block {
+        return EffectiveLevel {
+            level: PolicyLevel::Warn,
+            origin: LevelOrigin::Diagnosed,
+        };
+    }
+    effective(raw, "pr_summary", git.pr_summary)
+}
+
 /// The pending decision `doctor` names, if any.
 #[must_use]
 pub fn pending_decision(git: &GitPolicy) -> Option<String> {
@@ -174,8 +198,9 @@ pub fn pattern_only_profile<'p>(
 }
 
 /// A copy of `git` with the rules a matched profile skips turned off:
-/// branch naming and the commit message shape rules (format, body, ticket
-/// and required footers). Every other rule and every level is unchanged.
+/// branch naming, the commit message shape rules (format, body, ticket and
+/// required footers) and the PR Summary shape, since a bot writes its body
+/// to its own format. Every other rule and every level is unchanged.
 #[must_use]
 pub fn apply_profile_exemptions(git: &GitPolicy) -> GitPolicy {
     let mut exempt = git.clone();
@@ -185,6 +210,7 @@ pub fn apply_profile_exemptions(git: &GitPolicy) -> GitPolicy {
     exempt.commit_ticket_required = PolicyLevel::Off;
     exempt.commit_ticket_keys = Vec::new();
     exempt.commit_required_footers = Vec::new();
+    exempt.pr_summary = PolicyLevel::Off;
     exempt
 }
 
@@ -427,6 +453,56 @@ mod tests {
         assert!(release_backend_finding(ReleaseBackend::Codeflow, &[]).is_none());
     }
 
+    /// The cap follows the mapping's state, not the section check's
+    /// origin: an explicit `pr_sections` key keeps that check at its level,
+    /// but the Summary in a template still awaiting a decision only warns,
+    /// and a level already below warn stays where the project set it.
+    #[test]
+    fn summary_cap_follows_the_mapping_state_whatever_pr_sections_says() {
+        let mapping = serde_json::json!({"state": "diagnosed", "headings": {}, "decided": "none"});
+        for (policy, expected) in [
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "block", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "off", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Off, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "allow", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Allow, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "warn", "pr_summary": "warn", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": {"state": "accepted", "headings": {}, "decided": "2026-10-03"}}}),
+                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+            ),
+            (
+                serde_json::json!({"git": {}}),
+                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+            ),
+        ] {
+            let git = serde_json::from_value::<Policy>(policy.clone())
+                .unwrap()
+                .git;
+            let raw = Ok(Some(policy.clone()));
+            let got = pr_summary_effective(&raw, &git);
+            assert_eq!((got.level, got.origin), expected, "{policy}");
+        }
+    }
+
     #[test]
     fn exemptions_touch_only_naming_and_message_shape() {
         let base = GitPolicy::default();
@@ -439,6 +515,7 @@ mod tests {
         assert_eq!(exempt.policy_characters, base.policy_characters);
         assert_eq!(exempt.pr_sections, base.pr_sections);
         assert_eq!(exempt.pr_release_impact, base.pr_release_impact);
+        assert_eq!(exempt.pr_summary, PolicyLevel::Off);
         assert_eq!(exempt.secret_scan, base.secret_scan);
     }
 }

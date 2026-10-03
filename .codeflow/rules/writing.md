@@ -204,6 +204,10 @@ A substantive summary follows the summary rule under Replies and status: it
 anchors the reader in a few lines before the list or table it leads into. A
 short answer is its own summary and takes no lead.
 
+A pull request Summary is one prose paragraph that anchors the reader,
+then the details as a list or table, then at most one closing paragraph;
+`codeflow ci` checks that shape (`git.pr_summary`).
+
 Example, from CodeFlow's `docs/decisions/ADR-0067-written-content-policy.md`:
 
 > Project policy for new text is extended in the family of the no-emoji rule. Three closed lists say what is enforced and by whom.

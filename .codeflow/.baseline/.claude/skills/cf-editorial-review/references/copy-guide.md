@@ -362,7 +362,9 @@ section by section.
 - ADR consequences: what gets easier, what gets harder and what is ruled
   out, with the cost named plainly.
 - PR summary: a few lines that anchor the reader, then the changes as
-  bullets, one per logical change, most important first.
+  bullets, one per logical change, most important first. The Summary is
+  one prose paragraph, then bullets or a table, then at most one closing
+  paragraph; `codeflow ci` checks that shape.
 - PR testing: the tested revision and command, the gate's summary lines in a
   fenced block, the measured coverage with its scope, and what was not
   tested, named.

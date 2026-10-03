@@ -730,7 +730,7 @@ fn journey_ci_accepts_the_workspace_root_branch_and_no_other_line() {
     let edited = git_as(&root, None, &["commit", "-m", "docs: widen the notes"]);
     assert!(edited.status.success(), "{}", both(&edited));
 
-    let body = "## Summary\nWiden the workspace notes.\n\n## Changes\n- widen the notes\n\n\
+    let body = "## Summary\nWiden the workspace notes.\n\n- the notes\n\n## Changes\n- widen the notes\n\n\
                 ## Testing\n- fixture only\nNot tested: a hosted CI run.\n\n## Reviews\n\
                 None: awaiting the operator.\n\n## Release impact\n- Impact: patch\n\
                 - Breaking: no\n- Rationale: notes only.\n- Migration: none\n";
@@ -814,7 +814,8 @@ fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
     let edited = git_as(&root, None, &["commit", "-m", "docs: add the notes"]);
     assert!(edited.status.success(), "{}", both(&edited));
 
-    let body = "## Summary\nAdd the workspace notes.\n\n## Changes\n- add the notes\n\n\
+    let body =
+        "## Summary\nAdd the workspace notes.\n\n- the notes\n\n## Changes\n- add the notes\n\n\
                 ## Testing\n- fixture only\nNot tested: a hosted CI run.\n\n## Reviews\n\
                 None: awaiting the operator.\n\n## Release impact\n- Impact: patch\n\
                 - Breaking: no\n- Rationale: notes only.\n- Migration: none\n";

@@ -5,7 +5,7 @@ use codeflow_core::scaffold::{
 };
 use serde_json::{json, Value};
 
-const BODY: &str = "Task: TSK-001\n## Summary\nMake the command easier to use.\n\n## Changes\n- Explain the command's result.\n\n## Testing\nAt fixture HEAD, ran python -m unittest:\n```text\nRan 3 tests\nOK\n```\nCoverage: not measured; this fixture has no coverage tool.\nNot tested: Windows.\n\n## Reviews\nNone: awaiting the maintainer's review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output; this project has no release automation.\n- Migration: none\n- Package: fictional-tool\n";
+const BODY: &str = "Task: TSK-001\n## Summary\nMake the command easier to use.\n\n- Explain the result.\n\n## Changes\n- Explain the command's result.\n\n## Testing\nAt fixture HEAD, ran python -m unittest:\n```text\nRan 3 tests\nOK\n```\nCoverage: not measured; this fixture has no coverage tool.\nNot tested: Windows.\n\n## Reviews\nNone: awaiting the maintainer's review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output; this project has no release automation.\n- Migration: none\n- Package: fictional-tool\n";
 
 fn source() -> DirSource {
     DirSource::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"))
@@ -449,7 +449,7 @@ fn fill_installed_template(template: &str) -> String {
         .replace("Task: `TSK-NNN | EPC-NNN | <unit name>`", "Task: TSK-001")
         .replace(
             "## Summary\n",
-            "## Summary\n\nClarify the command's result.\n",
+            "## Summary\n\nClarify the command's result.\n\n- Explain the result.\n",
         )
         .replace("\n-\n", "\n- Explain the result.\n")
         .replace(

@@ -123,7 +123,8 @@ any non-empty name. A missing, empty, malformed, repeated or mismatched
 
 The Summary anchors a reader with no context in a few lines: the result, why
 it matters and where it stands; a key file name or number belongs there when
-it is part of that context, and the details follow as bullets. Write the
+it is part of that context, and the details follow as bullets or a table
+(the shape `codeflow ci` checks: `writing.md` "Summaries"). Write the
 body plainly: simple, straightforward and clear, no mannered prose (see
 `.codeflow/rules/writing.md`). Match presentation to the shape of the data:
 tables for matrices, fenced blocks for pasted output, one-line bullets for
