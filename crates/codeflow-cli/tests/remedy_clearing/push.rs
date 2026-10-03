@@ -1406,3 +1406,55 @@ fn an_earlier_push_is_checked_again_after_the_default_tightens() {
     let out = pushed(&root);
     refused(&dest, &out, &head_sha(&root));
 }
+
+/// A target the task record declares does not shorten the commit checks:
+/// a four-bullet commit published on `integration/seed` while the default
+/// branch allowed ten is judged again once the default allows three, since
+/// nothing proves the pull request targets the line (review round five).
+#[test]
+fn a_declared_line_does_not_hide_its_commits_from_the_default_s_policy() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-c", "seed", &format!("origin/{target}")],
+    );
+    four_bullets(&root);
+    git(
+        &dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            "seed:integration/seed",
+        ],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-work",
+            "origin/integration/seed",
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/seed");
+    commit_all(&root, "docs: plan the work");
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}

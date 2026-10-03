@@ -202,3 +202,57 @@ fn policy_from_judges_with_the_target_tip_not_the_fork_point() {
     assert!(said.contains("git.commit_body"), "{said}");
     assert!(said.contains("the commit --policy-from names"), "{said}");
 }
+
+/// `--commits-from` moves the commit checks off the base, so the banner
+/// names both ranges and does not call the run the hosted verdict, which
+/// checks commits from its base (review round five).
+#[test]
+fn commits_from_another_commit_is_never_called_the_hosted_verdict() {
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    write(root, "y.txt", "y\n");
+    commit(root, FOUR_BULLETS);
+    let out = run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--commits-from",
+            "HEAD",
+        ],
+    );
+    let said = said(&out);
+    assert!(said.contains("the commit checks run over"), "{said}");
+    assert!(said.contains("the other checks over"), "{said}");
+    assert!(said.contains("so this is not the hosted verdict"), "{said}");
+    assert!(
+        !said.contains("it is the hosted verdict only when"),
+        "{said}"
+    );
+    // The same commit as the base keeps the one range and its wording.
+    let same = run_in(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--commits-from",
+            "main",
+        ],
+    );
+    let same = self::said(&same);
+    assert!(!same.contains("the commit checks run over"), "{same}");
+    assert!(
+        same.contains("it is the hosted verdict only when"),
+        "{same}"
+    );
+}

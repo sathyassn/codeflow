@@ -282,7 +282,13 @@ pub fn run(args: &CiArgs) -> i32 {
             };
             Some(Authority::Named(sha))
         }
-        None => base_sha.clone().map(Authority::Base),
+        None => base_sha.clone().map(|sha| {
+            if split_range(&root, args.commits_from.as_deref(), Some(&sha)) {
+                Authority::SplitBase(sha)
+            } else {
+                Authority::Base(sha)
+            }
+        }),
     };
     let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
         return 2;
@@ -319,6 +325,18 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- commit-range checks ---------------------------------------------
     // Every path the range touches, for the PR-structure docs-only test.
     // `None` = the range could not be resolved (unknown = code, conservative).
+    if split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
+        let from = args.commits_from.as_deref().unwrap_or_default();
+        let from = rev_parse(&root, from).unwrap_or_else(|| from.to_string());
+        let others = base_sha.as_deref().map_or_else(
+            || "an unresolved base".to_string(),
+            |base| format!("{}..{head} (the base)", short(base)),
+        );
+        println!(
+            "codeflow ci: the commit checks run over {}..{head} (--commits-from), the other checks over {others}",
+            short(&from)
+        );
+    }
     let (commit_bases, commit_source) = args.commits_from.clone().map_or_else(
         || (base_candidates.clone(), range_source.clone()),
         |from| (vec![from], "--commits-from".to_string()),
@@ -1020,12 +1038,16 @@ enum Authority {
     /// The resolved base, which the caller chose: the hosted templates pass
     /// the pull request's target tip, but a local caller can name any commit.
     Base(String),
+    /// The resolved base, with the commit checks run from another commit
+    /// (`--commits-from`): never the hosted verdict, whose commit checks
+    /// run from the base.
+    SplitBase(String),
 }
 
 impl Authority {
     fn sha(&self) -> &str {
         match self {
-            Self::Named(sha) | Self::Base(sha) => sha,
+            Self::Named(sha) | Self::Base(sha) | Self::SplitBase(sha) => sha,
         }
     }
 
@@ -1036,8 +1058,19 @@ impl Authority {
                 "base {}, the commit this run was given; it is the hosted verdict only when that is the pull request's target tip, which the hosted jobs pass",
                 short(sha)
             ),
+            Self::SplitBase(sha) => format!(
+                "base {}, the commit this run was given; the commit checks run from another commit (--commits-from), so this is not the hosted verdict",
+                short(sha)
+            ),
         }
     }
+}
+
+/// Whether `--commits-from` names a commit other than the resolved base,
+/// so the commit checks run over a range the other checks do not. A
+/// `--commits-from` that does not resolve differs from any base.
+fn split_range(root: &Path, commits_from: Option<&str>, base: Option<&str>) -> bool {
+    commits_from.is_some_and(|from| rev_parse(root, from).as_deref() != base)
 }
 
 /// The policy a run judges with, and its raw form for the level origins.

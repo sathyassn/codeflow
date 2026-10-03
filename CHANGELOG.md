@@ -111,10 +111,16 @@ erratum below, never an edit of the section.
   over everything the pushed head adds to that tip, as the hosted job's
   range from the target tip does, so a commit the destination already
   holds under a tag or another branch, or one an earlier push carried
-  before the policy tightened, is still checked. A task branch whose
-  record declares an advertised integration line keeps that line's
-  boundary, the range its pull request into the line is judged on. A
-  policy there
+  before the policy tightened, is still checked. A target the task record
+  declares bounds only the other checks: nothing local proves the pull
+  request goes there, so a branch built on an integration line has the
+  line's inherited commits judged by the default branch's current policy
+  as well. That is stricter than the hosted job for a pull request into
+  the line, for inherited commits only; those commits must pass that
+  policy when the line's pull request reaches the default branch anyway.
+  `codeflow ci` names both ranges when its commit checks run from another
+  commit than its base, and then does not call the run the hosted verdict.
+  A policy there
   that this codeflow cannot read or validate refuses the push, whether or
   not its range resolves; when a newer codeflow wrote it, upgrade the
   local one. With no candidate authority (a destination that does not

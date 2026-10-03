@@ -83,7 +83,7 @@ impl History {
             remote_sha: old.to_string(),
         };
         let mut notices = Vec::new();
-        let RangeBase { base, note, .. } =
+        let RangeBase { base, note } =
             range_base(self.local.path(), &pushed, &destination, &mut notices).unwrap();
         SelectedRange {
             base,
