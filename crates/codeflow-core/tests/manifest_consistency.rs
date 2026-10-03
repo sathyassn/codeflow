@@ -1034,13 +1034,9 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
         .filter_map(|path| path.strip_prefix("docs-portal/"))
         .map(str::to_owned)
         .collect();
-    // So is the project's own dependency triage: osv-scanner reads
-    // suppressions from `osv-scanner.toml` beside the lockfile, and whether
-    // to accept an advisory is each project's call, so the starter ships
-    // none (TSK-209).
     let dogfood_files: Vec<String> = git_inventory(&root, "docs-portal")
         .into_iter()
-        .filter(|relative| !declarations.contains(relative) && relative != "osv-scanner.toml")
+        .filter(|relative| !declarations.contains(relative))
         .collect();
     assert!(!starter_files.is_empty(), "the starter lists no files");
     assert!(!dogfood_files.is_empty(), "docs-portal lists no files");

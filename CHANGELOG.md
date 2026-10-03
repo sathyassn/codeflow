@@ -68,8 +68,11 @@ erratum below, never an edit of the section.
   lockfile it covers. A docs portal scaffolded by CodeFlow currently reports
   GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which has no fixed
   version; Astro uses it only to time its build-time cache of remote
-  images. If your policy blocks on advisories and you accept that reasoning,
-  add the entry to `docs-portal/osv-scanner.toml` with an expiry date.
+  images. A new portal now starts with an `osv-scanner.toml` that ignores
+  it, with that reason, until 2026-11-30; the file is yours to edit or
+  delete. An existing portal is not changed: if your policy blocks on
+  advisories and you accept the reasoning, add the same entry to
+  `docs-portal/osv-scanner.toml`.
 
 ## [3.0.0]
 
