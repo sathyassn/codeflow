@@ -1,0 +1,11 @@
+id = "TSK-212"
+uid = "82a6cf2e-bba8-4fee-a501-efb9e056c983"
+kind = "TSK"
+title = "local ci matches the hosted verdict"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T06:47:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
