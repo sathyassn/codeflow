@@ -4534,8 +4534,8 @@ fn is_prefix_launcher(t: &str) -> bool {
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
 /// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
-/// `time -p -o FILE`, and `--` for all. `None` when the options make
-/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
+/// `time -p -o FILE`, and `--` for all. `None` when nothing after the
+/// options runs: `--help`, `--version`, or `command -v`/`-V`, a lookup.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
     let launcher = basename(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
@@ -4545,7 +4545,9 @@ fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> O
         if !a.starts_with('-') || a.len() < 2 {
             break;
         }
-        if launcher == "command" && a.contains(['v', 'V']) {
+        // `--help` and `--version` print and exit, and `command -v`/`-V`
+        // only looks the name up: nothing after them runs.
+        if a == "--help" || a == "--version" || (launcher == "command" && a.contains(['v', 'V'])) {
             return None;
         }
         idx += 1 + usize::from(takes_next_word(launcher, &a[1..]));
@@ -6421,6 +6423,13 @@ mod tests {
         // `command -v git` only looks git up, and a name attached to `-a`
         // is not followed by another: `echo` is the program here.
         assert!(evaluate("command -v git", &ctx(&p, "main")).is_empty());
+        for printed in [
+            "nohup --help git push origin main",
+            "/usr/bin/time --version git push",
+        ] {
+            let v = evaluate(printed, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{printed}: {v:?}");
+        }
         let echo = evaluate(
             "exec -aprobea echo git push origin main",
             &ctx(&p, "feat/x"),
