@@ -1751,7 +1751,7 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "1b83534a4143093bcfc223dd7905ebbdc7f655e88793f5842bae5cec177f5e23",
+      "sha256": "c44d02f87ff2da07e0f6b0777a55d2ebbd6d43979697480d77a2a14ffc521051",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {

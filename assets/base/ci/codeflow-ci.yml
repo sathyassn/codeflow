@@ -193,14 +193,16 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
-          ./gitleaks detect --source . --no-banner --exit-code 0 \
+          ./gitleaks detect --source . --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report" 2>"$log" || rc=$?
-          cat "$log" >&2
-          # gitleaks exits 0 with an empty report when git itself fails, so
-          # its log must show no error and at least one commit read.
+          # gitleaks exits 0 when git fails, even part way through, and logs
+          # git's failure only at debug level. Debug lines can quote decoded
+          # file content, so they stay in the temp file; the job log gets
+          # info and above.
           plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
+          printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
           scanned=$(printf '%s\n' "$plain" | sed -n 's/.* \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
-          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE ' (ERR|FTL) ' \
+          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) | command aborted ' \
             || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
             echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
             exit 1

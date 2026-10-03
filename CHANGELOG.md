@@ -71,8 +71,8 @@ erratum below, never an edit of the section.
   your configuration as before, then drops only `generic-api-key` findings
   whose value and matched text are exactly that prose in those two paths, so
   the scan passes without editing history. Anything else, on the same line
-  included, still fails the job, and so does a scan that logs an error or
-  reads no commit. A wrapper that
+  included, still fails the job, and so does a scan that logs an error,
+  reads no commit, or whose git run fails part way. A wrapper that
   runs gitleaks itself can add the entry the CI README shows.
 
 ## [3.0.0]

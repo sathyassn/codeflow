@@ -162,6 +162,22 @@ expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
 # report; the step fails it.
 STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
 expect git-failure 1
+
+# Git that writes the whole history and then fails: commits are read and no
+# error line is logged, but the scan is not trusted.
+mkdir "$TMP/failing-git"
+cat >"$TMP/failing-git/git" <<SH
+#!/bin/sh
+"$(command -v git)" "\$@"
+status=\$?
+case " \$* " in *" log "*) exit 1 ;; esac
+exit \$status
+SH
+chmod +x "$TMP/failing-git/git"
+# It runs on the clean prose-only history, which otherwise passes.
+REPO="$TMP/prose-only"
+STEP_ENV="PATH=$TMP/failing-git:$PATH"
+expect git-exit 1
 STEP_ENV=
 REPO=$SCAFFOLD
 
