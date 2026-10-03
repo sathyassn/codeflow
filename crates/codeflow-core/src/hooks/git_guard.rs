@@ -2291,7 +2291,9 @@ fn check_git(
     if sub == "config" && !config_only_reads(rest) {
         branches.config_changed = true;
     }
-    if matches!(sub, "checkout" | "switch") {
+    // A plain checkout only moves HEAD; one that force-creates a branch
+    // resets that branch and is judged below.
+    if matches!(sub, "checkout" | "switch") && force_created_branch(sub, rest).is_none() {
         return;
     }
 
@@ -3223,6 +3225,15 @@ fn judge_git_sub(
                         crate::remedy::PROTECTED_DELETE.remedy(),
                     ));
                 }
+            } else {
+                check_branch_move(rest, ctx, out);
+            }
+        }
+        "checkout" | "switch" => {
+            if let Some(target) = force_created_branch(sub, rest) {
+                if policy.branch_is_protected(target) {
+                    push_protected_move(sub, target, ctx, out);
+                }
             }
         }
         "config" => {
@@ -3513,6 +3524,104 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
                 crate::remedy::PROTECTED_BRANCH.remedy(),
             ));
         }
+    }
+}
+
+/// Refuse a `git branch` that forces a protected branch to a new commit: a
+/// forced create (`-f`/`--force`) and a forced rename or copy onto it (`-M`,
+/// `-C`, or `-m`/`-c` with `--force`). These rewrite the ref outside the
+/// sanctioned path, as `git update-ref refs/heads/<protected>` does. A
+/// rename or copy without force fails in git when the branch exists, so it
+/// can only create the branch and stays allowed.
+fn check_branch_move(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
+    let policy = ctx.policy;
+    let parsed = parse_options(rest, &GIT_BRANCH_OPTIONS);
+    let force = parsed.has_short(&['f', 'M', 'C']) || parsed.has_long("--force");
+    if !force {
+        return;
+    }
+    let operands = &parsed.operands;
+    if parsed.has_short(&['m', 'M', 'c', 'C'])
+        || parsed.has_long("--move")
+        || parsed.has_long("--copy")
+    {
+        // `-M <new>` renames the current branch; `-M <old> <new>` names both.
+        if let Some(destination) = operands.get(1).or_else(|| operands.first()) {
+            if policy.branch_is_protected(destination) {
+                push_protected_move("branch", destination, ctx, out);
+            }
+        }
+        return;
+    }
+    // Only the create form resets a branch; the listing, upstream and
+    // description forms move no ref.
+    let other_mode = parsed.has_short(&['u', 'l', 'a', 'r', 'v'])
+        || [
+            "--set-upstream-to",
+            "--unset-upstream",
+            "--edit-description",
+            "--list",
+            "--all",
+            "--remotes",
+            "--show-current",
+            "--contains",
+            "--no-contains",
+            "--merged",
+            "--no-merged",
+            "--points-at",
+        ]
+        .iter()
+        .any(|name| parsed.has_long(name));
+    if !other_mode {
+        if let Some(target) = operands.first().filter(|t| policy.branch_is_protected(t)) {
+            push_protected_move("branch", target, ctx, out);
+        }
+    }
+}
+
+/// The branch a `git checkout -B <name>` or `git switch -C|--force-create
+/// <name>` resets, attached or as the next token. The name is always the
+/// value of the forcing option itself, so other options need no arity.
+fn force_created_branch<'a>(sub: &str, rest: &'a [String]) -> Option<&'a str> {
+    let letter = if sub == "checkout" { 'B' } else { 'C' };
+    let mut tokens = rest.iter();
+    while let Some(token) = tokens.next() {
+        let token = token.as_str();
+        if token == "--" || token == END_OF_OPTIONS {
+            return None;
+        }
+        if sub == "switch" {
+            if let Some(value) = token.strip_prefix("--force-create=") {
+                return Some(value);
+            }
+            if token == "--force-create" {
+                return tokens.next().map(String::as_str);
+            }
+        }
+        let Some(cluster) = token.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
+            continue;
+        };
+        if let Some((at, _)) = cluster.char_indices().find(|(_, c)| *c == letter) {
+            let attached = &cluster[at + letter.len_utf8()..];
+            return if attached.is_empty() {
+                tokens.next().map(String::as_str)
+            } else {
+                Some(attached)
+            };
+        }
+    }
+    None
+}
+
+fn push_protected_move(sub: &str, target: &str, ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
+    let policy = ctx.policy;
+    if policy.local_ref_protection.is_active() && !ctx.integrate_token {
+        out.push(Violation::new(
+            "git.local_ref_protection",
+            policy.local_ref_protection,
+            format!("`git {sub}` would force protected branch '{target}' to a new commit outside the sanctioned path"),
+            crate::remedy::PROTECTED_BRANCH.remedy(),
+        ));
     }
 }
 
@@ -6409,6 +6518,53 @@ mod tests {
     fn test_update_ref_feature_branch_allowed() {
         let p = default_policy();
         assert!(evaluate("git update-ref refs/heads/feat/x abc", &ctx(&p, "feat/x")).is_empty());
+    }
+
+    /// TSK-216 AC-4: a forced branch move rewrites a protected ref as
+    /// `update-ref` does, so it is refused the same way; creating or moving
+    /// a feature branch, and an unforced create of a new protected name,
+    /// stay allowed.
+    #[test]
+    fn test_forced_branch_move_of_protected_blocked() {
+        let p = default_policy();
+        for cmd in [
+            "git branch -f main HEAD~3",
+            "git branch --force main HEAD~3",
+            "git branch -f main",
+            "git branch -qf main origin/feat",
+            "git branch -M feat/x main",
+            "git branch -m -f feat/x main",
+            "git branch -C feat/x main",
+            "git branch -c --force feat/x main",
+            "git checkout -B main HEAD~3",
+            "git checkout -Bmain",
+            "git switch -C main HEAD~3",
+            "git switch --force-create main HEAD~3",
+            "git switch --force-create=main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
+        }
+        let v = evaluate("git branch -M main", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.local_ref_protection"), "{v:?}");
+        for cmd in [
+            "git branch -f feat/y HEAD~3",
+            "git branch feat/y main",
+            "git branch -m feat/x feat/y",
+            "git branch -m feat/x main",
+            "git branch -c feat/x main",
+            "git branch -f -u origin/main main",
+            "git branch --list -f main",
+            "git checkout -B feat/y main",
+            "git checkout -b feat/y main",
+            "git checkout main",
+            "git switch -c feat/y main",
+            "git switch -C feat/y main",
+            "git switch main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
     }
 
     #[test]

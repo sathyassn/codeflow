@@ -355,6 +355,32 @@ fn git_guard_allows_empty_operands_in_a_claude_worktree() {
     }
 }
 
+/// TSK-216 AC-4: the real binary refuses a forced move of a protected
+/// branch, which the reference-transaction hook lets through when the move
+/// goes behind the remote head.
+#[test]
+fn git_guard_refuses_a_forced_move_of_a_protected_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "git branch -f main HEAD~3",
+        "git checkout -B main HEAD~3",
+        "git switch -C main HEAD~3",
+    ] {
+        let out = guard_run(command, dir.path());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("git.local_ref_protection"), "{command}: {err}");
+    }
+    let out = guard_run("git branch -f feat/y HEAD", dir.path());
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// `path` as a bare word in a Bash command. Bash removes an unquoted
 /// backslash, so on Windows the word uses `/`, which git and Git Bash both
 /// read as the separator.

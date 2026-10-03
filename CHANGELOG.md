@@ -103,6 +103,14 @@ erratum below, never an edit of the section.
   `.codeflow/policy.json` are still refused.
 
 <!-- codeflow:release-impact patch -->
+- **The git guard refuses a forced move of a protected branch.**
+  `git branch -f main HEAD~3` passed the guard, and the
+  reference-transaction hook lets a rewind behind the remote through. The
+  guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B` and
+  `git switch -C` aimed at a protected branch under
+  `git.local_ref_protection`, as it already refused `git update-ref`.
+
+<!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
   `dirty=true` in `codeflow --version` although they were built from the
   tagged source: the release job writes cargo-dist's manifest into the
