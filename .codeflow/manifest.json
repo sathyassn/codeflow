@@ -227,7 +227,7 @@
     ".agents/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "34691fba0ad700a929b9c3c5610b6444a5b2e0805deb0b9093d2e606968a4ba8",
+      "sha256": "7fbf2a5cc852fd92b0e6dc684e7a8f8a693cd7ec0cd4f2db6daf898795e3a922",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
@@ -785,7 +785,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "a1c331406bcae41e7ff0ffd42ac974e2fb4bc4c52b1ff1d3f9351b0f08f0c3ec",
+      "sha256": "31a1754353ac3b884798e234faab051e0021efecddae24106102ef9f110bb1c0",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-policy.md": {
@@ -1043,7 +1043,7 @@
     ".claude/skills/cf-editorial-review/references/copy-guide.md": {
       "src": "agents/skills/cf-editorial-review/references/copy-guide.md",
       "ownership": "managed",
-      "sha256": "34691fba0ad700a929b9c3c5610b6444a5b2e0805deb0b9093d2e606968a4ba8",
+      "sha256": "7fbf2a5cc852fd92b0e6dc684e7a8f8a693cd7ec0cd4f2db6daf898795e3a922",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
@@ -1601,7 +1601,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "a1c331406bcae41e7ff0ffd42ac974e2fb4bc4c52b1ff1d3f9351b0f08f0c3ec",
+      "sha256": "31a1754353ac3b884798e234faab051e0021efecddae24106102ef9f110bb1c0",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-policy.md": {
@@ -1667,7 +1667,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "6cd07e22f4ee438d914639497fd726719c07f04dab818fb6e64a7b39b1a1f677",
+      "sha256": "ba311864bc13ba071e740d132e4b2482405655c6b8d01f03527130e2b8ac7dc0",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1685,7 +1685,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "50d167abc96fc885aba20755ca5e02a9d452cfd4f9e8255af4159124b2e5930c",
+      "sha256": "4c3eb772bf43b55ee6b463ad6cdaf634bc00dddd75852e7176e6775a319eaa39",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
@@ -1745,7 +1745,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "d94f001eff27493f72145f1dd4e436a369e2b02cf299315c9d88085af8a19891",
+      "sha256": "e8af45e185976e92efe28a7ba168029fb456db151c533dee373da170616eb7be",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {

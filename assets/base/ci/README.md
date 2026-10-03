@@ -53,10 +53,20 @@ default stays Summary and Changes. Existing section lists and enforcement
 levels stay unchanged on update. The PR template
 ships at minimal, standard and full tiers through the usual managed-file merge.
 
-Presentation warnings cover Summary length, code spans and paths, missing
-`Not tested:`, fences over twelve lines, long prose lines, template remnants,
-and roughly 65 wrapped rows at 100 columns (90 for an integration branch into
-main). They are advisory and follow `pr_sections`; off/allow disables them.
+Presentation warnings cover an HTML block that never closes, a Testing
+section with no `Not tested:` line, and template remnants. They are advisory
+and follow `pr_sections`; off/allow disables them.
+
+`git.pr_summary` defaults to block independently. It checks the shape of the
+one Summary section: one prose paragraph, then a list or a table, then at
+most one closing paragraph. Only visible blocks count, so text in an HTML
+comment never supplies the lead or the list, and a heading, code block,
+quote or HTML block in the Summary fails. It judges shape, never a word or
+sentence count. It runs at warn while a kept PR template is diagnosed, a
+trusted automation profile skips it, and a project lowers it in its policy
+file. The shipped policy file does not list the key, so an older binary never
+meets it; a project that sets it runs codeflow 3.1.0 or later locally and in
+CI.
 
 `git.pr_release_impact` defaults to warn independently. It checks Impact
 (none/patch/minor/major), Breaking (yes/no), Rationale and Migration, allowing

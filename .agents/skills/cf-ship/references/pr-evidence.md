@@ -62,6 +62,10 @@ change, effect, limits, or the order of the flow); a summary that buries the
 anchor in detail fails, however short it is. The NEED YOUR ATTENTION heading
 of operator replies never appears in a PR body.
 
+`codeflow ci` checks the Summary's shape (`git.pr_summary`): one prose
+paragraph, then a list or table, then at most one closing paragraph. HTML
+comments count for nothing; whether the lead anchors stays with review.
+
 ## Release impact and evidence
 
 Assess the complete change under the project's adopted release policy
@@ -146,6 +150,10 @@ When a required check is red or stuck, or the adopted policy requires
 hosted checks green before landing, follow [PR checks](pr-checks.md): the
 bounded wait and the redness classes (assertion-red, red you cannot run
 locally, infrastructure-incomplete).
+
+A PR reported ready goes back to draft (`gh pr ready <n> --undo`) before
+any further change to its branch, and is reported ready again only once the
+new head has its review and checks.
 
 When the evidence is complete, send one readiness report without being
 asked. It opens with the result the change gives its consumer and where it
