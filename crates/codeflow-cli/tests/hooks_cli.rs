@@ -692,11 +692,20 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
         ],
     );
     #[cfg(unix)]
-    std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
+    {
+        std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
+        std::os::unix::fs::symlink(root.join(".codeflow"), root.join("alias")).unwrap();
+    }
+    // More entries than one glob expansion reads, none of them protected.
+    let many = root.join("build/many");
+    std::fs::create_dir_all(&many).unwrap();
+    for n in 0..4100 {
+        std::fs::write(many.join(format!("f{n}.o")), "").unwrap();
+    }
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two and three of PR 36 that
+/// The reviewers' exact commands from rounds two to four of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -740,12 +749,25 @@ const REVIEWER_REFUSALS: &[&str] = &[
     "stdbuf -o L rm .codeflow/policy.json",
     "caffeinate -t 5 rm .codeflow/policy.json",
     "xcrun --sdk macosx rm .codeflow/policy.json",
+    // Round four, finding 1: the directory a glob runs from.
+    r"cd build && printf '%s\n' ../.codeflow/pol* | xargs rm",
+    // Finding 2: a launcher's own effects.
+    "env -C .codeflow rm policy.json",
+    "env -C .codeflow sed -i '' s/a/b/ policy.json",
+    "env --chdir=.codeflow rm policy.json",
+    "timeout -- 1 rm .codeflow/policy.json",
+    "env --frobnicate rm README.md",
 ];
 
-/// Round two on unix, where the fixture's `build/link` points at the
-/// policy folder.
-const REVIEWER_REFUSALS_UNIX: &[&str] =
-    &["find -L build -name policy.json -exec sed -i '' 's/original/changed/' {} +"];
+/// On unix, where the fixture's `build/link` and `alias` point at the
+/// policy folder: round two's `find -L` and round four's globs through a
+/// symbolic link.
+const REVIEWER_REFUSALS_UNIX: &[&str] = &[
+    "find -L build -name policy.json -exec sed -i '' 's/original/changed/' {} +",
+    r"printf '%s\n' alias/pol* | xargs rm",
+    "find alias/pol* -delete",
+    "rm alias/pol*",
+];
 
 /// Round three, finding 5, from the linked worktree under
 /// `.claude/worktrees`: recursive changes and permission changes of its
@@ -775,6 +797,12 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "nice -n 5 sed -n p README.md",
     "timeout 10 sed -i '' s/a/b/ README.md",
     "sed -i '' 's/.*//' README.md",
+    r"printf '%s\n' build/many/* | xargs rm",
+    "rm build/many/*.o",
+    r"cd build && printf '%s\n' *.o | xargs rm",
+    "env -C build rm a.o",
+    "timeout -- 1 sed -n p README.md",
+    "env -i PATH=/usr/bin rm build/a.o",
 ];
 
 /// Harmless operands of the linked worktree's root, which the per-checkout

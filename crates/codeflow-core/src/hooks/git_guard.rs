@@ -942,14 +942,86 @@ fn integrity_write_in_dirs(
         Cwd::Paths(dirs) => dirs
             .iter()
             .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd, line)),
-        Cwd::Unknown(_) => integrity_write_violation(tokens, level, cwd, cwd, line),
+        Cwd::Unknown(why) => unknown_dir_glob_violation(tokens, level, line, why)
+            .or_else(|| integrity_write_violation(tokens, level, cwd, cwd, line)),
     }
+}
+
+/// Programs that can change the paths they are given, directly or through
+/// the command they run.
+const WRITING_PROGRAMS: &[&str] = &[
+    "rm",
+    "unlink",
+    "rmdir",
+    "mv",
+    "cp",
+    "ln",
+    "tee",
+    "truncate",
+    "shred",
+    "chmod",
+    "chown",
+    "chgrp",
+    "chflags",
+    "install",
+    "dd",
+    "rsync",
+    "sed",
+    "find",
+    "xargs",
+    "parallel",
+    "trash",
+    "trash-put",
+];
+
+/// Where the guard cannot tell the directory a command runs in, a glob
+/// that finds nothing from the session's directory proves nothing (TSK-216
+/// round 4). A command that changes files is refused when a glob on its
+/// line could name an enforcement path from some directory
+/// (`cd build && printf '%s\n' ../.codeflow/pol* | xargs rm`).
+fn unknown_dir_glob_violation(
+    tokens: &[String],
+    level: PolicyLevel,
+    line: &str,
+    why: &str,
+) -> Option<Violation> {
+    let (program, _) = strip_launchers(tokens)?;
+    if !WRITING_PROGRAMS.contains(&basename(program)) {
+        return None;
+    }
+    let canonical = canonical_text(line);
+    let (word, p) = line_words(&canonical).find_map(|w| glob_could_name(w).map(|p| (w, p)))?;
+    Some(hook_integrity_violation(
+        level,
+        format!(
+            "`{}` runs where the guard cannot tell the directory ({why}), and the glob `{word}` on its line could name `{p}`",
+            basename(program)
+        ),
+    ))
 }
 
 /// The integrity path a single argument token names, when any. The token is
 /// normalized first so equivalent spellings match. An empty token names no
 /// path: the commands read `''` as a missing file, never as the cwd.
 fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    if token.is_empty() {
+        return None;
+    }
+    token_integrity_path_literal(token, cwd, payload_cwd).or_else(|| {
+        // A glob is expanded as the shell will, and each path it reaches is
+        // judged through symbolic links (TSK-216 round 4).
+        (token.contains(['*', '?', '[']) && glob_reach(token, cwd, payload_cwd).is_some())
+            .then_some("repository enforcement files")
+    })
+}
+
+/// [`token_integrity_path`] for the token as written, without expanding a
+/// glob in it.
+fn token_integrity_path_literal(
+    token: &str,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<&'static str> {
     if token.is_empty() {
         return None;
     }
@@ -974,6 +1046,161 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
             .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
         integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
     })
+}
+
+/// The most directory entries one glob expansion reads before it stops. It
+/// bounds the guard's work: a glob over a larger tree is judged by the
+/// directory it starts from instead (see [`glob_reach`]).
+const GLOB_ENTRY_LIMIT: usize = 4096;
+
+/// Why a glob expansion stopped before it read every entry.
+#[derive(Debug, PartialEq, Eq)]
+enum GlobStop {
+    /// It would read more than [`GLOB_ENTRY_LIMIT`] entries.
+    TooManyEntries,
+}
+
+/// Expand a shell glob over the file system, as the shell would before the
+/// command runs. Only `*`, `?` and `[...]` in a component are wildcards; a
+/// name starting with `.` matches only a component that starts with `.`;
+/// matching ignores case. A name that is not UTF-8 cannot be matched as
+/// text, so it counts as a match of any wildcard component: the result
+/// over-approximates and never panics (TSK-216 round 4). Paths are joined
+/// as written, so a symbolic link in them is resolved by the caller's
+/// file-system-aware check.
+fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let mut current: Vec<PathBuf> = vec![PathBuf::new()];
+    let mut read = 0;
+    for component in pattern.components() {
+        let text = component.as_os_str().to_string_lossy();
+        let wild =
+            matches!(component, std::path::Component::Normal(_)) && text.contains(['*', '?', '[']);
+        if !wild {
+            for path in &mut current {
+                path.push(component);
+            }
+            continue;
+        }
+        let matcher = glob::Pattern::new(&text).ok();
+        let dotted = text.starts_with('.');
+        let mut next = Vec::new();
+        for dir in &current {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                read += 1;
+                if read > GLOB_ENTRY_LIMIT {
+                    return Err(GlobStop::TooManyEntries);
+                }
+                let name = entry.file_name();
+                let keep = match name.to_str() {
+                    Some(text) => {
+                        (dotted || !text.starts_with('.'))
+                            && matcher
+                                .as_ref()
+                                .is_none_or(|m| m.matches_with(text, options))
+                    }
+                    None => true,
+                };
+                if keep {
+                    next.push(dir.join(&name));
+                }
+            }
+        }
+        current = next;
+    }
+    current.retain(|path| std::fs::symlink_metadata(path).is_ok());
+    Ok(current)
+}
+
+/// The literal directory a glob path starts from: its components before
+/// the first wildcard.
+fn glob_prefix(pattern: &Path) -> PathBuf {
+    pattern
+        .components()
+        .take_while(|c| !c.as_os_str().to_string_lossy().contains(['*', '?', '[']))
+        .collect()
+}
+
+/// What a glob word reaches from `cwd`, judged by the file-system-aware
+/// checks: the enforcement path or registered worktree one of its
+/// expansions resolves to, symbolic links followed. When the expansion
+/// stops, the directory it starts from decides: one that holds or lies in
+/// enforcement files or a registered worktree counts as reached.
+fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
+    let pattern = integrity_shell_path(word, cwd);
+    let reached = |path: &Path| {
+        let shown = crate::portable_path::slashed(path);
+        token_integrity_path_literal(&shown, cwd, payload_cwd)
+            .map(str::to_string)
+            .or_else(|| {
+                checkout_under(path, cwd, payload_cwd, None)
+                    .map(|c| format!("the registered worktree {}", c.display()))
+            })
+    };
+    match expand_glob(&pattern) {
+        Ok(paths) => paths
+            .iter()
+            .find_map(|path| reached(path))
+            .map(|p| format!("{p} (through `{word}`)")),
+        Err(GlobStop::TooManyEntries) => {
+            let prefix = glob_prefix(&pattern);
+            let holds = super::edit_guard::holds_enforcement_files(&prefix, cwd)
+                || super::edit_guard::holds_enforcement_files(&prefix, payload_cwd);
+            (holds || reached(&prefix).is_some()).then(|| {
+                format!(
+                    "`{word}`, which reads more than {GLOB_ENTRY_LIMIT} entries under a directory that holds enforcement files"
+                )
+            })
+        }
+    }
+}
+
+/// Whether a glob word could name an enforcement path whatever directory
+/// it runs from: its last components, read as patterns, match one, as
+/// `../.codeflow/pol*` does.
+fn glob_could_name(word: &str) -> Option<&'static str> {
+    if !word.contains(['*', '?', '[']) {
+        return None;
+    }
+    let options = glob::MatchOptions {
+        case_sensitive: false,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let parts: Vec<&str> = word
+        .split('/')
+        .filter(|c| !c.is_empty() && *c != "." && *c != "..")
+        .collect();
+    let component_matches = |pattern: &str, name: &str| {
+        (pattern.starts_with('.') || !name.starts_with('.'))
+            && glob::Pattern::new(pattern).is_ok_and(|p| p.matches_with(name, options))
+    };
+    ENFORCEMENT_TEXT
+        .iter()
+        .chain(ENFORCEMENT_DIRS)
+        .copied()
+        .find(|needle| {
+            let names: Vec<&str> = needle.split('/').collect();
+            let whole_dir = matches!(
+                *needle,
+                ".codex" | ".grok" | ".codeflow/git-hooks" | ".git/hooks" | ".git/refs/remotes"
+            );
+            (0..parts.len()).any(|start| {
+                let suffix = &parts[start..];
+                (suffix.len() == names.len() || (whole_dir && suffix.len() > names.len()))
+                    && names
+                        .iter()
+                        .zip(suffix)
+                        .all(|(name, pattern)| component_matches(pattern, name))
+            })
+        })
 }
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
@@ -1408,43 +1635,26 @@ fn worktree_text(text: &str) -> Option<&'static str> {
     })
 }
 
-/// The most paths one glob word is expanded to before the guard stops.
-const GLOB_EXPANSION_LIMIT: usize = 4096;
-
 /// The enforcement path a command line names, as text or through a glob
-/// word that expands, from `cwd`, to one (`.codeflow/pol*`, `.*`). A glob
-/// that expands to more than the guard reads counts as naming one.
-fn line_names(line: &str, cwd: &Path) -> Option<String> {
+/// word that reaches one from `cwd` once expanded and resolved
+/// (`.codeflow/pol*`, `alias/pol*` through a symbolic link, `.*`).
+fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     if let Some(p) = enforcement_text(line) {
         return Some(p.to_string());
     }
-    let words = line.split(|c: char| {
+    line_words(line)
+        .filter(|word| word.contains(['*', '?', '[']))
+        .find_map(|word| glob_reach(word, cwd, payload_cwd))
+}
+
+/// The words of a command line, split at blanks and shell operators, with
+/// their quotes removed.
+fn line_words(line: &str) -> impl Iterator<Item = &str> {
+    line.split(|c: char| {
         c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
-    });
-    for word in words.map(|w| w.trim_matches(['\'', '"'])) {
-        if word.is_empty() || !word.contains(['*', '?', '[']) {
-            continue;
-        }
-        let pattern = crate::portable_path::slashed(&integrity_shell_path(word, cwd));
-        let options = glob::MatchOptions {
-            case_sensitive: false,
-            require_literal_separator: true,
-            require_literal_leading_dot: true,
-        };
-        let Ok(paths) = glob::glob_with(&pattern, options) else {
-            continue;
-        };
-        for (count, path) in paths.flatten().enumerate() {
-            if count >= GLOB_EXPANSION_LIMIT {
-                return Some(format!("{word} (too many matches to read)"));
-            }
-            let shown = crate::portable_path::slashed(&path);
-            if let Some(p) = enforcement_text(&shown).or_else(|| worktree_text(&shown)) {
-                return Some(format!("{p} (through `{word}`)"));
-            }
-        }
-    }
-    None
+    })
+    .map(|w| w.trim_matches(['\'', '"']))
+    .filter(|w| !w.is_empty())
 }
 
 /// Whether the shell fills in part of `word` when the command runs: a
@@ -1460,10 +1670,11 @@ fn unresolved_names_enforcement<'a>(
     args: impl IntoIterator<Item = &'a String>,
     line: &str,
     cwd: &Path,
+    payload_cwd: &Path,
 ) -> Option<String> {
     args.into_iter()
         .any(|arg| unresolved_word(arg))
-        .then(|| line_names(line, cwd))
+        .then(|| line_names(line, cwd, payload_cwd))
         .flatten()
 }
 
@@ -1530,10 +1741,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
         return None;
     }
     if text.contains(['*', '?', '[']) {
-        let pattern = crate::portable_path::slashed(&integrity_shell_path(&text, cwd));
-        return glob::glob(&pattern)
-            .ok()
-            .map(|paths| paths.flatten().collect());
+        return expand_glob(&integrity_shell_path(&text, cwd)).ok();
     }
     Some(vec![integrity_shell_path(&text, cwd)])
 }
@@ -1751,6 +1959,7 @@ fn sed_text_violation(
     args: &[String],
     level: PolicyLevel,
     cwd: &Path,
+    payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
     let in_place = requests_in_place(args);
@@ -1774,7 +1983,9 @@ fn sed_text_violation(
             format!("`sed` names the enforcement path `{p}` in `{arg}`, where its script or in-place edit can write it"),
         ));
     }
-    if let Some(p) = unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line, cwd) {
+    if let Some(p) =
+        unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line, cwd, payload_cwd)
+    {
         return Some(hook_integrity_violation(
             level,
             format!("`sed` takes a word the shell fills in, and the command line names the enforcement path `{p}`"),
@@ -1789,7 +2000,7 @@ fn sed_text_violation(
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             let why = if matches!(file, "-" | "/dev/stdin") {
-                line_names(line, cwd).map(|p| {
+                line_names(line, cwd, payload_cwd).map(|p| {
                     format!("reads its script from its input, and the command line names `{p}`")
                 })
             } else {
@@ -1802,7 +2013,7 @@ fn sed_text_violation(
                         .ok()
                         .and_then(|bytes| enforcement_text(&String::from_utf8_lossy(&bytes)))
                         .map(|p| format!("runs the script file `{file}`, which names `{p}`")),
-                    Err(_) => line_names(line, cwd).map(|p| {
+                    Err(_) => line_names(line, cwd, payload_cwd).map(|p| {
                         format!("runs the script file `{file}`, which the guard cannot read, and the command line names `{p}`")
                     }),
                 }
@@ -1932,7 +2143,7 @@ fn find_action_violation(
             .iter()
             .find_map(|a| enforcement_text(a))
             .map(str::to_string)
-            .or_else(|| unresolved_names_enforcement(rest, line, cwd))
+            .or_else(|| unresolved_names_enforcement(rest, line, cwd, payload_cwd))
         {
             return Some(hook_integrity_violation(
                 level,
@@ -1976,11 +2187,21 @@ fn find_action_violation(
             return Some(v);
         }
     }
-    let reachable: Vec<PathBuf> = starts
+    // The shell expands a glob starting point before `find` runs.
+    let start_paths: Vec<PathBuf> = starts
         .iter()
         .flat_map(|start| {
-            super::edit_guard::find_candidates(&integrity_shell_path(start, cwd), payload_cwd)
+            let path = integrity_shell_path(start, cwd);
+            if start.contains(['*', '?', '[']) {
+                expand_glob(&path).unwrap_or_else(|_| vec![glob_prefix(&path)])
+            } else {
+                vec![path]
+            }
         })
+        .collect();
+    let reachable: Vec<PathBuf> = start_paths
+        .iter()
+        .flat_map(|start| super::edit_guard::find_candidates(start, payload_cwd))
         .collect();
     let mut at = end;
     while let Some(arg) = rest.get(at) {
@@ -2031,7 +2252,7 @@ fn find_action_violation(
                 let command = &tail[..len];
                 let literal: Vec<String> = command.iter().filter(|t| *t != "{}").cloned().collect();
                 let mut dirs = vec![cwd.to_path_buf()];
-                dirs.extend(starts.iter().map(|start| integrity_shell_path(start, cwd)));
+                dirs.extend(start_paths.iter().cloned());
                 if in_dir {
                     dirs.extend(candidates().filter_map(|c| c.parent().map(Path::to_path_buf)));
                 }
@@ -2143,7 +2364,8 @@ fn xargs_violation(
     if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
         return Some(v);
     }
-    let named = line_names(line, cwd).or_else(|| worktree_text(line).map(str::to_string))?;
+    let named =
+        line_names(line, cwd, payload_cwd).or_else(|| worktree_text(line).map(str::to_string))?;
     Some(hook_integrity_violation(
         level,
         format!(
@@ -2213,7 +2435,8 @@ fn parallel_violation(
     if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
         return Some(v);
     }
-    let named = line_names(line, cwd).or_else(|| worktree_text(line).map(str::to_string))?;
+    let named =
+        line_names(line, cwd, payload_cwd).or_else(|| worktree_text(line).map(str::to_string))?;
     Some(hook_integrity_violation(
         level,
         format!(
@@ -2288,7 +2511,7 @@ fn wrapper_write_violation(
         }
     }
     if cmd == "sed" {
-        if let Some(v) = sed_text_violation(args, level, cwd, line) {
+        if let Some(v) = sed_text_violation(args, level, cwd, payload_cwd, line) {
             return Some(v);
         }
     }
@@ -2315,6 +2538,22 @@ fn integrity_write_violation(
     }
     let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
+    // A launcher's own effects apply to the command it runs: `env -C DIR`
+    // moves its directory, and a launcher the guard cannot read with
+    // certainty is not dropped silently (TSK-216 round 4).
+    let (dirs, uncertain) = launcher_effects(tokens);
+    if let Some(why) = uncertain {
+        if !read_only_program(tokens) {
+            return Some(hook_integrity_violation(
+                level,
+                format!("the guard cannot read the launcher in front of `{cmd}` ({why}), so it cannot tell what that command changes"),
+            ));
+        }
+    }
+    let launched_cwd = dirs.iter().fold(cwd.to_path_buf(), |dir, change| {
+        integrity_shell_path(change, &dir)
+    });
+    let cwd = launched_cwd.as_path();
 
     if let Some(v) = wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line) {
         return Some(v);
@@ -2333,7 +2572,7 @@ fn integrity_write_violation(
         } else {
             arg_integrity_path(paths, cwd, payload_cwd)
                 .map(str::to_string)
-                .or_else(|| unresolved_names_enforcement(paths, line, cwd))
+                .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
         }
     }) {
         return Some(hook_integrity_violation(
@@ -6164,6 +6403,141 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
     }
 }
 
+/// Whether `word` is a `timeout` duration: a number with an optional
+/// fraction and an `s`, `m`, `h` or `d` unit.
+fn is_duration(word: &str) -> bool {
+    let number = word.strip_suffix(['s', 'm', 'h', 'd']).unwrap_or(word);
+    let mut parts = number.splitn(2, '.');
+    let whole = parts.next().unwrap_or("");
+    let fraction = parts.next();
+    !whole.is_empty()
+        && whole.chars().all(|c| c.is_ascii_digit())
+        && fraction.is_none_or(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The effects of the launchers in front of a command that change how it
+/// runs (TSK-216 round 4): each directory `env -C DIR` or `env
+/// --chdir[=]DIR` moves to, in order, and the first launcher word the
+/// guard cannot read with certainty: an `env` option it does not know, an
+/// `env -C` without a directory, or a `timeout` without a duration. `env
+/// -S`, which packs the command into one word, is a stated limit.
+fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
+    let assignment = |t: &str| {
+        t.split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+    };
+    let mut dirs = Vec::new();
+    let mut idx = 0;
+    loop {
+        while tokens.get(idx).is_some_and(|t| assignment(t)) {
+            idx += 1;
+        }
+        let Some(t) = tokens.get(idx).map(String::as_str) else {
+            return (dirs, None);
+        };
+        let name = basename(t);
+        if is_prefix_launcher(t) {
+            let Some(next) = skip_launcher_options(t, tokens, idx + 1) else {
+                return (dirs, None);
+            };
+            if name == "timeout"
+                && !tokens
+                    .get(next.saturating_sub(1))
+                    .is_some_and(|d| is_duration(d))
+            {
+                return (
+                    dirs,
+                    Some("`timeout` without a duration the guard can read".to_string()),
+                );
+            }
+            idx = next;
+            continue;
+        }
+        if name == "env" {
+            match env_options(tokens, idx + 1, &mut dirs) {
+                Ok(next) => idx = next,
+                Err(why) => return (dirs, Some(why)),
+            }
+            continue;
+        }
+        return (dirs, None);
+    }
+}
+
+/// Walk the options and assignments of an `env` launcher from `idx`,
+/// pushing each directory `-C DIR`, `-CDIR` or `--chdir[=]DIR` moves to.
+/// Returns the index of the command after them, or why the guard cannot
+/// read them: an option it does not know, or `-C` without a directory.
+fn env_options<'t>(
+    tokens: &'t [String],
+    mut idx: usize,
+    dirs: &mut Vec<&'t str>,
+) -> Result<usize, String> {
+    while let Some(a) = tokens.get(idx).map(String::as_str) {
+        if a == "--" {
+            return Ok(idx + 1);
+        }
+        if matches!(a, "-C" | "--chdir") {
+            let Some(dir) = tokens.get(idx + 1) else {
+                return Err(format!("`env {a}` without a directory"));
+            };
+            dirs.push(dir.as_str());
+            idx += 2;
+            continue;
+        }
+        if let Some(dir) = a
+            .strip_prefix("--chdir=")
+            .or_else(|| a.strip_prefix("-C").filter(|d| !d.is_empty()))
+        {
+            dirs.push(dir);
+            idx += 1;
+            continue;
+        }
+        if matches!(a, "-u" | "--unset" | "-P" | "-a" | "--argv0") {
+            idx += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            let known = matches!(
+                a,
+                "-" | "-i"
+                    | "--ignore-environment"
+                    | "-0"
+                    | "--null"
+                    | "-v"
+                    | "--debug"
+                    | "--list-signal-handling"
+            ) || [
+                "--unset=",
+                "--argv0=",
+                "--default-signal",
+                "--ignore-signal",
+                "--block-signal",
+                "-u",
+                "-P",
+                "-a",
+                "-S",
+                "--split-string",
+            ]
+            .iter()
+            .any(|prefix| a.starts_with(prefix));
+            if !known {
+                return Err(format!("`env {a}`, an option the guard does not read"));
+            }
+            idx += 1;
+            continue;
+        }
+        let assignment = a
+            .split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name));
+        if !assignment {
+            break;
+        }
+        idx += 1;
+    }
+    Ok(idx)
+}
+
 /// `true` for the launchers that run the simple command after them: the
 /// `command`, `builtin` and `exec` builtins, `nohup`, `time` in its
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
@@ -6197,7 +6571,9 @@ fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> O
     let launcher = basename(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if a == "--" {
-            return Some(idx + 1);
+            // The options end; `timeout`'s duration still follows.
+            idx += 1;
+            break;
         }
         if !a.starts_with('-') || a.len() < 2 {
             break;
@@ -7675,6 +8051,49 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// Glob expansion reads the file system as the shell does: a leading
+    /// dot only matches a dotted pattern, and a glob that finds nothing
+    /// expands to nothing (TSK-216 round 4).
+    #[test]
+    fn test_expand_glob_matches_like_the_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a1.o"), "").unwrap();
+        std::fs::write(dir.path().join(".hidden.o"), "").unwrap();
+        let found = expand_glob(&dir.path().join("*.o")).unwrap();
+        assert_eq!(found, vec![dir.path().join("a1.o")]);
+        assert_eq!(expand_glob(&dir.path().join(".*.o")).unwrap().len(), 1);
+        assert!(expand_glob(&dir.path().join("none*")).unwrap().is_empty());
+    }
+
+    /// A glob over more entries than the guard reads stops, and is then
+    /// judged by the directory it starts from: harmless there, it passes.
+    #[test]
+    fn test_glob_over_many_entries_is_judged_by_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let many = dir.path().join("many");
+        std::fs::create_dir_all(&many).unwrap();
+        for n in 0..=GLOB_ENTRY_LIMIT {
+            std::fs::write(many.join(format!("f{n}")), "").unwrap();
+        }
+        assert_eq!(expand_glob(&many.join("*")), Err(GlobStop::TooManyEntries));
+        assert!(glob_reach("many/*", dir.path(), dir.path()).is_none());
+    }
+
+    /// A file name that is not UTF-8 counts as a match of any wildcard
+    /// component, so the guard gives a verdict instead of panicking.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_expand_glob_counts_a_non_utf8_name_as_a_match() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff.o");
+        std::fs::write(dir.path().join(name), "").unwrap();
+        let found = expand_glob(&dir.path().join("*.o")).unwrap();
+        assert_eq!(found, vec![dir.path().join(name)]);
+        let line = format!("printf x {}/* | xargs rm", dir.path().display());
+        assert!(line_names(&line, dir.path(), dir.path()).is_none());
     }
 
     /// The text floor matches an enforcement path or worktree folder as a
