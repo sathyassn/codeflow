@@ -34,7 +34,7 @@ pub enum PresentError {
     #[error(
         "the browser for presentation session {0} is already open. Switch to its window, or \
          quit that browser and run `codeflow present show {0}` again; on macOS the browser \
-         keeps running after its last window closes. `codeflow present show {0} --no-launch` \
+         can keep running after its last window closes. `codeflow present show {0} --no-launch` \
          prints the session's address without opening a window"
     )]
     BrowserAlreadyOpen(String),

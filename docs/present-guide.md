@@ -73,7 +73,7 @@ when you submit them.
    yourself. If you closed the window, reopen it with
    `codeflow present show <session-id>`. If `show` says the session's
    browser is already open, that browser is still running (on macOS it
-   keeps running after its last window closes): switch to its window, or
+   can keep running after its last window closes): switch to its window, or
    quit it and run `show` again. `show --no-launch` prints the session's
    address.
 2. Read the page from the top. On a wide screen, the left rail lists the

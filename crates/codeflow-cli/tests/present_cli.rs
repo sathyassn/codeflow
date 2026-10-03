@@ -986,6 +986,7 @@ fn show_says_the_browser_is_already_open() {
     for expected in [
         format!("the browser for presentation session {session_id} is already open"),
         "Switch to its window, or quit that browser and run".to_string(),
+        "on macOS the browser can keep running after its last window closes".to_string(),
         format!("`codeflow present show {session_id}` again"),
         format!("`codeflow present show {session_id} --no-launch` prints the session's address"),
     ] {
