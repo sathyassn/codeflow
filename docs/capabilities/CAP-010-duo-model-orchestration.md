@@ -317,7 +317,11 @@ the same rule against the task's target as `work start` anchors it. A task
 completed, reopened and completed again inside its own pull request may
 change its own criteria while no record with its id or uid is on the
 target, under any path and file name the record reader accepts; when the
-target cannot be read, the task keeps the criteria it was completed with. It still reviews its own range.
+target cannot be read, the task keeps the criteria it was completed with.
+The criteria to keep come only from the range anchor and the same run tips;
+another tip of the task's targets, a local branch or a remote-tracking ref,
+that holds the task can only keep the criteria it was completed with. It
+still reviews its own range.
 A task pull request may change its own criteria, and CI prints the change
 for the reviewer; a reopened task whose record is on the target keeps its
 criteria, and another task's criteria change only in its own pull request,

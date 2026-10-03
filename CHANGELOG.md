@@ -441,7 +441,11 @@ erratum below, never an edit of the section.
   cancels out, and the refusal names that commit. For the reopen rule in
   the entry on new tasks above, a landed record named `TSK-NNN.MD` counts
   as on the target, since the record reader takes the `.md` extension in
-  any case.
+  any case, and only the target the run is judged against supplies the
+  criteria a reopened task keeps: a local branch or remote-tracking ref,
+  such as an `origin/main` or another remote's upstream pointed at the
+  task's own branch, can make the check stricter but never supplies
+  criteria.
 
 ## [3.0.0]
 

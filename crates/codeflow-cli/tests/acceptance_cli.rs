@@ -3893,3 +3893,71 @@ fn copies_from_the_range_leave_a_new_task_new() {
         assert_eq!(result.0, 0, "{who}: {}", result.1);
     }
 }
+
+/// TSK-220, merged-head review: only the target the run is judged against
+/// supplies a reopened task's criteria. The task is published on `main`;
+/// its branch, cut before that, completes it, reopens it and adds a
+/// criterion. With local `main` stale, pointing `origin/main` or `main`'s
+/// configured upstream on another remote at the branch's own commit never
+/// makes that commit the target's record: CI against the published base
+/// refuses the changed criteria, as it does with ordinary refs.
+#[test]
+fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
+    let mut passed = Vec::new();
+    for case in [
+        "control",
+        "stale-only",
+        "forged-origin",
+        "alternate-upstream",
+    ] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let early = head(root);
+        let path = record_path("TSK-001");
+        write(
+            root,
+            &path,
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+        );
+        let published = commit(root, "docs(records): publish the task on main");
+        git(root, &["switch", "-q", "-c", "task/TSK-001-fix", &early]);
+        let spoof = |_branch: &str| {
+            let tip = head(root);
+            if case != "control" {
+                git(root, &["branch", "-f", "main", &early]);
+            }
+            if case == "forged-origin" {
+                git(root, &["update-ref", "refs/remotes/origin/main", &tip]);
+            }
+            if case == "alternate-upstream" {
+                git(
+                    root,
+                    &[
+                        "remote",
+                        "add",
+                        "alternate",
+                        "https://example.test/alternate",
+                    ],
+                );
+                git(root, &["update-ref", "refs/remotes/alternate/main", &tip]);
+                git(root, &["config", "branch.main.remote", "alternate"]);
+                git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+            }
+        };
+        let shape = |record: String| standalone_one(&record);
+        let [_, ci] = complete_reopen_complete_with(root, &path, &shape, &published, true, &spoof);
+        if ci.0 == 0 {
+            passed.push(case);
+        } else {
+            assert_blocks(
+                &ci,
+                &format!("{case}: CI against the published base"),
+                &["work.acceptance_binding", "TSK-001", "keeps its criteria"],
+            );
+        }
+    }
+    assert!(
+        passed.is_empty(),
+        "CI took the changed criteria in: {passed:?}"
+    );
+}

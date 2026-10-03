@@ -266,7 +266,7 @@ pub(crate) fn bind_completion_with_amendment(
         })
         .or_else(|| {
             let (at, old, note) =
-                recovered_completion(repo, task, &block, landing, anchor, default_target)?;
+                recovered_completion(repo, task, &block, landing, anchor, authorities)?;
             unreadable = note;
             recovered = true;
             Some((at, old))
@@ -974,14 +974,16 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
 /// reopen (TSK-217). When a record that may be the task cannot be read, a
 /// target it names does not resolve, or a branch outside the range records
 /// it, the recovered criteria stay and a changed set gets the returned
-/// refusal.
+/// refusal. Only the anchor and `authorities`, the target tips the run is
+/// judged against, supply the criteria to keep (TSK-220): a branch or
+/// remote-tracking ref can only make the answer stricter.
 fn recovered_completion(
     repo: &Repository,
     task: &RecordView,
     block: &AcceptanceBlock,
     landing: Landing<'_>,
     anchor: Option<Oid>,
-    default_target: Option<Oid>,
+    authorities: &[Oid],
 ) -> Option<(Oid, RecordView, Option<String>)> {
     let (at, mut old) = previous_completion(repo, task, block, landing)?;
     let mut refusal = None;
@@ -990,7 +992,7 @@ fn recovered_completion(
             anchor,
             head: landing.commit(),
         };
-        match target_record(repo, task, range, &old, default_target) {
+        match target_record(repo, task, range, &old, authorities) {
             Presence::Present(record) => old.criteria = record.criteria,
             Presence::Absent => old.criteria = task.criteria.clone(),
             Presence::Unreadable(reason) => {
@@ -1005,6 +1007,14 @@ fn recovered_completion(
                 if old.criteria.signature() != task.criteria.signature() {
                     refusal = Some(format!(
                         "{}: `{holder}` records this task outside this range (commit {commit:.9} adds or changes its record), so the task is not new here and its criteria stay as they were; if `{holder}` is a stale copy, delete it, or merge it if it is newer work on this task, and run this again",
+                        task.id
+                    ));
+                }
+            }
+            Presence::Unjudged { reference, commit } => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: `{reference}` (commit {commit:.9}) records this task, but it is not the target this run is judged against, so its criteria stay as they were; a reopened task keeps its criteria unless the judged target holds no record of it",
                         task.id
                     ));
                 }
@@ -1035,6 +1045,11 @@ enum Presence {
     /// outside the range records it: `commit`, which `holder` reaches and
     /// the range's head does not, adds or changes the task's record.
     Elsewhere { holder: String, commit: Oid },
+    /// The judged target does not hold it, but a tip of one of its targets
+    /// that the run is not judged against does: `reference` at `commit`.
+    /// Such a tip is a local branch or a remote-tracking ref, which this
+    /// clone can move, so it never supplies criteria (TSK-220).
+    Unjudged { reference: String, commit: Oid },
 }
 
 /// The target's record of `task`, read at every reference point the verb or
@@ -1049,15 +1064,18 @@ enum Presence {
 /// version, and a branch cut from an integration line carries that line's
 /// version, so the record's own history supplies its provenance.
 ///
-/// The first point that holds the task supplies the criteria to keep, so
-/// the order is deliberate: the range anchor first, the record this range
-/// was cut from (R-52); then the tips of the declared target, remote ones
-/// before the local branch, since a planning amendment landed there after
-/// the reopen is the criteria that bind and a local branch may be stale;
-/// then the tips of each former target; then `default_target` (the pull
-/// request's base in CI, the resolved default target in the verb); then
-/// the tips of the default target, which catch a record retargeted away
-/// from it.
+/// Only the judged points supply the criteria to keep (TSK-220): the
+/// range anchor, the record this range was cut from (R-52), then each of
+/// `authorities`, the target tips the run is judged against (the base
+/// `codeflow ci` is given and the pre-push candidate authority; in the
+/// verb, the task's target as `work start` anchors it). A planning
+/// amendment landed on the target after the reopen is on the judged tip,
+/// so its criteria bind. An authority inside the range (the range's own
+/// line) is the branch's own work and is skipped. Every other tip, of the
+/// declared target, each former target and the default target, is a local
+/// branch or a remote-tracking ref this clone can move: when one holds the
+/// task and no judged point does, the answer is [`Presence::Unjudged`],
+/// which keeps the recovered criteria and never supplies new ones.
 ///
 /// It fails closed: a required target (each one the record names, and the
 /// default target) with no tip here makes the answer unreadable, never
@@ -1069,7 +1087,7 @@ fn target_record(
     task: &RecordView,
     range: Range,
     recovered: &RecordView,
-    default_target: Option<Oid>,
+    authorities: &[Oid],
 ) -> Presence {
     let uid = record_uid(&task.content);
     let mut index = RecordIndex::new(repo, &task.id, uid.clone());
@@ -1088,46 +1106,69 @@ fn target_record(
         Ok(names) => names.iter().for_each(|name| add(Some(name))),
         Err(reason) => return Presence::Unreadable(reason),
     }
-    let mut points = vec![range.anchor];
+    let mut judged = vec![range.anchor];
+    judged.extend(authorities.iter().copied().filter(|tip| {
+        *tip == range.anchor
+            || !(*tip == range.head || repo.graph_descendant_of(range.head, *tip).unwrap_or(false))
+    }));
+    let mut tips: Vec<(String, Oid)> = Vec::new();
     for name in &targets {
-        let tips = target_tips(repo, name);
-        if tips.is_empty() {
+        let found = target_tips(repo, name);
+        if found.is_empty() {
             return Presence::Unreadable(format!(
                 "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
             ));
         }
-        points.extend(tips);
+        tips.extend(found);
     }
-    points.extend(default_target);
     match default_target_name(repo) {
         Ok(name) => {
-            let tips = target_tips(repo, &name.name);
-            if tips.is_empty() {
+            let found = target_tips(repo, &name.name);
+            if found.is_empty() {
                 return Presence::Unreadable(format!(
                     "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
                     name.name,
                     if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
                 ));
             }
-            points.extend(tips);
+            tips.extend(found);
         }
         Err(reason) => return Presence::Unreadable(reason),
     }
     let mut seen = std::collections::HashSet::new();
-    points.retain(|point| seen.insert(*point));
+    judged.retain(|point| seen.insert(*point));
+    tips.retain(|(_, point)| seen.insert(*point));
     let own_file = own_file_name(task);
     let mut unreadable = None;
-    for point in points {
+    for point in judged {
         match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
             Presence::Unreadable(reason) => {
                 unreadable.get_or_insert(reason);
             }
             present @ Presence::Present(_) => return present,
-            Presence::Absent | Presence::Elsewhere { .. } => {}
+            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
+        }
+    }
+    let mut unjudged = None;
+    for (reference, point) in tips {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            Presence::Present(_) => {
+                unjudged.get_or_insert(Presence::Unjudged {
+                    reference,
+                    commit: point,
+                });
+            }
+            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
         }
     }
     if let Some(reason) = unreadable {
         return Presence::Unreadable(reason);
+    }
+    if let Some(unjudged) = unjudged {
+        return unjudged;
     }
     match holder_outside(repo, &mut index, range.head) {
         Ok(Some((holder, commit))) => Presence::Elsewhere { holder, commit },
@@ -1360,10 +1401,11 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
         })
 }
 
-/// Every tip of the target `name` this clone knows: the configured
-/// upstream of its local branch (on any remote), its `origin` tracking ref,
-/// and the local branch, in that order. Empty when none resolves.
-fn target_tips(repo: &Repository, name: &str) -> Vec<Oid> {
+/// Every tip of the target `name` this clone knows, with the reference
+/// that names it: the configured upstream of its local branch (on any
+/// remote), its `origin` tracking ref, and the local branch, in that
+/// order. Empty when none resolves.
+fn target_tips(repo: &Repository, name: &str) -> Vec<(String, Oid)> {
     let mut names = Vec::new();
     if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
         if let Ok(upstream) = upstream.as_str() {
@@ -1379,7 +1421,7 @@ fn target_tips(repo: &Repository, name: &str) -> Vec<Oid> {
             repo.find_reference(reference)
                 .and_then(|found| found.peel_to_commit())
                 .ok()
-                .map(|commit| commit.id())
+                .map(|commit| (reference.clone(), commit.id()))
         })
         .collect()
 }
@@ -2262,6 +2304,16 @@ mod tests {
         );
         assert!(matches!(
             at(broken, "TSK-002", None, "TSK-002.md"),
+            Presence::Unreadable(_)
+        ));
+        // The reader takes `.md` in any case, so a broken landed `.MD` is
+        // the own file of a task whose current record is `.md` (TSK-220).
+        let upper = commit(
+            "project-management/tasks/TSK-003.MD",
+            "---\nid: TSK-003\nstatus: [unclosed\n---\n",
+        );
+        assert!(matches!(
+            at(upper, "TSK-003", None, "TSK-003.md"),
             Presence::Unreadable(_)
         ));
     }
