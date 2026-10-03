@@ -1235,8 +1235,15 @@ test("unverified retired claims are quarantined without regaining authority", { 
         afterClaimMoved: async ({ retired, expected }) => {
           if (mutation === "corrupt") await writeFile(retired, "{not-json");
           if (mutation === "swap") {
-            await rm(retired);
-            await writeFile(retired, JSON.stringify(expected));
+            // The product identifies a claim by device and inode. Deleting the file first lets a
+            // filesystem that reuses freed inodes (ext4, tmpfs) give the replacement the same inode,
+            // which is indistinguishable from the original. Build the replacement while the original
+            // still exists so the two inodes differ on every filesystem, then move it into place.
+            const original = await lstat(retired, { bigint: true });
+            const replacement = path.join(root, "swap-replacement.json");
+            await writeFile(replacement, JSON.stringify(expected));
+            assert.notEqual((await lstat(replacement, { bigint: true })).ino, original.ino);
+            await rename(replacement, retired);
           }
           if (mutation === "symlink") {
             const outside = path.join(root, "outside-claim.json");
