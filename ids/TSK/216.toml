@@ -1,0 +1,11 @@
+id = "TSK-216"
+uid = "7f3cda63-dcfb-4203-9847-ba8b1491c786"
+kind = "TSK"
+title = "CodeFlow guards and gate work inside its own Claude sandbox"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T07:23:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
