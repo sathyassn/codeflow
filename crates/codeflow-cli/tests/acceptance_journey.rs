@@ -982,6 +982,27 @@ fn journey_findings(output: &str) -> Vec<String> {
     found
 }
 
+/// `codeflow ci` over `branch` as its pull request into `main` runs it,
+/// with the installed template filled for TSK-001.
+fn pull_request_ci(root: &Path, main: &str, branch: &str) -> Output {
+    codeflow(
+        root,
+        &[
+            "ci",
+            "--base",
+            main,
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--into",
+            main,
+            "--pr-body",
+            &body(root, "TSK-001"),
+        ],
+    )
+}
+
 /// Journey (TSK-223 AC-1, sathyassn/codeflow#50): on a fresh
 /// `codeflow init --full` project, a standalone task branch that changes
 /// an adopter-facing path while its task has no journey criterion is
@@ -1056,22 +1077,7 @@ fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
 
     // The pull request check over the range blocks on the journey.
     let reason = "TSK-001 changes the adopter-facing path set but has no `(journey)` criterion";
-    let pull = codeflow(
-        &root,
-        &[
-            "ci",
-            "--base",
-            main,
-            "--head",
-            "HEAD",
-            "--branch",
-            branch,
-            "--into",
-            main,
-            "--pr-body",
-            &body(&root, "TSK-001"),
-        ],
-    );
+    let pull = pull_request_ci(&root, main, branch);
     fails(&pull, "the pull request check without a journey", reason);
 
     // The push of the same range is refused with the same finding.
@@ -1090,22 +1096,7 @@ fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
         "shall work.\n- AC-2 On a fresh project, the note shall read (journey).\n",
     );
     commit(&root, "docs(tasks): add the parity journey");
-    let pull = codeflow(
-        &root,
-        &[
-            "ci",
-            "--base",
-            main,
-            "--head",
-            "HEAD",
-            "--branch",
-            branch,
-            "--into",
-            main,
-            "--pr-body",
-            &body(&root, "TSK-001"),
-        ],
-    );
+    let pull = pull_request_ci(&root, main, branch);
     assert!(
         !text(&pull).contains("work.journey_criterion"),
         "{}",
