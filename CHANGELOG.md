@@ -438,12 +438,10 @@ erratum below, never an edit of the section.
   keeps the binding. Any other merge, a merge of more than two parents, a
   later commit beyond the record's status and Closeout, a graft or replace
   ref, or a shallow cut on the walked chain refuses, even when the change
-  cancels out, and the refusal names that commit. A task completed,
-  reopened and completed again inside its own pull request may also change
-  its own criteria while no record with its id or uid is on the target,
-  under any path and file name the record reader accepts; before,
-  `codeflow task status complete` refused that as a reopened task's
-  criteria change.
+  cancels out, and the refusal names that commit. For the reopen rule in
+  the entry on new tasks above, a landed record named `TSK-NNN.MD` counts
+  as on the target, since the record reader takes the `.md` extension in
+  any case.
 
 ## [3.0.0]
 
