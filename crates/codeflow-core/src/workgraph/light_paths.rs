@@ -65,15 +65,20 @@ fn current_branch(repo_root: &Path) -> Option<String> {
 }
 
 /// File a follow-up of `source_id` (R-73): the new task records
-/// `follow_up_of`, inherits the source's epic (or states it follows the
-/// standalone source) and its integration target, and is written only on a
-/// `plan/` branch, so it lands by one planning pull request on that target.
+/// `follow_up_of` and inherits the source's integration target. A follow-up
+/// of an epic task inherits the epic and is written only on a `plan/`
+/// branch, so it lands in the epic's batched amendment. A follow-up of a
+/// standalone task is itself a standalone task (R-78): it states the source
+/// it follows as its reason, is written off a `plan/` branch, and lands with
+/// its work on its own task branch, since a planning pull request names an
+/// epic and it has none.
 ///
 /// # Errors
 ///
 /// Returns not-found for a missing source, invalid-record when the current
-/// branch is not a planning branch or the source has no resolvable target,
-/// and the allocation errors of [`create_task`].
+/// branch does not suit the source (an epic task's follow-up off a `plan/`
+/// branch, a standalone task's on one) or the source has no resolvable
+/// target, and the allocation errors of [`create_task`].
 pub fn create_follow_up(
     repo_root: &Path,
     template: &str,
@@ -107,13 +112,23 @@ pub fn create_follow_up_with(
         StoreError::Invalid(format!("{source_id} has no integration_target to follow"))
     })?;
     let branch = current_branch(repo_root).unwrap_or_default();
-    if !branch.starts_with("plan/") {
+    let epic = field(&map, "epic_id");
+    let planning = branch.starts_with("plan/");
+    if epic.is_some() && !planning {
         return Err(StoreError::Invalid(format!(
             "a follow-up is written on a plan/ branch of '{target}' (current branch '{branch}'); \
              run `git switch -c plan/<slug> {target}` first"
         )));
     }
-    let epic = field(&map, "epic_id");
+    if epic.is_none() && planning {
+        return Err(StoreError::Invalid(format!(
+            "{source_id} is a standalone task, so its follow-up is a standalone task too: \
+             its record lands with its work on its own task branch, since a planning pull \
+             request names an epic (current branch '{branch}'); run \
+             `git switch -c task/<slug> {target}`, file the follow-up there, then \
+             `codeflow work claim <TSK-NNN>`"
+        )));
+    }
     let reason = epic
         .is_none()
         .then(|| format!("follow-up of standalone task {source_id}"));
