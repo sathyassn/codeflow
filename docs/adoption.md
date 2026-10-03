@@ -245,7 +245,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | A pull request that changes only Markdown under `docs/` or `project-management/`, outside your product and watched contract paths and the other shared contract surfaces | Whatever the decision, it needs just Summary and Changes of your required list, under the template's headings when the mapping is accepted, and may leave out Release impact |
 | A run without a terminal (`--yes`, CI) | Leaves the state `diagnosed`, and `codeflow doctor` repeats it |
 | While the mapping is diagnosed | The PR-section check runs at `warn` only on a fresh install whose policy file `init` created; a `pr_sections` value already in your policy file stays in force, even when it equals the default |
-| The Summary shape while diagnosed | The Summary shape check (`git.pr_summary`) runs at `warn` at most whenever the PR-section check runs diagnosed |
+| The Summary shape while diagnosed | The Summary shape check (`git.pr_summary`) runs at `warn` at most while the mapping is diagnosed, whatever `pr_sections` says; a lower `pr_summary` level stays as you set it |
 | `codeflow ci` | Prints each check's effective level and where it comes from (`configured`, `shipped default` or `diagnosed`) |
 | These policy edits, and the keys `codeflow update` adds | Spliced into the file as you wrote it, so no other byte changes; a policy with no `git` object gains one |
 | A template reached through a symlink out of the repository | Never read or written |

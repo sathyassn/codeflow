@@ -107,23 +107,27 @@ pub fn pr_sections_effective(
 }
 
 /// The effective `git.pr_summary` level: at most `warn`, with origin
-/// `diagnosed`, while the PR-section check runs diagnosed, since the Summary
-/// it judges sits in a template the adopter has not yet decided on;
-/// otherwise the configured or default level.
+/// `diagnosed`, while `pr_section_mapping` is diagnosed, since the Summary
+/// it judges sits in a template the adopter has not yet decided on. The cap
+/// follows the mapping's state whatever `pr_sections` says, and a level
+/// already below warn stays as set; otherwise the configured or default
+/// level.
 #[must_use]
 pub fn pr_summary_effective(
     raw: &Result<Option<Value>, String>,
     git: &GitPolicy,
-    pr_sections: EffectiveLevel,
 ) -> EffectiveLevel {
-    let configured = effective(raw, "pr_summary", git.pr_summary);
-    if pr_sections.origin == LevelOrigin::Diagnosed && git.pr_summary == PolicyLevel::Block {
+    let diagnosed = git
+        .pr_section_mapping
+        .as_ref()
+        .is_some_and(|m| m.state == MappingState::Diagnosed);
+    if diagnosed && git.pr_summary == PolicyLevel::Block {
         return EffectiveLevel {
             level: PolicyLevel::Warn,
             origin: LevelOrigin::Diagnosed,
         };
     }
-    configured
+    effective(raw, "pr_summary", git.pr_summary)
 }
 
 /// The pending decision `doctor` names, if any.
@@ -449,35 +453,54 @@ mod tests {
         assert!(release_backend_finding(ReleaseBackend::Codeflow, &[]).is_none());
     }
 
+    /// The cap follows the mapping's state, not the section check's
+    /// origin: an explicit `pr_sections` key keeps that check at its level,
+    /// but the Summary in a template still awaiting a decision only warns,
+    /// and a level already below warn stays where the project set it.
     #[test]
-    fn summary_runs_at_warn_while_the_template_is_diagnosed() {
-        let git = GitPolicy::default();
-        let raw = Ok(Some(serde_json::json!({"git": {}})));
-        let diagnosed = EffectiveLevel {
-            level: PolicyLevel::Warn,
-            origin: LevelOrigin::Diagnosed,
-        };
-        let decided = EffectiveLevel {
-            level: PolicyLevel::Block,
-            origin: LevelOrigin::ShippedDefault,
-        };
-        assert_eq!(
-            pr_summary_effective(&raw, &git, diagnosed),
-            diagnosed,
-            "a kept template awaiting a decision only warns"
-        );
-        assert_eq!(pr_summary_effective(&raw, &git, decided), decided);
-        let mut lowered = git.clone();
-        lowered.pr_summary = PolicyLevel::Off;
-        let configured = Ok(Some(serde_json::json!({"git": {"pr_summary": "off"}})));
-        assert_eq!(
-            pr_summary_effective(&configured, &lowered, diagnosed),
-            EffectiveLevel {
-                level: PolicyLevel::Off,
-                origin: LevelOrigin::Configured,
-            },
-            "a level below warn is never raised"
-        );
+    fn summary_cap_follows_the_mapping_state_whatever_pr_sections_says() {
+        let mapping = serde_json::json!({"state": "diagnosed", "headings": {}, "decided": "none"});
+        for (policy, expected) in [
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "block", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Diagnosed),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "off", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Off, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_summary": "allow", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Allow, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "warn", "pr_summary": "warn", "pr_section_mapping": mapping}}),
+                (PolicyLevel::Warn, LevelOrigin::Configured),
+            ),
+            (
+                serde_json::json!({"git": {"pr_sections": "block", "pr_section_mapping": {"state": "accepted", "headings": {}, "decided": "2026-10-03"}}}),
+                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+            ),
+            (
+                serde_json::json!({"git": {}}),
+                (PolicyLevel::Block, LevelOrigin::ShippedDefault),
+            ),
+        ] {
+            let git = serde_json::from_value::<Policy>(policy.clone())
+                .unwrap()
+                .git;
+            let raw = Ok(Some(policy.clone()));
+            let got = pr_summary_effective(&raw, &git);
+            assert_eq!((got.level, got.origin), expected, "{policy}");
+        }
     }
 
     #[test]

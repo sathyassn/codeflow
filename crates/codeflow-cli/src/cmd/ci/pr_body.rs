@@ -512,10 +512,20 @@ fn visible_block(kind: Block, source: &str) -> bool {
             let task_line = text.starts_with("Task:") && !text.contains('\n');
             !text.is_empty() && !task_line
         }
-        Block::List | Block::Table => !rendered_text(source, false, false).trim().is_empty(),
+        Block::List => !rendered_text(source, false, false).trim().is_empty(),
+        Block::Table => table_has_text(source),
         Block::Html => !strip_markup(source).trim().is_empty(),
         Block::Heading | Block::Code | Block::Quote | Block::Rule => true,
     }
+}
+
+/// Whether a table shows any cell text. It is parsed with tables on, as
+/// the shape walk is, so pipes and separator hyphens are structure, never
+/// text, and a cell holding only an HTML comment or nothing shows nothing.
+fn table_has_text(source: &str) -> bool {
+    Parser::new_ext(source, Options::ENABLE_TABLES).any(
+        |event| matches!(event, Event::Text(text) | Event::Code(text) if !text.trim().is_empty()),
+    )
 }
 
 /// The text of an HTML block a reader sees: without its comments, where an
@@ -1066,6 +1076,16 @@ mod tests {
             (
                 "a list whose items are only code",
                 "Adds the check.\n\n- ```\n  hidden\n  ```",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table with only empty cells",
+                "Adds the check.\n\n|  |  |\n|---|---|\n|  |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table whose cells hold only comments",
+                "Adds the check.\n\n| <!-- a --> | <!-- b --> |\n|---|---|\n| <!-- c --> | <!-- d --> |",
                 "no list or table follows the lead",
             ),
             (
