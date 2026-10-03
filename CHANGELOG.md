@@ -51,6 +51,19 @@ erratum below, never an edit of the section.
   there, and a junction can send the delete anywhere. A relative path is
   judged as before.
 
+<!-- codeflow:release-impact minor -->
+- **`codeflow doctor --check grok` checks that Grok can run the CodeFlow
+  guards.** It warns, naming each file, about a CodeFlow hook command
+  Grok would skip because it carries a `$`, with the step that fixes it:
+  `codeflow update` for the files it manages and a hand edit for
+  `.claude/settings.local.json`, and it names a `.new` file update left
+  waiting. When the shipped exec-guard command is bound where Grok's
+  shell tool hits it, doctor runs `codeflow hook exec-guard --contract 3`
+  from PATH on a canary dangerous command, in the payload Grok sends and
+  in a scratch directory, and warns unless it refuses with exit 2, a
+  reason and Grok's deny answer. Doctor never runs hook text from the
+  repository: a customised exec-guard command is reported as unverified.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -100,8 +113,10 @@ erratum below, never an edit of the section.
   trust. After `codeflow update`, the hook commands in
   `.grok/hooks/codeflow.json`, `.claude/settings.json` (which Grok also
   reads) and `.codex/hooks.json` carry no `$`: each runs
-  `codeflow hook <name> --contract 3` and exits 2 whenever the hook fails,
-  naming the installer and `codeflow update` when the binary is missing. A
+  `codeflow hook <name> --contract 3` and exits 2 with a reason whenever
+  the hook fails, since Codex lets a call through on exit 2 with no
+  reason, naming the installer and `codeflow update` when the binary is
+  missing. A
   binary older than 3.0.0 still blocks, now with its own usage error in
   place of the install line. Grok 1.0.46 also sends each payload field
   under both spellings (`toolName` and `tool_name`), which the guards took
@@ -110,10 +125,15 @@ erratum below, never an edit of the section.
   only the first line of a hook's error output as the reason it denied a
   call, so a guard refusing a Grok call also returns Grok's deny decision
   with the whole refusal, the rule and its sanctioned path included.
-  `codeflow doctor --check grok` now warns, naming the file, about a
-  CodeFlow hook command Grok would skip, and runs the configured Grok shell
-  guard on a canary dangerous command in the payload Grok sends, in a
-  scratch directory, warning when it does not refuse it.
+  `codeflow update` rewrites these files only where you have not edited
+  them. A Grok or Codex hook file you edited stays as it is, and update
+  writes a `.new` file beside it holding a 3-way merge: resolve its
+  conflict markers in favour of the shipped CodeFlow hook commands,
+  replace your file with it and delete the `.new` file. Update never
+  touches `.claude/settings.local.json`, which Grok also reads: replace
+  any CodeFlow hook command there that carries a `$` with the one in
+  `.claude/settings.json`. Then run `codeflow doctor --check grok` and
+  confirm that a live Grok session refuses a dangerous shell command.
 
 <!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
