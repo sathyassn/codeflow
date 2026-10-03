@@ -3171,3 +3171,60 @@ fn a_moved_landed_record_keeps_its_criteria() {
         &["TSK-001", "a reopened task keeps its criteria"],
     );
 }
+
+/// TSK-220 round 3: the work-record reader accepts a `.md` extension in any
+/// case, so a landed legacy record at `tasks/TSK-001.MD` with no `uid` is on
+/// the target. Reopened with a changed criterion, kept at that path or moved
+/// into its epic's folder, it keeps its landed criteria and CI blocks.
+#[test]
+fn a_landed_record_with_an_uppercase_extension_keeps_its_criteria() {
+    for to in [
+        "project-management/tasks/TSK-001.MD",
+        "project-management/epics/EPC-001/tasks/TSK-001.md",
+    ] {
+        let (dir, _, archived) = one_pr_fix();
+        let root = dir.path();
+        let landed = "project-management/tasks/TSK-001.MD";
+        git(root, &["switch", "-q", "main"]);
+        git(root, &["merge", "-q", "--ff-only", "task/TSK-001-fix"]);
+        git(root, &["mv", &record_path("TSK-001"), landed]);
+        commit(root, "docs(records): uppercase the record's extension");
+        git(root, &["switch", "-q", "task/TSK-001-fix"]);
+        git(root, &["merge", "-q", "--ff-only", "main"]);
+        std::fs::remove_file(root.join(landed)).unwrap();
+        write(root, to, &task("TSK-001", "todo", OWN_JOURNEY, &archived));
+        write(root, "src/lib.rs", "pub fn second() {}\n");
+        let first = commit(root, "feat: first repair");
+        let active = fix_block(&first);
+        let completed = format!("{archived}{active}");
+        write(
+            root,
+            to,
+            &task("TSK-001", "complete", OWN_JOURNEY, &completed),
+        );
+        commit(root, "docs(records): complete the first repair");
+        let archived = format!(
+            "{archived}{}",
+            active.replace(
+                "acceptance:\n",
+                "acceptance_superseded:\n  reason: revise again\n"
+            )
+        );
+        let changed = OWN_JOURNEY.replace("shall work.", "shall work differently.");
+        write(root, to, &task("TSK-001", "todo", &changed, &archived));
+        commit(
+            root,
+            "docs(records): reopen and change the landed criterion",
+        );
+        write(root, "src/lib.rs", "pub fn third() {}\n");
+        let second = commit(root, "feat: second repair");
+        let closeout = format!("{archived}{}", fix_block(&second));
+        write(root, to, &task("TSK-001", "complete", &changed, &closeout));
+        commit(root, "docs(records): complete the second repair");
+        assert_blocks(
+            &ci(root, "task/TSK-001-fix", "TSK-001"),
+            &format!("a landed .MD record reopened at {to}"),
+            &["TSK-001", "a reopened task keeps its criteria"],
+        );
+    }
+}

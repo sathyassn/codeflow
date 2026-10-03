@@ -508,41 +508,32 @@ enum Anchored {
     Unknown,
 }
 
-/// The task record at `anchor` with `task`'s id or `uid`, in any supported
-/// layout (the flat `tasks/` folder or an epic's `tasks/` folder), so moving
-/// a record never makes a landed task look unlanded (TSK-220).
+/// The task record at `anchor` with `task`'s id or `uid`, read by the
+/// work-record tree reader itself, so every path and file name it accepts
+/// counts (the flat `tasks/` folder or an epic's, any case of the `.md`
+/// extension) and identity is the parsed id, never a file name. Moving or
+/// renaming a record never makes a landed task look unlanded (TSK-220).
 fn anchored_task(repo: &Repository, anchor: Oid, task: &RecordView) -> Anchored {
     let uid = crate::ids::entry::frontmatter_value(&task.content, "uid")
         .filter(|uid| !uid.trim().is_empty());
     let Ok(tree) = repo.find_commit(anchor).and_then(|commit| commit.tree()) else {
         return Anchored::Unknown;
     };
-    let file = format!("{}.md", task.id);
     let mut found = Vec::new();
-    let mut unreadable = false;
-    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
-        let Ok(name) = entry.name() else {
-            unreadable = true;
-            return git2::TreeWalkResult::Ok;
-        };
-        let path = format!("{root}{name}");
-        if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
-            return git2::TreeWalkResult::Ok;
-        }
-        match repo.find_blob(entry.id()) {
-            Ok(blob) => {
-                let text = String::from_utf8_lossy(blob.content()).into_owned();
-                let same_uid =
-                    uid.is_some() && crate::ids::entry::frontmatter_value(&text, "uid") == uid;
-                if name == file || same_uid {
-                    found.push((path, text));
-                }
+    let read = super::work_start::visit_tree_records(
+        repo,
+        &tree,
+        |_, kind| kind == RecordKind::Task,
+        |path, text, record| {
+            let same_uid =
+                uid.is_some() && crate::ids::entry::frontmatter_value(text, "uid") == uid;
+            if record.id == task.id || same_uid {
+                found.push((path.to_string(), text.to_string()));
             }
-            Err(_) => unreadable = true,
-        }
-        git2::TreeWalkResult::Ok
-    });
-    if walked.is_err() || unreadable {
+            Ok(())
+        },
+    );
+    if read.is_err() {
         return Anchored::Unknown;
     }
     match found.as_slice() {
