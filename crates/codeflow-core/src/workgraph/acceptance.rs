@@ -242,8 +242,10 @@ pub(crate) fn bind_completion_with_amendment(
         .then_some(anchor)
         .flatten()
         .and_then(|anchor| {
-            let content = blob_at(repo, anchor, &task.path)?;
-            let old = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+            // By identity, wherever the target holds the record (TSK-220).
+            let Anchored::Present(old) = anchored_task(repo, anchor, task) else {
+                return None;
+            };
             let reopened = old.status == "complete"
                 && (matches!(landing, Landing::Worktree { .. })
                     || super::lifecycle::is_recompletion(Some(&old), task)
@@ -254,7 +256,7 @@ pub(crate) fn bind_completion_with_amendment(
                         &Graph::default().with(task.clone()),
                     )
                     .contains(&task.id));
-            reopened.then_some((anchor, old))
+            reopened.then_some((anchor, *old))
         })
         .or_else(|| {
             let recovery = recovered_completion(repo, task, &block, landing, anchor)?;
@@ -477,6 +479,8 @@ pub(super) fn epic_completions_in_range(
 /// landed criteria exist to protect, so a reopen inside the range may
 /// change the task's own criteria, as the range's own-task delta allows
 /// (TSK-220); once the record is on the target, its criteria there stand.
+/// The record is found by identity in every supported layout, and a target
+/// that cannot be read keeps the recovered completion's criteria.
 fn recovered_completion(
     repo: &Repository,
     task: &RecordView,
@@ -485,15 +489,72 @@ fn recovered_completion(
     anchor: Option<Oid>,
 ) -> Option<(Oid, RecordView)> {
     let (at, mut old) = previous_completion(repo, task, block, landing)?;
-    match anchor.map(|anchor| {
-        blob_at(repo, anchor, &task.path)
-            .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
-    }) {
-        Some(Some(anchored)) => old.criteria = anchored.criteria,
-        Some(None) => old.criteria = task.criteria.clone(),
-        None => {}
+    match anchor.map(|anchor| anchored_task(repo, anchor, task)) {
+        Some(Anchored::Present(anchored)) => old.criteria = anchored.criteria.clone(),
+        Some(Anchored::Absent) => old.criteria = task.criteria.clone(),
+        Some(Anchored::Unknown) | None => {}
     }
     Some((at, old))
+}
+
+/// How a task stands on an anchored target commit, found by identity.
+enum Anchored {
+    /// No task record at the commit has this id or `uid`.
+    Absent,
+    /// The one record with this id or `uid`.
+    Present(Box<RecordView>),
+    /// The commit cannot settle it: its tree or a record cannot be read or
+    /// parsed, or several records claim the identity. Never read as absent.
+    Unknown,
+}
+
+/// The task record at `anchor` with `task`'s id or `uid`, in any supported
+/// layout (the flat `tasks/` folder or an epic's `tasks/` folder), so moving
+/// a record never makes a landed task look unlanded (TSK-220).
+fn anchored_task(repo: &Repository, anchor: Oid, task: &RecordView) -> Anchored {
+    let uid = crate::ids::entry::frontmatter_value(&task.content, "uid")
+        .filter(|uid| !uid.trim().is_empty());
+    let Ok(tree) = repo.find_commit(anchor).and_then(|commit| commit.tree()) else {
+        return Anchored::Unknown;
+    };
+    let file = format!("{}.md", task.id);
+    let mut found = Vec::new();
+    let mut unreadable = false;
+    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        let Ok(name) = entry.name() else {
+            unreadable = true;
+            return git2::TreeWalkResult::Ok;
+        };
+        let path = format!("{root}{name}");
+        if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
+            return git2::TreeWalkResult::Ok;
+        }
+        match repo.find_blob(entry.id()) {
+            Ok(blob) => {
+                let text = String::from_utf8_lossy(blob.content()).into_owned();
+                let same_uid =
+                    uid.is_some() && crate::ids::entry::frontmatter_value(&text, "uid") == uid;
+                if name == file || same_uid {
+                    found.push((path, text));
+                }
+            }
+            Err(_) => unreadable = true,
+        }
+        git2::TreeWalkResult::Ok
+    });
+    if walked.is_err() || unreadable {
+        return Anchored::Unknown;
+    }
+    match found.as_slice() {
+        [] => Anchored::Absent,
+        [(path, text)] => RecordView::parse(RecordKind::Task, path, text)
+            .ok()
+            .filter(|record| record.id == task.id)
+            .map_or(Anchored::Unknown, |record| {
+                Anchored::Present(Box::new(record))
+            }),
+        _ => Anchored::Unknown,
+    }
 }
 
 /// Find the prior completed record when a range or target checkout starts
@@ -1333,7 +1394,9 @@ pub(super) fn reopened_ids(
 /// before applying the shared binding rule.
 /// `default_target` stands in for a task that declares no integration
 /// target when its waivers are judged; `authorities` are the target tips a
-/// clean merge after a review must come from.
+/// clean merge after a review must come from, and `line` is the branch the
+/// range judges, whose own line a planning or line range adds for the tasks
+/// that target it.
 ///
 /// # Errors
 ///
@@ -1346,6 +1409,7 @@ pub fn completions_in_range(
     default_target: Option<Oid>,
     criteria: &Criteria,
     authorities: &[Oid],
+    line: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let amendable = *criteria == Criteria::Amendable;
     // The task a task pull request is for may waive a criterion by a
@@ -1368,13 +1432,7 @@ pub fn completions_in_range(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
-    // A planning or line range carries each completion from where it was
-    // introduced on the line it judges, so a task merge of that line, the
-    // range head's first-parent line, is a merge of its target as well.
-    let mut authorities = authorities.to_vec();
-    if amendable {
-        authorities.push(head_oid);
-    }
+
     let mut findings = Vec::new();
     for task in after
         .records
@@ -1421,7 +1479,7 @@ pub fn completions_in_range(
                 Transport::TaskLanding,
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
-                &authorities,
+                &with_own_line(authorities, line, task, amendable.then_some(head_oid)),
             ));
         }
     }
@@ -1429,6 +1487,31 @@ pub fn completions_in_range(
         repo, &before, &after, head_oid, amendable,
     ));
     Ok(findings)
+}
+
+/// The target tips a completion in a range may stack merges from: the run's
+/// `authorities`, and, in a planning or line range (`line_head`), the range
+/// head's own line, but only for a task whose declared target is that line
+/// (`line`, the branch the range judges). A task bound for another target
+/// never takes that line's merges as its target's (TSK-220).
+fn with_own_line(
+    authorities: &[Oid],
+    line: Option<&str>,
+    task: &RecordView,
+    line_head: Option<Oid>,
+) -> Vec<Oid> {
+    let mut tips = authorities.to_vec();
+    let declared = task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    if let (Some(head), Some(line), Some(declared)) = (line_head, line, declared) {
+        if super::work_start::logical_target(declared) == super::work_start::logical_target(line) {
+            tips.push(head);
+        }
+    }
+    tips
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
@@ -1549,14 +1632,15 @@ pub fn pull_request_findings(
     head: &str,
     criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
-    pull_request_findings_judged(repo_root, base, head, criteria, None)
+    pull_request_findings_judged(repo_root, base, head, criteria, None, None)
 }
 
 /// [`pull_request_findings`] for a run that also names a candidate
-/// authority (the pre-push hook's destination default tip): a clean merge
-/// after a review may come from the first-parent line of the base or of
-/// that authority, and of nothing a local branch or its configuration says
-/// (TSK-220).
+/// authority (the pre-push hook's destination default tip) and the branch
+/// it judges: a clean merge after a review may come from the first-parent
+/// line of the base or of that authority, and in a planning or line range
+/// from the range's own line for the tasks that target `branch`; never from
+/// what a local branch or its configuration says (TSK-220).
 ///
 /// # Errors
 ///
@@ -1568,6 +1652,7 @@ pub fn pull_request_findings_judged(
     head: &str,
     criteria: &Criteria,
     authority: Option<&str>,
+    branch: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -1604,6 +1689,7 @@ pub fn pull_request_findings_judged(
         Some(target_tip),
         criteria,
         &authorities,
+        branch,
     )?);
     Ok(found)
 }

@@ -43,7 +43,14 @@ pub(super) fn dispatch(
     let found = match judge(root, range, names) {
         Some(judged) => judged,
         None => criteria(root, range, branch, class).and_then(|criteria| {
-            pull_request_findings_judged(root, range.base, range.head, &criteria, names.candidate)
+            pull_request_findings_judged(
+                root,
+                range.base,
+                range.head,
+                &criteria,
+                names.candidate,
+                Some(names.branch),
+            )
         }),
     };
     match found {

@@ -3048,3 +3048,126 @@ fn the_pre_push_candidate_authority_carries_a_target_merge() {
     );
     assert_passes(&run(Some(&tip)), "with the candidate authority");
 }
+
+/// Round 2 of the TSK-220 review: a line range's own line carries a merge
+/// after the review only for a task whose target is that line. A task
+/// bound for `main` that merges the line after its review still refuses
+/// when the line lands on `main`; a task bound for the line passes.
+#[test]
+fn a_line_carries_merges_only_for_the_tasks_that_target_it() {
+    for target_main in [true, false] {
+        // TSK-002 keeps the line an epic integration line, so the range
+        // binds each completion where it was introduced.
+        let dir = line_repo(&["TSK-001", "TSK-002"]);
+        let root = dir.path();
+        if target_main {
+            write(
+                root,
+                &record_path("TSK-001"),
+                &standalone("TSK-001", "todo", "main", "Pending.\n"),
+            );
+            commit(root, "docs(records): the task targets main");
+            git(root, &["branch", "-f", LINE, "main"]);
+        }
+        let reviewed = build(root, BRANCH, "src/reviewed.rs");
+        git(root, &["switch", "-q", "-c", "feat/side", LINE]);
+        write(root, "src/side.rs", "pub fn side() {}\n");
+        commit(root, "feat: work on the line");
+        let line_tip = land(root, "feat/side");
+        git(root, &["switch", "-q", BRANCH]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: merge the line", &line_tip],
+        );
+        let record = if target_main {
+            standalone("TSK-001", "complete", "main", &valid_block(&reviewed))
+        } else {
+            line_task("TSK-001", "complete", &valid_block(&reviewed))
+        };
+        write(root, &record_path("TSK-001"), &record);
+        commit(root, "docs(records): complete the task");
+        land(root, BRANCH);
+        let result = ci_on(root, "main", LINE, "Task: EPC-001");
+        if target_main {
+            assert_blocks(
+                &result,
+                "a main-bound task merging the line",
+                &[
+                    "work.acceptance_binding",
+                    "TSK-001",
+                    "src/side.rs changed after the reviewed commit",
+                ],
+            );
+        } else {
+            assert_passes(&result, "a line-bound task merging its line");
+        }
+    }
+}
+
+/// Round 2 of the TSK-220 review: a landed record moved to another
+/// supported layout is still found on the target by its identity, so a
+/// reopen in the fix range keeps the landed criteria.
+#[test]
+fn a_moved_landed_record_keeps_its_criteria() {
+    let (dir, _, archived) = one_pr_fix();
+    let root = dir.path();
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["merge", "-q", "--ff-only", "task/TSK-001-fix"]);
+    git(root, &["switch", "-q", "task/TSK-001-fix"]);
+    let moved = "project-management/epics/EPC-001/tasks/TSK-001.md";
+    std::fs::remove_file(root.join(record_path("TSK-001"))).unwrap();
+    write(
+        root,
+        moved,
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    write(root, "src/lib.rs", "pub fn second() {}\n");
+    let first = commit(root, "feat: first repair and move the record");
+    let active = fix_block(&first);
+    write(
+        root,
+        moved,
+        &task(
+            "TSK-001",
+            "complete",
+            OWN_JOURNEY,
+            &format!("{archived}{active}"),
+        ),
+    );
+    commit(root, "docs(records): complete the first repair");
+    let archived = format!(
+        "{archived}{}",
+        active.replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: revise again\n"
+        )
+    );
+    let changed = OWN_JOURNEY.replace("shall work.", "shall work differently.");
+    write(root, moved, &task("TSK-001", "todo", &changed, &archived));
+    commit(
+        root,
+        "docs(records): reopen and change the landed criterion",
+    );
+    write(root, "src/lib.rs", "pub fn third() {}\n");
+    let second = commit(root, "feat: second repair");
+    let closeout = format!("{archived}{}", fix_block(&second));
+    write(root, moved, &task("TSK-001", "todo", &changed, &closeout));
+    let verb = status_complete(root, "TSK-001");
+    assert_ne!(verb.0, 0, "the verb kept the landed criteria: {}", verb.1);
+    assert!(
+        verb.1.contains("a reopened task keeps its criteria"),
+        "{}",
+        verb.1
+    );
+    write(
+        root,
+        moved,
+        &task("TSK-001", "complete", &changed, &closeout),
+    );
+    commit(root, "docs(records): complete the second repair");
+    assert_blocks(
+        &ci(root, "task/TSK-001-fix", "TSK-001"),
+        "a moved record's landed criteria",
+        &["TSK-001", "a reopened task keeps its criteria"],
+    );
+}
