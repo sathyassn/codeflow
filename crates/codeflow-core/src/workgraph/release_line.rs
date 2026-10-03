@@ -2036,6 +2036,19 @@ fn recorded_first_parent(odb: &git2::Odb<'_>, commit: Oid) -> Result<Option<Oid>
     Ok(None)
 }
 
+/// The history overlay of the repository at `repo_root`: a non-empty
+/// graft file or a replace ref, as the release judge finds it. The push
+/// set treats a clone with one as unable to prove two histories unrelated.
+///
+/// # Errors
+///
+/// Returns a message when the repository, a graft file or the refs cannot
+/// be read.
+pub fn history_overlay_at(repo_root: &Path) -> Result<Option<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    history_overlay(&repo)
+}
+
 /// A local overlay that makes git or libgit2 read commits' parents or
 /// objects as something other than what they record: a non-empty graft
 /// file, or a replace ref: a ref named by the literal prefix

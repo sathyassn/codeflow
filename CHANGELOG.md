@@ -112,11 +112,14 @@ erratum below, never an edit of the section.
   adds to the tip, as the hosted job's range from the target tip does, so
   a commit the destination already holds under a tag or another branch,
   or one an earlier push carried before the policy tightened, is still
-  checked. A branch the destination already has whose history shares
-  nothing with the tip, such as a `gh-pages` deployment branch, keeps its
-  own new commits as its commit range under that policy, and the hook
-  says this is not default-target parity; a shallow clone, which cannot
-  show the histories are unrelated, keeps the tip. A target the task record
+  checked. A head whose recorded history shares nothing with the tip,
+  such as a `gh-pages` deployment branch, is never diffed against it: a
+  fast-forward of a branch the destination already has keeps its own new
+  commits as its commit range, and a new branch keeps the commits the
+  destination does not hold yet, under that policy, and the hook says
+  this is not default-target parity. A shallow clone, a graft or a
+  replace ref cannot show the histories are unrelated, so it keeps the
+  tip. A target the task record
   declares bounds only the other checks: nothing local proves the pull
   request goes there, so a branch built on an integration line has the
   line's inherited commits judged by the default branch's current policy

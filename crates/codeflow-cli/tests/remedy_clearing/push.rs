@@ -1567,3 +1567,100 @@ fn an_unrelated_history_joined_into_a_related_branch_is_checked_in_full() {
     assert!(!out.contains("not default-target parity"), "{out}");
     not_landed(&dest, &out, "feat/joined", &joined);
 }
+
+/// A related branch whose old remote tip an overlay makes parentless is
+/// not taken for unrelated history: with a replace ref or a graft, the
+/// four-bullet commit it carries is still judged by the tightened default
+/// (review round seven).
+#[test]
+fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
+    for overlay in ["replace", "graft"] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        land_on_default(&root, &dest, loosen);
+        let target = default_branch(&dest);
+        git(
+            &root,
+            &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+        );
+        write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+        commit_all(&root, "chore: add a quick target");
+        four_bullets(&root);
+        let first = pushed(&root);
+        let old = head_sha(&root);
+        let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+        assert_eq!(there.trim(), old, "{first}");
+        land_on_default(&root, &dest, |root| {
+            set_policy(
+                root,
+                &[
+                    ("commit_body_max_bullets", 3.into()),
+                    ("commit_body_bullet_max_len", 72.into()),
+                ],
+            );
+        });
+        write(&root, "z.txt", "z\n");
+        commit_all(&root, "feat: add z");
+        if overlay == "replace" {
+            git(&root, &["replace", "--graft", &old]);
+        } else {
+            write(&root, ".git/info/grafts", &format!("{old}\n"));
+        }
+        let out = pushed(&root);
+        assert!(
+            !out.contains("not default-target parity"),
+            "{overlay}: {out}"
+        );
+        assert!(
+            out.contains("overlays its recorded history"),
+            "{overlay}: {out}"
+        );
+        refused(&dest, &out, &head_sha(&root));
+    }
+}
+
+/// A new branch whose history shares nothing with the default branch, and
+/// which the destination already holds under a tag, keeps the advertised
+/// boundary as its commit range instead of a diff against the unrelated
+/// default: at the tagged commit, and with one more valid commit (review
+/// round seven).
+#[test]
+fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
+    for extra in [false, true] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        land_on_default(&root, &dest, |root| {
+            set_policy(root, &[("branch_naming", "off".into())]);
+        });
+        let target = default_branch(&dest);
+        git(
+            &root,
+            &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+        );
+        let tree = empty_tree(&root);
+        let published = commit_tree(&root, &tree, &[], "docs: publish the pages");
+        git(&root, &["tag", "pages-v1", &published]);
+        git(
+            &dest,
+            &[
+                "fetch",
+                "-q",
+                root.to_str().unwrap(),
+                "refs/tags/pages-v1:refs/tags/pages-v1",
+            ],
+        );
+        git(&root, &["fetch", "-q", "origin"]);
+        let head = if extra {
+            commit_tree(&root, &tree, &[&published], "docs: deploy the site")
+        } else {
+            published
+        };
+        git(&root, &["branch", "gh-pages", &head]);
+        let out = push(&root, &["origin", "gh-pages"]);
+        let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
+        assert_eq!(there.trim(), head, "{extra}: {out}");
+        assert!(out.contains("this is not default-target parity"), "{out}");
+    }
+}

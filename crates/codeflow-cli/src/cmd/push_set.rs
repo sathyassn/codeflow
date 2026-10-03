@@ -316,13 +316,17 @@ fn run_ci_ranges(
 /// target tip: history the destination already holds under another name,
 /// commits an earlier push carried that the tip now forbids, and commits
 /// a declared target's line carries are not left out, and no commit is
-/// filtered by first parent or ancestry path. A branch the destination
-/// already has whose history shares nothing with the tip, such as a
-/// deployment branch, and that this push fast-forwards, keeps its own new
-/// commits from its old tip, under the same policy, and the hook says this
-/// is not default-target parity: its whole history was never a pull request
-/// into the default branch. A shallow clone or an unreadable history proves
-/// nothing about relatedness, so it keeps the tip and says so.
+/// filtered by first parent or ancestry path. A head whose history is
+/// proven to share nothing with the tip, such as a deployment branch, is
+/// never diffed against it: a branch the destination already has, that
+/// this push fast-forwards, keeps its own new commits from its old tip,
+/// and a new branch keeps the commits the destination does not hold yet,
+/// from `base`, under the same policy; the hook says this is not
+/// default-target parity, since that history was never a pull request into
+/// the default branch. Unrelatedness is proven only from recorded history:
+/// a shallow clone, a graft or replace ref (which can drop the parents
+/// that join a branch to the tip) or an unreadable history proves nothing,
+/// so it keeps the tip and says so.
 fn commits_from(
     root: &Path,
     r: &PushRef,
@@ -362,18 +366,31 @@ fn commits_from(
     if shallow.as_deref().map(str::trim) != Some("false") {
         return unknown("this clone is shallow", report);
     }
-    let Some(old) = existing_tip(root, r) else {
-        return keep;
-    };
-    if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none() {
-        return keep;
+    match release_line::history_overlay_at(root) {
+        Ok(None) => {}
+        Ok(Some(overlay)) => {
+            return unknown(
+                &format!("this clone overlays its recorded history with {overlay}"),
+                report,
+            )
+        }
+        Err(why) => return unknown(&why, report),
     }
+    let (from, what) = match existing_tip(root, r) {
+        Some(old) => {
+            if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none() {
+                return keep;
+            }
+            (old, "its own new commits")
+        }
+        None => (base, "the commits the destination does not hold yet"),
+    };
     report.status.push(format!(
-        "note: '{branch}' shares no history with {target} {}, so its commit checks run over its own new commits from {}, under that policy; this is not default-target parity",
+        "note: '{branch}' shares no history with {target} {}, so its commit checks run over {what}, from {}, under that policy; this is not default-target parity",
         short(tip),
-        short(old)
+        short(from)
     ));
-    old.to_string()
+    from.to_string()
 }
 
 /// The base of a pushed branch's `codeflow ci` range: a release branch's
