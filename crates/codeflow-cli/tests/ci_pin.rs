@@ -498,15 +498,14 @@ fn judge_a_forged_head(head_pin: &str) {
     assert_eq!(enforced.status.code(), Some(1), "{text}");
     assert!(text.contains("git.commit_format"), "{text}");
 
-    // Control: judged from the head's own tree, the relaxed policy would pass.
+    // Run from the head's own tree, the relaxed policy no longer judges
+    // the range: the policy is read at the base as git data
+    // (sathyassn/codeflow#22), so the checkout cannot choose it.
     git(&origin, &["checkout", "-q", "feat/x"]);
     let forged_run = verdict(&origin);
-    assert_eq!(
-        forged_run.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&forged_run.stderr)
-    );
+    let forged_text = String::from_utf8_lossy(&forged_run.stderr);
+    assert_eq!(forged_run.status.code(), Some(1), "{forged_text}");
+    assert!(forged_text.contains("git.commit_format"), "{forged_text}");
 }
 
 /// A repository whose default branch `main` pins 1.2.3 and allows a
@@ -602,14 +601,16 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
             .output()
             .unwrap()
     };
-    // Control: without the explicit ref, the default branch's pin and its
-    // looser policy would judge the pull request, and it would pass.
-    let loose = verdict(&target);
-    assert_eq!(
-        loose.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&loose.stderr)
+    // From the default checkout the policy is still the base's, read as
+    // git data (sathyassn/codeflow#22), so the verdict no longer depends on
+    // the checkout; the pin still does, which is why the workflow checks
+    // out the base: without it the default branch's pin would be installed.
+    let from_default = verdict(&target);
+    let from_default_text = String::from_utf8_lossy(&from_default.stderr);
+    assert_eq!(from_default.status.code(), Some(1), "{from_default_text}");
+    assert!(
+        from_default_text.contains("over the 10-char limit"),
+        "{from_default_text}"
     );
     let default_pin = run_install(&install_script(POLICY), &target, "HEAD", &releases);
     assert_eq!(

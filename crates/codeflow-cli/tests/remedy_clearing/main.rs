@@ -111,7 +111,6 @@ const ROWS: &[(&str, Proof)] = &[
     ("RECORD_BASELINE_EXEMPT", Runs),
     ("BASELINE_REVIEW", Runs),
     ("POLICY_DEPRECATED", Runs),
-    ("TARGET_BEHIND_UPSTREAM", Runs),
     ("PROTECTED_BRANCH", Runs),
     ("PROTECTED_DELETE", Runs),
     ("PROTECTED_REWRITE", Runs),
@@ -147,6 +146,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_PRESENTATION", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
+    ("CI_BASE_REFUSED", Runs),
     ("CI_RANGE_UNREADABLE", Runs),
     ("CI_BRANCH_UNRESOLVED", Runs),
     ("CI_BODY_UNSUPPLIED", Runs),
@@ -1015,6 +1015,38 @@ fn clears_ci_base_unresolved() {
 }
 
 #[test]
+fn clears_ci_base_refused() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    commit(root, "x.txt", "feat: add x");
+    // A replace ref git cannot follow stops git on the base; git refuses to
+    // write one, so the ref file is written directly.
+    let base = text(&run("git", root, &["rev-parse", "main"]));
+    let replace = format!(".git/refs/replace/{}", base.trim());
+    write(root, &replace, "0123456789012345678901234567890123456789\n");
+    let finding = "git refused it";
+    prove(
+        "CI_BASE_REFUSED",
+        finding,
+        || ci(root, &[]),
+        |printed| {
+            assert!(printed.contains("fatal: replacement"), "{printed}");
+            std::fs::remove_file(root.join(&replace)).unwrap();
+            let step = printed_command(printed, "CI_BASE_REFUSED", None);
+            run_printed(
+                root,
+                &step,
+                &[
+                    ("--base <ref>", "--base main"),
+                    ("--head <ref>", "--head HEAD"),
+                ],
+                &["--branch", "feat/x"],
+            );
+        },
+    );
+}
+
+#[test]
 fn clears_ci_branch_unresolved() {
     let dir = ci_repo(DEFAULTS);
     let root = dir.path();
@@ -1447,15 +1479,15 @@ fn clears_secret_staged() {
     );
 }
 
+/// A local target strictly behind its upstream (sathyassn/codeflow#27):
+/// `work start` anchors on the upstream and names it, and prints no step.
+/// The stale branch is checked out in the root checkout, and the guards
+/// refuse each way an agent in a task worktree could fast-forward it.
 #[test]
-fn clears_target_behind_upstream() {
+fn a_target_behind_its_upstream_prints_no_step() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
-    let target =
-        String::from_utf8(run("git", &root, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).stdout)
-            .unwrap_or_default();
-    let _ = target;
     // The destination's target moves on; the local target stays behind.
     let base = String::from_utf8(run("git", &dest, &["symbolic-ref", "--short", "HEAD"]).stdout)
         .unwrap()
@@ -1497,24 +1529,28 @@ fn clears_target_behind_upstream() {
             &base,
         ],
     );
+    git(&root, &["switch", "-q", &base]);
+    let task = root.parent().unwrap().join("task");
     git(
         &root,
         &[
-            "switch",
+            "worktree",
+            "add",
             "-q",
-            "-c",
+            "-b",
             "task/TSK-001-work",
+            task.to_str().unwrap(),
             &format!("origin/{base}"),
         ],
     );
-    prove(
-        "TARGET_BEHIND_UPSTREAM",
-        "behind its upstream",
-        || codeflow(&root, &["work", "start", "TSK-001"]),
-        |printed| {
-            let step = printed_command(printed, "TARGET_BEHIND_UPSTREAM", None);
-            run_printed(&root, &step, &[], &[]);
-        },
+    let out = codeflow(&task, &["work", "start", "TSK-001"]);
+    assert!(
+        out.contains(&format!("-> refs/remotes/origin/{base}")),
+        "{out}"
+    );
+    assert!(
+        !out.contains("behind its upstream") && !out.contains("clear it"),
+        "{out}"
     );
 }
 

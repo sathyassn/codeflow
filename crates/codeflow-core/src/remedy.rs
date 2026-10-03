@@ -282,9 +282,6 @@ catalog! {
     /// A deprecated policy key.
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
         "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
-    /// A local target branch behind its upstream.
-    TARGET_BEHIND_UPSTREAM = Step::Git("git fetch"),
-        "fast-forward '{local}' with `git fetch . {upstream}:{local}` (or `git merge --ff-only {upstream}` while on it)";
 
     // Protected branches and the sanctioned landing path.
 
@@ -406,6 +403,9 @@ catalog! {
     /// A range whose base ref does not resolve.
     CI_BASE_UNRESOLVED = Step::Codeflow("codeflow ci"),
         "fetch the base branch (`git fetch`), or name the range: `codeflow ci --base <ref> --head <ref>`";
+    /// A base git itself refuses to resolve, naming git's own cause.
+    CI_BASE_REFUSED = Step::Codeflow("codeflow ci"),
+        "fix the cause git names, such as a replace ref it cannot follow or a `GIT_REPLACE_REF_BASE` without a trailing slash, which git 2.55 and later refuse; then rerun `codeflow ci --base <ref> --head <ref>`";
     /// A range git could not diff or list.
     CI_RANGE_UNREADABLE = Step::Git("git fetch"),
         "fetch the whole range (`git fetch --unshallow`, or a CI checkout with fetch-depth 0), then rerun `codeflow ci`";
