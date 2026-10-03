@@ -17,6 +17,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Every platform binary must be a clean build of the release commit
+      # (sathyassn/codeflow#14). This runs on dry runs too, so a dry run
+      # shows the problem before a real tag is cut.
+      - name: Download the platform builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: artifacts-build-local-*
+          path: /tmp/release-builds
+          merge-multiple: true
+      - name: Verify each binary is a clean build of the release commit
+        run: python3 scripts/release.py verify-clean-builds --artifacts-dir /tmp/release-builds --source "$GITHUB_SHA"
       - name: Recheck selected main after platform builds
         if: github.event.inputs.tag != 'dry-run'
         env:

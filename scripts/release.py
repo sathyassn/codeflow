@@ -13,8 +13,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
 from typing import Any, NoReturn
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ".release/config.json"
@@ -1956,6 +1958,80 @@ def verify_published_assets(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "verified", "tag": args.tag, "assets": len(actual)}))
 
 
+RELEASE_ARCHIVE_SUFFIXES = (".tar.xz", ".tar.gz", ".zip")
+RELEASE_BINARY_NAMES = {"codeflow", "codeflow.exe"}
+
+
+def archive_binaries(path: Path) -> list[tuple[str, bytes]]:
+    """The `codeflow` binaries inside one release archive, by member name."""
+    found: list[tuple[str, bytes]] = []
+    if path.name.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                if not info.is_dir() and Path(info.filename).name in RELEASE_BINARY_NAMES:
+                    found.append((info.filename, archive.read(info)))
+    else:
+        with tarfile.open(path) as archive:
+            for member in archive.getmembers():
+                if member.isfile() and Path(member.name).name in RELEASE_BINARY_NAMES:
+                    extracted = archive.extractfile(member)
+                    if extracted is not None:
+                        found.append((member.name, extracted.read()))
+    return found
+
+
+RELEASE_IDENTITY = re.compile(rb" source=([0-9A-Za-z]+) dirty=([a-z]+) inputs=[0-9a-f]{64}")
+
+
+def binary_identity_problem(data: bytes, version: str, source: str) -> str | None:
+    """Why `data` is not a clean build of `version` at `source`, or None.
+
+    The binary holds its `codeflow --version` line as a literal, packed
+    against neighbouring strings, so the bytes before the version are
+    arbitrary. Every identity-shaped string must name the release commit
+    and `dirty=false`, and the version must end right before it with no
+    digit or dot in front, so `13.1.0` never reads as `3.1.0`."""
+    found = list(RELEASE_IDENTITY.finditer(data))
+    if not found:
+        return "has no version identity"
+    expected = version.encode()
+    for match in found:
+        rev, dirty = match.group(1).decode(), match.group(2).decode()
+        head = data[max(0, match.start() - len(expected) - 1):match.start()]
+        if not head.endswith(expected) or (len(head) > len(expected) and head[:1] in b"0123456789."):
+            return f"carries an identity for a version other than {version}"
+        if rev != source:
+            return f"carries an identity from source {rev}"
+        if dirty != "false":
+            return f"reports dirty={dirty}"
+    return None
+
+
+def verify_clean_builds(args: argparse.Namespace) -> None:
+    """Refuse release archives whose binary is not a clean build of the
+    release commit (sathyassn/codeflow#14). Each binary embeds its
+    `codeflow --version` line as a literal, so the bytes are read and no
+    platform runner is needed."""
+    version = args.version or tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    archives = sorted(
+        path for path in args.artifacts_dir.iterdir()
+        if path.name.endswith(RELEASE_ARCHIVE_SUFFIXES)
+    )
+    if not archives:
+        fail(f"no release archive in {args.artifacts_dir}")
+    for path in archives:
+        if path.is_symlink() or not path.is_file():
+            fail(f"release archive is not a regular file: {path.name}")
+        binaries = archive_binaries(path)
+        if not binaries:
+            fail(f"{path.name} holds no codeflow binary")
+        for member, data in binaries:
+            problem = binary_identity_problem(data, version, args.source)
+            if problem:
+                fail(f"{path.name}: {member} is not a clean build of {version} at {args.source}: it {problem}")
+    print(json.dumps({"status": "verified", "version": version, "archives": len(archives)}))
+
+
 def add_host_args(value: argparse.ArgumentParser) -> None:
     value.add_argument("--host-state", type=Path)
     value.add_argument("--repository", default="")
@@ -2053,6 +2129,12 @@ def parser() -> argparse.ArgumentParser:
     published.add_argument("--source", required=True)
     published.add_argument("--tag", required=True)
     published.set_defaults(func=verify_published_assets)
+
+    clean = sub.add_parser("verify-clean-builds")
+    clean.add_argument("--artifacts-dir", type=Path, required=True)
+    clean.add_argument("--source", required=True)
+    clean.add_argument("--version", help="the release version; default: Cargo.toml's")
+    clean.set_defaults(func=verify_clean_builds)
     return value
 
 

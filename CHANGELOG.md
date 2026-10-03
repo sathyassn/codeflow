@@ -107,6 +107,13 @@ erratum below, never an edit of the section.
   does not know rather than trust it, so a command that runs nothing, such
   as `nohup --help git push`, may be refused.
 
+<!-- codeflow:release-impact patch -->
+- **A release refuses a binary that is not a clean build.** Before a
+  release is hosted, and on every dry run, each platform archive is opened
+  and its `codeflow` binary must identify as the release version at the
+  release commit with `dirty=false`. A dirty build, a build from another
+  commit, or an archive without a binary stops the release.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
