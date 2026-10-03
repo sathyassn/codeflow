@@ -4429,8 +4429,9 @@ def windows_access(path: Path) -> tuple[str, set[str]]:
 
 
 def windows_make_private(path: Path, user: str) -> None:
-    """Replace the access list of `path` with one entry: full control for
-    `user`, inherited by what the folder holds."""
+    """Drop the entries `path` inherits and set `user`'s own to full control,
+    inherited by what a folder holds. Another account's explicit entry
+    survives this; `windows_require_private` refuses it afterwards."""
 
     grant = f"*{user}:(OI)(CI)F" if path.is_dir() else f"*{user}:F"
     done = subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", grant], capture_output=True, text=True, check=False)
