@@ -21,7 +21,9 @@
 #      secret added in a merge resolution or in a file that replaces a link
 #      is reported, as is one in a file git judges binary, under its own
 #      path; merges report nothing twice; an octopus merge the trusted
-#      commit does not hold and a git older than 2.41 are refused;
+#      commit does not hold, a path gitleaks cannot read reliably (a
+#      backslash, a double quote or a control character) in one, and a git
+#      older than 2.41 are refused; spaced and non-ASCII names pass;
 #   4. this repository's own gitleaks step is the template's, and in both
 #      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
@@ -291,9 +293,24 @@ commit "near misses"
 expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
   ".claude/workflows/pipeline.workflow.js$NL:2"
 
-# A scan in which git fails reads no commit and exits 0 with an empty
-# report; the step fails it.
+# A git that cannot list the paths the scan will read fails the step before
+# gitleaks runs.
 STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
+MESSAGE="cannot list the paths that commits the trusted commit does not hold change; refusing to scan"
+NO_SCAN=1
+expect listing-failure 1
+NO_SCAN=
+
+# A scan in which gitleaks' own git fails reads no commit and exits 0 with
+# an empty report; the step fails it. Only gitleaks' git log -p breaks.
+mkdir "$TMP/broken-diff-git"
+cat >"$TMP/broken-diff-git/git" <<SH
+#!/bin/sh
+case " \$* " in *" log -p "*) exec "$(command -v git)" -c diff.algorithm=invalid "\$@" ;; esac
+exec "$(command -v git)" "\$@"
+SH
+chmod +x "$TMP/broken-diff-git/git"
+STEP_ENV="PATH=$TMP/fake-bin:$TMP/broken-diff-git:$PATH"
 MESSAGE="gitleaks did not complete a scan (exit 0, 0 commits read)"
 expect git-failure 1
 
@@ -304,7 +321,7 @@ cat >"$TMP/failing-git/git" <<SH
 #!/bin/sh
 "$(command -v git)" "\$@"
 status=\$?
-case " \$* " in *" log "*) exit 1 ;; esac
+case " \$* " in *" log -p "*) exit 1 ;; esac
 exit \$status
 SH
 chmod +x "$TMP/failing-git/git"
@@ -729,6 +746,107 @@ as_canary merge -q side >/dev/null 2>&1 || true
 printf 'main\nside\n%s\n' "$PLANTED" >"$REPO/f.txt"
 commit "resolve with a secret"
 on_base "$BASE" pr-conflict-path 1 f.txt:3
+
+# gitleaks' patch parser misreads some names that git quotes. A path with a
+# backslash, a double quote or a control character in a commit the trusted
+# commit does not hold is refused before gitleaks runs.
+ALLOW_B="[extend]
+useDefault = true
+
+[[allowlists]]
+description = \"a real b/ directory\"
+paths = ['''^b/''']"
+ODD_NAME="gitleaks cannot read reliably; rename it in every commit of the pull request; refusing to scan"
+new_repo backslash-name
+printf '%s\n' "$PLANTED" >"$REPO/leak\\"
+commit "a name that ends in a backslash"
+rm "$REPO/leak\\"
+commit "delete it"
+NO_SCAN=1
+MESSAGE=$ODD_NAME
+on_base "$BASE" pr-backslash-name 1
+# A newline in the name of a file both sides change: the conflicted merge's
+# header would span lines, and the trusted ^b/ allowlist would then cover
+# the secret its resolution adds.
+new_repo newline-conflict
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf '%s\n' "$ALLOW_B" >"$REPO/.gitleaks.toml"
+printf 'one\n' >"$REPO/f${NL}x.txt"
+commit "an odd name and a b/ allowlist"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/f${NL}x.txt"
+commit side
+git -C "$REPO" checkout -q "$MAIN"
+printf 'main\n' >"$REPO/f${NL}x.txt"
+commit main
+as_canary merge -q side >/dev/null 2>&1 || true
+printf 'main\nside\n%s\n' "$PLANTED" >"$REPO/f${NL}x.txt"
+commit "resolve with a secret"
+on_base "$BASE" pr-newline-conflict 1
+# The same for a rename conflict whose new name holds a newline.
+new_repo rename-newline
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf '%s\n' "$ALLOW_B" >"$REPO/.gitleaks.toml"
+printf 'one\ntwo\n' >"$REPO/orig.txt"
+commit "a file and a b/ allowlist"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b side
+git -C "$REPO" mv orig.txt "new${NL}name.txt"
+commit "rename it oddly"
+git -C "$REPO" checkout -q "$MAIN"
+git -C "$REPO" mv orig.txt main.txt
+commit "rename it plainly"
+as_canary merge -q side >/dev/null 2>&1 || true
+rm -f "$REPO/new${NL}name.txt" "$REPO/orig.txt"
+printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/main.txt"
+commit "resolve with a secret"
+on_base "$BASE" pr-rename-newline 1
+NO_SCAN=
+MESSAGE=
+# An ordinary rename conflict is scanned, and its resolution's secret is
+# reported under its own path, out of reach of the trusted ^b/ allowlist.
+new_repo rename-conflict
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf '%s\n' "$ALLOW_B" >"$REPO/.gitleaks.toml"
+printf 'one\ntwo\n' >"$REPO/orig.txt"
+commit "a file and a b/ allowlist"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b side
+git -C "$REPO" mv orig.txt side.txt
+commit "rename it one way"
+git -C "$REPO" checkout -q "$MAIN"
+git -C "$REPO" mv orig.txt main.txt
+commit "rename it another way"
+as_canary merge -q side >/dev/null 2>&1 || true
+rm -f "$REPO/side.txt" "$REPO/orig.txt"
+printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/main.txt"
+commit "resolve with a secret"
+on_base "$BASE" pr-rename-conflict 1 main.txt:3
+# Odd names the trusted commit already holds do not refuse the scan, and a
+# pull request may delete one.
+new_repo trusted-odd-name
+printf 'trusted\n' >"$REPO/old\\"
+printf 'trusted\n' >"$REPO/say\"hi\".txt"
+commit "odd names"
+BASE=$(tip)
+rm "$REPO/old\\"
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "delete one and leak"
+on_base "$BASE" trusted-odd-name 1 leak.txt:1
+# Names with spaces or non-ASCII letters pass, and a leak in one is
+# reported under its name.
+CAFE="caf$(printf '\303\251').txt"
+new_repo spaced-names
+mkdir "$REPO/dir with space"
+printf 'plain\n' >"$REPO/dir with space/a b.txt"
+printf 'plain\n' >"$REPO/$CAFE"
+commit "spaced and non-ASCII names"
+on_base "$BASE" spaced-names 0
+printf '%s\n' "$PLANTED" >>"$REPO/dir with space/a b.txt"
+printf '%s\n' "$PLANTED" >>"$REPO/$CAFE"
+commit "leaks in them"
+on_base "$BASE" spaced-name-leaks 1 "dir with space/a b.txt:2" "$CAFE:2"
 
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still

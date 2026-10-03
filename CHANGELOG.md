@@ -115,7 +115,10 @@ erratum below, never an edit of the section.
   secret added in a merge resolution, in a file that replaces a link or
   after a NUL byte is reported, under the file's own path. git cannot show
   what an octopus merge adds, so the step refuses one the trusted commit
-  does not hold; merge the branches one at a time.
+  does not hold; merge the branches one at a time. It also refuses a path
+  with a backslash, a double quote or a control character in a commit the
+  trusted commit does not hold, since gitleaks cannot read such names
+  reliably; names with spaces or non-ASCII letters pass.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README

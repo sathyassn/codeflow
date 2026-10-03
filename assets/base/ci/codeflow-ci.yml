@@ -223,6 +223,16 @@ jobs:
       # the branches one at a time instead. A local stash, which git also
       # records with three parents, is not refused; a CI checkout has none.
       #
+      # gitleaks' patch parser misreads some names that git quotes: it skips
+      # one that ends in a backslash without an error, and a newline in a
+      # name splits a conflicted merge's header into lines the wrapper cannot
+      # tell apart. So before it scans, the step lists every path that a
+      # commit the trusted commit does not hold adds, changes, renames or
+      # copies, merges included, and refuses a name with a backslash, a
+      # double quote or a control character. Names with spaces or non-ASCII
+      # letters are read correctly and pass. gitleaks is not shown deleted
+      # files, so a pull request may delete such a file.
+      #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
       # pipeline workflow ("vulnerable/malicious deps"), which the
@@ -265,10 +275,29 @@ jobs:
           cat >"$trusted/bin/git" <<GIT
           #!/bin/bash
           set -o pipefail
-          case " \$* " in *" log "*) ;; *) exec "$real_git" "\$@" ;; esac
-          "$real_git" "\$@" | sed '/^remerge /d'
+          if [ "\$1" = -C ] && [ "\$3" = log ]; then
+            "$real_git" "\$@" | sed '/^remerge /d'
+            exit
+          fi
+          exec "$real_git" "\$@"
           GIT
           chmod +x "$trusted/bin/git"
+          if ! git log -z --format= --name-status --full-history --diff-filter=uxdb --remerge-diff \
+            --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/paths"; then
+            echo "::error::cannot list the paths that commits the trusted commit does not hold change; refusing to scan"; exit 1
+          fi
+          odd=$(python3 -I - "$trusted/paths" <<'PY'
+          import sys
+
+          with open(sys.argv[1], "rb") as handle:
+              names = handle.read().split(b"\0")
+          odd = [n for n in names if any(c < 32 or c == 127 or c in b'"\\' for c in n)]
+          print(ascii(odd[0].decode("utf-8", "replace"))[1:-1] if odd else "")
+          PY
+          )
+          if [ -n "$odd" ]; then
+            echo "::error::a commit the trusted commit does not hold has the path \"${odd}\", whose backslash, double quote or control character gitleaks cannot read reliably; rename it in every commit of the pull request; refusing to scan"; exit 1
+          fi
           rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
           # needs one named, and each file that configuration extends.
