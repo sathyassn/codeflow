@@ -1980,13 +1980,39 @@ def archive_binaries(path: Path) -> list[tuple[str, bytes]]:
     return found
 
 
+RELEASE_IDENTITY = re.compile(rb" source=([0-9A-Za-z]+) dirty=([a-z]+) inputs=[0-9a-f]{64}")
+
+
+def binary_identity_problem(data: bytes, version: str, source: str) -> str | None:
+    """Why `data` is not a clean build of `version` at `source`, or None.
+
+    The binary holds its `codeflow --version` line as a literal, packed
+    against neighbouring strings, so the bytes before the version are
+    arbitrary. Every identity-shaped string must name the release commit
+    and `dirty=false`, and the version must end right before it with no
+    digit or dot in front, so `13.1.0` never reads as `3.1.0`."""
+    found = list(RELEASE_IDENTITY.finditer(data))
+    if not found:
+        return "has no version identity"
+    expected = version.encode()
+    for match in found:
+        rev, dirty = match.group(1).decode(), match.group(2).decode()
+        head = data[max(0, match.start() - len(expected) - 1):match.start()]
+        if not head.endswith(expected) or (len(head) > len(expected) and head[:1] in b"0123456789."):
+            return f"carries an identity for a version other than {version}"
+        if rev != source:
+            return f"carries an identity from source {rev}"
+        if dirty != "false":
+            return f"reports dirty={dirty}"
+    return None
+
+
 def verify_clean_builds(args: argparse.Namespace) -> None:
     """Refuse release archives whose binary is not a clean build of the
     release commit (sathyassn/codeflow#14). Each binary embeds its
     `codeflow --version` line as a literal, so the bytes are read and no
     platform runner is needed."""
     version = args.version or tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    clean = f"{version} source={args.source} dirty=false ".encode()
     archives = sorted(
         path for path in args.artifacts_dir.iterdir()
         if path.name.endswith(RELEASE_ARCHIVE_SUFFIXES)
@@ -2000,12 +2026,9 @@ def verify_clean_builds(args: argparse.Namespace) -> None:
         if not binaries:
             fail(f"{path.name} holds no codeflow binary")
         for member, data in binaries:
-            if clean not in data:
-                dirty = b" dirty=true " in data
-                fail(
-                    f"{path.name}: {member} is not a clean build of {version} at {args.source}"
-                    + (" (it reports dirty=true)" if dirty else "")
-                )
+            problem = binary_identity_problem(data, version, args.source)
+            if problem:
+                fail(f"{path.name}: {member} is not a clean build of {version} at {args.source}: it {problem}")
     print(json.dumps({"status": "verified", "version": version, "archives": len(archives)}))
 
 

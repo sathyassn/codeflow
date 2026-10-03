@@ -1565,9 +1565,14 @@ class PublicationTests(unittest.TestCase):
         )
         cases: dict[str, tuple[dict[str, bytes | None], str | None]] = {
             "clean": ({linux: line(), mac: line(), windows: line()}, None),
-            "dirty": ({linux: line(), windows: line(dirty="true")}, r"windows-msvc\.zip: codeflow\.exe .*\(it reports dirty=true\)"),
-            "other source": ({mac: line(rev="e" * 40)}, r"apple-darwin\.tar\.xz: .* not a clean build of 3\.1\.0 at c{40}$"),
-            "other version": ({mac: line(version="3.0.0")}, r"not a clean build of 3\.1\.0"),
+            "dirty": ({linux: line(), windows: line(dirty="true")}, r"windows-msvc\.zip: codeflow\.exe .*: it reports dirty=true$"),
+            "other source": ({mac: line(rev="e" * 40)}, r"apple-darwin\.tar\.xz: .* not a clean build of 3\.1\.0 at c{40}: it carries an identity from source e{40}$"),
+            "other version": ({mac: line(version="3.0.0")}, r"identity for a version other than 3\.1\.0"),
+            "longer version": ({mac: line(version="13.1.0")}, r"identity for a version other than 3\.1\.0"),
+            "dirty beside clean": ({mac: line(dirty="true") + line()}, r"it reports dirty=true$"),
+            "other source beside clean": ({mac: line(rev="e" * 40) + line()}, r"identity from source e{40}$"),
+            "no identity": ({mac: b"\x00a binary with no version line\x00"}, r"it has no version identity$"),
+            "packed after a word": ({linux: b"Cli" + line()[5:], mac: line(), windows: line()}, None),
             "no binary": ({linux: line(), mac: None}, r"apple-darwin\.tar\.xz holds no codeflow binary"),
             "no archive": ({}, r"no release archive"),
         }
