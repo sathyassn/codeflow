@@ -55,21 +55,26 @@ erratum below, never an edit of the section.
 - **`codeflow doctor --check grok` checks that Grok can run the CodeFlow
   guards.** It warns, naming each file, about a CodeFlow hook command
   Grok would skip because it carries a `$`, with the step that fixes it:
-  `codeflow update` for the files update itself would rewrite (shipped,
-  managed and not opted out with `[scaffold] ignore`) and a hand edit for
-  any other file, such as `.claude/settings.local.json`, and it names a
-  `.new` file update left waiting. When the shipped exec-guard handler
-  (its command, timeout and environment) is bound where Grok's shell tool
-  hits it, matched as Grok matches, doctor judges a canary dangerous
-  command in the payload Grok sends with the handler
-  `codeflow hook exec-guard --contract 3` runs, in its own process and
-  against an empty scratch folder, and warns unless it refuses with exit
-  2, a reason and Grok's deny answer. Doctor executes nothing for the
-  check, so no hook text, hook environment, `codeflow` found on PATH or
-  swapped binary can answer for it: a customised handler is reported as
-  unverified, and where PATH resolves `codeflow` is reported, flagged
-  when it lies inside the repository or is not the binary doctor started
-  from.
+  `codeflow update` where update's own steps rewrite the file or write a
+  `.new` merge beside it, and a hand edit for any other file, with the
+  reason update leaves it: a file update does not manage, such as
+  `.claude/settings.local.json`, a file it skips as a symlink or through
+  `[scaffold] ignore`, or an edit it keeps because the shipped version
+  has not changed. It names a `.new` file update left waiting. When the
+  shipped exec-guard handler (its command, timeout and environment) is
+  bound where Grok's shell tool hits it, matched as Grok matches, doctor
+  judges a fixed canary dangerous command in the payload Grok sends with
+  the handler `codeflow hook exec-guard --contract 3` runs, in its own
+  process under the catastrophic-command floor alone, reading no policy,
+  repository, working directory or environment and recording no
+  refusal, and warns unless it refuses with exit 2, a reason and Grok's
+  deny answer. Doctor executes nothing for the check, so no hook text,
+  hook environment, `codeflow` found on PATH or swapped binary can answer
+  for it: a customised handler is reported as unverified, and where PATH
+  resolves `codeflow` is reported, flagged when it lies inside the
+  repository or is not the binary doctor started from. The canary does
+  not exercise a shell, the command-line parsing, the `codeflow` on PATH
+  or Grok's own hook call; a live session's hook lines prove those.
 
 ### Changed
 
@@ -140,8 +145,10 @@ erratum below, never an edit of the section.
   its conflict markers in favour of the shipped CodeFlow hook commands,
   replace your file with it and delete the `.new` file. Update never
   touches a hook file it does not manage, such as
-  `.claude/settings.local.json`, which Grok also reads: replace any
-  CodeFlow hook command there that carries a `$` with the shipped one.
+  `.claude/settings.local.json`, which Grok also reads, nor one that is a
+  symlink, and it keeps an edit when the shipped version has not changed:
+  in such a file, replace any CodeFlow hook command that carries a `$`
+  with the shipped one, as `codeflow doctor --check grok` names.
   Then run `codeflow doctor --check grok` and confirm that a live Grok
   session refuses a dangerous shell command.
 
