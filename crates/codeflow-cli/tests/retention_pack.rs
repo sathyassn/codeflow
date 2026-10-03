@@ -169,8 +169,21 @@ fn assert_local_window_and_reinjection(case: &str, plan: &Value, fixture: &Path,
             .expect("local settings JSON");
     assert_eq!(
         local,
-        serde_json::json!({"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"}}),
-        "{case}"
+        serde_json::json!({"env": {
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "100"
+        }}),
+        "{case}: the window and the pinned percentage"
+    );
+    // The pin matters because the scaffold's shared settings lower the
+    // percentage by default (TSK-211).
+    let shared: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.join(".claude/settings.json")).expect("shared settings"),
+    )
+    .expect("shared settings JSON");
+    assert_eq!(
+        shared["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        "{case}: the project default the pin overrides"
     );
     let tracked = Command::new("git")
         .args(["ls-files", ".claude/settings.local.json"])
