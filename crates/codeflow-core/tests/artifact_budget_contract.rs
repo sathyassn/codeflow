@@ -1262,8 +1262,8 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             ("trust prompt identity", "Decide by authorization and path identity"),
             (
-                "hook trust only for unchanged hooks",
-                "A prompt to trust hook definitions, such as Codex's review of a project's hooks, is not a folder trust prompt: answer it only when every hook file the seat loads is byte-identical to the one at the pull request's target tip, and otherwise it goes to the operator",
+                "hook trust only in the narrow Codex case",
+                "Answer it only in the narrow case the orchestrator's transport rule defines (\"First-run prompts\"; ADR-0075, amendment of 2026-10-03): a Codex seat whose project hooks file is unchanged from the fetched target tip and runs only CodeFlow's shipped `codeflow hook` commands. Every other hook prompt, and every Grok project trust prompt, goes to the operator.",
             ),
             (
                 "refused families stay the operator's",

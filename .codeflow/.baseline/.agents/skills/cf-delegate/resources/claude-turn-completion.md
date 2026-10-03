@@ -27,8 +27,7 @@ Code. It makes zero tmux calls; waiting is pure file polling.
    (run id, state-dir spelling) and rejects any difference as unsafe. Never
    edit it or merge other keys into it. The launch flags are the Claude row
    of the cross-family transport posture table, written out in the launch
-   below: production launches `--permission-mode bypassPermissions`. Consult
-   and no-edit review keep `--permission-mode auto`. Make `autoMode.classifyAllShell` effective at
+   below. Make `autoMode.classifyAllShell` effective at
    user scope (Claude ignores it at project scope, and repeated `--settings`
    flags are not a supported composition mechanism), then prove the composed
    boundary with the preflight canary.

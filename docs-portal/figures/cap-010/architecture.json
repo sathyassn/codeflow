@@ -8,7 +8,7 @@
     "idea": "Every host reaches the other seat the same way: the other family's interactive CLI in a Herdr tab, with tmux as the last fallback.",
     "title": "How each host reaches the other seat",
     "kicker": "Hosts and transports",
-    "caption": "Every route runs through a vendor's own interactive harness, so changing host changes the transport and never the contract.",
+    "caption": "Every route runs through a vendor's own interactive harness, so changing host never changes the seat, the transport or the contract.",
     "states": [
       {
         "name": "seat",

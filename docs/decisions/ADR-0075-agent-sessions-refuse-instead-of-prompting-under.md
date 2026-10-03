@@ -461,28 +461,54 @@ fail-closed, integration and hook-trust text in AC-2, AC-3 and AC-6. TSK-190
 owns the Codex launch-profile changes. No dropped mechanism is a
 prerequisite to those tasks.
 
-## Amendment, 2026-10-03: agents trust unchanged hooks
+## Amendment, 2026-10-03: agents trust unchanged CodeFlow hooks in Codex
 
-The operator decided on 2026-10-03 (TSK-213) that when a Codex or Grok seat
-asks whether to trust the project's hooks, the calling agent may answer
-"trust" only when every hook definition that seat would load is
-byte-identical to the one at the pull request's base, the target tip. If any
-hook differs, the operator answers the prompt in the seat's Herdr tab. The
-agent never trusts a changed hook and never picks "continue without
-trusting" to get past the prompt.
+The operator decided on 2026-10-03 (TSK-213) that when a seat asks whether
+to trust the project's hooks, the calling agent may answer "trust" only when
+every hook definition the seat would load is byte-identical to the one at
+the pull request's base, the target tip; otherwise the operator answers in
+the seat's own surface, and the agent never trusts a changed hook or picks
+"continue without trusting".
 
-This replaces the consequence "Hook trust is the operator's: agents never
-review or trust hook definitions" and decision 8's Codex hook trust entry
-for unchanged hooks. Changed hooks stay the operator's, as before.
+Review of that rule (PR 37, round 1) showed that identical definitions do
+not mean identical executed code: an unchanged hook running `sh ./check.sh`
+passed the byte comparison while the script it runs had changed. It also
+showed that Codex loads hooks from inline config, user, global and plugin
+sources as well as the project file, and that Grok reads other harnesses'
+hook files and its project trust grants MCP and LSP servers along with
+hooks. This amendment therefore narrows the operator's decision, on that
+review evidence, to the case where the decision's premise holds. The agent
+answers "trust" only when all of these hold:
 
-Why: the earlier rule kept an agent from deciding which guards run. A hook
-byte-identical to the target tip is already reviewed and landed, so trusting
-it adds no unreviewed code and leaves the guards as reviewed. A changed hook
-is unreviewed code the seat would run, so it stays with the operator.
+1. The seat is Codex, whose prompt grants hooks only.
+2. The prompt lists only the project's Codex hooks file.
+3. That file is a regular file, not a symlink, and is byte-identical to the
+   file at the immutable SHA of the successfully fetched target tip. A
+   failed fetch or an unresolved target means no trust.
+4. The file is also byte-identical to CodeFlow's managed copy, so every
+   hook command is, as a whole string, a form CodeFlow ships:
+   `codeflow hook <name> --contract <N>` followed by CodeFlow's shared
+   missing-binary probe. These run only the installed `codeflow` binary,
+   resolved outside the repository, and system tools; no repository script,
+   interpreter or relative path.
 
-The agent checks the match by comparing each hook file the harness loads
-(Codex `.codex/hooks.json`, each file under `.grok/hooks/`) with
-`git show <target-tip>:<path>` after a fetch; a file missing at the tip
-counts as changed. The rule's home is
-`cf-model-orchestrator/resources/routing/transport.md`, "First-run prompts"
-(ADR-0077), with `cf-method/references/autonomy.md`, "Trust prompts".
+Everything else goes to the operator: Grok's combined grant, any changed or
+extra hook, any hook from another source, and any hook that runs repository
+code. This replaces the consequence "Hook trust is the operator's: agents
+never review or trust hook definitions" and decision 8's Codex hook-trust
+entry only for that one case.
+
+Why: the earlier rule kept an agent from deciding which guards run. When the
+four conditions hold, the hooks the seat would trust are CodeFlow's own
+guard commands as reviewed and landed on the target, and they run no code
+from the repository, so trusting them leaves the reviewed guards in place.
+The check does not review hook behaviour, and it makes no claim about hooks
+outside that case.
+
+This also settles D3's agent-launched `--trust`: a Grok seat never launches
+with `--trust` from an agent, since Grok's project trust is the operator's.
+D3's builder route (`--always-approve --sandbox cf-guard-worktree`) stays
+unqualified until the items listed under "Still to establish" are proven,
+so no Grok seat builds until then. The procedure lives in
+`cf-model-orchestrator/resources/routing/hook-trust.md`, reached from the
+transport rule's "First-run prompts" (ADR-0077).

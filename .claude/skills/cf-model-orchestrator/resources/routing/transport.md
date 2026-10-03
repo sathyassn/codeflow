@@ -44,33 +44,43 @@ headless peer run, or hand-rolled app-server JSON-RPC. Status commands such as
 
 ### Launch postures
 
-Each seat starts in its CLI's autonomous permission mode, so it never stalls
-on an approval prompt. This table is the one home of these flags:
+Each seat starts in its CLI's autonomous permission mode, which removes
+routine approval prompts. A mode can still stop a seat, for a classifier
+escalation, an action the mode never approves or a sandbox refusal. The
+caller never answers a consequential approval for the seat: it reports the
+seat as blocked, with the prompt's text, to the operator and continues other
+work. This table is the one home of these flags:
 
 | Seat | Production and building | Consult and review |
 |---|---|---|
 | Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |
 | Codex | `--ask-for-approval never --sandbox danger-full-access` | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
-| Grok | `--always-approve` | `--permission-mode auto` |
+| Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |
 
 The Codex builder posture is ADR-0075 D1: it moves to the `cf-builder`
 profile only after that decision's spike passes, and this row is the one
-line that changes then. Grok adds `--sandbox <PROFILE>` when an OS sandbox is
-required. A consult or review edits nothing whatever its mode. Never
-`--dangerously-skip-permissions` unless the operator named it, and never
-`--dangerously-bypass-hook-trust`.
+line that changes then. The Grok builder posture is ADR-0075 D3:
+`--always-approve --sandbox cf-guard-worktree`, launched in its own task
+worktree after a separate step saves folder trust for that exact directory,
+with readiness judged by the hooks that load. ADR-0075 still lists as
+unestablished a Grok trust-only form and whether Grok resolves that
+profile's `../../.git` entry, so the route is not qualified: until a canary
+proves both, building goes to a Claude or Codex seat. A Grok seat never
+launches with `--trust` from an agent, because Grok's project trust is the
+operator's (First-run prompts). A consult or review edits nothing whatever
+its mode. Never `--dangerously-skip-permissions` unless the operator named
+it, and never `--dangerously-bypass-hook-trust`.
 
 ### First-run prompts
 
-A new seat can stop at a folder trust prompt, a project hook trust prompt or
-a self-update offer before its first turn. The caller answers folder trust
+A new seat can stop at a folder trust prompt, a hook trust prompt or a
+self-update offer before its first turn. The caller answers folder trust
 only for the task's own folder (`cf-method/references/autonomy.md`, "Trust
-prompts"). It answers hook trust (ADR-0075, amendment of 2026-10-03) only
-when every hook file the seat would load (Codex's hooks file in `.codex/`,
-each file under `.grok/hooks/`) is byte-identical to the one at the pull
-request's target tip: after a fetch, `git show <target-tip>:<path> | cmp -
-<path>` passes for each, and a file missing at the tip differs. If any file
-differs, the caller tells the operator the seat is waiting, the operator
-answers in the seat's Herdr tab, and the seat gets no brief until then. The
-caller never trusts a changed hook and never picks "continue without
-trusting". Skip a self-update offer.
+prompts"), and skips a self-update offer. At a hook trust prompt, the caller
+answers "trust" only in the narrow Codex case that [hook trust](hook-trust.md)
+defines (ADR-0075, amendment of 2026-10-03). Every other hook trust prompt,
+every Grok project trust prompt included, goes to the operator: the caller
+tells the operator the seat is waiting in its own surface, its Herdr tab or,
+under the fallback, its tmux pane, and briefs it only after the operator
+answers. The caller never trusts a changed or extra hook and never picks
+"continue without trusting".

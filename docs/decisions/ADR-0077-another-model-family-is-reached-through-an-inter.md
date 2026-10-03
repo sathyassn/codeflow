@@ -47,9 +47,9 @@ production and building and `auto` for consults and reviews; Codex
 consults leaving `--sandbox` off; Grok `--always-approve` for production and
 `--permission-mode auto` for consults). A new seat's folder trust prompt is
 answered by the caller for the task's own folder only, its hook trust prompt
-only when every hook file is byte-identical to the target tip's (ADR-0075,
-amendment of 2026-10-03) and otherwise by the operator, and a self-update
-offer is skipped. The seat's own
+only in a narrow Codex case (ADR-0075, amendment of 2026-10-03) and
+otherwise by the operator, and a self-update offer is skipped. A Grok
+builder seat is not qualified until ADR-0075 D3's containment is proven. The seat's own
 Codex session record may be read for a long reply and for the observed
 model and effort of that one session, never as a completion signal. The
 rule has one home, `cf-model-orchestrator/resources/routing/transport.md`,

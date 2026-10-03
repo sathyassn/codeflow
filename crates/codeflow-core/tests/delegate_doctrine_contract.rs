@@ -882,9 +882,11 @@ const TRANSPORT_CITERS: &[&str] = &[
     DELEGATE_PLUGIN_LANE,
     DELEGATE_LIFECYCLE_LANE,
     "assets/base/claude/skills/cf-delegate/resources/native-fallback.md",
+    "assets/base/claude/skills/cf-delegate/resources/edit-access.md",
     ADAPTER,
     CONSULT,
     HERDR,
+    "assets/base/agents/skills/cf-herdr/references/review-and-harvest.md",
     CUSTOMIZE,
     "assets/base/CLAUDE.md.tmpl",
     "assets/base/AGENTS.md.tmpl",
@@ -907,14 +909,52 @@ const STALE_ROUTES: &[&str] = &[
 ];
 
 /// A seat's launch flags: stated in the transport table, and written out
-/// only in the adapter's literal tmux launch line.
+/// only inside the adapter's executable launch block.
 const POSTURE_FLAGS: &[&str] = &[
     "danger-full-access",
     "--always-approve",
     "bypassPermissions",
     "--ask-for-approval never",
+    "--permission-mode",
 ];
 
+/// Words that rank one host above another in a sentence.
+const RANKING: &[&str] = &[
+    "first",
+    "prefer",
+    "default",
+    "only if",
+    "only when",
+    "instead of",
+    "rather than",
+    "before",
+    "unless",
+];
+
+/// Removes fenced code blocks: the adapter's executable launch example is
+/// the only place a flag may be written out.
+fn without_fences(text: &str) -> String {
+    let mut kept = String::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if !fenced {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
+/// The faults of one citing passage. What this guarantees, and no more: the
+/// passage cites the transport rule; it states none of the listed retired
+/// routes; outside the adapter's executable block it writes out no launch
+/// flag; no sentence that names tmux ranks it with a ranking word unless
+/// that sentence keeps tmux as the fallback for when no Herdr server is
+/// reachable; and no sentence ties auto mode to an edit, build or handoff.
 fn transport_faults(path: &str, text: &str) -> Vec<String> {
     let normal = normalized(text);
     let lower = normal.to_lowercase();
@@ -927,11 +967,36 @@ fn transport_faults(path: &str, text: &str) -> Vec<String> {
             faults.push(format!("{path} restates a retired route: {stale}"));
         }
     }
-    if path != ADAPTER {
-        for flag in POSTURE_FLAGS {
-            if normal.contains(flag) {
-                faults.push(format!("{path} restates a launch flag: {flag}"));
-            }
+    let prose = if path == ADAPTER {
+        normalized(&without_fences(text))
+    } else {
+        normal.clone()
+    };
+    for flag in POSTURE_FLAGS {
+        if prose.contains(flag) {
+            faults.push(format!("{path} restates a launch flag: {flag}"));
+        }
+    }
+    let prose = prose.to_lowercase();
+    for sentence in prose.split(['.', ';', '!', '?']) {
+        let ranked = RANKING.iter().any(|word| sentence.contains(word));
+        if sentence.contains("tmux") && ranked && !sentence.contains("no herdr server is reachable")
+        {
+            faults.push(format!(
+                "{path} ranks tmux without the no-Herdr-server condition: {}",
+                sentence.trim()
+            ));
+        }
+        let auto = sentence.contains("auto mode") || sentence.contains("auto-mode");
+        if auto
+            && ["edit", "build", "handoff"]
+                .iter()
+                .any(|w| sentence.contains(w))
+        {
+            faults.push(format!(
+                "{path} ties auto mode to an edit or build: {}",
+                sentence.trim()
+            ));
         }
     }
     faults
@@ -952,14 +1017,24 @@ fn cross_family_transport_is_stated_once_and_cited_everywhere() {
             "Never `codex exec`, `claude -p` / `--print`, `grok -p` / `--single`",
             "| Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |",
             "| Codex | `--ask-for-approval never --sandbox danger-full-access` | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |",
-            "| Grok | `--always-approve` | `--permission-mode auto` |",
+            "| Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |",
             "The Codex builder posture is ADR-0075 D1",
+            "The Grok builder posture is ADR-0075 D3: `--always-approve --sandbox cf-guard-worktree`",
+            "until a canary proves both, building goes to a Claude or Codex seat",
+            "A Grok seat never launches with `--trust` from an agent",
+            "The caller never answers a consequential approval for the seat: it reports the seat as blocked",
             "The caller answers folder trust only for the task's own folder",
-            "It answers hook trust (ADR-0075, amendment of 2026-10-03) only",
-            "is byte-identical to the one at the pull\nrequest's target tip",
-            "The\ncaller never trusts a changed hook and never picks \"continue without\ntrusting\".",
-            "Skip a self-update offer.",
+            "and skips a self-update offer",
+            "At a hook trust prompt, the caller answers \"trust\" only in the narrow Codex case that [hook trust](hook-trust.md) defines",
+            "every Grok project trust prompt included, goes to the operator",
+            "its Herdr tab or, under the fallback, its tmux pane",
+            "The caller never trusts a changed or extra hook and never picks \"continue without trusting\".",
         ],
+    );
+    let transport = normalized(&read(TRANSPORT));
+    assert!(
+        !transport.contains("never stalls"),
+        "the transport rule overstates the permission modes"
     );
     let mut faults = Vec::new();
     for path in TRANSPORT_CITERS {
@@ -985,6 +1060,180 @@ fn a_restated_route_or_flag_fails_naming_it() {
         assert!(
             faults.iter().any(|fault| fault.contains(expected)),
             "{expected}: {faults:?}"
+        );
+    }
+}
+
+// PR 37 review round 1: a citation alone must not let a passage rank tmux
+// ahead of Herdr or send an edit handoff to auto mode.
+#[test]
+fn a_tmux_first_route_or_an_auto_mode_edit_handoff_fails_despite_a_citation() {
+    for (text, expected) in [
+        (
+            "See transport.md. Use tmux first; use Herdr only if tmux fails.",
+            "ranks tmux",
+        ),
+        (
+            "See transport.md. Claude edit handoffs use --permission-mode auto.",
+            "launch flag: --permission-mode",
+        ),
+        (
+            "See transport.md. Claude edit handoffs run in auto mode.",
+            "auto mode",
+        ),
+    ] {
+        let faults = transport_faults(HERDR, text);
+        assert!(
+            faults.iter().any(|fault| fault.contains(expected)),
+            "{text} -> {expected}: {faults:?}"
+        );
+    }
+    // The adapter's exemption covers its executable block only; the same
+    // flag in its prose fails.
+    let prose = transport_faults(
+        ADAPTER,
+        "See transport.md. Production launches `--permission-mode bypassPermissions`.\n\
+         ```sh\nclaude --permission-mode bypassPermissions\n```\n",
+    );
+    assert!(
+        prose
+            .iter()
+            .any(|fault| fault.contains("bypassPermissions")),
+        "{prose:?}"
+    );
+    let block_only = transport_faults(
+        ADAPTER,
+        "See transport.md.\n```sh\nclaude --permission-mode bypassPermissions\n```\n",
+    );
+    assert!(block_only.is_empty(), "{block_only:?}");
+}
+
+// ADR-0075 amendment of 2026-10-03, narrowed on PR 37 review: the caller
+// trusts hooks only for a Codex seat whose project hooks file is unchanged
+// from the fetched target tip and runs only CodeFlow's shipped commands.
+const HOOK_TRUST: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md";
+const SHIPPED_CODEX_HOOKS: &str = "assets/base/codex/hooks.json";
+
+/// Every hook command in the shipped Codex hooks file.
+fn shipped_codex_hook_commands() -> Vec<String> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(&read(SHIPPED_CODEX_HOOKS)).expect("shipped Codex hooks parse");
+    let mut commands = Vec::new();
+    for groups in parsed["hooks"].as_object().expect("hooks object").values() {
+        for group in groups.as_array().expect("hook groups") {
+            for hook in group["hooks"].as_array().expect("hook list") {
+                commands.push(hook["command"].as_str().expect("command").to_owned());
+            }
+        }
+    }
+    commands
+}
+
+/// Splits `codeflow hook <name> --contract <N>; <rest>` into its rest, or
+/// `None` when the command does not open with that exact shipped form.
+fn after_shipped_head(command: &str) -> Option<&str> {
+    let rest = command.strip_prefix("codeflow hook ")?;
+    let (name, rest) = rest.split_once(' ')?;
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return None;
+    }
+    let rest = rest.strip_prefix("--contract ")?;
+    let (contract, rest) = rest.split_once("; ")?;
+    if contract.is_empty() || !contract.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(rest)
+}
+
+/// A command is eligible only as a whole shipped form: the shipped head and
+/// then exactly the shared probe. Never by substring.
+fn is_shipped_hook_command(command: &str, probe: &str) -> bool {
+    after_shipped_head(command) == Some(probe)
+}
+
+fn shipped_probe() -> String {
+    let commands = shipped_codex_hook_commands();
+    assert!(
+        !commands.is_empty(),
+        "the shipped Codex hooks file has no command"
+    );
+    let probes: BTreeSet<String> = commands
+        .iter()
+        .map(|command| {
+            after_shipped_head(command)
+                .expect("a shipped command opens with the shipped head")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(probes.len(), 1, "shipped Codex hooks share one probe");
+    probes.into_iter().next().expect("one probe")
+}
+
+#[test]
+fn hook_trust_is_narrowed_to_unchanged_codeflow_hooks_in_codex() {
+    assert_contains(
+        HOOK_TRUST,
+        &[
+            "**The seat is Codex.** Codex's prompt grants hooks only.",
+            "so a Grok trust prompt always goes to the operator",
+            "A hook from inline config, a plugin, or a user or global file goes to the operator.",
+            "`tip=$(git rev-parse --verify \"origin/<target>^{commit}\")` resolves",
+            "the file is a regular file and not a symlink",
+            "`git show \"$tip:<path>\" | cmp - <path>` passes",
+            "A failed fetch, an unresolved target, a file missing at the tip or any byte of difference means no trust.",
+            "byte-identical to CodeFlow's managed copy under `.codeflow/.baseline/`",
+            "as a whole string, `codeflow hook <name> --contract <N>` followed by CodeFlow's shared missing-binary probe",
+            "`command -v codeflow` must resolve outside the repository",
+            "A command that runs a repository script, an interpreter or a relative path is never eligible",
+            "the check does not review hook behaviour",
+            "its Herdr tab, or its tmux pane under the fallback",
+            "never pick \"continue without trusting\"",
+        ],
+    );
+    // The retired claim is gone from the rule and its decision record.
+    for path in [
+        HOOK_TRUST,
+        TRANSPORT,
+        "docs/decisions/ADR-0075-agent-sessions-refuse-instead-of-prompting-under.md",
+    ] {
+        let text = normalized(&read(path));
+        assert!(
+            !text.contains("adds no unreviewed code"),
+            "{path} keeps the retired claim that matching definitions add no unreviewed code"
+        );
+    }
+    // Condition 4 holds for what CodeFlow ships: every shipped command is a
+    // shipped form whose probe runs no repository code.
+    let probe = shipped_probe();
+    for command in shipped_codex_hook_commands() {
+        assert!(is_shipped_hook_command(&command, &probe), "{command}");
+    }
+    for marker in [
+        "./", "../", "$PWD", "git ", "python", "node ", "bash ", "source ",
+    ] {
+        assert!(
+            !probe.contains(marker),
+            "the shipped probe runs repository or interpreter code: {marker}"
+        );
+    }
+}
+
+#[test]
+fn a_hook_that_runs_repository_code_is_never_a_shipped_form() {
+    let probe = shipped_probe();
+    for command in [
+        "sh ./check.sh".to_owned(),
+        "codeflow hook exec-guard --contract 3; ./check.sh".to_owned(),
+        format!("./target/debug/codeflow hook exec-guard --contract 3; {probe}"),
+        format!("codeflow hook exec-guard --contract 3; {probe}; python3 scripts/hook.py"),
+        format!("codeflow hook exec-guard --contract 3 && sh ./check.sh; {probe}"),
+        format!("bash -c 'codeflow hook exec-guard --contract 3; {probe}'"),
+        format!("codeflow hook ../exec-guard --contract 3; {probe}"),
+    ] {
+        assert!(
+            !is_shipped_hook_command(&command, &probe),
+            "accepted a hook that runs repository code: {command}"
         );
     }
 }

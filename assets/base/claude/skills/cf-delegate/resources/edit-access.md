@@ -4,7 +4,9 @@ Read this before any write-enabled handoff, on every lane.
 
 A delegate that edits works **only** inside a worktree on a feature branch,
 the same worktree-per-session discipline that binds every agent here. Start
-the seat with the worktree as its working directory: the Herdr tab's `cwd`
+the seat in the production and building posture of
+[cross-family transport](../../cf-model-orchestrator/resources/routing/transport.md),
+with the worktree as its working directory: the Herdr tab's `cwd`
 (`cf-herdr`), or `/codex:rescue` scoped to the worktree when the plugin
 fallback is in use. Let it commit conventionally.
 

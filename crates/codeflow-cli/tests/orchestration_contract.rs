@@ -1219,7 +1219,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         "the transport rule lost the Claude production launch contract"
     );
     for required in [
-        "Consult and no-edit review keep",
+        "of the cross-family transport posture table, written out in the launch below",
         "Make `autoMode.classifyAllShell` effective at user scope",
         "repeated `--settings` flags are not a supported composition mechanism",
     ] {

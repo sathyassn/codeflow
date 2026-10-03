@@ -29,9 +29,10 @@ grok --model <selector> --reasoning-effort <effort> <posture flags>
 
 The posture flags are the Grok row of
 [cross-family transport](routing/transport.md), which also rules out every
-headless form. Add `--sandbox <PROFILE>` when an OS sandbox is required. `grok --help` exposes
-the flag; the Grok Build user guide names `workspace` / `read-only` /
-`strict`. Profile names are VERIFY-ON-INSTALL against the installed CLI.
+headless form and holds the Grok builder's unqualified sandboxed route
+(ADR-0075 D3). `grok --help` exposes `--sandbox <PROFILE>`; the Grok Build
+user guide names `workspace` / `read-only` / `strict`. Profile names are
+VERIFY-ON-INSTALL against the installed CLI.
 
 ## Peer lanes
 

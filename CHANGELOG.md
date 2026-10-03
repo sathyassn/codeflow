@@ -88,10 +88,13 @@ erratum below, never an edit of the section.
   not, with its anti-hijack rules unchanged. The seats' launch flags are
   stated once, so an edit handoff to Claude now launches in the production
   posture instead of auto mode, and a new seat's first-run prompts are
-  named: the caller answers folder trust for the task's own folder, and
-  hook trust only when every hook file is byte-identical to the pull
-  request's target tip, otherwise the operator answers it; a self-update
-  offer is skipped. A long
+  named: the caller answers folder trust for the task's own folder; it
+  answers hook trust only for a Codex seat whose project hooks file is
+  unchanged from the fetched target tip and runs only CodeFlow's shipped
+  `codeflow hook` commands, and the operator answers every other hook
+  prompt and every Grok trust prompt; a self-update offer is skipped. A
+  Grok builder seat is marked not qualified until ADR-0075 D3's sandboxed
+  route is proven. A long
   Codex reply and its observed model and effort are read from the seat's
   session record. Review and consult briefs ask for one holistic pass over
   the whole unit and its blast radius, earlier findings being checks within
@@ -99,7 +102,10 @@ erratum below, never an edit of the section.
   --check delegates` no longer warns about a missing Codex plugin and now
   warns when `herdr` is missing, naming tmux as the fallback. Projects that
   relied on the plugin keep it as the fallback; to use the default route,
-  install Herdr.
+  install Herdr. Where a project customised these skills and its edits
+  overlap the new text, `codeflow update` leaves a `.new` proposal beside
+  the file; reconcile it so the project's routing prose agrees. "Any host"
+  adds no native Windows support: delegate state there still needs WSL2.
 
 <!-- codeflow:release-impact minor -->
 - **Claude sessions compact at half the context window by default.**

@@ -25,11 +25,15 @@ A cross-family review or consult in Herdr runs this way, and only this way:
 1. An interactive seat in its own `cf-` tab ("Create or resume" in the
    skill).
 2. Launched in its CLI's autonomous permission mode, the consult and review
-   row of the transport posture table, so it never stalls on an approval.
+   row of the transport posture table
+   (`cf-model-orchestrator/resources/routing/transport.md`). A prompt the mode still raises is
+   reported to the operator as a blocked seat, with its text; the caller
+   never answers a consequential approval for the seat.
 3. First-run prompts handled as the transport rule's "First-run prompts"
    section says: folder trust for the task's own folder only; hook trust
-   only when each hook file matches `git show <target-tip>:<path>` byte for
-   byte, otherwise the operator is told the seat is waiting in this tab.
+   only in its narrow Codex case (a Codex hooks file unchanged from the
+   fetched target tip and running only shipped `codeflow hook` commands),
+   otherwise the operator is told the seat is waiting in this tab.
 4. The brief follows the review brief contract in the orchestrator's
    `resources/quality/findings.md`: one holistic pass over the whole unit at
    one head, its blast radius included. It is delivered with `deliver.py`.

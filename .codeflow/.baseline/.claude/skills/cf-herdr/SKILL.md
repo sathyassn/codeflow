@@ -22,9 +22,9 @@ completion.
 ## When this skill applies
 
 1. Check the server: `herdr status server` reports `status: running`. If no
-   server is reachable, **stop driving Herdr**: say so, use `cf-delegate`'s
-   tmux lifecycle, the last fallback, and label that path **degraded**.
-   `HERDR_ENV=1` only marks a caller inside a Herdr pane.
+   server is reachable, **stop driving Herdr**: say so, take the fallback the
+   transport rule orders, and label that path **degraded**. `HERDR_ENV=1`
+   only marks a caller inside a Herdr pane.
 2. From a sandboxed host, the Herdr socket can sit outside the sandbox: run
    `herdr` through the session's permitted unsandboxed retry for a trusted
    installed tool, never by changing sandbox or permission settings.
@@ -125,9 +125,9 @@ A new seat can stop at folder trust, then project hook trust (Grok:
 `/hooks-trust` or `--trust`), or a self-update offer; delivery exits 5
 until they are answered. Folder trust:
 Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).
-Hook trust: only for hooks byte-identical to the target tip's; else tell
-the operator the seat waits. Skip a self-update offer. The transport
-rule's "First-run prompts" section is the authority.
+Hook trust: only in the transport rule's narrow Codex case; else tell the
+operator the seat waits in its tab. Skip a self-update offer. That rule's
+"First-run prompts" is the authority.
 
 ## Deliver a prompt
 

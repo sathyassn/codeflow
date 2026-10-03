@@ -35,13 +35,13 @@
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "d6ddd4c15b8d54132edaf8a4405a43f3ea87144d17b0a309488373893873b8c0",
+      "sha256": "a3729955f1bc480833abd65641a5fde747288d15721205dd9803a6cc0d33cbbd",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/edit-access.md": {
       "src": "claude/skills/cf-delegate/resources/edit-access.md",
       "ownership": "managed",
-      "sha256": "dfec19aed8cbbd20e1d41db77f64672498add3eeb236ef5ff90e6650444e2556",
+      "sha256": "55d55f781daaeb3372586c77098dcb9247a4e1489ff4a341883ef2f30318208d",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/lane-lifecycle.md": {
@@ -311,7 +311,7 @@
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
       "src": "agents/skills/cf-evaluate-model/resources/harness-evidence.md",
       "ownership": "managed",
-      "sha256": "bc57f923484ae5f563974e4d8aa88d4049fb65a277ff9a27771effaf5d6eb34a",
+      "sha256": "ec7d450acc954f607b200c744b43200980abe1750a1c276b1f4a0b87d14787c9",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harnesses.json": {
@@ -389,13 +389,13 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "70c9fe2f41c5cb3d5acacda3e6e49d1d686e4d45196e032248d39adce5eb49e1",
+      "sha256": "d0655c2b20bba759a1b5f9340af49c7b4a38d0f0f3603f636107d838b094476b",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "4197a9253bf735faaec3d09fe477e84ec278e920957ca809ef9f0841981ab754",
+      "sha256": "2774cb903070eb68de3d34fc6e5dcf6210eb28b32ee3deb8ec931b86c65d257e",
       "exec": false
     },
     ".agents/skills/cf-herdr/scripts/deliver.py": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "6c3d76e6c2b6b518ab428002bc1540dd18718ce6b66b3f21bb5f2f41cfd463b9",
+      "sha256": "e14d7f761759f7a191028a97dddaccfb6b889e6c96165eb460e2d78e91c0747c",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -491,7 +491,7 @@
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "fc6680bf73863c5be36b391ed754c4a59ba34b570ec3e73cb94d9dcf90f43d4f",
+      "sha256": "5462c96e7d0af85eea61faccc336f426434fafe53a1b35720c14bae36c69a080",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -620,6 +620,12 @@
       "sha256": "040c930b3054ddeff52a6214f623a44d07ffc80554de3a0ba39f4c9635876d7a",
       "exec": false
     },
+    ".agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md": {
+      "src": "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md",
+      "ownership": "managed",
+      "sha256": "0eb0941c8551d7656cc535a6756d8a2ae139f2fe8875b5b23d42711b2e3766a2",
+      "exec": false
+    },
     ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
       "ownership": "managed",
@@ -629,7 +635,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "7d107bff52c3764da6dd379d01198900c42b5abba3a76133c7588b4093390c4c",
+      "sha256": "d6a7f7b2414fc719bc124d5b89dbd9fa974e10d633f681a5bc2cd1b144162ca7",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -863,13 +869,13 @@
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "d6ddd4c15b8d54132edaf8a4405a43f3ea87144d17b0a309488373893873b8c0",
+      "sha256": "a3729955f1bc480833abd65641a5fde747288d15721205dd9803a6cc0d33cbbd",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/edit-access.md": {
       "src": "claude/skills/cf-delegate/resources/edit-access.md",
       "ownership": "managed",
-      "sha256": "dfec19aed8cbbd20e1d41db77f64672498add3eeb236ef5ff90e6650444e2556",
+      "sha256": "55d55f781daaeb3372586c77098dcb9247a4e1489ff4a341883ef2f30318208d",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/lane-lifecycle.md": {
@@ -1139,7 +1145,7 @@
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
       "src": "agents/skills/cf-evaluate-model/resources/harness-evidence.md",
       "ownership": "managed",
-      "sha256": "bc57f923484ae5f563974e4d8aa88d4049fb65a277ff9a27771effaf5d6eb34a",
+      "sha256": "ec7d450acc954f607b200c744b43200980abe1750a1c276b1f4a0b87d14787c9",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harnesses.json": {
@@ -1217,13 +1223,13 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "70c9fe2f41c5cb3d5acacda3e6e49d1d686e4d45196e032248d39adce5eb49e1",
+      "sha256": "d0655c2b20bba759a1b5f9340af49c7b4a38d0f0f3603f636107d838b094476b",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "4197a9253bf735faaec3d09fe477e84ec278e920957ca809ef9f0841981ab754",
+      "sha256": "2774cb903070eb68de3d34fc6e5dcf6210eb28b32ee3deb8ec931b86c65d257e",
       "exec": false
     },
     ".claude/skills/cf-herdr/scripts/deliver.py": {
@@ -1241,7 +1247,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "6c3d76e6c2b6b518ab428002bc1540dd18718ce6b66b3f21bb5f2f41cfd463b9",
+      "sha256": "e14d7f761759f7a191028a97dddaccfb6b889e6c96165eb460e2d78e91c0747c",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
@@ -1319,7 +1325,7 @@
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "fc6680bf73863c5be36b391ed754c4a59ba34b570ec3e73cb94d9dcf90f43d4f",
+      "sha256": "5462c96e7d0af85eea61faccc336f426434fafe53a1b35720c14bae36c69a080",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -1448,6 +1454,12 @@
       "sha256": "040c930b3054ddeff52a6214f623a44d07ffc80554de3a0ba39f4c9635876d7a",
       "exec": false
     },
+    ".claude/skills/cf-model-orchestrator/resources/routing/hook-trust.md": {
+      "src": "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md",
+      "ownership": "managed",
+      "sha256": "0eb0941c8551d7656cc535a6756d8a2ae139f2fe8875b5b23d42711b2e3766a2",
+      "exec": false
+    },
     ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
       "ownership": "managed",
@@ -1457,7 +1469,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "7d107bff52c3764da6dd379d01198900c42b5abba3a76133c7588b4093390c4c",
+      "sha256": "d6a7f7b2414fc719bc124d5b89dbd9fa974e10d633f681a5bc2cd1b144162ca7",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1751,7 +1763,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "b4e92fc3248faca935c0becc9605946568bc2712e6acc6c030caeeb58c848ebb",
+      "sha256": "45926077f01cd332dc314f9454e6fb40df2826c23e3fafe6d301bacc44ef6889",
       "exec": false
     },
     ".codex/hooks.json": {
