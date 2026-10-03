@@ -1,0 +1,11 @@
+id = "TSK-223"
+uid = "1775290b-3462-4b87-a278-3c33cc613c51"
+kind = "TSK"
+title = "local checks match hosted CI and exec-guard judges only what runs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T23:34:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
