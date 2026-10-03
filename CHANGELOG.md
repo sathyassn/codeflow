@@ -64,7 +64,8 @@ erratum below, never an edit of the section.
   materialized. `codeflow validate --docs` warns about an open task with
   no filled section and no path in its Description; the warning never
   blocks, has no policy key, and never reads a complete or cancelled
-  record. After `codeflow update`, an adopter's
+  record. It errs toward silence: anything that plausibly names a path,
+  Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
   `project-management/templates/` carries the new section.
 
 ### Changed

@@ -1141,6 +1141,68 @@ Criteria
         assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
     }
 
+    /// Review round 2 (PR 44): recognition is broad, so the advisory errs
+    /// toward silence: Windows paths, local link targets with a fragment
+    /// or query, a slash path in prose and common extensionless files all
+    /// name a path, while a URL still does not.
+    #[test]
+    fn windows_paths_link_fragments_and_extensionless_files_are_paths() {
+        let description = |text: &str| task_body(text, None);
+        let mut wrong = wrong_cases(
+            &[
+                "Updates `C:\\repo\\docs\\guide.md`.",
+                "Updates `docs\\guide.md`.",
+                "Updates C:/repo/docs/guide.md.",
+                "Updates `README`.",
+                "Updates CHANGELOG.",
+                "Updates [guide](docs/guide.md#usage).",
+                "Updates [guide](docs/guide.md?plain=1).",
+                "Moves the pages under docs/guides in place.",
+                "Adds a NOTICE file and AUTHORS.",
+            ],
+            false,
+            description,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "Links [the site](https://example.com/docs/guide.md#usage).",
+                "Reads the license terms and the readme words.",
+            ],
+            true,
+            description,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 2 (PR 44): only list items, paragraphs and fenced
+    /// blocks are entries, never headings, and a template placeholder is
+    /// seen before inline HTML is stripped.
+    #[test]
+    fn headings_and_placeholders_never_fill_the_deliverables_section() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let mut wrong = wrong_cases(
+            &[
+                "### Files",
+                "### Files\n\nTODO",
+                "- The <output>: <path>",
+                "### Files\n\n- [ ]",
+                "#### Outputs\n\n- TBD",
+                "- the guide: <path>",
+            ],
+            true,
+            section,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "### Files\n\n- the guide: `docs/guide.md`",
+                "### Decisions\n\nA decision record, home provisional until the docs tree is agreed.",
+            ],
+            false,
+            section,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
     /// Review round 1 (PR 44): an empty list or checklist item, a
     /// placeholder or the template's own entry form fills nothing; a
     /// substantive entry, provisional or not, does.

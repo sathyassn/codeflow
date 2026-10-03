@@ -336,25 +336,42 @@ pub fn has_section(body: &str, heading: &str) -> bool {
 
 /// Whether a task record names what it delivers (sathyassn/codeflow#40):
 /// its `## Deliverables` section has a substantive entry, or its
-/// `## Description` names a path. Both are read as Markdown: comments
-/// never count, and an empty list or checklist item, a placeholder such as
-/// `TODO`, or the template's own `<output>: <path>` form fills nothing.
+/// `## Description` names a path. Both are read as Markdown, and comments
+/// never count.
+///
+/// The warning this feeds is advisory, so the reading errs toward
+/// silence: anything that plausibly names a path counts, and only a
+/// section with no real entry fails. A token with `/` or `\` counts unless
+/// it is a URL, a version or a slash word such as and/or; a file name with
+/// an extension counts; a link target counts with its fragment and query
+/// removed; and common extensionless files (README, CHANGELOG, LICENSE and
+/// the like) count. In Deliverables, a heading is never an entry, and an
+/// empty or checkbox-only item, a placeholder such as `TODO`, or the
+/// template's `<output>` and `<path>` tokens fill nothing.
 #[must_use]
 pub fn names_deliverables(body: &str) -> bool {
     section_markdown(body, "## Deliverables").is_some_and(|text| has_entry(&text))
         || section_markdown(body, "## Description").is_some_and(|text| names_path(&text))
 }
 
-/// The Markdown of a section as [`scan`] reads it: hidden lines (comments)
-/// are blank, inline HTML is removed, and fenced lines stay as written.
+/// The Markdown of a section as written, with its comment lines blank;
+/// inline HTML stays, so a placeholder such as `<path>` is still seen.
 fn section_markdown(body: &str, heading: &str) -> Option<String> {
-    section(body, heading).map(|lines| {
-        lines
-            .into_iter()
-            .map(|line| line.visible)
+    let lines: Vec<&str> = body.lines().collect();
+    let scanned = scan(&lines);
+    let (start, end) = section_span(&scanned, heading)?;
+    Some(
+        (start + 1..end)
+            .map(|index| {
+                if scanned[index].kind == LineKind::Hidden {
+                    ""
+                } else {
+                    lines[index].trim_end_matches('\r')
+                }
+            })
             .collect::<Vec<_>>()
-            .join("\n")
-    })
+            .join("\n"),
+    )
 }
 
 /// Words that hold a place rather than name an output.
@@ -370,15 +387,24 @@ const PLACEHOLDERS: &[&str] = &[
 ];
 
 /// Whether a Deliverables section has one substantive entry: a list item,
-/// paragraph or fenced block with words other than placeholders.
+/// paragraph or fenced block, never a heading, with words other than
+/// placeholders.
 fn has_entry(markdown: &str) -> bool {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
     let mut entry = String::new();
     let mut filled = false;
+    let mut in_heading = false;
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
-            Event::Text(text) | Event::Code(text) => {
+            Event::Start(Tag::Heading { .. }) => {
+                filled |= is_entry(&entry);
+                entry.clear();
+                in_heading = true;
+            }
+            Event::End(TagEnd::Heading(_)) => in_heading = false,
+            _ if in_heading => {}
+            Event::Text(text) | Event::Code(text) | Event::InlineHtml(text) => {
                 entry.push_str(&text);
                 entry.push(' ');
             }
@@ -397,17 +423,29 @@ fn has_entry(markdown: &str) -> bool {
     filled || is_entry(&entry)
 }
 
+/// Whether one entry is substantive. The template's `<output>` and `<path>`
+/// tokens are looked for first, before any markup is stripped.
 fn is_entry(text: &str) -> bool {
     let lower = text.to_lowercase();
     if lower.contains("<output>") || lower.contains("<path>") {
         return false;
     }
-    let text = text.trim_start();
-    let text = ["[ ]", "[x]", "[X]"]
+    let mut visible = String::new();
+    let mut in_tag = false;
+    for c in text.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => visible.push(c),
+            _ => {}
+        }
+    }
+    let visible = visible.trim_start();
+    let visible = ["[ ]", "[x]", "[X]"]
         .iter()
-        .find_map(|checkbox| text.strip_prefix(checkbox))
-        .unwrap_or(text);
-    let words: Vec<String> = text
+        .find_map(|checkbox| visible.strip_prefix(checkbox))
+        .unwrap_or(visible);
+    let words: Vec<String> = visible
         .split_whitespace()
         .map(|word| {
             word.trim_matches(|c: char| !c.is_alphanumeric())
@@ -422,36 +460,18 @@ fn is_entry(text: &str) -> bool {
 }
 
 /// Whether a Description names a path, read from the parsed Markdown: a
-/// word of the text, a code span or a link destination, such as
-/// `crates/x.rs`, docs/guides/, AGENTS.md or `[the guide](docs/guide.md)`.
+/// word of the text, a code span or a link target.
 fn names_path(markdown: &str) -> bool {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
+    use pulldown_cmark::{Event, Options, Parser, Tag, TextMergeStream};
 
-    let mut in_code_block = false;
-    for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
-        let found = match event {
-            Event::Start(Tag::CodeBlock(_)) => {
-                in_code_block = true;
-                false
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                in_code_block = false;
-                false
-            }
-            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
-                is_path(&dest_url, true)
-            }
-            Event::Code(text) => text.split_whitespace().any(|word| is_path(word, true)),
-            Event::Text(text) => text
-                .split_whitespace()
-                .any(|word| is_path(word, in_code_block)),
-            _ => false,
-        };
-        if found {
-            return true;
+    TextMergeStream::new(Parser::new_ext(markdown, Options::empty())).any(|event| match event {
+        Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => {
+            let local = dest_url.split(['#', '?']).next().unwrap_or_default();
+            is_path(local)
         }
-    }
-    false
+        Event::Code(text) | Event::Text(text) => text.split_whitespace().any(is_path),
+        _ => false,
+    })
 }
 
 /// Slash words that are prose, never paths.
@@ -486,24 +506,24 @@ const DOMAINS: &[&str] = &[
 
 /// Files commonly named without an extension.
 const BARE_FILES: &[&str] = &[
+    "README",
+    "CHANGELOG",
+    "LICENSE",
+    "NOTICE",
+    "AUTHORS",
+    "CODEOWNERS",
     "Makefile",
     "Dockerfile",
     "Containerfile",
     "Justfile",
+    "Procfile",
     "Gemfile",
     "Rakefile",
-    "Procfile",
-    "LICENSE",
-    "CODEOWNERS",
 ];
 
-/// Whether one word names a path. A file name with an extension of any
-/// length, a known extensionless file, or a slash path with a file name or
-/// a trailing `/` count anywhere; in code, a slash path of two or more
-/// named segments counts too. A URL, an anchor, a version, a slash word
-/// such as and/or, a product such as Node.js and a host such as
-/// example.com never count, in code or out of it.
-fn is_path(raw: &str, code: bool) -> bool {
+/// Whether one word names a path, by the broad reading
+/// [`names_deliverables`] describes.
+fn is_path(raw: &str) -> bool {
     let mut word = raw
         .trim_start_matches(['(', '[', '{', '<', '"', '\''])
         .trim_end_matches([')', ']', '}', '>', '"', '\'', ',', ';', ':', '.', '!', '?']);
@@ -515,44 +535,43 @@ fn is_path(raw: &str, code: bool) -> bool {
             }
         }
     }
-    if word.is_empty() || word.contains(':') || word.starts_with('#') {
+    // A drive prefix such as `C:\` or `C:/` starts a Windows path.
+    let bytes = word.as_bytes();
+    let drive = bytes.len() > 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    let rest = if drive { &word[2..] } else { word };
+    // A URL, a scheme or an anchor is no path.
+    if rest.is_empty() || rest.contains(':') || rest.starts_with('#') {
         return false;
     }
-    let lower = word.to_lowercase();
+    let lower = rest.to_lowercase();
     if NOT_PATHS.contains(&lower.as_str()) || NOT_FILES.contains(&lower.as_str()) {
         return false;
     }
-    let unversioned = word.strip_prefix(['v', 'V']).unwrap_or(word);
+    let unversioned = rest.strip_prefix(['v', 'V']).unwrap_or(rest);
     if unversioned
         .chars()
-        .all(|c| c.is_ascii_digit() || matches!(c, '.' | '/' | '-'))
+        .all(|c| c.is_ascii_digit() || matches!(c, '.' | '/' | '\\' | '-'))
     {
         return false;
     }
-    if !word
-        .chars()
-        .all(|c| c.is_alphanumeric() || "./_-*~@+<>{}".contains(c))
-    {
-        return false;
+    if BARE_FILES.contains(&rest) {
+        return true;
     }
-    let segments: Vec<&str> = word.split('/').collect();
-    if segments.len() == 1 {
-        let host = word
-            .rsplit_once('.')
-            .is_some_and(|(_, tld)| DOMAINS.contains(&tld.to_lowercase().as_str()));
-        return BARE_FILES.contains(&word) || (names_file(word) && !host);
+    if rest.contains(['/', '\\']) {
+        return rest
+            .split(['/', '\\'])
+            .any(|segment| segment.chars().any(char::is_alphanumeric));
     }
-    let named = segments
-        .iter()
-        .filter(|segment| segment.chars().any(char::is_alphanumeric))
-        .count();
-    named > 0
-        && (segments.last().is_some_and(|last| names_file(last))
-            || word.ends_with('/')
-            || (code && named >= 2))
+    let host = rest
+        .rsplit_once('.')
+        .is_some_and(|(_, tld)| DOMAINS.contains(&tld.to_lowercase().as_str()));
+    names_file(rest) && !host
 }
 
-/// Whether a path segment is a file name with an extension: `guide.md`,
+/// Whether a word is a file name with an extension: `guide.md`,
 /// `a.markdown` or `.gitignore`, never an abbreviation such as e.g, a
 /// version such as 2.x, or a number.
 fn names_file(segment: &str) -> bool {
