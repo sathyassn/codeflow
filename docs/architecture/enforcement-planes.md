@@ -34,7 +34,11 @@ it.
   protected-base check live in the Claude layer and in CI, not in the hooks.
 - The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate token
   apply to the git-hook plane only. The git-guard never trusts them, because an
-  agent in a session cannot prove it is a human.
+  agent in a session cannot prove it is a human. In that plane they lift the
+  protected-branch commit, merge, push and local ref-update rules; they never
+  lift a force push or deletion of a protected branch, or the secret checks.
+  A protected branch moves only by a proven fast-forward: a push over a remote
+  tip that is not in the local repository is refused as a force push.
 - Host attribution has a fourth brake that is not a plane: the shipped Claude
   settings preset turns the host's own injection off at the source
   (`includeCoAuthoredBy`, `attribution`), so the `commit-msg` hook catches only
