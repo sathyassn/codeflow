@@ -144,6 +144,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_SECTION_MISSING", Runs),
     ("PR_TEMPLATE_REMNANT", Runs),
     ("PR_PRESENTATION", Runs),
+    ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
     ("CI_BASE_REFUSED", Runs),
@@ -780,7 +781,8 @@ fn clears_conflict_marker() {
 // Pull request bodies: edit the body, then `codeflow ci --pr-body-file`.
 // ---------------------------------------------------------------------------
 
-const BODY: &str = "## Summary\n\nAdds a thing.\n\nTask: TSK-001\n\n## Changes\n\n- one change\n\n\
+const BODY: &str =
+    "## Summary\n\nAdds a thing.\n\n- the thing\n\nTask: TSK-001\n\n## Changes\n\n- one change\n\n\
                     ## Testing\n\n- cargo test: 12 passed\n- Not tested: Windows.\n\n\
                     ## Reviews\n\nNone: pending review.\n\n## Release impact\n\n\
                     - Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n\
@@ -895,7 +897,7 @@ fn clears_pr_section_missing() {
     prove_body(
         "PR_SECTION_MISSING",
         DEFAULTS,
-        &BODY.replace("## Summary\n\nAdds a thing.\n\n", ""),
+        &BODY.replace("## Summary\n\nAdds a thing.\n\n- the thing\n\n", ""),
         BODY,
         "missing required section '## Summary'",
     );
@@ -926,6 +928,17 @@ fn clears_pr_presentation() {
         &BODY.replace("- Not tested: Windows.\n", ""),
         BODY,
         "has no Not tested: line",
+    );
+}
+
+#[test]
+fn clears_pr_summary_shape() {
+    prove_body(
+        "PR_SUMMARY_SHAPE",
+        DEFAULTS,
+        &BODY.replace("- the thing\n", "It also does more.\n"),
+        BODY,
+        "git.pr_summary",
     );
 }
 

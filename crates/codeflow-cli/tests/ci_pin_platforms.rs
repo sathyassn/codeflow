@@ -22,7 +22,7 @@ const END: &str = "# <<< codeflow pinned run";
 /// A pull request body in the shipped template's shape. GitLab passes the
 /// merge request description as `CODEFLOW_PR_BODY`; the other platforms read
 /// it from the same variable when a project supplies it.
-const BODY: &str = "## Summary\n\nAdds a file.\n\nTask: pin probe\n\n## Changes\n\n- add a file\n\n## Testing\n\nThe probe target passes.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new file.\n- Migration: none\n";
+const BODY: &str = "## Summary\n\nAdds a file.\n\n- a file\n\nTask: pin probe\n\n## Changes\n\n- add a file\n\n## Testing\n\nThe probe target passes.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new file.\n- Migration: none\n";
 
 #[derive(Clone, Copy, Debug)]
 enum Platform {

@@ -87,6 +87,8 @@ pub(super) fn resolve(
     let mut effective = git.clone();
     let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
+    let pr_summary = adoption::pr_summary_effective(raw, git);
+    effective.pr_summary = pr_summary.level;
     effective.pr_required_sections = adoption::mapped_sections(git, &git.pr_required_sections);
     effective.pr_code_sections = adoption::mapped_sections(git, &git.pr_code_sections);
 
@@ -99,7 +101,7 @@ pub(super) fn resolve(
     let profile = adoption::matching_profile(profiles, actor, branch).cloned();
     if let Some(p) = &profile {
         println!(
-            "codeflow ci: automation profile '{}' applies (actor '{actor}', branch '{branch}', read from the target side): branch naming and the commit message shape rules are skipped; classification: automation profile",
+            "codeflow ci: automation profile '{}' applies (actor '{actor}', branch '{branch}', read from the target side): branch naming, the commit message shape rules and the PR Summary shape are skipped; classification: automation profile",
             p.name
         );
         effective = adoption::apply_profile_exemptions(&effective);
@@ -115,7 +117,10 @@ pub(super) fn resolve(
         raw,
         git,
         &effective,
-        pr_sections,
+        Levels {
+            pr_sections,
+            pr_summary,
+        },
         profile.as_ref(),
         Ran { has_body, tracked },
     );
@@ -246,16 +251,28 @@ struct Ran {
     tracked: bool,
 }
 
+/// The levels adopter fit resolves before the profile applies, with their
+/// origins.
+#[derive(Clone, Copy)]
+struct Levels {
+    pr_sections: EffectiveLevel,
+    pr_summary: EffectiveLevel,
+}
+
 /// Print the effective level and origin of every check `codeflow ci` runs.
 fn print_levels(
     raw: &Result<Option<serde_json::Value>, String>,
     configured: &GitPolicy,
     effective: &GitPolicy,
-    pr_sections: EffectiveLevel,
+    levels: Levels,
     profile: Option<&AutomationProfile>,
     ran: Ran,
 ) {
-    let rows: [(&str, PolicyLevel, PolicyLevel); 10] = [
+    let Levels {
+        pr_sections,
+        pr_summary,
+    } = levels;
+    let rows: [(&str, PolicyLevel, PolicyLevel); 11] = [
         (
             "commit_format",
             configured.commit_format,
@@ -288,6 +305,7 @@ fn print_levels(
             configured.pr_release_impact,
             effective.pr_release_impact,
         ),
+        ("pr_summary", pr_summary.level, effective.pr_summary),
         (
             "work_records",
             configured.work_records_level(),
@@ -301,17 +319,17 @@ fn print_levels(
     ];
     for (key, level, applied) in rows {
         let runs = match key {
-            "pr_sections" | "pr_release_impact" => ran.has_body,
+            "pr_sections" | "pr_release_impact" | "pr_summary" => ran.has_body,
             "work_records" | "work_planning" => ran.tracked,
             _ => true,
         };
         if !runs {
             continue;
         }
-        let origin = if key == "pr_sections" {
-            pr_sections.origin
-        } else {
-            adoption::effective(raw, key, level).origin
+        let origin = match key {
+            "pr_sections" => pr_sections.origin,
+            "pr_summary" => pr_summary.origin,
+            _ => adoption::effective(raw, key, level).origin,
         };
         let skipped = match profile {
             Some(p) if applied != level => format!("; skipped by automation profile '{}'", p.name),
@@ -321,7 +339,7 @@ fn print_levels(
     }
     if ran.has_body && pr_sections.origin == LevelOrigin::Diagnosed {
         println!(
-            "codeflow ci: the PR-section check runs at warn while the kept PR template is diagnosed; decide in pr_section_mapping (accepted, refused or custom)"
+            "codeflow ci: the PR-section and Summary shape checks run at warn while the kept PR template is diagnosed; decide in pr_section_mapping (accepted, refused or custom)"
         );
     }
 }

@@ -123,7 +123,10 @@ fn body(root: &Path, task: &str) -> String {
             "Task: `TSK-NNN | EPC-NNN | <unit name>`",
             &format!("Task: {task}"),
         )
-        .replace("## Summary\n", "## Summary\n\nBuild the task.\n")
+        .replace(
+            "## Summary\n",
+            "## Summary\n\nBuild the task.\n\n- build the task\n",
+        )
         .replace("\n-\n", "\n- Build the task.\n")
         .replace(
             "- Revision and command:",
