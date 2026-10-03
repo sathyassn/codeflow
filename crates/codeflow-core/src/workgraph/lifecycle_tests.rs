@@ -539,18 +539,90 @@ fn epic_close_needs_every_task_terminal() {
     assert!(refusal(close_epic(&repo)).contains("every task terminal; open: TSK-001"));
 }
 
+/// R-33: a cancelled child never satisfies the epic's outcome. A criterion
+/// served only by cancelled tasks is proven by the epic's own block, as an
+/// unserved one is, and stays unverified without it (sathyassn/codeflow#25).
 #[test]
-fn an_epic_criterion_served_only_by_cancelled_tasks_is_unverified() {
+fn an_epic_criterion_served_only_by_cancelled_tasks_needs_the_epics_own_block() {
     let (repo, _) = project();
     let cancelled = task(
         "TSK-001",
         "cancelled",
         CRITERIA,
-        "- cancelled: replaced\n- scope: dropped",
+        "- cancelled: replaced\n- scope: moved to TSK-002",
     );
     repo.write(TASK_PATH, &cancelled);
     repo.commit("cancel");
     assert!(refusal(close_epic(&repo)).contains("served only by cancelled tasks"));
+
+    // A ticked checkbox is not evidence for it.
+    repo.write(
+        EPIC_PATH,
+        &epic(
+            "planning",
+            "",
+            "- [x] AC-1 When used, the system shall work.",
+        ),
+    );
+    repo.commit("tick the criterion");
+    assert!(refusal(close_epic(&repo)).contains("served only by cancelled tasks"));
+
+    // An own block that does not verify it proves nothing.
+    repo.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
+    repo.commit("untick");
+    let failed = StatusChange {
+        acceptance: Some(
+            block(&["AC-1"], "none | n/a")
+                .replace("verified | cargo test AC-1", "failed | not run"),
+        ),
+        ..change("complete")
+    };
+    let refused = refusal(set_status(repo.root(), RecordKind::Epic, "EPC-001", &failed).map(drop));
+    assert!(refused.contains("AC-1 failed"), "{refused}");
+
+    // The epic's own block verifying it closes the epic.
+    close_epic_with_block(&repo).unwrap();
+}
+
+/// A journey criterion served only by cancelled tasks needs the journey
+/// verified in the epic's own block.
+#[test]
+fn a_cancelled_only_journey_criterion_needs_the_journey_in_the_own_block() {
+    let repo = Repo::new();
+    repo.write(
+        EPIC_PATH,
+        &epic(
+            "planning",
+            "",
+            "- AC-1 When run on a fresh init, the system shall work (journey)",
+        ),
+    );
+    let criteria = "- AC-1 When run, the system shall work (serves EPC-001 AC-1)";
+    let closeout = "- cancelled: replaced\n- scope: moved to the epic's own evidence";
+    repo.write(TASK_PATH, &task("TSK-001", "cancelled", criteria, closeout));
+    repo.commit("plan and cancel");
+    let close = |journey: &str| {
+        let change = StatusChange {
+            acceptance: Some(block(&["AC-1"], journey)),
+            ..change("complete")
+        };
+        set_status(repo.root(), RecordKind::Epic, "EPC-001", &change).map(drop)
+    };
+    assert!(refusal(close("none | not run")).contains("`journey` must be `verified"));
+    close("verified | fresh init").unwrap();
+}
+
+#[test]
+fn an_epic_criterion_served_by_a_complete_task_beside_a_cancelled_one_closes() {
+    let (repo, _) = project();
+    let cancelled = task(
+        "TSK-001",
+        "cancelled",
+        CRITERIA,
+        "- cancelled: replaced\n- scope: moved to TSK-002",
+    );
+    repo.write(TASK_PATH, &cancelled);
+    repo.commit("cancel");
 
     let done = fenced(&block(&["AC-1", "AC-2"], "none | n/a"));
     repo.write(
