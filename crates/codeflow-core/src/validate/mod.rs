@@ -627,6 +627,8 @@ pub fn validate_task(
         });
     }
 
+    warns.extend(deliverables_warning(&data, &body_text));
+
     let repo_root = record_repo_root(path);
     errs.extend(awaiting_selection_errors(
         &data,
@@ -649,6 +651,23 @@ pub fn validate_task(
     }
 
     Ok((errs, warns))
+}
+
+/// An open task names what it delivers and where it goes; a closed record
+/// is history and never warns (sathyassn/codeflow#40).
+fn deliverables_warning(
+    data: &HashMap<String, serde_yaml::Value>,
+    body: &str,
+) -> Option<ValidationWarning> {
+    let open = matches!(
+        get_string_field(data, "status").as_str(),
+        "todo" | "blocked" | "in_progress"
+    );
+    (open && !crate::workgraph::record_text::names_deliverables(body)).then(|| ValidationWarning {
+        field: "deliverables".into(),
+        message: "open task names no deliverables: no filled `## Deliverables` section and no path in its Description".into(),
+        clearing: &crate::remedy::TASK_DELIVERABLES,
+    })
 }
 
 /// The repository root of a record under `project-management/`.
@@ -905,6 +924,9 @@ depends_on: []
 ## Description
 Some description
 
+## Deliverables
+- the change: `crates/codeflow-core/src/`
+
 ## Acceptance Criteria
 Some criteria
 "#
@@ -976,6 +998,297 @@ Criteria
         let (errs, warns) = validate_task(&path, &opts).unwrap();
         assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
         assert!(warns.is_empty(), "Expected no warnings, got: {warns:?}");
+    }
+
+    /// The deliverables warnings of a task with `status` whose body, from
+    /// `## Description` on, is `body` (sathyassn/codeflow#40).
+    fn deliverables_warnings(status: &str, body: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TSK-022.md");
+        let content = valid_task_content()
+            .replace("status: \"in_progress\"", &format!("status: \"{status}\""));
+        let (front, _) = content.split_once("## Description").unwrap();
+        std::fs::write(&path, format!("{front}{body}")).unwrap();
+        let (_, warns) = validate_task(&path, &ValidateOptions::default()).unwrap();
+        warns
+            .iter()
+            .filter(|warning| warning.message.contains("names no deliverables"))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn task_body(description: &str, deliverables: Option<&str>) -> String {
+        let section = deliverables
+            .map(|text| format!("## Deliverables\n\n{text}\n\n"))
+            .unwrap_or_default();
+        format!(
+            "## Description\n\n{description}\n\n{section}## Acceptance Criteria\n\n- AC-1 it works\n"
+        )
+    }
+
+    /// sathyassn/codeflow#40: an open task with no filled `## Deliverables`
+    /// section and no path in its Description warns; a template comment
+    /// alone fills nothing.
+    #[test]
+    fn an_open_task_that_names_no_deliverables_warns() {
+        let comment = "<!-- `- <output>: <path>`, such as `docs/guide.md` -->";
+        for status in ["todo", "blocked", "in_progress"] {
+            for body in [
+                task_body("Some description", None),
+                task_body("Some description", Some(comment)),
+                task_body(&format!("{comment}\nSome description"), Some("-")),
+            ] {
+                let warned = deliverables_warnings(status, &body);
+                assert_eq!(warned.len(), 1, "{status}: {body}\n{warned:?}");
+                assert!(warned[0].contains("`## Deliverables`"), "{warned:?}");
+            }
+        }
+    }
+
+    /// sathyassn/codeflow#40: a filled `## Deliverables` section, even a
+    /// provisional home, silences the warning.
+    #[test]
+    fn a_task_with_a_filled_deliverables_section_does_not_warn() {
+        for deliverables in [
+            "- the guide: `docs/guide.md`",
+            "- a decision record: provisional, decided by the structure review",
+            "```text\ndocs/\n  guide.md\n```",
+        ] {
+            let body = task_body("Some description", Some(deliverables));
+            assert!(
+                deliverables_warnings("todo", &body).is_empty(),
+                "{deliverables}"
+            );
+        }
+    }
+
+    /// sathyassn/codeflow#40: a path in the Description silences the
+    /// warning; a URL, a command or a word with a slash is no path.
+    #[test]
+    fn a_path_in_the_description_names_a_deliverable() {
+        for description in [
+            "Edits `crates/codeflow-core/src/lib.rs`.",
+            "Rewrites docs/cli.md for the new flag.",
+            "Adds a page under docs/guides/.",
+            "Updates `AGENTS.md` and nothing else.",
+            "Moves the policy (`.codeflow/policy.json`) default.",
+        ] {
+            let body = task_body(description, None);
+            assert!(
+                deliverables_warnings("todo", &body).is_empty(),
+                "{description}"
+            );
+        }
+        for description in [
+            "Choose one and/or the other.",
+            "See https://example.com/a/b.md for context.",
+            "Runs `codeflow validate --docs` on the result.",
+        ] {
+            let body = task_body(description, None);
+            assert_eq!(
+                deliverables_warnings("todo", &body).len(),
+                1,
+                "{description}"
+            );
+        }
+    }
+
+    /// Every case whose deliverables warning disagrees with `warns`, one
+    /// line each, so a run shows the result of every case at once.
+    fn wrong_cases(cases: &[&str], warns: bool, body: impl Fn(&str) -> String) -> Vec<String> {
+        cases
+            .iter()
+            .filter(|case| deliverables_warnings("todo", &body(case)).is_empty() == warns)
+            .map(|case| format!("{case:?} (expected warning: {warns})"))
+            .collect()
+    }
+
+    /// Review round 1 (PR 44): paths are read from the parsed Markdown, so
+    /// a link destination, emphasis, a double-backtick span, a bare file
+    /// name and a long extension all name a path, and a version, and/or or
+    /// a URL never does, in a code span or out of one.
+    #[test]
+    fn paths_are_read_from_the_markdown_and_non_paths_are_rejected() {
+        let description = |text: &str| task_body(text, None);
+        let mut wrong = wrong_cases(
+            &[
+                "Rewrites AGENTS.md.",
+                "Updates docs/a.markdown.",
+                "Edits [the guide](docs/guide.md).",
+                "Edits **docs/guide.md**.",
+                "Edits ``AGENTS.md``.",
+                "Edits docs/\u{65e5}\u{672c}\u{8a9e}.md.",
+                "Adds `.gitignore` entries.",
+                "Fixes `crates/codeflow-core/src/lib.rs:42`.",
+                "Moves code under `crates/codeflow-core` only.",
+                "Builds the Makefile target.",
+            ],
+            false,
+            description,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "Version `1.2/3`.",
+                "Choose `and/or`.",
+                "Plain 1.2/3 and and/or, e.g. for 3.1.0 or `v3.1.0`.",
+                "See https://example.com/a/b.md and <https://example.com/c.md>.",
+                "Links [the site](https://example.com/x.md) and [a heading](#notes).",
+                "Uses Node.js against example.com.",
+            ],
+            true,
+            description,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 2 (PR 44): recognition is broad, so the advisory errs
+    /// toward silence: Windows paths, local link targets with a fragment
+    /// or query, a slash path in prose and common extensionless files all
+    /// name a path, while a URL still does not.
+    #[test]
+    fn windows_paths_link_fragments_and_extensionless_files_are_paths() {
+        let description = |text: &str| task_body(text, None);
+        let mut wrong = wrong_cases(
+            &[
+                "Updates `C:\\repo\\docs\\guide.md`.",
+                "Updates `docs\\guide.md`.",
+                "Updates C:/repo/docs/guide.md.",
+                "Updates `README`.",
+                "Updates CHANGELOG.",
+                "Updates [guide](docs/guide.md#usage).",
+                "Updates [guide](docs/guide.md?plain=1).",
+                "Moves the pages under docs/guides in place.",
+                "Adds a NOTICE file and AUTHORS.",
+            ],
+            false,
+            description,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "Links [the site](https://example.com/docs/guide.md#usage).",
+                "Reads the license terms and the readme words.",
+            ],
+            true,
+            description,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 2 (PR 44): only list items, paragraphs and fenced
+    /// blocks are entries, never headings, and a template placeholder is
+    /// seen before inline HTML is stripped.
+    #[test]
+    fn headings_and_placeholders_never_fill_the_deliverables_section() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let mut wrong = wrong_cases(
+            &[
+                "### Files",
+                "### Files\n\nTODO",
+                "- The <output>: <path>",
+                "### Files\n\n- [ ]",
+                "#### Outputs\n\n- TBD",
+                "- the guide: <path>",
+            ],
+            true,
+            section,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "### Files\n\n- the guide: `docs/guide.md`",
+                "### Decisions\n\nA decision record, home provisional until the docs tree is agreed.",
+            ],
+            false,
+            section,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 3 (PR 44): an inline HTML comment never changes the
+    /// result. Each case is judged with and without a comment, and both
+    /// must match the expected result; a real `<output>` or `<path>` token
+    /// outside a comment still empties the entry.
+    #[test]
+    fn an_inline_comment_never_changes_the_deliverables_result() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let description = |text: &str| task_body(text, None);
+        let pairs: [(&str, &str, bool, bool); 7] = [
+            (
+                "- guide: `docs/guide.md`",
+                "- guide: `docs/guide.md` <!-- TODO: <path> -->",
+                false,
+                true,
+            ),
+            (
+                "- the guide",
+                "- the guide <!-- a\n  multi-line note -->",
+                false,
+                true,
+            ),
+            ("- TODO", "- TODO <!-- decision -> pending -->", true, true),
+            ("- [ ]", "- [ ] <!-- x > y -->", true, true),
+            ("- <path>", "- <path> <!-- note -->", true, true),
+            (
+                "- the <output>",
+                "- the <output> <!-- the guide -->",
+                true,
+                true,
+            ),
+            (
+                "Some description",
+                "Some description <!-- edits docs/guide.md -->",
+                true,
+                false,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (plain, commented, warns, in_section) in pairs {
+            let body: &dyn Fn(&str) -> String = if in_section { &section } else { &description };
+            wrong.extend(wrong_cases(&[plain, commented], warns, body));
+        }
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// Review round 1 (PR 44): an empty list or checklist item, a
+    /// placeholder or the template's own entry form fills nothing; a
+    /// substantive entry, provisional or not, does.
+    #[test]
+    fn empty_and_placeholder_deliverables_fill_nothing() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let mut wrong = wrong_cases(
+            &[
+                "1.",
+                "- [ ]",
+                "* [x]",
+                "TODO",
+                "- TBD",
+                "- <output>: <path>",
+                "- `<output>`: `<path>`",
+                "- `- <output>: <path>`",
+                "-\n-\n- ...",
+            ],
+            true,
+            section,
+        );
+        wrong.extend(wrong_cases(
+            &[
+                "- a decision record: provisional, decided by the structure review",
+                "- [ ] the guide: `docs/guide.md`",
+                "1. the research note, home provisional until the docs tree is agreed",
+            ],
+            false,
+            section,
+        ));
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
+    /// sathyassn/codeflow#40: a complete or cancelled record never warns, so
+    /// closed history stays quiet.
+    #[test]
+    fn a_closed_task_never_warns_about_deliverables() {
+        for status in ["complete", "cancelled"] {
+            let body = task_body("Some description", None);
+            assert!(deliverables_warnings(status, &body).is_empty(), "{status}");
+        }
     }
 
     /// TSK-103 AC-5: a join awaiting selection is a valid blocked record
