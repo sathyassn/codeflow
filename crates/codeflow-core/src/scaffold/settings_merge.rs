@@ -47,6 +47,22 @@ const COMMAND_PREFIX: &str = "codeflow ";
 /// keeps removed.
 pub const KEPT_REMOVAL: &str = "kept the project's removal of";
 
+/// The start of every report line about a malformed `env`.
+const ENV_MALFORMED: &str = "settings: \"env\" ";
+
+/// The wording of every report line about a shipped `env` key update did
+/// not add.
+const ENV_UNSET: &str = "stays unset";
+
+/// Whether a report line describes a standing condition that update reports
+/// on every run, even when the settings file does not change: a permission
+/// entry the project removed, a malformed `env`, or a shipped `env` key
+/// update did not add. Such lines name keys, never `env` values.
+#[must_use]
+pub fn is_standing_note(line: &str) -> bool {
+    line.contains(KEPT_REMOVAL) || line.starts_with(ENV_MALFORMED) || line.contains(ENV_UNSET)
+}
+
 fn is_codeflow_command(cmd: &str) -> bool {
     cmd == "codeflow" || cmd.starts_with(COMMAND_PREFIX)
 }
@@ -229,7 +245,10 @@ fn merge_env(
         .and_then(Value::as_object);
     let removed = |key: &str| shipped_before.is_some_and(|env| env.contains_key(key));
     let kept = |key: &str| {
-        format!("settings: kept env.{key} out; the project removed it after CodeFlow wrote it")
+        format!(
+            "settings: env.{key} {ENV_UNSET}; update does not restore a shipped key \
+             it wrote before"
+        )
     };
     match cur.get_mut("env") {
         None => {
@@ -248,10 +267,9 @@ fn merge_env(
         }
         Some(Value::Object(env)) => {
             if env.values().any(|value| !value.is_string()) {
-                report.push(
-                    "settings: \"env\" has a value that is not a string; left untouched"
-                        .to_string(),
-                );
+                report.push(format!(
+                    "{ENV_MALFORMED}has a value that is not a string; left untouched"
+                ));
                 return;
             }
             for (key, value) in inc_env {
@@ -262,8 +280,8 @@ fn merge_env(
                         }
                     }
                     None if baseline.is_none() => report.push(format!(
-                        "settings: did not add env.{key} to the project's own \"env\": \
-                         no recorded baseline shows whether the project removed it"
+                        "settings: env.{key} {ENV_UNSET}; no recorded baseline shows \
+                         whether the project removed it from its own \"env\""
                     )),
                     None if removed(key) => report.push(kept(key)),
                     None => {
@@ -274,7 +292,7 @@ fn merge_env(
             }
         }
         Some(_) => {
-            report.push("settings: \"env\" is not an object; left untouched".to_string());
+            report.push(format!("{ENV_MALFORMED}is not an object; left untouched"));
         }
     }
 }
@@ -902,8 +920,17 @@ mod tests {
             serde_json::json!({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"})
         );
         assert!(report.iter().any(|line| line
-            == "settings: kept env.CLAUDE_CODE_AUTO_COMPACT_WINDOW out; \
-                the project removed it after CodeFlow wrote it"));
+            == "settings: env.CLAUDE_CODE_AUTO_COMPACT_WINDOW stays unset; \
+                update does not restore a shipped key it wrote before"));
+        // The kept key is a standing note, reported on every update; the
+        // preserved value is not.
+        for line in &report {
+            assert_eq!(
+                is_standing_note(line),
+                line.contains("stays unset"),
+                "{line}"
+            );
+        }
         assert!(report
             .iter()
             .any(|line| line
@@ -937,7 +964,8 @@ mod tests {
         );
         assert!(report
             .iter()
-            .all(|line| line.contains("no recorded baseline shows whether")));
+            .all(|line| line.contains("no recorded baseline shows whether")
+                && is_standing_note(line)));
         assert_eq!(report.len(), 2);
 
         // An earlier release's preset is no record of what this project had.
@@ -974,6 +1002,7 @@ mod tests {
                 let expected: Value = serde_json::from_str(user).unwrap();
                 assert_eq!(env_of(&merged), expected["env"]);
                 assert_eq!(report, vec![line.to_string()]);
+                assert!(is_standing_note(line), "{line}");
             }
         }
     }

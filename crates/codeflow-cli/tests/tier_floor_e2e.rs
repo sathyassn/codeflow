@@ -1298,3 +1298,91 @@ fn update_brings_the_compaction_default_to_an_earlier_install() {
         );
     }
 }
+
+/// TSK-211 AC-2: a malformed `env` is reported on every update, even when
+/// nothing else in the settings changes, and is left exactly as it was. The
+/// report never prints an `env` value.
+#[test]
+fn update_reports_a_malformed_env_on_every_run_without_its_values() {
+    for (env, diagnostic) in [
+        (
+            serde_json::json!(["secret-array-value"]),
+            "\"env\" is not an object",
+        ),
+        (
+            serde_json::json!({"PROJECT_TOKEN": "secret-map-value", "PORT": 8080}),
+            "\"env\" has a value that is not a string",
+        ),
+    ] {
+        let (_tmp, root) = project();
+        init(&root, "--minimal");
+        let mut value = read_json(&root, CLAUDE_SETTINGS);
+        value["env"] = env.clone();
+        write_json(&root, CLAUDE_SETTINGS, &value);
+        let before = read(&root, CLAUDE_SETTINGS);
+
+        for attempt in 1..=2 {
+            let report = update(&root);
+            assert!(
+                report.contains(diagnostic),
+                "update {attempt} did not report the malformed env {env}:\n{report}"
+            );
+            assert!(
+                !report.contains("secret-array-value")
+                    && !report.contains("secret-map-value")
+                    && !report.contains("8080"),
+                "update {attempt} printed an env value:\n{report}"
+            );
+            assert_eq!(
+                read(&root, CLAUDE_SETTINGS),
+                before,
+                "update {attempt} touched a malformed env"
+            );
+        }
+    }
+}
+
+/// TSK-211 AC-2: with no recorded baseline, a project's own `env` gains
+/// neither shipped key, and every update names the keys it left unset,
+/// without printing the project's values.
+#[test]
+fn update_names_the_keys_it_did_not_add_without_a_baseline() {
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+    let mut value = read_json(&root, CLAUDE_SETTINGS);
+    value["env"] = serde_json::json!({"PROJECT_TOKEN": "secret-project-value"});
+    write_json(&root, CLAUDE_SETTINGS, &value);
+    std::fs::remove_file(root.join(CLAUDE_SETTINGS_BASELINE)).expect("drop the baseline");
+
+    let mut after_first = String::new();
+    for attempt in 1..=2 {
+        let report = update(&root);
+        for key in [
+            "env.CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            "env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+        ] {
+            assert!(
+                report.contains(key),
+                "update {attempt} did not name {key}:\n{report}"
+            );
+        }
+        assert!(
+            !report.contains("secret-project-value"),
+            "update {attempt} printed an env value:\n{report}"
+        );
+        assert_eq!(
+            read_json(&root, CLAUDE_SETTINGS)["env"],
+            serde_json::json!({"PROJECT_TOKEN": "secret-project-value"}),
+            "update {attempt} changed the project's env"
+        );
+        if attempt == 1 {
+            after_first = read(&root, CLAUDE_SETTINGS);
+        } else {
+            assert_eq!(
+                read(&root, CLAUDE_SETTINGS),
+                after_first,
+                "the second update was not a no-op"
+            );
+        }
+    }
+}
