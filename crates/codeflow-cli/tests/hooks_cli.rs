@@ -705,7 +705,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to five of PR 36 that
+/// The reviewers' exact commands from rounds two to six of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -762,6 +762,12 @@ const REVIEWER_REFUSALS: &[&str] = &[
     "env -C .codeflow sh -c 'rm policy.json'",
     "env -C .codeflow sh -c 'sed -i.bak s/a/b/ policy.json'",
     r#"cd "$(printf build)" && rm ../policy.json"#,
+    // Round six: writes from a directory filled in at run time, beside the
+    // reads allowed below.
+    r#"cd "$dir" && sed -i '' s/a/b/ policy.json"#,
+    r#"cd "$dir" && find . -name policy.json -delete"#,
+    r#"cd "$dir" && printf "%s\n" *.json | xargs rm"#,
+    r#"cd "$dir" && sed -f fix.sed README.md"#,
 ];
 
 /// On unix, where the fixture's `build/link` and `alias` point at the
@@ -816,6 +822,12 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "env -C build sh -c 'rm a.o'",
     r#"cd "$(printf build)" && rm -f a.o"#,
     "cd build && make clean | tee log.txt",
+    // Round six: reads from a directory filled in at run time, and a line
+    // of many directory moves, which the guard judges without stalling.
+    r#"cd "$(git rev-parse --show-toplevel)" && sed -n '1,5p' .codeflow/policy.json"#,
+    r#"cd "$dir" && find . -name "*.json" -print"#,
+    r#"cd "$dir" && printf "%s\n" *.json | xargs cat"#,
+    "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 
 /// Harmless operands of the linked worktree's root, which the per-checkout

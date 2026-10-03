@@ -980,17 +980,104 @@ const WRITING_PROGRAMS: &[&str] = &[
     "trash-put",
 ];
 
-/// Programs that can change paths named elsewhere on the line: in their
-/// input, a script or a file list.
-const LINE_FED_PROGRAMS: &[&str] = &["xargs", "parallel", "sed", "find"];
+/// A word as the guard shows it in a message: a command substitution the
+/// tokenizer cut out reads as `$(...)`.
+fn shown_word(word: &str) -> String {
+    word.replace([git_target::SUBSTITUTED, SUBSTITUTED_BARE], "$(...)")
+}
+
+/// The words a list of arguments holds, each split at blanks and shell
+/// operators as the file system reads them, so a `sed` script's `w FILE`
+/// yields `FILE`.
+fn words_of<'a>(args: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    args.into_iter()
+        .flat_map(|arg| {
+            let text = canonical_text(arg);
+            line_words(&text).map(str::to_string).collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// What a command does to paths when the guard cannot tell the directory
+/// it runs in (TSK-216 round 6).
+enum UnknownDirUse {
+    /// It only reads: a `find` whose actions change nothing, an `xargs` or
+    /// `parallel` running a read-only program, or a program that writes
+    /// no paths it is given.
+    Reads,
+    /// It can write, and these words could name what it writes.
+    Words(Vec<String>),
+    /// It can write through text the guard cannot see from here.
+    Uncertain(String),
+}
+
+/// Classify a command by what it changes before its words are read by
+/// name, with the same readings the checks from a known directory use:
+/// the `find` action checks, the read-only programs `xargs` and `parallel`
+/// run, and the `sed` read clearance.
+fn unknown_dir_use(name: &str, args: &[String], line: &str) -> UnknownDirUse {
+    let line_words_all = || {
+        let text = canonical_text(line);
+        line_words(&text).map(str::to_string).collect::<Vec<_>>()
+    };
+    match name {
+        "find" if !find_mutates(args) => UnknownDirUse::Reads,
+        "find" => UnknownDirUse::Words(line_words_all()),
+        "xargs" => match xargs_command(args) {
+            Some(command) if !read_only_program(command) => UnknownDirUse::Words(line_words_all()),
+            _ => UnknownDirUse::Reads,
+        },
+        "parallel" => match args.iter().position(|arg| !arg.starts_with('-')) {
+            Some(start) if read_only_program(&args[start..]) => UnknownDirUse::Reads,
+            _ => UnknownDirUse::Words(line_words_all()),
+        },
+        "sed" => sed_unknown_dir_use(args, line),
+        _ if WRITING_PROGRAMS.contains(&name) => UnknownDirUse::Words(words_of(args)),
+        _ => UnknownDirUse::Reads,
+    }
+}
+
+/// A `sed` from an unknown directory: the files it only reads are cleared
+/// as from anywhere else; its script, in-place files and option values are
+/// read by name, a script from its input by the rest of the line, and a
+/// relative script file it cannot see is uncertain.
+fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
+    let in_place = requests_in_place(args);
+    let gnu = sed_operands_in(args, &SED_OPTIONS);
+    let bsd = sed_operands_in(args, &BSD_SED_OPTIONS);
+    let read = |arg: &String| {
+        !in_place
+            && [&gnu, &bsd].iter().all(|operands| {
+                operands
+                    .iter()
+                    .any(|op| std::ptr::eq(op.as_ptr(), arg.as_ptr()) && op.len() == arg.len())
+            })
+    };
+    let mut words = words_of(args.iter().filter(|arg| !read(arg)));
+    for spec in SED_GRAMMARS {
+        for file in parse_options(args, spec).values_of('f', "--file") {
+            if matches!(file, "-" | "/dev/stdin") {
+                let mut elsewhere = line.to_string();
+                for arg in args.iter().filter(|arg| read(arg) && !arg.is_empty()) {
+                    elsewhere = elsewhere.replace(arg.as_str(), "");
+                }
+                words.extend(words_of(std::iter::once(&elsewhere)));
+            } else if !Path::new(file).is_absolute() {
+                return UnknownDirUse::Uncertain(format!(
+                    "its script file `{file}` lies where the guard cannot read it"
+                ));
+            }
+        }
+    }
+    UnknownDirUse::Words(words)
+}
 
 /// Where the guard cannot list every directory a command can run in, a
 /// path or glob judged from the directories it knows proves nothing
-/// (TSK-216 rounds 4 and 5). A command that changes files is refused when
-/// one of its words, or for a program fed from the rest of the line one of
-/// the line's words, could name an enforcement path from some directory
-/// (`cd "$d" && rm policy.json`, `printf '%s\n' ../alias/pol* | xargs rm`
-/// after an untracked move).
+/// (TSK-216 rounds 4 to 6). A command that changes files is refused when a
+/// word that could name what it writes could name an enforcement path from
+/// some directory (`cd "$d" && rm policy.json`); a command proven to only
+/// read passes (`cd "$d" && sed -n p policy.json`).
 fn unknown_dir_name_violation(
     tokens: &[String],
     level: PolicyLevel,
@@ -999,22 +1086,27 @@ fn unknown_dir_name_violation(
 ) -> Option<Violation> {
     let (program, args) = strip_launchers(tokens)?;
     let name = basename(program);
-    if !WRITING_PROGRAMS.contains(&name) {
-        return None;
-    }
-    let canonical = canonical_text(line);
-    let found = if LINE_FED_PROGRAMS.contains(&name) {
-        line_words(&canonical).find_map(|w| word_could_name(w).map(|p| (w.to_string(), p)))
-    } else {
-        args.iter()
-            .map(|a| canonical_text(a))
-            .find_map(|w| word_could_name(&w).map(|p| (w, p)))
-    }?;
-    let (word, p) = found;
+    let why = shown_word(why);
+    let words = match unknown_dir_use(name, args, line) {
+        UnknownDirUse::Reads => return None,
+        UnknownDirUse::Uncertain(what) => {
+            return Some(hook_integrity_violation(
+                level,
+                format!(
+                    "`{name}` runs where the guard cannot tell the directory ({why}), and {what}"
+                ),
+            ))
+        }
+        UnknownDirUse::Words(words) => words,
+    };
+    let (word, p) = words
+        .iter()
+        .find_map(|w| word_could_name(w).map(|p| (w, p)))?;
     Some(hook_integrity_violation(
         level,
         format!(
-            "`{name}` runs where the guard cannot tell the directory ({why}), and `{word}` could name `{p}` from there"
+            "`{name}` runs where the guard cannot tell the directory ({why}), and `{}` could name `{p}` from there",
+            shown_word(word)
         ),
     ))
 }
@@ -1309,39 +1401,51 @@ fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
             moves = true;
             if unresolved_word(target) {
                 unknown.get_or_insert_with(|| {
-                    format!("`{target}`, a directory filled in at run time")
+                    format!(
+                        "`{}`, a directory filled in at run time",
+                        shown_word(target)
+                    )
                 });
                 continue;
             }
-            let mut reached = Vec::new();
-            for dir in &dirs {
+            // Each new directory is checked against the limit as it is
+            // added, so the list never grows past it (TSK-216 round 6).
+            let before = dirs.len();
+            for at in 0..before {
+                let dir = dirs[at].clone();
                 let path = if target == "~" {
                     std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
                 } else {
-                    integrity_shell_path(target, dir)
+                    integrity_shell_path(target, &dir)
                 };
-                if target.contains(['*', '?', '[']) {
+                let reached = if target.contains(['*', '?', '[']) {
                     match expand_glob(&path) {
-                        Ok(found) => reached.extend(found),
+                        Ok(found) => found,
                         Err(GlobStop::TooManyEntries) => {
                             unknown.get_or_insert_with(|| {
                                 format!("`{target}`, a directory glob over too many entries")
                             });
+                            Vec::new()
                         }
                     }
                 } else {
-                    reached.push(path);
+                    vec![path]
+                };
+                for path in reached {
+                    if dirs.contains(&path) {
+                        continue;
+                    }
+                    if dirs.len() >= RUN_DIR_LIMIT {
+                        let why =
+                            format!("more than {RUN_DIR_LIMIT} directories the line can move to");
+                        return RunDirs {
+                            dirs,
+                            unknown: Some(why),
+                        };
+                    }
+                    dirs.push(path);
                 }
             }
-            for dir in reached {
-                if !dirs.contains(&dir) {
-                    dirs.push(dir);
-                }
-            }
-        }
-        if dirs.len() > RUN_DIR_LIMIT {
-            unknown.get_or_insert_with(|| "more directory changes than the guard follows".into());
-            break;
         }
     }
     if repeats && moves {
@@ -8238,6 +8342,47 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// Many directory moves on one line stop at the limit as they are
+    /// collected: the list never grows past it, the directory becomes
+    /// unknown, and the work stays small (TSK-216 round 6).
+    #[test]
+    fn test_run_dirs_stop_at_the_limit_while_collecting() {
+        let options: Vec<String> = (0..30).map(|n| format!("-C d{n}")).collect();
+        let line = format!("env {} true", options.join(" "));
+        let started = std::time::Instant::now();
+        let run = run_dirs(&expand_commands(&line), Path::new("/r"));
+        assert!(run.dirs.len() <= RUN_DIR_LIMIT, "{}", run.dirs.len());
+        assert!(run.unknown.is_some());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A refusal from a run-time directory names the substitution in
+    /// words, never the tokenizer's placeholder.
+    #[test]
+    fn test_unknown_dir_refusal_shows_the_substitution() {
+        let line = r#"cd "$(git rev-parse --show-toplevel)" && rm policy.json"#;
+        let run = run_dirs(&expand_commands(line), Path::new("/r"));
+        let why = run.unknown.expect("a run-time directory");
+        let v = unknown_dir_name_violation(
+            &shell_tokens("rm policy.json"),
+            PolicyLevel::Block,
+            line,
+            &why,
+        )
+        .expect("refused");
+        assert!(v.message.contains("$(...)"), "{}", v.message);
+        assert!(
+            !v.message
+                .contains([git_target::SUBSTITUTED, SUBSTITUTED_BARE]),
+            "{}",
+            v.message
+        );
     }
 
     /// From a directory the guard cannot determine, a word is read by its
