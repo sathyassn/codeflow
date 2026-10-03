@@ -296,10 +296,28 @@ pub fn resolve_work_target_checked(
             default_work_target(repo_root).map(|target| ResolvedWorkTarget { target, note: None })
         );
     };
-    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target, note: None }));
     let Ok(repo) = Repository::discover(repo_root) else {
-        return plain(target.to_string());
+        return Ok(Some(ResolvedWorkTarget {
+            target: target.to_string(),
+            note: None,
+        }));
     };
+    resolve_declared_target(&repo, target)
+}
+
+/// [`resolve_work_target_checked`] for a declared, non-empty target in an
+/// open repository: the one resolver `work start`, readiness and the
+/// acceptance binding share.
+///
+/// # Errors
+///
+/// Returns [`WorkStartError::DivergedTarget`] when the local branch and its
+/// configured upstream have diverged.
+pub(crate) fn resolve_declared_target(
+    repo: &Repository,
+    target: &str,
+) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target, note: None }));
     let Some(candidates) = target_reference_names(target) else {
         return plain(target.to_string());
     };
@@ -314,7 +332,7 @@ pub fn resolve_work_target_checked(
     let local_ref = format!("refs/heads/{target}");
     if candidates.first() == Some(&local_ref) {
         if let Some(local_id) = resolves(&local_ref) {
-            return local_or_upstream(&repo, target, &local_ref, local_id);
+            return local_or_upstream(repo, target, &local_ref, local_id);
         }
     }
     // Otherwise the first candidate that resolves: an exact full ref, or

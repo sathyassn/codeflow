@@ -2519,3 +2519,270 @@ fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
         );
     }
 }
+
+// TSK-220: a reviewed task pull request merges its moved target so the
+// release check sees the current base. The target is read as `work start`
+// reads it, so a local branch strictly behind its upstream never stands in
+// for the target the merge brought, and anything that is not a clean merge
+// of that target still blocks, naming the commit.
+
+/// A standalone task record (no epic) with [`OWN_JOURNEY`] criteria,
+/// targeting `target`.
+fn standalone(id: &str, status: &str, target: &str, closeout: &str) -> String {
+    task(id, status, OWN_JOURNEY, closeout)
+        .replace(
+            "epic_id: EPC-001\nstandalone_reason: null",
+            "epic_id: null\nstandalone_reason: \"one fix\"",
+        )
+        .replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        )
+}
+
+/// `git` in `dir`, whatever its exit status: a conflicted merge fails.
+fn git_try(dir: &Path, args: &[&str]) {
+    let _ = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+}
+
+/// A bare `origin` whose default branch is `main`, holding `main` and
+/// `line`, which the local `line` tracks.
+fn with_origin(root: &Path, line: &str) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare"]);
+    git(remote.path(), &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(
+        root,
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main:main"]);
+    git(root, &["push", "-q", "origin", &format!("{line}:{line}")]);
+    git(root, &["fetch", "-q", "origin"]);
+    git(
+        root,
+        &[
+            "branch",
+            "--set-upstream-to",
+            &format!("origin/{line}"),
+            line,
+        ],
+    );
+    remote
+}
+
+/// Move `origin/<line>` one commit ahead, writing `path`, and leave the
+/// local `line` strictly behind it, as a root checkout that never pulls is.
+fn advance_origin(root: &Path, line: &str, path: &str, content: &str) -> String {
+    let back = git_out(root, &["branch", "--show-current"]);
+    git(
+        root,
+        &["switch", "-q", "-c", "advance", &format!("origin/{line}")],
+    );
+    write(root, path, content);
+    let tip = commit(root, "feat: advance the target");
+    git(root, &["push", "-q", "origin", &format!("advance:{line}")]);
+    git(root, &["switch", "-q", &back]);
+    git(root, &["branch", "-q", "-D", "advance"]);
+    git(root, &["fetch", "-q", "origin"]);
+    assert_ne!(
+        git_out(root, &["rev-parse", line]),
+        git_out(root, &["rev-parse", &format!("origin/{line}")]),
+        "the local {line} stays behind"
+    );
+    tip
+}
+
+/// A standalone task targeting `main`, reviewed on its branch and completed
+/// there, with `origin/main` one commit ahead of the local `main`. Returns
+/// the repository, its remote and the reviewed commit.
+fn reviewed_standalone() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &standalone("TSK-001", "todo", "main", "Pending.\n"),
+    );
+    commit(root, "docs(records): a standalone task");
+    let remote = with_origin(root, "main");
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &standalone("TSK-001", "complete", "main", &valid_block(&reviewed)),
+    );
+    commit(root, "docs(records): complete the task");
+    (dir, remote, reviewed)
+}
+
+/// AC-1: a completed standalone task that merges its moved target cleanly
+/// keeps its binding, though the local `main` is behind `origin/main`;
+/// before TSK-220 the stale local branch made the merge look foreign. The
+/// verb binds the same way when the completion follows the merge.
+#[test]
+fn a_clean_merge_of_the_moved_target_keeps_the_binding() {
+    let (dir, _remote, reviewed) = reviewed_standalone();
+    let root = dir.path();
+    advance_origin(root, "main", "src/line.rs", "pub fn line() {}\n");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the target",
+            "origin/main",
+        ],
+    );
+    assert_passes(
+        &ci_on(root, "origin/main", BRANCH, "Task: TSK-001"),
+        "a clean merge of origin/main after the completion",
+    );
+
+    // The completion made after the merge, by the verb and then by CI.
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &standalone("TSK-001", "todo", "main", "Pending.\n"),
+    );
+    commit(root, "docs(records): a standalone task");
+    let _remote = with_origin(root, "main");
+    let reviewed_here = code_change(root, BRANCH, "pub fn work() {}\n");
+    advance_origin(root, "main", "src/line.rs", "pub fn line() {}\n");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the target",
+            "origin/main",
+        ],
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &standalone("TSK-001", "todo", "main", &valid_block(&reviewed_here)),
+    );
+    assert_passes(
+        &status_complete(root, "TSK-001"),
+        "the verb after a clean merge of origin/main",
+    );
+    commit(root, "docs(records): complete the task");
+    assert_passes(
+        &ci_on(root, "origin/main", BRANCH, "Task: TSK-001"),
+        "a completion after a clean merge of origin/main",
+    );
+    assert_ne!(reviewed, reviewed_here);
+}
+
+/// AC-2: after the review, a merge of the moved target with a hand edit, a
+/// conflicted merge resolved by hand, a regular commit and a merge of an
+/// unrelated branch each still block, naming the commit.
+#[test]
+fn anything_but_a_clean_target_merge_still_blocks_and_names_the_commit() {
+    for case in ["edited", "conflicted", "commit", "unrelated"] {
+        let (dir, _remote, reviewed) = reviewed_standalone();
+        let root = dir.path();
+        let conflicting = if case == "conflicted" {
+            "src/lib.rs"
+        } else {
+            "src/line.rs"
+        };
+        advance_origin(root, "main", conflicting, "pub fn line() {}\n");
+        let culprit = match case {
+            "edited" => {
+                git(root, &["merge", "--no-ff", "--no-commit", "origin/main"]);
+                write(root, "src/extra.rs", "pub fn unreviewed() {}\n");
+                commit(root, "chore: merge the target")
+            }
+            "conflicted" => {
+                git_try(root, &["merge", "--no-ff", "origin/main"]);
+                write(root, "src/lib.rs", "pub fn work() {}\npub fn line() {}\n");
+                commit(root, "chore: merge the target")
+            }
+            "commit" => {
+                git(
+                    root,
+                    &[
+                        "merge",
+                        "--no-ff",
+                        "-m",
+                        "chore: merge the target",
+                        "origin/main",
+                    ],
+                );
+                write(root, "src/extra.rs", "pub fn unreviewed() {}\n");
+                commit(root, "feat: change after the merge")
+            }
+            _ => {
+                git(root, &["switch", "-q", "-c", "feat/side", "main"]);
+                write(root, "src/side.rs", "pub fn side() {}\n");
+                commit(root, "feat: side work");
+                git(root, &["switch", "-q", BRANCH]);
+                git(
+                    root,
+                    &["merge", "--no-ff", "-m", "chore: merge side", "feat/side"],
+                );
+                head(root)
+            }
+        };
+        let result = ci_on(root, "origin/main", BRANCH, "Task: TSK-001");
+        let needles: Vec<String> = match case {
+            "edited" | "conflicted" => vec![format!(
+                "merge {culprit} is not a clean re-merge from the task's integration target"
+            )],
+            "commit" => vec![
+                format!("after the reviewed commit {reviewed}"),
+                format!("(commit {culprit}: src/extra.rs changed)"),
+            ],
+            _ => vec![
+                format!("after the reviewed commit {reviewed}"),
+                format!("merge {culprit} brings"),
+                "which is not on the first-parent line of the task's target main".to_string(),
+            ],
+        };
+        let mut all = vec!["work.acceptance_binding", "TSK-001"];
+        all.extend(needles.iter().map(String::as_str));
+        assert_blocks(&result, case, &all);
+    }
+}
+
+/// AC-3: a task landing into an integration line keeps working when the
+/// local line is behind `origin`'s: the task merges the moved line cleanly
+/// after its review, and the line is resolved as `work start` resolves it.
+#[test]
+fn a_task_into_a_moved_integration_line_keeps_the_binding() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let _remote = with_origin(root, LINE);
+    let reviewed = build(root, BRANCH, "src/one.rs");
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs(records): complete the task");
+    advance_origin(root, LINE, "src/line.rs", "pub fn line() {}\n");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the line",
+            &format!("origin/{LINE}"),
+        ],
+    );
+    assert_passes(
+        &ci_on(root, &format!("origin/{LINE}"), BRANCH, "Task: TSK-001"),
+        "a clean merge of the moved line",
+    );
+}

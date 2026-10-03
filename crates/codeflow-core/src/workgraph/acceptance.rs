@@ -296,10 +296,13 @@ pub(crate) fn bind_completion_with_amendment(
                     || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && !reopens_range {
-                binding_problem(repo, task, landing, reviewed, transport)
             } else {
-                binding_problem(repo, task, landing, reviewed, Transport::Direct)
+                let carried = if reopens_range {
+                    Transport::Direct
+                } else {
+                    transport
+                };
+                binding_problem(repo, task, landing, reviewed, carried, default_target)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -356,7 +359,9 @@ pub fn bind_epic_completion(
             block.reviewed
         )),
         Some(reviewed) => {
-            if let Some(problem) = reviewed_span_problem(repo, epic, landing, reviewed, false) {
+            if let Some(problem) =
+                reviewed_span_problem(repo, epic, landing, reviewed, Stacking::Never)
+            {
                 bind(problem);
             }
         }
@@ -527,32 +532,43 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
 
 /// Apply the one reviewed-span check, resolving task-landing transport only
 /// when the source and completion do not share a directly reviewed span.
+/// `default_target` is the target of a task that declares none.
 fn binding_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
     transport: Transport,
+    default_target: Option<Oid>,
 ) -> Option<String> {
     // A task landing's own span may stack (TSK-184): the task branch may
     // re-merge its integration target cleanly after the review. Direct
     // work, a reopening range and a completion bound at a head never stack.
-    let direct = reviewed_span_problem(
-        repo,
-        task,
-        landing,
-        reviewed,
-        transport == Transport::TaskLanding,
-    )?;
+    let stacking = if transport == Transport::TaskLanding {
+        Stacking::OnTarget(default_target)
+    } else {
+        Stacking::Never
+    };
+    let direct = reviewed_span_problem(repo, task, landing, reviewed, stacking)?;
     if transport == Transport::Direct {
         return Some(direct);
     }
     match task_landing(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
-        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, false)
+        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
             .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
         Landed::Refused(problem) => Some(problem),
     }
+}
+
+/// Whether a reviewed span may stack clean merges of the task's target.
+#[derive(Debug, Clone, Copy)]
+enum Stacking {
+    /// Direct work, a reopening range, a landed head and an epic.
+    Never,
+    /// A task pull request's own chain; the default target stands in for a
+    /// task that declares none.
+    OnTarget(Option<Oid>),
 }
 
 /// The only binding predicate: the reviewed commit is the source head or
@@ -566,7 +582,7 @@ fn reviewed_span_problem(
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
-    stacking: bool,
+    stacking: Stacking,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
         let outside: Vec<&str> = changed
@@ -597,11 +613,17 @@ fn reviewed_span_problem(
     // Reviewed stacking: after the review, the task branch may re-merge
     // its integration target cleanly, and its own commits may change only
     // this record's status and Closeout. Anything else is judged as the
-    // whole change from the reviewed commit to C.
-    let stack = if stacking {
-        stacked(repo, task, reviewed, at)
-    } else {
-        Stacked::No
+    // whole change from the reviewed commit to C, naming the commit that
+    // stopped the stack.
+    let stack = match stacking {
+        Stacking::OnTarget(default_target) => stacked(
+            repo,
+            task,
+            reviewed,
+            at,
+            task_target(repo, task, default_target),
+        ),
+        Stacking::Never => Stacked::No(None),
     };
     match stack {
         Stacked::Clean => {
@@ -617,8 +639,13 @@ fn reviewed_span_problem(
         Stacked::Unclean(merge) => Some(format!(
             "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
         )),
-        Stacked::No => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
-            format!("{problem} after the reviewed commit {reviewed}; review the result again")
+        Stacked::No(stop) => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+            let detail = match stop {
+                None => String::new(),
+                Some(Stop::Commit { commit, changed }) => format!(" (commit {commit}: {changed})"),
+                Some(Stop::Other(why)) => format!(" ({why})"),
+            };
+            format!("{problem} after the reviewed commit {reviewed}{detail}; review the result again")
         }),
     }
 }
@@ -631,37 +658,88 @@ enum Stacked {
     /// A merge from the integration target whose tree is not the clean
     /// re-merge of its parents.
     Unclean(Oid),
-    /// The reviewed commit is not on the chain, or a commit between changes
-    /// more than a clean re-merge or the record allows.
-    No,
+    /// The chain does not stack on the review, and where it stopped. `None`
+    /// where stacking does not apply.
+    No(Option<Stop>),
 }
 
-fn stacked(repo: &Repository, task: &RecordView, reviewed: Oid, at: Oid) -> Stacked {
-    let target = task_target(repo, task, None);
+/// Where a chain stopped stacking on the review.
+enum Stop {
+    /// A non-merge commit that changes more than this record's status and
+    /// Closeout, and what it changed.
+    Commit { commit: Oid, changed: String },
+    /// A merge from outside the target, or history that cannot be read.
+    Other(String),
+}
+
+/// Walk C's first-parent chain back to the reviewed commit. A merge whose
+/// second parent lies on the target tip's first-parent line, with the tree
+/// git's clean merge of its parents gives, brings only reviewed target work:
+/// it stacks. A non-merge commit stacks only by changing this record's
+/// status and Closeout. Anything else, or history that cannot be read,
+/// stops the stack and is named.
+fn stacked(
+    repo: &Repository,
+    task: &RecordView,
+    reviewed: Oid,
+    at: Oid,
+    target: Option<Oid>,
+) -> Stacked {
+    let line = declared_target(task).unwrap_or("the default target");
     let mut cursor = at;
     while cursor != reviewed {
+        let unreadable = || {
+            Stacked::No(Some(Stop::Other(format!(
+                "the history from {at} to the reviewed commit cannot be read at {cursor}"
+            ))))
+        };
         let Ok(commit) = repo.find_commit(cursor) else {
-            return Stacked::No;
+            return unreadable();
         };
         let Ok(parent) = commit.parent_id(0) else {
-            return Stacked::No;
+            return unreadable();
         };
-        if commit.parent_count() == 2 {
-            let from_target = target.is_some_and(|tip| {
-                commit
-                    .parent_id(1)
-                    .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
-            });
-            if !from_target {
-                return Stacked::No;
+        if !is_ancestor_or_same(repo, reviewed, parent) {
+            return Stacked::No(Some(Stop::Other(format!(
+                "{cursor} brings the reviewed commit through a parent other than its first, so the reviewed commit is not on the head's first-parent chain"
+            ))));
+        }
+        match commit.parent_count() {
+            1 => {
+                let changed = match blob_at(repo, cursor, &task.path) {
+                    None => Some(format!("{} was removed", task.path)),
+                    Some(content) => later_change(repo, &task.path, &content, parent, cursor),
+                };
+                if let Some(changed) = changed {
+                    return Stacked::No(Some(Stop::Commit {
+                        commit: cursor,
+                        changed,
+                    }));
+                }
             }
-            if !is_clean_remerge(repo, &commit).unwrap_or(false) {
-                return Stacked::Unclean(cursor);
+            2 => {
+                let Ok(side) = commit.parent_id(1) else {
+                    return unreadable();
+                };
+                let Some(tip) = target else {
+                    return Stacked::No(Some(Stop::Other(format!(
+                        "merge {cursor} cannot be checked against the task's target {line}, which does not resolve here"
+                    ))));
+                };
+                if !is_first_parent_ancestor(repo, side, tip) {
+                    return Stacked::No(Some(Stop::Other(format!(
+                        "merge {cursor} brings {side}, which is not on the first-parent line of the task's target {line}"
+                    ))));
+                }
+                if !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                    return Stacked::Unclean(cursor);
+                }
             }
-        } else if blob_at(repo, cursor, &task.path).is_none_or(|content| {
-            later_change(repo, &task.path, &content, parent, cursor).is_some()
-        }) {
-            return Stacked::No;
+            _ => {
+                return Stacked::No(Some(Stop::Other(format!(
+                    "merge {cursor} has more than two parents, so it is not a merge of the task's target {line}"
+                ))))
+            }
         }
         cursor = parent;
     }
@@ -825,18 +903,29 @@ fn later_change(
 }
 
 /// The tip of the line `task` belongs to: its declared integration target
-/// as a local or remote-tracking branch, or `default_target` when it
-/// declares none. A declared target that does not resolve is `None`.
+/// resolved as `work start` resolves it, or `default_target` when it
+/// declares none. A bare name reads the local branch, or its configured
+/// upstream when the local branch is strictly behind it, and `origin/<name>`
+/// where no local branch exists (a CI clone), so a stale local `main` never
+/// stands in for the target a pull request merged. A declared target that
+/// resolves nowhere, or whose local branch and upstream have diverged, is
+/// `None`.
 fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>) -> Option<Oid> {
-    match task
-        .integration_target
+    match declared_target(task) {
+        Some(target) => super::work_start::resolve_declared_target(repo, target)
+            .ok()
+            .flatten()
+            .and_then(|resolved| super::work_start::target_reference(repo, &resolved.target))
+            .map(|commit| commit.id()),
+        None => default_target,
+    }
+}
+
+fn declared_target(task: &RecordView) -> Option<&str> {
+    task.integration_target
         .as_deref()
         .map(str::trim)
         .filter(|target| !target.is_empty())
-    {
-        Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
-        None => default_target,
-    }
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
