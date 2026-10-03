@@ -158,7 +158,10 @@ as extra steps when your stack warrants:
   before this release and the secret-scan job runs a step of yours before
   the gitleaks step, `codeflow update` keeps it through the merge and warns
   about it on every run: move it after the gitleaks step or into another
-  job. gitleaks reads the whole history of HEAD, the base's included (on a
+  job. Update recognises the scan step by its shipped name, `gitleaks`,
+  with `TRUSTED_SHA` in its env; if you renamed it, update cannot check the
+  order and says on every run that the job's step order needs your review.
+  gitleaks reads the whole history of HEAD, the base's included (on a
   pull request, the pull request merged into its base; on a push, the
   pushed commit), with what each merge adds beyond its automatic result,
   files whose type changes and files git judges binary, which gitleaks'

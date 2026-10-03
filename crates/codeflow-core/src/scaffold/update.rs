@@ -260,48 +260,67 @@ const SECRET_SCAN_WORKFLOW: &str = "ci/codeflow-ci.yml";
 /// `GITHUB_ENV` or `GITHUB_PATH`, and one that runs the pull request's code
 /// lets the pull request hide its own leak. A 3-way merge keeps a step the
 /// project added before this protection shipped, so the step is kept as
-/// written and the warning stands until it moves.
+/// written and the warning stands until it moves. When the job has no step
+/// update recognises as the scan (a renamed scan step, say), it says the
+/// order needs a person's review instead of guessing.
 fn warn_steps_before_secret_scan(root: &Path, dest: &str, report: &mut Report) {
     for path in [dest.to_string(), format!("{dest}.new")] {
         let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
             continue;
         };
-        let steps = steps_before_secret_scan(&text);
-        if steps.is_empty() {
-            continue;
+        match scan_order(&text) {
+            ScanOrder::NotChecked => {}
+            ScanOrder::Checked(steps) if steps.is_empty() => {}
+            ScanOrder::Checked(steps) => report.warnings.push(format!(
+                "{path}: the secret-scan job runs {} before its gitleaks step. A step there can \
+                 set the scan's environment through GITHUB_ENV or GITHUB_PATH, and one that runs \
+                 the pull request's code lets the pull request hide a leak from the scan; move it \
+                 after the gitleaks step or into another job. Update kept it as you wrote it.",
+                steps.join(", ")
+            )),
+            ScanOrder::Unrecognized => report.warnings.push(format!(
+                "{path}: the secret-scan job has no step named `gitleaks` with TRUSTED_SHA in its \
+                 env, so update cannot check what runs before the scan; review the job's step \
+                 order by hand. A step before the scan can set its environment through GITHUB_ENV \
+                 or GITHUB_PATH, so move any step other than the checkout after the scan or into \
+                 another job."
+            )),
         }
-        report.warnings.push(format!(
-            "{path}: the secret-scan job runs {} before its gitleaks step. A step there can set \
-             the scan's environment through GITHUB_ENV or GITHUB_PATH, and one that runs the \
-             pull request's code lets the pull request hide a leak from the scan; move it after \
-             the gitleaks step or into another job. Update kept it as you wrote it.",
-            steps.join(", ")
-        ));
     }
 }
 
-/// The steps of a workflow's `secret-scan` job that run before its gitleaks
-/// step, other than `actions/checkout`, each named by its `name`, `uses` or
-/// first `run` line. Empty when the workflow does not parse (a conflict
-/// proposal with markers), has no such job, or has no step named `gitleaks`
-/// with `TRUSTED_SHA` in its env, as the shipped scan step has.
-fn steps_before_secret_scan(workflow: &str) -> Vec<String> {
+/// What update can tell about the steps a workflow's `secret-scan` job runs
+/// before its gitleaks step.
+#[derive(Debug, PartialEq, Eq)]
+enum ScanOrder {
+    /// The workflow does not parse (a conflict proposal with markers) or has
+    /// no `secret-scan` job: nothing to check.
+    NotChecked,
+    /// The job exists, but no step is the shipped scan step (named
+    /// `gitleaks`, with `TRUSTED_SHA` in its env), so its order needs a
+    /// person's review.
+    Unrecognized,
+    /// The steps before the scan other than `actions/checkout`, each named by
+    /// its `name`, `uses` or first `run` line; empty when there are none.
+    Checked(Vec<String>),
+}
+
+fn scan_order(workflow: &str) -> ScanOrder {
     use serde_yaml::Value;
     let Ok(doc) = serde_yaml::from_str::<Value>(workflow) else {
-        return vec![];
+        return ScanOrder::NotChecked;
     };
-    let Some(steps) = doc
-        .get("jobs")
-        .and_then(|jobs| jobs.get("secret-scan"))
-        .and_then(|job| job.get("steps"))
-        .and_then(Value::as_sequence)
-    else {
-        return vec![];
+    let Some(job) = doc.get("jobs").and_then(|jobs| jobs.get("secret-scan")) else {
+        return ScanOrder::NotChecked;
+    };
+    let Some(steps) = job.get("steps").and_then(Value::as_sequence) else {
+        return ScanOrder::Unrecognized;
     };
     let text = |step: &Value, key: &str| step.get(key).and_then(Value::as_str).map(str::to_string);
     // The scanner is the shipped step: named `gitleaks` and reading the
     // trusted commit from its env. A step that merely mentions gitleaks, such
-    // as a canary or an install, is never taken for it.
+    // as a canary or an install, is never taken for it, and a renamed scan
+    // step is not guessed at.
     let is_scan = |step: &Value| {
         text(step, "name").as_deref() == Some("gitleaks")
             && step
@@ -310,25 +329,27 @@ fn steps_before_secret_scan(workflow: &str) -> Vec<String> {
                 .is_some()
     };
     let Some(scan) = steps.iter().position(is_scan) else {
-        return vec![];
+        return ScanOrder::Unrecognized;
     };
-    steps[..scan]
-        .iter()
-        .filter(|step| {
-            !(text(step, "uses").is_some_and(|uses| uses.starts_with("actions/checkout@"))
-                && step.get("run").is_none())
-        })
-        .map(|step| {
-            let label = text(step, "name")
-                .or_else(|| text(step, "uses").map(|uses| format!("uses: {uses}")))
-                .or_else(|| {
-                    text(step, "run")
-                        .map(|run| format!("run: {}", run.lines().next().unwrap_or("").trim()))
-                })
-                .unwrap_or_else(|| "a step".to_string());
-            format!("`{label}`")
-        })
-        .collect()
+    ScanOrder::Checked(
+        steps[..scan]
+            .iter()
+            .filter(|step| {
+                !(text(step, "uses").is_some_and(|uses| uses.starts_with("actions/checkout@"))
+                    && step.get("run").is_none())
+            })
+            .map(|step| {
+                let label = text(step, "name")
+                    .or_else(|| text(step, "uses").map(|uses| format!("uses: {uses}")))
+                    .or_else(|| {
+                        text(step, "run")
+                            .map(|run| format!("run: {}", run.lines().next().unwrap_or("").trim()))
+                    })
+                    .unwrap_or_else(|| "a step".to_string());
+                format!("`{label}`")
+            })
+            .collect(),
+    )
 }
 
 /// The work-record migration (SPC-013 R-83): an existing project whose
@@ -1129,14 +1150,19 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 #[cfg(test)]
 mod tests {
     /// The shipped workflow and this repository's own run only the checkout
-    /// before the gitleaks step; a step added there is named, and a
-    /// conflict proposal that does not parse is left alone (TSK-210).
+    /// before the gitleaks step; a step added there is named, a renamed scan
+    /// step is reported as unrecognised, and a conflict proposal that does
+    /// not parse is left alone (TSK-210).
     #[test]
-    fn steps_before_secret_scan_names_only_added_steps() {
+    fn scan_order_names_only_added_steps() {
+        use super::{scan_order, ScanOrder};
+        let none = ScanOrder::Checked(vec![]);
+        let named =
+            |names: &[&str]| ScanOrder::Checked(names.iter().map(|n| (*n).to_string()).collect());
         let shipped = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
         let own = include_str!("../../../../.github/workflows/codeflow-ci.yml");
-        assert!(super::steps_before_secret_scan(shipped).is_empty());
-        assert!(super::steps_before_secret_scan(own).is_empty());
+        assert_eq!(scan_order(shipped), none);
+        assert_eq!(scan_order(own), none);
 
         let checkout = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
                         - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
@@ -1149,9 +1175,16 @@ mod tests {
             1,
         );
         assert_eq!(
-            super::steps_before_secret_scan(&added),
-            ["`setup`", "`uses: ./.github/actions/prepare`"]
+            scan_order(&added),
+            named(&["`setup`", "`uses: ./.github/actions/prepare`"])
         );
+        let renamed = added.replacen(
+            "      - name: gitleaks\n",
+            "      - name: Repository credential scan\n",
+            1,
+        );
+        assert_ne!(renamed, added);
+        assert_eq!(scan_order(&renamed), ScanOrder::Unrecognized);
         // A step that mentions gitleaks before the scan is listed, never
         // taken for the scan.
         let canary = shipped.replacen(
@@ -1163,14 +1196,18 @@ mod tests {
             1,
         );
         assert_eq!(
-            super::steps_before_secret_scan(&canary),
-            [
+            scan_order(&canary),
+            named(&[
                 "`run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"`",
                 "`setup`"
-            ]
+            ])
         );
         let conflicted = format!("<<<<<<< ours\n{added}=======\n{shipped}>>>>>>> theirs\n");
-        assert!(super::steps_before_secret_scan(&conflicted).is_empty());
+        assert_eq!(scan_order(&conflicted), ScanOrder::NotChecked);
+        assert_eq!(
+            scan_order("jobs:\n  gates:\n    runs-on: x\n"),
+            ScanOrder::NotChecked
+        );
     }
 
     /// `CodeFlow`'s release jobs live in its own `codeflow-release.yml`, not

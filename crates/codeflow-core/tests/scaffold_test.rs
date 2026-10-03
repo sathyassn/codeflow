@@ -2057,3 +2057,53 @@ fn kept_steps_are_warned_about(steps: &str, named: &str) {
         "{named}: {after}"
     );
 }
+
+/// A project that renamed the scan step, with a step of its own before it,
+/// is told on every update that the step order needs a person's review:
+/// update cannot recognise the scan, so it neither guesses nor stays silent.
+#[test]
+fn update_says_a_renamed_scan_step_needs_review() {
+    const SHIPPED: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
+    const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
+                            - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
+    const SCAN: &str = "      - name: gitleaks\n";
+    isolate_git();
+    let (_p, root) = project_dir();
+    let (a1, _) = fixture_assets(false);
+    let earlier = SHIPPED.replace("GITLEAKS_VERSION=8.30.1", "GITLEAKS_VERSION=8.30.0");
+    std::fs::write(a1.path().join("base/ci/codeflow-ci.yml"), &earlier).unwrap();
+    scaffold::init(&DirSource::new(a1.path()), &root, &opts(None, "2.0.0")).unwrap();
+
+    let workflow = ".github/workflows/codeflow-ci.yml";
+    let current = read(&root, workflow);
+    assert_eq!(current.matches(SCAN).count(), 1);
+    let mine = current
+        .replacen(
+            CHECKOUT,
+            &format!("{CHECKOUT}      - name: setup\n        run: ./scripts/setup.sh\n"),
+            1,
+        )
+        .replacen(SCAN, "      - name: Repository credential scan\n", 1);
+    std::fs::write(root.join(workflow), &mine).unwrap();
+
+    let (a2, _) = fixture_assets(true);
+    std::fs::write(a2.path().join("base/ci/codeflow-ci.yml"), SHIPPED).unwrap();
+    let assets = DirSource::new(a2.path());
+    let advised = |report: &Report| {
+        report.warnings.iter().any(|warning| {
+            warning.starts_with(workflow)
+                && warning.contains("has no step named `gitleaks` with TRUSTED_SHA in its env")
+                && warning.contains("review the job's step order by hand")
+        })
+    };
+    let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, workflow), Action::Merged);
+    let merged = read(&root, workflow);
+    assert!(
+        merged.contains("name: Repository credential scan")
+            && merged.contains("./scripts/setup.sh")
+    );
+    assert!(advised(&report), "{report}");
+    let again = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert!(advised(&again), "{again}");
+}

@@ -159,7 +159,9 @@ erratum below, never an edit of the section.
   already runs a step of yours before the gitleaks step, move that step
   after the scan or into another job when you update:** the 3-way merge
   keeps it, and `codeflow update` now warns about it on every run until it
-  moves. gitleaks now reads the whole history of HEAD, the base's
+  moves. If you renamed the scan step, update cannot check the order and
+  says on every run that the job's step order needs your review. gitleaks
+  now reads the whole history of HEAD, the base's
   included (on a pull request, the pull request merged into its base; on
   a push, the pushed commit), instead of every fetched branch and tag, so
   an unrelated branch can no longer fail a pull request's scan. This
