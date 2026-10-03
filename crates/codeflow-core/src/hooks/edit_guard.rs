@@ -577,14 +577,19 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
                 .map_or((relative, false), |prefix| (prefix, true))
         })
         .collect();
-    let mut ancestor_bases = vec![repo.commondir().to_path_buf()];
+    // Each protected path carries the base its ancestors must lie in: the
+    // first component under its own checkout (`.claude`, `.codeflow`), or the
+    // common git directory. A checkout nested in another checkout's `.claude`
+    // (`.claude/worktrees/<name>`) is therefore not an ancestor of its own
+    // files by lying inside the outer `.claude`.
     let mut protected = Vec::new();
     for root in roots {
         for (relative, directory) in &patterns {
-            protected.push((root.join(relative), *directory));
-            if let Some(base) = Path::new(relative).components().next() {
-                ancestor_bases.push(root.join(base));
-            }
+            let base = Path::new(relative)
+                .components()
+                .next()
+                .map_or_else(|| root.clone(), |base| root.join(base));
+            protected.push((root.join(relative), *directory, base));
         }
     }
     for (name, directory) in [
@@ -593,13 +598,17 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
         ("packed-refs", false),
         ("config", false),
     ] {
-        protected.push((repo.commondir().join(name), directory));
+        protected.push((
+            repo.commondir().join(name),
+            directory,
+            repo.commondir().to_path_buf(),
+        ));
     }
     for resolve in [false, true] {
         let Ok(target) = normalized(target, resolve) else {
             continue;
         };
-        for (path, directory) in &protected {
+        for (path, directory, base) in &protected {
             let Ok(path) = normalized(path, resolve) else {
                 continue;
             };
@@ -607,9 +616,7 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
                 || (*directory && target.starts_with(&path))
                 || (ancestors
                     && path.starts_with(&target)
-                    && ancestor_bases.iter().any(|base| {
-                        normalized(base, resolve).is_ok_and(|base| target.starts_with(base))
-                    }))
+                    && normalized(base, resolve).is_ok_and(|base| target.starts_with(base)))
             {
                 return true;
             }

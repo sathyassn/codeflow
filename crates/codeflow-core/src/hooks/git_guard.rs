@@ -898,8 +898,12 @@ fn integrity_write_in_dirs(
 }
 
 /// The integrity path a single argument token names, when any. The token is
-/// normalized first so equivalent spellings match.
+/// normalized first so equivalent spellings match. An empty token names no
+/// path: the commands read `''` as a missing file, never as the cwd.
 fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    if token.is_empty() {
+        return None;
+    }
     let path = integrity_shell_path(token, cwd);
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
@@ -1215,7 +1219,10 @@ fn integrity_write_violation(
         }
     }
     if cmd == "sed" && requests_in_place(args) {
-        if let Some(p) = arg_integrity_path(args, cwd, payload_cwd) {
+        if let Some(p) = sed_file_operands(args)
+            .into_iter()
+            .find_map(|file| token_integrity_path(file, cwd, payload_cwd))
+        {
             return Some(hook_integrity_violation(
                 level,
                 format!("`sed -i` edits the integrity path `{p}`"),
@@ -4173,6 +4180,40 @@ const SED_OPTIONS: OptionSpec = OptionSpec {
     git_style: false,
 };
 
+/// BSD `sed` (macOS): `-i` always takes the backup suffix, attached or as
+/// the next token, so `sed -i '' s/a/b/ file` edits `file` with no backup.
+const BSD_SED_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('e', Arity::Value),
+        ('f', Arity::Value),
+        ('l', Arity::Value),
+        ('i', Arity::Value),
+    ],
+    long: SED_OPTIONS.long,
+    git_style: false,
+};
+
+/// The files an in-place `sed` may write. The command line is read both the
+/// GNU way and the BSD way, since the guard cannot tell which `sed` runs,
+/// and the files of either reading count. The script operand, the backup
+/// suffix and the values of `-e`, `-f` and `-l` are never files.
+fn sed_file_operands(args: &[String]) -> Vec<&str> {
+    let mut files = Vec::new();
+    for spec in [&SED_OPTIONS, &BSD_SED_OPTIONS] {
+        let parsed = parse_options(args, spec);
+        let scripted = parsed.has_short(&['e', 'f'])
+            || parsed.has_long("--expression")
+            || parsed.has_long("--file");
+        let skip = usize::from(!scripted);
+        for operand in parsed.operands.into_iter().skip(skip) {
+            if !files.contains(&operand) {
+                files.push(operand);
+            }
+        }
+    }
+    files
+}
+
 /// For commands where only the presence of a long flag matters and no option
 /// arity is modelled.
 const PLAIN_OPTIONS: OptionSpec = OptionSpec {
@@ -5966,9 +6007,42 @@ mod tests {
             "sed -Ei s/block/off/ .codeflow/policy.json",
             "sed --in-place s/block/off/ .codeflow/policy.json",
             "sed --in-place=.bak s/block/off/ .codeflow/policy.json",
+            // BSD sed takes the backup suffix as the next token.
+            "sed -i '' s/block/off/ .codeflow/policy.json",
+            "sed -i .bak s/block/off/ .codeflow/policy.json",
+            "sed -i '' -e s/block/off/ .codeflow/policy.json",
+            "sed -i -e s/block/off/ .codeflow/policy.json",
+            // GNU sed reads `''` as an empty script and the next token as a file.
+            "sed -i '' .codeflow/policy.json",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// TSK-216 AC-1 (issue 23): an in-place `sed` is judged by the files it
+    /// writes, never by its script, its backup suffix or an empty token.
+    #[test]
+    fn test_in_place_sed_judges_only_its_files() {
+        let p = default_policy();
+        assert_eq!(
+            sed_file_operands(&["-i".into(), String::new(), "s/a/b/".into(), "f".into()]),
+            ["s/a/b/", "f"],
+        );
+        assert_eq!(
+            sed_file_operands(&["-i".into(), "-e".into(), "s/a/b/".into(), "f".into()]),
+            ["f"],
+        );
+        for cmd in [
+            "sed -i '' s/a/b/ README.md",
+            "sed -i '' -e s/a/b/ README.md",
+            "sed -i .bak s/a/b/ README.md",
+            "sed -i -e s/.codeflow/x/ README.md",
+            "sed -i -f .codeflow/script.sed README.md",
+            "rm -f '' README.md",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
     }
 

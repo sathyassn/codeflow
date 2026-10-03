@@ -92,6 +92,17 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **An in-place `sed` on macOS is no longer read as an edit of the
+  enforcement files.** In a worktree under `.claude/worktrees/`, the git
+  guard refused `sed -i '' ...` on any file, and an empty operand of `rm`
+  and the other write commands, as an edit of the repository's enforcement
+  files. It now reads BSD sed's separate backup suffix, judges only the
+  files `sed` writes, never treats an empty argument as a path, and judges
+  a worktree nested in the main checkout's `.claude/` by its own files.
+  Writes to the worktree's own `.claude/settings.json` or
+  `.codeflow/policy.json` are still refused.
+
+<!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
   `dirty=true` in `codeflow --version` although they were built from the
   tagged source: the release job writes cargo-dist's manifest into the

@@ -307,6 +307,54 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
     assert!(stderr.contains("codeflow integrate"), "{stderr}");
 }
 
+/// TSK-216 AC-1 (issue 23): in a linked worktree under the main checkout's
+/// `.claude/worktrees/`, BSD `sed -i ''` and an empty operand of a write
+/// command name no enforcement file, while real writes to the worktree's own
+/// enforcement files are still refused. Replays the issue's table through
+/// the real binary.
+#[test]
+fn git_guard_allows_empty_operands_in_a_claude_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    init_repo(&root, "main");
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::write(root.join("README.md"), "a\n").unwrap();
+    git(&root, &["add", ".claude/settings.json", "README.md"]);
+    git(&root, &["commit", "-m", "chore: fixture settings"]);
+    write_agent_policy(&root, TARGETING_POLICY);
+    let worktree = root.join(".claude/worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&worktree)],
+    );
+    let scratch = shell_path(&tmp.path().join("x.txt"));
+    for command in [
+        format!("sed -i '' 's/a/b/' {scratch}"),
+        "sed -i '' 's/a/b/' README.md".to_string(),
+        format!("rm -f '' {scratch}"),
+        format!("sed -i 's/a/b/' {scratch}"),
+        format!("sed -i.bak 's/a/b/' {scratch}"),
+        "rm -f .".to_string(),
+    ] {
+        let out = guard_run(&command, &worktree);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{command}: {err}");
+        assert!(!err.contains("git.hook_integrity"), "{command}: {err}");
+    }
+    for command in [
+        "sed -i '' 's/block/off/' .codeflow/policy.json",
+        "sed -i '' -e 's/a/b/' .claude/settings.json",
+        "rm -rf .claude",
+        "rm -rf .codeflow",
+    ] {
+        let out = guard_run(command, &worktree);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("git.hook_integrity"), "{command}: {err}");
+    }
+}
+
 /// `path` as a bare word in a Bash command. Bash removes an unquoted
 /// backslash, so on Windows the word uses `/`, which git and Git Bash both
 /// read as the separator.
