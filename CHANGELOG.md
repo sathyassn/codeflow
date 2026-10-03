@@ -134,8 +134,10 @@ erratum below, never an edit of the section.
   to, and a glob is expanded from there with each match judged through
   symbolic links and registered worktrees, so `alias/pol*` with `alias`
   linked to `.codeflow` is refused. Where a directory is filled in at run
-  time, a writing command whose words could name an enforcement path by
-  their names alone, such as `policy.json` or `pol*`, is refused, while a
+  time, or a stack rotation or `popd` can reach a directory `pushd -n`
+  stacked, a writing command or write redirect whose words could name an
+  enforcement path by their names alone, such as `policy.json` or `pol*`,
+  is refused, while a
   command proven to only read passes: a plain `sed` read, a `find` that
   changes nothing, or `xargs` running a read-only program. The guard
   follows at most 64 such directories per line and treats more as

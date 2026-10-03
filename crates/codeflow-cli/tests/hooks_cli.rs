@@ -695,6 +695,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     {
         std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
         std::os::unix::fs::symlink(root.join(".codeflow"), root.join("alias")).unwrap();
+        std::os::unix::fs::symlink("../.codeflow", root.join("build/review-stack")).unwrap();
     }
     // More entries than one glob expansion reads, none of them protected.
     let many = root.join("build/many");
@@ -705,7 +706,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to eight of PR 36 that
+/// The reviewers' exact commands from rounds two to ten of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -779,8 +780,9 @@ const REVIEWER_REFUSALS: &[&str] = &[
     "sed -f - .codeflow/policy.json <<< 'w .codeflow/policy.json'",
 ];
 
-/// On unix, where the fixture's `build/link` and `alias` point at the
-/// policy folder: round two's `find -L` and round four's globs through a
+/// On unix, where the fixture's `build/link`, `build/review-stack` and
+/// `alias` point at the policy folder: round two's `find -L`, round ten's
+/// directory stack and round four's globs through a
 /// symbolic link.
 const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     "find -L build -name policy.json -exec sed -i '' 's/original/changed/' {} +",
@@ -792,6 +794,18 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     "env -C alias sh -c 'rm policy.json'",
     r"printf x | xargs sh -c 'cd alias && rm policy.json'",
     r"find build -name a.o -exec sh -c 'cd ../alias && rm policy.json' \;",
+    // Round ten: a relative directory `pushd -n` stacks, which bash resolves
+    // only when a rotation or `popd` reaches it, here after a `cd` into the
+    // folder whose `review-stack` points at the policy folder.
+    "pushd -n review-stack; cd build; pushd; printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; pushd; printf '%s\n' policy.json | xargs rm",
+    "pushd -n review-stack; cd build; pushd +1; printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd +1; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; pushd +1; printf '%s\n' policy.json | xargs rm",
+    "pushd -n review-stack; cd build; popd; printf x > policy.json",
+    "pushd -n review-stack; cd build; popd; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; popd; printf '%s\n' policy.json | xargs rm",
 ];
 
 /// Round three, finding 5, from the linked worktree under
@@ -844,6 +858,10 @@ const REVIEWER_ALLOWED: &[&str] = &[
     r"printf 'p\n' | sed -f - .codeflow/policy\.json",
     r#"cd "$dir" && sed -n p 'policy.json'"#,
     r#"cd "$dir" && sed -n p policy\.json"#,
+    // Round ten: `pushd -n` alone stays put, and a read after a rotation
+    // that can reach a stacked directory still passes.
+    "pushd -n .codeflow && printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd; sed -n p policy.json",
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 

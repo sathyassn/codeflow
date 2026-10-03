@@ -1144,17 +1144,36 @@ fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
 /// path or glob judged from the directories it knows proves nothing
 /// (TSK-216 rounds 4 to 6). A command that changes files is refused when a
 /// word that could name what it writes could name an enforcement path from
-/// some directory (`cd "$d" && rm policy.json`); a command proven to only
-/// read passes (`cd "$d" && sed -n p policy.json`).
+/// some directory (`cd "$d" && rm policy.json`), and so is a write
+/// redirect whose target could (`cd "$d" && printf x > policy.json`,
+/// TSK-216 round 10); a command proven to only read passes
+/// (`cd "$d" && sed -n p policy.json`).
 fn unknown_dir_name_violation(
     tokens: &[String],
     level: PolicyLevel,
     line: &str,
     why: &str,
 ) -> Option<Violation> {
+    let why = shown_word(why);
+    let targets: Vec<String> = redirect_write_targets(tokens)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let redirected = words_of(&targets);
+    if let Some((target, p)) = redirected
+        .iter()
+        .find_map(|w| word_could_name(w).map(|p| (w, p)))
+    {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "a redirect runs where the guard cannot tell the directory ({why}), and `{}` could name `{p}` from there",
+                shown_word(target)
+            ),
+        ));
+    }
     let (program, args) = strip_launchers(tokens)?;
     let name = basename(program);
-    let why = shown_word(why);
     let words = match unknown_dir_use(name, args, line) {
         UnknownDirUse::Reads => return None,
         UnknownDirUse::Uncertain(what) => {
@@ -1419,7 +1438,8 @@ struct RunDirs {
     /// `env -C` on the script can reach from a directory listed before it.
     dirs: Vec<PathBuf>,
     /// Why the list may miss one: a directory filled in at run time, a
-    /// program that can move the shell untracked, or a move that repeats.
+    /// program that can move the shell untracked, a move that repeats, or
+    /// a rotation that can reach a `pushd -n` directory.
     unknown: Option<String>,
 }
 
@@ -1427,15 +1447,17 @@ struct RunDirs {
 /// `start`. Each literal directory change is applied, in order, to every
 /// directory listed before it, so the list holds wherever the shell can be
 /// whatever runs, a pipeline member, a subshell or a shell body included.
-/// A directory `pushd -n` only puts on the stack joins the list once a
-/// stack rotation or `popd` can move there. It over-approximates: a command
-/// is judged from each listed directory.
+/// `pushd -n` alone moves nothing. Bash resolves the directory it stacks
+/// only when a rotation or `popd` reaches it, from wherever the shell is
+/// then, so once one is stacked a rotation or `popd` makes the directory
+/// unknown (TSK-216 round 10). It over-approximates: a command is judged
+/// from each listed directory.
 fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
     let mut run = RunDirs {
         dirs: vec![start.to_path_buf()],
         unknown: None,
     };
-    let mut stacked: Vec<PathBuf> = Vec::new();
+    let mut stacked = false;
     let mut repeats = false;
     let mut moves = false;
     for segment in segments {
@@ -1462,16 +1484,18 @@ fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
             continue;
         }
         let mut moves_to: Vec<&str> = launcher_effects(&tokens).0;
-        let mut stacks = None;
         match dir_move(name, args) {
             DirMove::To(target) => moves_to.push(target),
-            DirMove::Stack(target) => stacks = Some(target),
+            DirMove::Stack => stacked = true,
             DirMove::Rotate => {
                 moves = true;
-                for dir in std::mem::take(&mut stacked) {
-                    if !add_run_dir(&mut run, dir) {
-                        return run;
-                    }
+                // Without a `pushd -n` entry the stack holds only
+                // directories the shell has been in, which are listed.
+                if stacked {
+                    run.unknown.get_or_insert_with(|| {
+                        "a directory `pushd -n` stacked, which a rotation or `popd` moves to"
+                            .to_string()
+                    });
                 }
             }
             DirMove::Stay => {}
@@ -1481,19 +1505,6 @@ fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
             for dir in reach_dirs(target, &mut run) {
                 if !add_run_dir(&mut run, dir) {
                     return run;
-                }
-            }
-        }
-        if let Some(target) = stacks {
-            for dir in reach_dirs(target, &mut run) {
-                if stacked.len() >= RUN_DIR_LIMIT {
-                    run.unknown = Some(format!(
-                        "more than {RUN_DIR_LIMIT} directories the line can move to"
-                    ));
-                    return run;
-                }
-                if !stacked.contains(&dir) {
-                    stacked.push(dir);
                 }
             }
         }
@@ -1569,8 +1580,9 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
 enum DirMove<'a> {
     /// To its operand, or home for a bare `cd`.
     To(&'a str),
-    /// `pushd -n DIR`: DIR goes on the stack and the shell stays.
-    Stack(&'a str),
+    /// `pushd -n DIR`: DIR goes on the stack, unresolved, and the shell
+    /// stays.
+    Stack,
     /// A stack rotation (`pushd +1`, `pushd -1`, a bare `pushd`) or a
     /// `popd`: to a directory on the stack.
     Rotate,
@@ -1609,7 +1621,7 @@ fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
             return DirMove::Stay;
         }
         return if no_change {
-            DirMove::Stack(word)
+            DirMove::Stack
         } else {
             DirMove::To(word)
         };
@@ -1807,27 +1819,22 @@ fn redirect_integrity_path(
     cwd: &Path,
     payload_cwd: &Path,
 ) -> Option<&'static str> {
-    let mut i = 0;
-    while i < tokens.len() {
-        match redirect_target(&tokens[i]) {
-            Some(RedirectTarget::Attached(t)) => {
-                if let Some(p) = token_integrity_path(t, cwd, payload_cwd) {
-                    return Some(p);
-                }
-            }
-            Some(RedirectTarget::Next) => {
-                if let Some(p) = tokens
-                    .get(i + 1)
-                    .and_then(|n| token_integrity_path(n, cwd, payload_cwd))
-                {
-                    return Some(p);
-                }
-            }
-            None => {}
-        }
-        i += 1;
-    }
-    None
+    redirect_write_targets(tokens)
+        .into_iter()
+        .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
+}
+
+/// The files the write redirects in `tokens` write, attached to their
+/// operator (`>policy.json`) or the token after it (`> policy.json`).
+fn redirect_write_targets(tokens: &[String]) -> Vec<&str> {
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(i, token)| match redirect_target(token)? {
+            RedirectTarget::Attached(t) => Some(t),
+            RedirectTarget::Next => tokens.get(i + 1).map(String::as_str),
+        })
+        .collect()
 }
 
 fn rsync_dry_run(args: &[String]) -> bool {
@@ -8569,8 +8576,9 @@ mod tests {
     }
 
     /// A `find` primary's value and an `-exec` command's argument are never
-    /// actions, and `pushd -n` only stacks a directory, which a later
-    /// rotation can reach (PR 36 CI round).
+    /// actions, and `pushd -n` only stacks a directory; a later rotation or
+    /// `popd` can reach it, resolved from wherever the shell is then, so the
+    /// directory becomes unknown (PR 36 CI round, TSK-216 round 10).
     #[test]
     fn test_find_values_and_pushd_stack_are_read_as_written() {
         let words = |line: &str| shell_tokens(line)[1..].to_vec();
@@ -8581,18 +8589,40 @@ mod tests {
         let start = Path::new("/r");
         let run = run_dirs(&expand_commands("pushd -n sub && rm x"), start);
         assert_eq!(run.dirs, vec![PathBuf::from("/r")]);
-        let run = run_dirs(&expand_commands("pushd -n sub && pushd +1 && rm x"), start);
-        assert!(
-            run.dirs.contains(&PathBuf::from("/r/sub")),
-            "{:?}",
-            run.dirs
-        );
-        let run = run_dirs(&expand_commands("pushd -n sub; popd; rm x"), start);
-        assert!(
-            run.dirs.contains(&PathBuf::from("/r/sub")),
-            "{:?}",
-            run.dirs
-        );
+        assert!(run.unknown.is_none(), "{:?}", run.unknown);
+        for line in [
+            "pushd -n sub && pushd +1 && rm x",
+            "pushd -n sub; cd b; pushd; rm x",
+            "pushd -n sub; cd b; pushd -1; rm x",
+            "pushd -n sub; popd; rm x",
+            "pushd -n sub; popd +1; rm x",
+            "pushd -n sub | true; popd -n; rm x",
+        ] {
+            let run = run_dirs(&expand_commands(line), start);
+            assert!(run.unknown.is_some(), "{line}: {:?}", run.dirs);
+        }
+        for line in ["pushd +1 && rm x", "pushd b && popd && rm x", "pushd; rm x"] {
+            let run = run_dirs(&expand_commands(line), start);
+            assert!(run.unknown.is_none(), "{line}: {:?}", run.unknown);
+        }
+        // From there a write redirect is read by its target's name.
+        let judged = |cmd: &str| {
+            unknown_dir_name_violation(&shell_tokens(cmd), PolicyLevel::Block, cmd, "a stack")
+        };
+        for cmd in [
+            "printf x > policy.json",
+            "echo x >>policy.json",
+            "true &> pol*",
+        ] {
+            assert!(judged(cmd).is_some(), "{cmd}");
+        }
+        for cmd in [
+            "printf x > notes.md",
+            "make 2>/dev/null >&2",
+            "cat policy.json",
+        ] {
+            assert!(judged(cmd).is_none(), "{cmd}");
+        }
     }
 
     /// The files a `sed` only reads are dropped at their own positions in
