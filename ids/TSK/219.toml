@@ -1,0 +1,11 @@
+id = "TSK-219"
+uid = "d8520cb8-55fc-44b0-a063-0ab7c0dae991"
+kind = "TSK"
+title = "say plainly that a standalone task never uses a plan branch"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T14:14:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
