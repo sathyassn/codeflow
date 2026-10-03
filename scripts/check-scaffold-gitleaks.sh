@@ -16,15 +16,17 @@
 #      inline gitleaks:allow comment or an edited extended file that a pull
 #      request adds fails it, and the same exemption on the trusted commit
 #      passes; an unreadable trusted commit fails it before it scans; links
-#      the pull request plants are never written through or followed;
-#   4. this repository's own gitleaks step is the template's.
+#      the pull request plants are never written through or followed, and
+#      no Python module or .gitattributes it commits steers the scan;
+#   4. this repository's own gitleaks step is the template's, and in both
+#      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
 # test, so no network is needed; its pinned checksum is the Linux release's
 # and is not checked here.
 # Usage: check-scaffold-gitleaks.sh [gitleaks] [codeflow]
-# CODEFLOW_CI_TEMPLATE names another template to run, for example the one
-# from before TSK-210 to show the cases it fails; every case still runs and
-# each failure is listed at the end.
+# CODEFLOW_CI_TEMPLATE and CODEFLOW_CI_OWN name another template and own
+# workflow to check, for example earlier revisions to show the cases they
+# fail; every case still runs and each failure is listed at the end.
 set -eu
 # The finding lists below are word-split on purpose.
 # shellcheck disable=SC2086
@@ -36,6 +38,7 @@ GITLEAKS=$(absolute "$GITLEAKS")
 [ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-ci.yml}
+OWN=${CODEFLOW_CI_OWN:-$ROOT/.github/workflows/codeflow-ci.yml}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-gitleaks.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 FAILURES="$TMP/failures"
@@ -70,14 +73,34 @@ if [ -n "$CODEFLOW" ]; then
   done
 fi
 
-# The template's gitleaks step, whole. With the shipped template, it must
-# read the trusted commit through env, never interpolate it into the
-# script, and match this repository's own step.
-python3 - "$TEMPLATE" "$ROOT/.github/workflows/codeflow-ci.yml" "$TMP/step.sh" \
-  "${CODEFLOW_CI_TEMPLATE:+other}" <<'PY' >>"$FAILURES"
+# The template's gitleaks step, whole. It must read the trusted commit
+# through env, never interpolate it into the script, and match this
+# repository's own step. In both workflows the secret-scan job runs nothing
+# before it but the checkout: an earlier step that ran checkout code could
+# write GITHUB_ENV or GITHUB_PATH, and the scan would honour them.
+python3 - "$TEMPLATE" "$OWN" "$TMP/step.sh" <<'PY' >>"$FAILURES"
+import re
 import sys
 
-template, own, out, other = sys.argv[1:]
+template, own, out = sys.argv[1:]
+
+
+def before_scan(path):
+    """Problems with what the secret-scan job runs before its gitleaks step."""
+    lines = open(path, encoding="utf-8").read().split("\n")
+    start = lines.index("  secret-scan:")
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"  \S", lines[i])), len(lines))
+    job = lines[start:end]
+    if "      - name: gitleaks" not in job:
+        return [f"{path}: the secret-scan job has no gitleaks step"]
+    before = job[:job.index("      - name: gitleaks")]
+    steps = [line for line in before if line.startswith("      - ")]
+    problems = []
+    if steps != ["      - uses: actions/checkout@v6"]:
+        problems.append(f"{path}: the secret-scan job runs {steps} before gitleaks, not the checkout alone")
+    if any(line.strip().startswith(("run:", "shell:", "env:")) for line in before):
+        problems.append(f"{path}: the secret-scan job sets a run, shell or env before gitleaks")
+    return problems
 
 
 def step(path):
@@ -99,14 +122,22 @@ if '"$report"' not in script:
     raise SystemExit("the template's gitleaks step reads no report, so the "
                      "3.0.0 pipeline line fails every adopter's secret scan")
 open(out, "w", encoding="utf-8").write(script)
-if not other:
-    trusted = "          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
-    if env != ["        env:", trusted]:
-        print(f"step: the trusted commit is not passed as env {trusted.strip()!r}: {env}")
-    if "${{" in script:
-        print("step: the script interpolates an expression instead of reading env")
-    if step(own) != (env, script):
-        print("own workflow: .github/workflows/codeflow-ci.yml's gitleaks step differs from the template's")
+trusted = "          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
+if env != ["        env:", trusted]:
+    print(f"step: the trusted commit is not passed as env {trusted.strip()!r}: {env}")
+if "${{" in script:
+    print("step: the script interpolates an expression instead of reading env")
+if step(own) != (env, script):
+    print("own workflow: its gitleaks step differs from the template's")
+for path in (template, own):
+    for problem in before_scan(path):
+        print(f"job: {problem}")
+    # Nor does the step itself run anything from the checkout.
+    text = step(path)[1]
+    if re.search(r"python3(?! -I )", text):
+        print(f"step: {path}: a Python helper runs without -I, so the checkout is on its import path")
+    if re.search(r"""(^|[\s"'])(\./|scripts/)""", text, re.M):
+        print(f"step: {path}: the step runs a path from the checkout")
 PY
 if [ -s "$FAILURES" ]; then
   cat "$FAILURES" >&2
@@ -165,7 +196,8 @@ commit scaffold
 # "file:line" findings it must name, exactly. The step runs in $REPO with a
 # runner temp directory of its own. The trusted commit is $TRUSTED when set
 # (a pull request's base), else the tip (a push). Extra environment is
-# passed through STEP_ENV; MESSAGE is text the output must hold; NO_SCAN
+# passed through STEP_ENV; MESSAGE is text the output must hold, required
+# when the step must fail without a finding; NO_SCAN
 # says gitleaks must not have run; after_step checks the checkout before
 # it is restored.
 after_step() { :; }
@@ -202,6 +234,11 @@ if problems:
 PY
   ); then
     failed "$name" "$problem"
+  fi
+  # A failure with no finding must be the intended one, so an unrelated
+  # error cannot satisfy the case.
+  if [ "$status" -ne 0 ] && [ $# -eq 0 ] && [ -z "${MESSAGE:-}" ]; then
+    failed "$name" "the case expects a failure without a finding but names no diagnostic"
   fi
   if [ -n "${MESSAGE:-}" ] && ! grep -qF -- "$MESSAGE" "$TMP/$name.out"; then
     failed "$name" "the output does not say \"$MESSAGE\""
@@ -253,6 +290,7 @@ expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
 # A scan in which git fails reads no commit and exits 0 with an empty
 # report; the step fails it.
 STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
+MESSAGE="gitleaks did not complete a scan (exit 0, 0 commits read)"
 expect git-failure 1
 
 # Git that writes the whole history and then fails: commits are read and no
@@ -269,8 +307,10 @@ chmod +x "$TMP/failing-git/git"
 # It runs on the clean prose-only history, which otherwise passes.
 REPO="$TMP/prose-only"
 STEP_ENV="PATH=$TMP/fake-bin:$TMP/failing-git:$PATH"
+MESSAGE="gitleaks did not complete a scan"
 expect git-exit 1
 STEP_ENV=
+MESSAGE=
 
 # The same words in scanned text are not git's failure: a configuration
 # title, and file content gitleaks decodes, both reach the debug log, and a
@@ -346,7 +386,9 @@ STEP_ENV=
 # A configuration gitleaks cannot load fails the step; it never passes.
 printf '[extend\n' >"$REPO/.gitleaks.toml"
 commit "broken config"
+MESSAGE="unable to load gitleaks config"
 expect broken-config 1
+MESSAGE=
 
 # Exemptions come from the trusted commit (TSK-210). Each history starts
 # with a clean commit; a case named pr-* is a pull request on the commit
@@ -456,9 +498,10 @@ MESSAGE=
 
 # Without a readable trusted commit the step fails before gitleaks runs.
 new_repo no-base
-MESSAGE="refusing to scan"
 NO_SCAN=1
+MESSAGE="trusted commit 0123456789abcdef0123456789abcdef01234567 is not in the checkout; refusing to scan"
 on_base 0123456789abcdef0123456789abcdef01234567 absent-base 1
+MESSAGE="no trusted commit to read exemptions from; refusing to scan"
 on_base "" empty-base 1
 on_base origin/main ref-name-base 1
 MESSAGE=
@@ -495,6 +538,49 @@ after_step() {
 }
 on_base "$BASE" pr-links 1 fixtures/leak.txt:1
 after_step() { :; }
+
+# A Python module the pull request commits at the checkout's root is never
+# imported by the step's helpers. Each one marks that it ran and, given the
+# report, empties it and exits 0, which would hide the leak.
+mkdir "$TMP/shadow-marks"
+shadow() {
+  cat >"$REPO/$1.py" <<PY
+import sys
+with open("$TMP/shadow-marks/$1", "a") as mark:
+    mark.write("imported\n")
+if len(sys.argv) > 1 and sys.argv[1].endswith(".json"):
+    with open(sys.argv[1], "w") as report:
+        report.write("[]")
+    print("[]")
+    raise SystemExit(0)
+PY
+}
+after_step() {
+  marks=$(ls "$TMP/shadow-marks")
+  [ -z "$marks" ] || { echo "the step imported the checkout's" $marks; return 1; }
+}
+new_repo shadow-json
+shadow json
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "leak with a json module"
+on_base "$BASE" pr-shadow-json 1 leak.txt:1
+rm -f "$TMP/shadow-marks"/*
+new_repo shadow-modules
+for module in os re subprocess tomllib; do
+  shadow "$module"
+done
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "leak with stdlib modules"
+on_base "$BASE" pr-shadow-modules 1 leak.txt:1
+after_step() { :; }
+
+# A .gitattributes the pull request commits does not hide its changes from
+# git: attributes come from the trusted commit.
+new_repo attributes
+printf 'leak.txt -diff\n' >"$REPO/.gitattributes"
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit "leak marked -diff"
+on_base "$BASE" pr-attributes 1 leak.txt:1
 
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still

@@ -149,7 +149,12 @@ as extra steps when your stack warrants:
   an absolute path into the checkout. An inline `gitleaks:allow` comment
   counts only on a commit the trusted commit already holds. The step fails
   before it scans when the trusted commit is not in the checkout, and it
-  downloads gitleaks under the runner's temp directory. It then drops one
+  downloads gitleaks under the runner's temp directory. Nothing from the
+  checkout runs or steers the scan: its Python helpers run isolated, git
+  reads `.gitattributes` from the trusted commit (git 2.40 or later), and
+  no step before the scan runs code from the checkout, since such a step
+  could set the scan's environment. Add any new step to that job after
+  the scan. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

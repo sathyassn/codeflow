@@ -197,6 +197,16 @@ jobs:
       # file outside the checkout is read where it is, and
       # [extend] useDefault = true needs no file.
       #
+      # Nothing from the checkout runs or steers the scan. The Python
+      # helpers run isolated (python3 -I), so a module the pull request
+      # commits beside them is never imported. git reads .gitattributes from
+      # the trusted commit (GIT_ATTR_SOURCE, git 2.40 or later), so a
+      # pull request cannot mark its own files -diff to hide their changes.
+      # No step before this one runs code from the checkout: a step that
+      # did could write GITHUB_ENV or GITHUB_PATH for this one, so
+      # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
+      # this workflow's own env. Keep it that way when you add steps.
+      #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
       # pipeline workflow ("vulnerable/malicious deps"), which the
@@ -216,6 +226,10 @@ jobs:
           if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
+          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 40)) }'; then
+            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; refusing to scan"; exit 1
+          fi
+          export GIT_ATTR_SOURCE="$TRUSTED_SHA"
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -229,7 +243,7 @@ jobs:
           rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
           # needs one named, and each file that configuration extends.
-          python3 - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
+          python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
           import json
           import os
           import subprocess
@@ -372,7 +386,7 @@ jobs:
           # The report holds no line text, so an inline gitleaks:allow is read
           # from the commit that holds the finding, and only a commit the
           # trusted commit already holds counts.
-          held=$(python3 - "$report" "$TRUSTED_SHA" <<'PY'
+          held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
           import json
           import re
           import subprocess

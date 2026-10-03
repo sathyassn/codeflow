@@ -105,7 +105,11 @@ erratum below, never an edit of the section.
   checkout, when it does not hold an extended file, or when an extended
   file is named by an absolute path into the checkout. gitleaks is now
   downloaded and unpacked under the runner's temp directory, so a file or
-  link a pull request commits at that name is not written through.
+  link a pull request commits at that name is not written through. Nothing
+  from the checkout runs or steers the scan: its Python helpers run
+  isolated, git reads `.gitattributes` from the trusted commit (git 2.40 or
+  later), and no step before the scan runs code from the checkout. If you
+  add a step to the secret-scan job, add it after the scan.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
