@@ -213,11 +213,17 @@ jobs:
       # after a NUL byte would go unread. The scan names its own log
       # options: --remerge-diff shows only what each merge adds beyond its
       # automatic result, so a branch's commits are not reported twice; the
-      # diff filter keeps type changes; and --text shows every file as text.
+      # diff filter keeps type changes; --text shows every file as text; and
+      # no external diff or textconv filter rewrites what git shows.
       # gitleaks runs git from PATH, and the git it finds there drops the
       # "remerge" notes that --remerge-diff writes into a conflicted file's
       # header. gitleaks' patch parser does not know them and would name the
       # file b/<path>, so an exemption for a real b/ path could apply to it.
+      # That git also pins the patch format whatever the runner's git
+      # configuration says: the a/ and b/ prefixes, quoted names, no colour,
+      # the medium format with full hashes and the root commit's diff. With
+      # diff.noprefix, for one, gitleaks would drop each path's first
+      # directory, and an exemption for leak.txt would cover dir/leak.txt.
       # git cannot show what an octopus merge (three or more parents) adds,
       # so the step refuses one that the trusted commit does not hold; merge
       # the branches one at a time instead. A local stash, which git also
@@ -229,9 +235,14 @@ jobs:
       # tell apart. So before it scans, the step lists every path that a
       # commit the trusted commit does not hold adds, changes, renames or
       # copies, merges included, and refuses a name with a backslash, a
-      # double quote or a control character. Names with spaces or non-ASCII
-      # letters are read correctly and pass. gitleaks is not shown deleted
-      # files, so a pull request may delete such a file.
+      # double quote or a control character. A conflicted merge's header can
+      # also name a file either side renamed or deleted, the trusted side
+      # included, so for each such merge the list also holds every path that
+      # differs between a merge base and either parent. Names with spaces or
+      # non-ASCII letters are read correctly and pass. gitleaks is not shown
+      # deleted files, so a pull request that merges nothing may delete such
+      # a file; one that merges across a change to it is refused, and
+      # rebasing instead passes.
       #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
@@ -275,17 +286,34 @@ jobs:
           cat >"$trusted/bin/git" <<GIT
           #!/bin/bash
           set -o pipefail
+          pin=(-c core.quotePath=true -c diff.noprefix=false -c diff.mnemonicPrefix=false
+            -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false -c color.ui=false
+            -c color.diff=false -c format.pretty=medium -c log.date=default -c log.decorate=false
+            -c log.abbrevCommit=false -c log.showSignature=false -c log.showRoot=true)
           if [ "\$1" = -C ] && [ "\$3" = log ]; then
-            "$real_git" "\$@" | sed '/^remerge /d'
+            "$real_git" "\${pin[@]}" "\$@" | sed '/^remerge /d'
             exit
           fi
-          exec "$real_git" "\$@"
+          exec "$real_git" "\${pin[@]}" "\$@"
           GIT
           chmod +x "$trusted/bin/git"
+          export PATH="$trusted/bin:$PATH"
           if ! git log -z --format= --name-status --full-history --diff-filter=uxdb --remerge-diff \
-            --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/paths"; then
+            --no-ext-diff --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/paths" \
+            || ! git rev-list --merges --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/merges"; then
             echo "::error::cannot list the paths that commits the trusted commit does not hold change; refusing to scan"; exit 1
           fi
+          empty=$(git hash-object -t tree /dev/null)
+          while read -r merge; do
+            bases=$(git merge-base --all "$merge^1" "$merge^2") || bases=$empty
+            for base in $bases; do
+              for parent in "$merge^1" "$merge^2"; do
+                if ! git diff-tree -r -z --name-only "$base" "$parent" >>"$trusted/paths"; then
+                  echo "::error::cannot list the paths that merge $merge joins; refusing to scan"; exit 1
+                fi
+              done
+            done
+          done <"$trusted/merges"
           odd=$(python3 -I - "$trusted/paths" <<'PY'
           import sys
 
@@ -296,7 +324,7 @@ jobs:
           PY
           )
           if [ -n "$odd" ]; then
-            echo "::error::a commit the trusted commit does not hold has the path \"${odd}\", whose backslash, double quote or control character gitleaks cannot read reliably; rename it in every commit of the pull request; refusing to scan"; exit 1
+            echo "::error::a commit the trusted commit does not hold touches the path \"${odd}\", or a merge joins changes to it, and gitleaks cannot read its backslash, double quote or control character reliably; rename it, or rebase instead of merging; refusing to scan"; exit 1
           fi
           rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
@@ -424,8 +452,8 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
-          (cd "$trusted/tree" && PATH="$trusted/bin:$PATH" "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff --text" \
+          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
+            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?

@@ -160,8 +160,11 @@ as extra steps when your stack warrants:
   octopus merge adds, so the step refuses one the trusted commit does not
   hold; merge the branches one at a time. It also refuses a path with a
   backslash, a double quote or a control character in a commit the trusted
-  commit does not hold, since gitleaks cannot read such names reliably;
-  names with spaces or non-ASCII letters pass. It then drops one
+  commit does not hold, or on either side of a merge it does not hold,
+  since gitleaks cannot read such names reliably; rename the file, or rebase
+  instead of merging. Names with spaces or non-ASCII letters pass. The scan
+  pins git's patch format, so git configuration on the runner, such as
+  `diff.noprefix`, cannot move a finding to another path. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

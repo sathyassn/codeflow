@@ -20,10 +20,11 @@
 #      no Python module or .gitattributes it commits steers the scan; a
 #      secret added in a merge resolution or in a file that replaces a link
 #      is reported, as is one in a file git judges binary, under its own
-#      path; merges report nothing twice; an octopus merge the trusted
-#      commit does not hold, a path gitleaks cannot read reliably (a
-#      backslash, a double quote or a control character) in one, and a git
-#      older than 2.41 are refused; spaced and non-ASCII names pass;
+#      path, whatever git configuration the runner inherits; merges report
+#      nothing twice; an octopus merge the trusted commit does not hold, a
+#      path gitleaks cannot read reliably (a backslash, a double quote or a
+#      control character) in one or on either side of a merge in one, and
+#      a git older than 2.41 are refused; spaced and non-ASCII names pass;
 #   4. this repository's own gitleaks step is the template's, and in both
 #      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
@@ -747,6 +748,35 @@ printf 'main\nside\n%s\n' "$PLANTED" >"$REPO/f.txt"
 commit "resolve with a secret"
 on_base "$BASE" pr-conflict-path 1 f.txt:3
 
+# git configuration the runner sets does not change the patch gitleaks reads.
+# With diff.noprefix, gitleaks would drop dir/ and the trusted exemption for
+# a top-level leak.txt would cover dir/leak.txt.
+new_repo inherited-config
+printf 'leak.txt:generic-api-key:1\n' >"$REPO/.gitleaksignore"
+commit "exempt a top-level leak.txt"
+BASE=$(tip)
+mkdir "$REPO/dir"
+printf '%s\n' "$PLANTED" >"$REPO/dir/leak.txt"
+commit "a leak one directory down"
+inherit() { # STEP_ENV that sets each key=value as the runner's git configuration
+  count=0
+  STEP_ENV=
+  for pair in "$@"; do
+    STEP_ENV="$STEP_ENV GIT_CONFIG_KEY_$count=${pair%%=*} GIT_CONFIG_VALUE_$count=${pair#*=}"
+    count=$((count + 1))
+  done
+  STEP_ENV="GIT_CONFIG_COUNT=$count$STEP_ENV"
+}
+inherit diff.noprefix=true
+on_base "$BASE" inherited-noprefix 1 dir/leak.txt:1
+# The other settings that change the patch's prefixes, names, colour or
+# commit headers, together.
+inherit diff.noprefix=true diff.mnemonicPrefix=true diff.srcPrefix=x/ diff.dstPrefix=y/ \
+  core.quotePath=false color.ui=always color.diff=always format.pretty=oneline log.date=relative \
+  log.decorate=full log.abbrevCommit=true log.showSignature=true log.showRoot=false
+on_base "$BASE" inherited-config 1 dir/leak.txt:1
+STEP_ENV=
+
 # gitleaks' patch parser misreads some names that git quotes. A path with a
 # backslash, a double quote or a control character in a commit the trusted
 # commit does not hold is refused before gitleaks runs.
@@ -756,7 +786,7 @@ useDefault = true
 [[allowlists]]
 description = \"a real b/ directory\"
 paths = ['''^b/''']"
-ODD_NAME="gitleaks cannot read reliably; rename it in every commit of the pull request; refusing to scan"
+ODD_NAME="gitleaks cannot read its backslash, double quote or control character reliably; rename it, or rebase instead of merging; refusing to scan"
 new_repo backslash-name
 printf '%s\n' "$PLANTED" >"$REPO/leak\\"
 commit "a name that ends in a backslash"
@@ -802,6 +832,29 @@ rm -f "$REPO/new${NL}name.txt" "$REPO/orig.txt"
 printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/main.txt"
 commit "resolve with a secret"
 on_base "$BASE" pr-rename-newline 1
+# The same when the odd name is the trusted side's: main renames a file to a
+# name with two newlines, the pull request renames it plainly, and its merge
+# of main deletes both and puts the secret at the old name. The conflict's
+# header names the trusted file, and the trusted ^b/ allowlist would cover
+# the secret.
+new_repo trusted-rename-newline
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf '%s\n' "$ALLOW_B" >"$REPO/.gitleaks.toml"
+printf 'one\ntwo\n' >"$REPO/orig.txt"
+commit "a file and a b/ allowlist"
+FIRST=$(tip)
+git -C "$REPO" mv orig.txt "trusted${NL}123456${NL}x.txt"
+commit "rename it oddly on main"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b pr "$FIRST"
+git -C "$REPO" mv orig.txt side.txt
+commit "rename it plainly"
+as_canary merge -q "$MAIN" >/dev/null 2>&1 || true
+git -C "$REPO" rm -q --cached -r . >/dev/null
+rm -f "$REPO/side.txt" "$REPO/trusted${NL}123456${NL}x.txt"
+printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/orig.txt"
+commit "resolve with a secret at the old name"
+on_base "$BASE" pr-trusted-rename-newline 1
 NO_SCAN=
 MESSAGE=
 # An ordinary rename conflict is scanned, and its resolution's secret is
@@ -834,6 +887,20 @@ rm "$REPO/old\\"
 printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
 commit "delete one and leak"
 on_base "$BASE" trusted-odd-name 1 leak.txt:1
+# Nor does a merge of main whose sides leave such a name alone.
+new_repo odd-name-merge
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+printf 'trusted\n' >"$REPO/say\"hi\".txt"
+commit "an odd name"
+FIRST=$(tip)
+printf 'more\n' >>"$REPO/README.md"
+commit "later on main"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b pr "$FIRST"
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit leak
+merge "$MAIN" -m "merge main"
+on_base "$BASE" odd-name-merge 1 leak.txt:1
 # Names with spaces or non-ASCII letters pass, and a leak in one is
 # reported under its name.
 CAFE="caf$(printf '\303\251').txt"

@@ -145,8 +145,11 @@ erratum below, never an edit of the section.
   what an octopus merge adds, so the step refuses one the trusted commit
   does not hold; merge the branches one at a time. It also refuses a path
   with a backslash, a double quote or a control character in a commit the
-  trusted commit does not hold, since gitleaks cannot read such names
-  reliably; names with spaces or non-ASCII letters pass.
+  trusted commit does not hold, or on either side of a merge it does not
+  hold, since gitleaks cannot read such names reliably; rename the file, or
+  rebase instead of merging. Names with spaces or non-ASCII letters pass.
+  The scan pins git's patch format, so git configuration on the runner,
+  such as `diff.noprefix`, cannot move a finding to another path.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
