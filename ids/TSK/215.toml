@@ -1,0 +1,11 @@
+id = "TSK-215"
+uid = "cc11b45a-c982-46c6-b647-735e55d26621"
+kind = "TSK"
+title = "Grok sessions run CodeFlow's guards"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T06:51:06Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
