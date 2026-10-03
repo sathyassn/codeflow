@@ -308,18 +308,20 @@ from the run, never from a local branch or its upstream configuration: the
 base `codeflow ci` is given (in hosted CI, the pull request's base commit),
 and in the pre-push hook also its candidate authority, the destination
 default branch's advertised tip; a planning or line range also accepts its
-own line. Any other merge, a merge of more than two parents, a later commit
-beyond the record's status and Closeout, a history overlay (grafts or
-replace refs) or a shallow cut on the walked chain refuses, even when the
-net change cancels out, and the refusal names that commit. The status verb,
-which has no run base, previews the same rule against the task's target as
-`work start` anchors it. A task completed, reopened and completed again
-inside its own pull request may change its own criteria while its record is
-not on the target, though it still reviews its own range.
+own line, for the tasks that target that line. Any other merge, a merge
+of more than two parents, a later commit beyond the record's status and
+Closeout, a history overlay (grafts or replace refs) or a shallow cut on
+the walked chain refuses, even when the net change cancels out, and the
+refusal names that commit. The status verb, which has no run base, previews
+the same rule against the task's target as `work start` anchors it. A task
+completed, reopened and completed again inside its own pull request may
+change its own criteria while no record with its id or uid is on the
+target, in any task layout; when the target cannot be read, the task keeps
+the criteria it was completed with. It still reviews its own range.
 A task pull request may change its own criteria, and CI prints the change
-for the reviewer; a reopened task keeps its criteria, and another task's
-criteria change only in its own pull request, a planning-only change or a
-checked epic line. A range touching
+for the reviewer; a reopened task whose record is on the target keeps its
+criteria, and another task's criteria change only in its own pull request,
+a planning-only change or a checked epic line. A range touching
 the adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a

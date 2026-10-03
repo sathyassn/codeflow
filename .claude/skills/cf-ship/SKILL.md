@@ -20,7 +20,8 @@ description: Land finished work (docs and capability updates, then a PR through 
    so refreshing a stale base needs no new review; any other merge or a
    later code change does not. A one-PR fix of a complete task reopens it
    (the old block kept as superseded) and completes it again in that PR;
-   its criteria change only through a separate planning PR.
+   once its record is on the target, its criteria change only through a
+   separate planning PR; before that, a reopen in its own PR may change them.
    After-release criteria stay `deferred`, never verified at build time.
    When a work item is planned, started, blocked, completed or cancelled,
    follow

@@ -280,9 +280,9 @@ erratum below, never an edit of the section.
   ref, or a shallow cut on the walked chain refuses, even when the change
   cancels out, and the refusal names that commit. A task completed,
   reopened and completed again inside its own pull request may also change
-  its own criteria while its record is not yet on the target; before,
-  `codeflow task status complete` refused that as a reopened task's
-  criteria change.
+  its own criteria while no record with its id or uid is on the target, in
+  either task layout; before, `codeflow task status complete` refused that
+  as a reopened task's criteria change.
 
 ## [3.0.0]
 
