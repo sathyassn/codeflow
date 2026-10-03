@@ -134,5 +134,31 @@ API — see CodeFlow ADR-0017.
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`
+- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
+  The GitHub workflow runs gitleaks with your configuration exactly as
+  gitleaks finds it (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`,
+  `.gitleaks.toml`, else its default rules). It then drops one known false
+  positive from the report: the security-stage prose CodeFlow 3.0.0 seeded on
+  line 209 of `.claude/workflows/pipeline.workflow.js` and its baseline copy,
+  which the `generic-api-key` rule mistakes for a key. Only a
+  `generic-api-key` finding whose value and matched text are exactly that
+  prose, in one of those two paths, is dropped; every other finding fails
+  the job, as does a scan that logs an error or reads no commit. A wrapper that runs gitleaks itself on a repository
+  scaffolded by 3.0.0 can allow the same prose in its own configuration.
+  With no `.gitleaks.toml` yet, create one that keeps the default rules:
+
+  ```toml
+  [extend]
+  useDefault = true
+
+  [[allowlists]]
+  description = "CodeFlow 3.0.0 seeded pipeline workflow: security-stage prose, not a credential"
+  condition = "AND"
+  paths = ['''^(?:\.codeflow/\.baseline/)?\.claude/workflows/pipeline\.workflow\.js$''']
+  regexTarget = "match"
+  regexes = ['''^authz gaps, vulnerable[/]malicious $''']
+  ```
+
+  With a `.gitleaks.toml` already, add only the `[[allowlists]]` block to
+  that file; leave its `[extend]` section as it is.
 - **osv-scanner** — dependency/supply-chain audit: `osv-scanner scan -r .`
