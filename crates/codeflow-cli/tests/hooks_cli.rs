@@ -1332,6 +1332,45 @@ fn exec_guard_classifies_every_review_probe() {
 }
 
 #[test]
+fn exec_guard_lets_text_that_only_names_a_peer_through() {
+    // TSK-223 AC-3 (sathyassn/codeflow#52): a brief or commit message that
+    // names a peer and the word review, on a line with a variable program,
+    // is no headless run; the same line that runs the peer still is.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "D=$PWD; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF\n$EDITOR brief.md",
+        "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+        "grep -c review <<< 'Codex review: approve'",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "should allow: {command}: {err}");
+        assert!(!err.contains("headless"), "{command}: {err}");
+    }
+    for command in [
+        "CMD=codex; $CMD exec x",
+        "D=$PWD; cat > brief.md <<EOF\nCodex: review\nEOF\necho 'codex exec x' | $SHELL",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        assert!(
+            err.contains("security.headless_peer_runs"),
+            "{command}: {err}"
+        );
+    }
+}
+
+#[test]
 fn exec_guard_flags_headless_peer_runs_per_level() {
     // TSK-136 AC-1 as amended by ADR-0075 D4: each headless form is refused
     // by default and at block, warns with the rule and the interactive path

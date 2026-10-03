@@ -22,15 +22,30 @@
 //! are never read as the headless flag. A help or version flag in an option
 //! position (`claude --help -p`, `codex exec --help`) is no run, since the
 //! CLI prints and exits (TSK-141); the same word as a value, a prompt or
-//! after `--` is data. A line whose commands cannot be
-//! resolved (a here-string, a substitution or variable as the program, an
-//! alias, a shell reading its script from stdin) is judged on its raw text:
-//! a peer name followed by one of its headless markers is flagged. That can
-//! over-flag an unusual line, which the default `block` level then refuses;
-//! the message says the line was not fully parsed, and a project that needs
-//! such a run sets `security.headless_peer_runs` to `warn`.
+//! after `--` is data.
+//!
+//! A command the classifier cannot resolve is judged by what it can run
+//! (TSK-223). A variable or substitution as the program is judged by its
+//! own arguments: as a launcher of the peer it names (`$SUDO codex exec`),
+//! or as any peer the line names (`CMD=codex; $CMD exec`). An alias the
+//! line defines is expanded where it is used. A here-string is judged only
+//! when it feeds something other than a known reader, and a pipe only when
+//! it feeds a shell or such a program. None of these reads a heredoc body
+//! the shell reader treats as data (`cat > brief.md <<EOF`) or a commit
+//! message. What is left (a shell, `source` or a function reading a script
+//! this line may have written, a launcher the reader does not model) is
+//! judged on the line's raw text the way each CLI parses it: a peer name
+//! followed by its headless flag among the options before the first
+//! positional word, or by its headless subcommand as that word
+//! (`codex exec`, `claude -p`, `grok -p`). Such a line, and interpreter
+//! code, can still over-flag text whose peer name is directly followed by
+//! its marker (`the Codex review`); the message says the line was not fully
+//! parsed, and a project that needs such a run sets
+//! `security.headless_peer_runs` to `warn`.
 
-use crate::hooks::git_guard::simple_commands;
+use crate::hooks::git_guard::{
+    command_argv, expand_commands, simple_commands, strip_launchers, strip_reserved_words,
+};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,26 +70,189 @@ enum Found {
     Run(HeadlessRun),
     /// It runs something this classifier cannot resolve.
     Unresolved,
+    /// A variable or substitution names the program; these are its
+    /// arguments.
+    UnknownProgram(Vec<String>),
     Nothing,
 }
+
+/// The peer CLIs.
+const PEERS: [&str; 3] = ["claude", "codex", "grok"];
+
+/// Programs that read a here-string as data and never run it. Tools that
+/// can run their input (`sed e`, `awk` with `system()`, shells,
+/// interpreters) are left out, as is every program not listed.
+const HERE_STRING_READERS: &[&str] = &[
+    "cat",
+    "tee",
+    "echo",
+    "printf",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "wc",
+    "head",
+    "tail",
+    "sort",
+    "uniq",
+    "tr",
+    "cut",
+    "diff",
+    "jq",
+    "base64",
+    "read",
+    "mapfile",
+    "readarray",
+    "git",
+    "gh",
+];
 
 fn find(command: &str, depth: usize) -> Option<HeadlessRun> {
     if depth > 4 {
         return raw_run(command);
     }
-    let mut unresolved = command.contains("<<<");
+    let mut unresolved = here_string_runs(command);
+    let mut aliases: Vec<(String, String)> = Vec::new();
     for argv in simple_commands(command) {
+        if argv.first().is_some_and(|program| program == "alias") {
+            for (name, value) in argv[1..].iter().filter_map(|arg| arg.split_once('=')) {
+                // A definition that itself starts a run is judged as one.
+                if let Some(run) = find(value, depth + 1) {
+                    return Some(HeadlessRun {
+                        parsed: false,
+                        ..run
+                    });
+                }
+                aliases.push((name.to_string(), value.to_string()));
+            }
+            continue;
+        }
+        // An alias the line defined runs its value with these arguments.
+        if let Some((_, value)) = argv
+            .first()
+            .and_then(|program| aliases.iter().find(|(name, _)| name == program))
+        {
+            let expanded = format!("{value} {}", quoted(&argv[1..]));
+            if let Some(run) = find(&expanded, depth + 1) {
+                return Some(HeadlessRun {
+                    parsed: false,
+                    ..run
+                });
+            }
+            continue;
+        }
         match classify(&argv, depth) {
             Found::Run(run) => return Some(run),
             Found::Unresolved => unresolved = true,
+            Found::UnknownProgram(args) => {
+                if let Some(run) = unknown_program_run(command, &args, depth) {
+                    return Some(run);
+                }
+            }
             Found::Nothing => {}
         }
     }
-    if unresolved {
+    if unresolved || pipes_into_unknown(command) {
         raw_run(command)
     } else {
         None
     }
+}
+
+/// Words joined for a shell to read back, each in single quotes.
+fn quoted(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| format!("'{}'", word.replace('\'', r"'\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A program named by a variable or substitution, run with `args`: a run
+/// when it launches a peer through its arguments (`$SUDO codex exec`), or
+/// when a peer the line names would run headless with those arguments
+/// (`CMD=codex; $CMD exec`). Text elsewhere on the line is never the
+/// marker, so a brief or commit message that names a peer stays data.
+fn unknown_program_run(command: &str, args: &[String], depth: usize) -> Option<HeadlessRun> {
+    let unparsed = |run: HeadlessRun| HeadlessRun {
+        parsed: false,
+        ..run
+    };
+    if let Found::Run(run) = classify(args, depth + 1) {
+        return Some(unparsed(run));
+    }
+    let named = raw_words(command);
+    PEERS
+        .iter()
+        .filter(|peer| named.iter().any(|word| basename(word) == **peer))
+        .find_map(|peer| match peer_run(peer, args, depth + 1) {
+            Found::Run(run) => Some(unparsed(run)),
+            _ => None,
+        })
+}
+
+/// Whether a here-string (`<<<`) feeds a command that may run its text:
+/// anything but a known reader (a shell, an interpreter, a launcher, a
+/// program a variable or substitution names). A here-string fed to `grep`
+/// or `git` is data.
+fn here_string_runs(command: &str) -> bool {
+    expand_commands(command).iter().any(|segment| {
+        if !segment.contains("<<<") {
+            return false;
+        }
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        strip_launchers(&words)
+            .is_none_or(|(program, _)| !HERE_STRING_READERS.contains(&basename(program).as_str()))
+    })
+}
+
+/// Whether a pipe feeds a program that a variable or substitution names
+/// (`… | $SHELL`): its input may run as a script.
+fn pipes_into_unknown(command: &str) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut after_pipe = false;
+    let mut chars = command.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if let Some(open) = quote {
+            if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        // The first word after a pipe is the program that reads it.
+        if after_pipe && !ch.is_whitespace() {
+            after_pipe = false;
+            let rest = &command[at..];
+            let program = command_argv(rest).into_iter().next().unwrap_or_default();
+            if program.contains(['$', '`'])
+                || program.chars().any(char::is_control)
+                || rest.starts_with("$(")
+                || rest.starts_with("\"$")
+            {
+                return true;
+            }
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '|' if chars.peek().is_some_and(|(_, next)| *next == '|') => {
+                chars.next();
+            }
+            '|' => after_pipe = true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Classify one simple command's argument vector, unwrapping launchers.
@@ -87,7 +265,7 @@ fn classify(argv: &[String], depth: usize) -> Found {
         // A variable or substitution names the program; git-guard's reader
         // marks a substitution with a control character.
         if program.contains(['$', '`']) || program.chars().any(char::is_control) {
-            return Found::Unresolved;
+            return Found::UnknownProgram(argv[1..].to_vec());
         }
         let name = basename(program);
         let rest = &argv[1..];
@@ -288,11 +466,14 @@ fn takes_next(args: &[String], at: usize) -> bool {
         .is_some_and(|next| !next.starts_with('-') || next == "-")
 }
 
-/// A run over an unresolved command over nothing.
+/// A run over an unresolved command over nothing. Inside a launcher, a
+/// program a variable names counts as unresolved: the line's raw text
+/// judges it.
 fn strongest(a: Found, b: Found) -> Found {
     match (a, b) {
         (Found::Run(run), _) | (_, Found::Run(run)) => Found::Run(run),
-        (Found::Unresolved, _) | (_, Found::Unresolved) => Found::Unresolved,
+        (Found::Unresolved | Found::UnknownProgram(_), _)
+        | (_, Found::Unresolved | Found::UnknownProgram(_)) => Found::Unresolved,
         _ => Found::Nothing,
     }
 }
@@ -416,7 +597,7 @@ fn find_exec(args: &[String], depth: usize) -> Found {
             .unwrap_or(body.len());
         match classify(&body[..end], depth) {
             Found::Run(run) => return Found::Run(run),
-            Found::Unresolved => found = Found::Unresolved,
+            Found::Unresolved | Found::UnknownProgram(_) => found = Found::Unresolved,
             Found::Nothing => {}
         }
         rest = &body[end..];
@@ -869,42 +1050,88 @@ fn after_long_value(cli: &Cli, flag: &str, args: &[String], mut at: usize) -> us
     at
 }
 
-/// The raw-text judgement for a line that could not be resolved: a peer
-/// name followed, anywhere later, by one of its headless markers.
-pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
-    let plain: String = command
+/// The words of raw text: quotes and escapes dropped, split at anything
+/// that is not part of a word or a path.
+fn raw_words(text: &str) -> Vec<String> {
+    let plain: String = text
         .chars()
         .filter(|c| !matches!(c, '\\' | '\'' | '"'))
         .collect();
-    let words: Vec<&str> = plain
+    plain
         .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '-')))
         .filter(|w| !w.is_empty())
-        .collect();
-    words.iter().enumerate().find_map(|(at, word)| {
-        let name = basename(word);
-        let later = &words[at + 1..];
-        let (peer, form) = match name.as_str() {
-            "claude" => later.iter().find_map(|w| {
-                let short = w.strip_prefix('-').filter(|c| !c.starts_with('-'));
-                (*w == "--print" || *w == "ultrareview" || short.is_some_and(|c| c.contains('p')))
-                    .then_some(("claude", "claude -p"))
-            })?,
-            "codex" => later.iter().find_map(|w| {
-                matches!(*w, "exec" | "e" | "review").then_some(("codex", "codex exec"))
-            })?,
-            "grok" => later.iter().find_map(|w| {
-                (w.starts_with("-p")
-                    || matches!(*w, "--single" | "--prompt-file" | "--prompt-json" | "agent"))
-                .then_some(("grok", "grok -p"))
-            })?,
-            _ => return None,
-        };
-        Some(HeadlessRun {
-            peer,
-            form,
-            parsed: false,
+        .map(str::to_string)
+        .collect()
+}
+
+/// The raw-text judgement for a line that could not be resolved. Within
+/// each command of the text (split at `;`, `|`, `&` and newlines), a peer
+/// name runs headless when the words after it read as its CLI parses
+/// them: its headless flag among the options before the first positional
+/// word (an option's value skipped), or its headless subcommand as that
+/// word. A later word is never the marker (TSK-223), so prose such as
+/// "Codex adversarial seat: please review" is no run.
+pub(crate) fn raw_run(command: &str) -> Option<HeadlessRun> {
+    command.split(['\n', ';', '|', '&']).find_map(|chunk| {
+        let words = raw_words(chunk);
+        words.iter().enumerate().find_map(|(at, word)| {
+            let cli = match basename(word).as_str() {
+                "claude" => &CLAUDE,
+                "codex" => &CODEX,
+                "grok" => &GROK,
+                _ => return None,
+            };
+            raw_marker(cli, &words[at + 1..]).map(|form| HeadlessRun {
+                peer: cli.peer,
+                form,
+                parsed: false,
+            })
         })
     })
+}
+
+/// The headless form the words after a peer name start, read the way its
+/// CLI parses them, or `None` once the first positional word is not a
+/// headless subcommand. Help is not honoured here: raw text is judged
+/// conservatively.
+fn raw_marker(cli: &Cli, words: &[String]) -> Option<&'static str> {
+    let short_form = cli.headless_long.first().map_or("", |(_, form)| *form);
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        at += 1;
+        if word == "--" {
+            return None;
+        }
+        if word.starts_with("--") {
+            if let Some((_, form)) = cli.headless_long.iter().find(|(flag, _)| flag == word) {
+                return Some(form);
+            }
+            if cli.long_value.contains(&word.as_str()) {
+                at += 1;
+            }
+            continue;
+        }
+        if let Some(cluster) = word.strip_prefix('-').filter(|c| !c.is_empty()) {
+            for (index, flag) in cluster.char_indices() {
+                if cli.headless_short.contains(flag) {
+                    return Some(short_form);
+                }
+                if cli.short_value.contains(flag) {
+                    if cluster[index + flag.len_utf8()..].is_empty() {
+                        at += 1;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        return cli
+            .headless_subcommands
+            .iter()
+            .find(|(sub, _)| sub == word)
+            .map(|(_, form)| *form);
+    }
+    None
 }
 
 /// The program name: its last path component, without `.exe`, lower case.
@@ -1053,6 +1280,86 @@ mod tests {
         // An unresolved line without a peer marker is not a run.
         assert_eq!(found("$(printf ls) -la"), None);
         assert_eq!(found("bash <<< 'echo claude'"), None);
+    }
+
+    /// TSK-223 AC-3 (sathyassn/codeflow#52): text that only names a peer,
+    /// in a heredoc body, a commit message or other quoted data, is no run,
+    /// even on a line whose program is a variable or substitution or that
+    /// feeds a here-string to a reader. Each was refused before the change.
+    #[test]
+    fn text_that_only_names_a_peer_is_not_a_run() {
+        for command in [
+            // The report's brief, beside a variable program.
+            "D=$PWD; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF\n$EDITOR brief.md",
+            "cat > brief.md <<EOF\nThe Codex review found two issues.\nEOF\n\"$EDITOR\" brief.md",
+            // A commit message naming a model, beside a variable program.
+            "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+            "M=$(date); $PAGER notes.md; git commit -m \"docs: record the Codex review $M\"",
+            "$(git rev-parse --show-toplevel)/check.sh && git commit -m 'fix: apply the Claude -p finding'",
+            // A here-string fed to a reader.
+            "grep -c review <<< 'Codex review: approve'",
+            // Prose in raw text names the peer, then the marker later on.
+            "bash run.sh; echo 'Codex adversarial seat: please review the page'",
+            "source .venv/bin/activate && echo 'Grok, the agent seat, and Claude will review it'",
+        ] {
+            assert_eq!(found(command), None, "{command}");
+        }
+    }
+
+    /// TSK-223 AC-4: the headless runs an unresolved line can still start
+    /// stay refused.
+    #[test]
+    fn unresolved_lines_that_run_a_peer_are_still_runs() {
+        for command in [
+            "CMD=codex; $CMD exec x",
+            "export P=$(command -v codex); $P exec x",
+            "$SUDO codex exec x",
+            "CMD=codex; timeout 5 $CMD --model demo exec x",
+            "$(printf claude) -p x",
+            "alias peer=codex\npeer exec x",
+            "alias peer='claude -p'",
+            "bash <<< \"codex exec x\"",
+            "python3 <<< 'import os; os.system(\"codex exec x\")'",
+            "$RUN <<< 'codex exec x'",
+            "echo 'codex exec x' | bash",
+            "echo 'codex exec x' | $SHELL",
+            "printf 'grok -p x' | \"$SH\" -s",
+            "cat > run.sh <<EOF\ncodex exec x\nEOF\nbash run.sh",
+            "cat > run.sh <<EOF\nclaude --print hi\nEOF\nsource run.sh",
+            "function peer { claude -p x; }; peer",
+        ] {
+            assert!(found(command).is_some(), "{command}");
+        }
+    }
+
+    /// TSK-223 AC-3: the raw text reads a peer the way its CLI parses:
+    /// the headless flag among the options before the first positional
+    /// word, or the headless subcommand as that word, never a later word.
+    #[test]
+    fn the_raw_text_reads_a_peer_the_way_its_cli_parses() {
+        for (text, form) in [
+            ("codex exec x", Some("codex exec")),
+            ("codex --model demo exec x", Some("codex exec")),
+            ("codex -m demo review", Some("codex review")),
+            ("codex e", Some("codex exec")),
+            ("claude -p hi", Some("claude -p")),
+            ("claude --model opus --print hi", Some("claude -p")),
+            ("claude -dp hi", Some("claude -p")),
+            ("claude ultrareview", Some("claude ultrareview")),
+            ("grok -px", Some("grok -p")),
+            ("grok --single=x", Some("grok -p")),
+            ("grok --prompt-file p.txt", Some("grok --prompt-file")),
+            ("grok agent", Some("grok agent")),
+            ("Codex adversarial seat: please review", None),
+            ("codex then exec", None),
+            ("claude said -p", None),
+            ("grok models agent", None),
+            ("codex -- exec", None),
+            ("codex; exec ls", None),
+            ("the Codex review", Some("codex review")),
+        ] {
+            assert_eq!(raw_run(text).map(|run| run.form), form, "{text}");
+        }
     }
 
     /// TSK-141 AC-6: a peer started through `npx`, `bunx`, `pnpm dlx` or
