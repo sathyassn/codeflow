@@ -1,0 +1,11 @@
+id = "TSK-211"
+uid = "32171eaf-31f6-4d8c-a3fe-a90507ca2525"
+kind = "TSK"
+title = "new Claude settings compact at half the window"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T04:38:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
