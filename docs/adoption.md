@@ -141,7 +141,18 @@ the project accepts.
    manifests, CI commands, policy, and required Model Context Protocol (MCP)
    servers. CodeFlow never invents these facts or silently changes global
    harness settings, so review them and commit.
-7. Start the first feature on a `feat/*` branch in a worktree and land it by
+7. For a new repository with an empty remote, push the scaffold commit
+   yourself from your own terminal. The pre-push hook refuses a push to
+   protected `main`, so a human makes this one push with the override:
+
+   ```sh
+   git remote add origin <url>
+   CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main
+   ```
+
+   The override lifts only the protected-branch rules, never a force push,
+   a deletion or the secret checks, and an agent cannot set it.
+8. Start the first feature on a `feat/*` branch in a worktree and land it by
    PR, or with `codeflow integrate` when there is no remote.
 
 | Behavior | New repository | Existing repository |
@@ -417,8 +428,8 @@ One task, one pull request, and a check at every step.
    evidenced green. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
-   A human can override the git layer for a local merge with
-   `CODEFLOW_HUMAN_OVERRIDE=1`.
+   A human can override the git layer for a local merge, commit or push on
+   a protected branch with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
 | Hook | Checks |
 |---|---|

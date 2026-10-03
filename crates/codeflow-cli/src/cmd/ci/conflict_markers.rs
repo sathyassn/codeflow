@@ -268,7 +268,7 @@ mod tests {
         git(root, &["rm", "-q", "gone.md"]);
 
         let policy = GitPolicy::default();
-        let hook = git_hook::pre_commit(root, &policy, false).unwrap();
+        let hook = git_hook::pre_commit(root, &policy, false, false).unwrap();
         git(root, &["commit", "-q", "-m", "feat: add the files"]);
         let ci = range_findings(root, &policy, "main", "HEAD").unwrap();
 
@@ -351,7 +351,7 @@ mod tests {
         let cacheinfo = format!("160000,{first},vendor");
         git(&root, &["update-index", "--add", "--cacheinfo", &cacheinfo]);
         let hook = messages(
-            &git_hook::pre_commit(&root, &policy, false)
+            &git_hook::pre_commit(&root, &policy, false, false)
                 .unwrap()
                 .violations,
         );
@@ -368,7 +368,7 @@ mod tests {
         let cacheinfo = format!("160000,{second},vendor");
         git(&root, &["update-index", "--cacheinfo", &cacheinfo]);
         let hook = messages(
-            &git_hook::pre_commit(&root, &policy, false)
+            &git_hook::pre_commit(&root, &policy, false, false)
                 .unwrap()
                 .violations,
         );

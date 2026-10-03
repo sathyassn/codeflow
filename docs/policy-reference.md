@@ -17,8 +17,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
 | `git.protected_branches` | string list | `["main","master"]` | an array of branch names or glob patterns (e.g. release/*) | Branches every enforcement plane treats as protected. | Globs use the `glob` crate's syntax; read by all four planes. |
-| `git.commit_to_protected` | Level | `block` | off \| warn \| allow \| block | A commit made directly on a protected branch. |  |
-| `git.push_to_protected` | Level | `block` | off \| warn \| allow \| block | A push to a protected branch. |  |
+| `git.commit_to_protected` | Level | `block` | off \| warn \| allow \| block | A commit made directly on a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
+| `git.push_to_protected` | Level | `block` | off \| warn \| allow \| block | A push to a protected branch. | A human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1 for a fast-forward push; force pushes and deletions stay refused. |
 | `git.force_push_protected` | Level | `block` | off \| warn \| allow \| block | A force-push to a protected branch. |  |
 | `git.force_push_unprotected` | Level | `allow` | off \| warn \| allow \| block | A force-push to a NON-protected branch. | The only non-strict default (allow); it sanctions the durability push with --force-with-lease; set block to forbid. |
 | `git.delete_protected` | Level | `block` | off \| warn \| allow \| block | Deleting a protected branch. |  |

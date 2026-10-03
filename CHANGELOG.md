@@ -60,6 +60,17 @@ erratum below, never an edit of the section.
   checkout before it builds, and the build counted that untracked file.
   The file is now ignored, so a release build reports `dirty=false`.
 
+<!-- codeflow:release-impact patch -->
+- **A human's override covers protected commits and pushes.** The README
+  says a human can override the git-hook plane with
+  `CODEFLOW_HUMAN_OVERRIDE=1`, but the pre-commit and pre-push hooks
+  ignored it, so the first push of `main` to an empty remote after
+  `codeflow init` needed `--no-verify`. Both hooks now honour the override
+  for the protected-branch rules, as the merge hooks already did:
+  `CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main` works. A force push
+  or deletion of a protected branch and the secret checks stay refused, and
+  the git-guard still refuses an agent that sets the override.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a

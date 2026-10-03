@@ -87,6 +87,9 @@ pub struct StageReport {
 
 /// The pre-commit stage: protected-branch commit check, staged-.env block,
 /// and the secret content scan over the staged diff (charter §6.1, §6.3).
+/// The protected-branch check steps aside for the `codeflow integrate` token
+/// or a human's [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV) (ADR-0007);
+/// the secret checks never do.
 ///
 /// # Errors
 ///
@@ -95,6 +98,7 @@ pub fn pre_commit(
     root: &Path,
     policy: &GitPolicy,
     integrate_token: bool,
+    human_override: bool,
 ) -> Result<StageReport, HookError> {
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
@@ -104,6 +108,7 @@ pub fn pre_commit(
     if policy.commit_to_protected.is_active()
         && policy.branch_is_protected(&branch)
         && !integrate_token
+        && !human_override
     {
         report.violations.push(Violation::new(
             "git.commit_to_protected",
@@ -920,7 +925,11 @@ pub fn parse_push_refs(input: &str) -> Vec<PushRef> {
 }
 
 /// The pre-push stage: protected-branch push/delete/force checks, branch
-/// naming against `branch_prefixes`. The push set runs separately.
+/// naming against `branch_prefixes`. The push set runs separately. A
+/// fast-forward push to a protected branch steps aside for the `codeflow
+/// integrate` token or a human's
+/// [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV) (ADR-0007); deleting or
+/// force-pushing a protected branch never does.
 ///
 /// # Errors
 ///
@@ -930,6 +939,7 @@ pub fn pre_push(
     policy: &GitPolicy,
     refs: &[PushRef],
     integrate_token: bool,
+    human_override: bool,
 ) -> Result<StageReport, HookError> {
     let repo = Repository::discover(root)
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
@@ -959,7 +969,8 @@ pub fn pre_push(
             continue;
         }
 
-        if protected && policy.push_to_protected.is_active() && !integrate_token {
+        if protected && policy.push_to_protected.is_active() && !integrate_token && !human_override
+        {
             report.violations.push(Violation::new(
                 "git.push_to_protected",
                 policy.push_to_protected,
@@ -1275,7 +1286,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wt = feature_worktree(dir.path());
         stage(&wt, "src/lib.rs", "pub fn hello() {}\n");
-        let report = pre_commit(&wt, &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(&wt, &GitPolicy::default(), false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -1302,7 +1313,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         stage(dir.path(), "a.txt", "hello\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.commit_to_protected");
         assert_eq!(report.violations[0].level, PolicyLevel::Block);
@@ -1313,8 +1324,37 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         stage(dir.path(), "a.txt", "hello\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), true).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), true, false).unwrap();
         assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_pre_commit_human_override_passes_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        stage(dir.path(), "a.txt", "hello\n");
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, true).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_pre_commit_human_override_keeps_the_env_block() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        stage(dir.path(), ".env", "TOKEN=x\n");
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, true).unwrap();
+        assert!(
+            report
+                .violations
+                .iter()
+                .all(|v| v.rule != "git.commit_to_protected"),
+            "{:?}",
+            report.violations
+        );
+        assert!(
+            !report.violations.is_empty(),
+            "the staged .env still blocks"
+        );
     }
 
     #[test]
@@ -1325,7 +1365,7 @@ mod tests {
             commit_to_protected: PolicyLevel::Warn,
             ..GitPolicy::default()
         };
-        let report = pre_commit(dir.path(), &policy, false).unwrap();
+        let report = pre_commit(dir.path(), &policy, false, false).unwrap();
         assert_eq!(report.violations[0].level, PolicyLevel::Warn);
     }
 
@@ -1334,7 +1374,7 @@ mod tests {
         // AC #3: release/* added to policy is honored by this plane too.
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "release/2.0");
-        let report = pre_commit(dir.path(), &release_policy(), false).unwrap();
+        let report = pre_commit(dir.path(), &release_policy(), false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.commit_to_protected");
     }
 
@@ -1343,7 +1383,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         assert!(report
             .violations
             .iter()
@@ -1358,7 +1398,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env", "DB_PASSWORD=hunter2hunter2\n");
-        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
         assert!(
             report
                 .violations
@@ -1371,7 +1411,7 @@ mod tests {
             &["commit", "-m", "chore: pre-adoption env file"],
         );
         git(dir.path(), &["rm", ".env"]);
-        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
         assert!(
             report.violations.is_empty(),
             "deleting a tracked dotenv file must pass: {:?}",
@@ -1384,7 +1424,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), ".env.example", "DB_PASSWORD=\n");
-        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -1397,7 +1437,7 @@ mod tests {
             "src/config.rs",
             "let key = \"AKIAIOSFODNN7EXAMPLF\";\n",
         );
-        let report = pre_commit(dir.path(), &scan_policy(), false).unwrap();
+        let report = pre_commit(dir.path(), &scan_policy(), false, false).unwrap();
         assert_eq!(report.violations.len(), 1);
         assert_eq!(report.violations[0].rule, "git.secret_scan");
         assert!(report.violations[0].message.contains("src/config.rs"));
@@ -1413,14 +1453,14 @@ mod tests {
             secret_scan: PolicyLevel::Off,
             ..scan_policy()
         };
-        let report = pre_commit(dir.path(), &policy, false).unwrap();
+        let report = pre_commit(dir.path(), &policy, false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
     #[test]
     fn test_pre_commit_outside_repo_is_config_error() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(pre_commit(dir.path(), &GitPolicy::default(), false).is_err());
+        assert!(pre_commit(dir.path(), &GitPolicy::default(), false, false).is_err());
     }
 
     /// A marker line built at run time, so this file holds none itself.
@@ -1451,7 +1491,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), "notes.md", &leftover_conflict());
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         let found = marker_findings(&report);
         assert_eq!(found.len(), 3, "{:?}", report.violations);
         assert!(found.iter().all(|v| v.level == PolicyLevel::Block));
@@ -1473,7 +1513,7 @@ mod tests {
                 conflict_markers: level,
                 ..GitPolicy::default()
             };
-            let report = pre_commit(dir.path(), &policy, false).unwrap();
+            let report = pre_commit(dir.path(), &policy, false, false).unwrap();
             let found = marker_findings(&report);
             assert_eq!(found.len(), expected, "{level:?}");
             assert!(found.iter().all(|v| v.level == level));
@@ -1498,7 +1538,7 @@ mod tests {
         );
         let binary = format!("\0{}\n", leftover_conflict());
         stage(dir.path(), "blob.bin", &binary);
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         assert!(
             marker_findings(&report).is_empty(),
             "{:?}",
@@ -1513,14 +1553,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         stage(dir.path(), "fixtures/merge.txt", &leftover_conflict());
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         assert_eq!(marker_findings(&report).len(), 3);
         stage(
             dir.path(),
             ".gitattributes",
             "fixtures/** conflict-marker-size=32\n",
         );
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         assert!(
             marker_findings(&report).is_empty(),
             "{:?}",
@@ -1535,7 +1575,7 @@ mod tests {
                 marker('>', 32, " b")
             ),
         );
-        let report = pre_commit(dir.path(), &GitPolicy::default(), false).unwrap();
+        let report = pre_commit(dir.path(), &GitPolicy::default(), false, false).unwrap();
         let found = marker_findings(&report);
         assert_eq!(found.len(), 2, "{:?}", report.violations);
         assert!(found[0].message.starts_with("fixtures/real.txt:1 "));
@@ -2519,7 +2559,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
@@ -2528,7 +2568,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         let refs = [pref("refs/heads/main", "abc1", "refs/heads/main", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.push_to_protected");
     }
 
@@ -2537,8 +2577,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "main");
         let refs = [pref("refs/heads/main", "abc1", "refs/heads/main", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, true).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, true, false).unwrap();
         assert!(report.violations.is_empty());
+    }
+
+    #[test]
+    fn test_pre_push_human_override_passes_protected_push() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let refs = [pref("refs/heads/main", "abc1", "refs/heads/main", ZERO)];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, true).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_pre_push_human_override_never_deletes_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let refs = [pref("(delete)", ZERO, "refs/heads/main", "abc1")];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, true, true).unwrap();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].rule, "git.delete_protected");
     }
 
     #[test]
@@ -2546,7 +2605,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         let refs = [pref("(delete)", ZERO, "refs/heads/main", "abc1")];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.delete_protected");
     }
 
@@ -2555,7 +2614,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         let refs = [pref("(delete)", ZERO, "refs/heads/feat/old", "abc1")];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -2569,7 +2628,7 @@ mod tests {
             "refs/heads/bad-name",
             ZERO,
         )];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.branch_naming");
         assert!(report.violations[0].remedy.contains("feat/"));
     }
@@ -2588,7 +2647,7 @@ mod tests {
             "refs/heads/bad-name",
             ZERO,
         )];
-        let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
+        let report = pre_push(dir.path(), &policy, &refs, false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -2597,7 +2656,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         let refs = [pref("refs/tags/v1.0", "abc1", "refs/tags/v1.0", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -2612,7 +2671,7 @@ mod tests {
             "refs/heads/release/2.0",
             ZERO,
         )];
-        let report = pre_push(dir.path(), &release_policy(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &release_policy(), &refs, false, false).unwrap();
         assert_eq!(report.violations[0].rule, "git.push_to_protected");
     }
 
@@ -2641,17 +2700,28 @@ mod tests {
             "refs/heads/feat/x",
             &c2,
         )];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
 
         // Same rewrite against a protected branch: blocked.
         let refs = [pref("refs/heads/main", &c2_prime, "refs/heads/main", &c2)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(
             report
                 .violations
                 .iter()
                 .any(|v| v.rule == "git.force_push_protected"),
+            "{:?}",
+            report.violations
+        );
+
+        // A human's override lifts only the push rule: the force push stays
+        // refused (ADR-0007).
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, true).unwrap();
+        let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            ["git.force_push_protected"],
             "{:?}",
             report.violations
         );
@@ -2663,7 +2733,7 @@ mod tests {
             "refs/heads/feat/x",
             &c1,
         )];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty());
     }
 
@@ -2697,7 +2767,7 @@ mod tests {
             "refs/heads/feat/x",
             &c2,
         )];
-        let report = pre_push(dir.path(), &policy, &refs, false).unwrap();
+        let report = pre_push(dir.path(), &policy, &refs, false, false).unwrap();
         let forced: Vec<_> = report
             .violations
             .iter()
@@ -2731,7 +2801,7 @@ mod tests {
         init_repo(dir.path(), "feat/x");
         write_test_config(dir.path(), "false");
         let refs = [pref("refs/heads/feat/x", "abc1", "refs/heads/feat/x", ZERO)];
-        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false).unwrap();
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 

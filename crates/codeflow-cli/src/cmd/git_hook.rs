@@ -104,7 +104,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
     let (plane, result) = match args.stage {
         StageName::PreCommit => (
             "pre-commit",
-            git_hook::pre_commit(&root, &policy.git, token),
+            git_hook::pre_commit(&root, &policy.git, token, super::human_override_present()),
         ),
         StageName::CommitMsg => ("commit-msg", commit_msg(&root, &policy, &args.args)),
         StageName::PreMergeCommit => (
@@ -123,7 +123,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
-            let mut result = git_hook::pre_push(&root, &policy.git, &refs, token);
+            let mut result = git_hook::pre_push(
+                &root,
+                &policy.git,
+                &refs,
+                token,
+                super::human_override_present(),
+            );
             if let Ok(report) = result.as_mut() {
                 let remote = args.args.first().map(String::as_str);
                 let url = args.args.get(1).map(String::as_str);

@@ -94,6 +94,11 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
 /// Runs `git` in `dir` with the binary on PATH (so wired hooks fire) and an
 /// author identity, host config neutralized.
 fn git(dir: &Path, args: &[&str]) -> Output {
+    git_env(dir, args, &[])
+}
+
+/// [`git`] with extra environment, such as a human's override.
+fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
@@ -113,6 +118,9 @@ fn git(dir: &Path, args: &[&str]) -> Output {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .envs(envs.iter().copied())
         .output()
         .expect("git runs")
 }
@@ -553,6 +561,112 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
             "{tier}: block did not name the failing target:\n{err}"
         );
     }
+}
+
+/// TSK-207 (sathyassn/codeflow#12): after `init --minimal`, a human's
+/// `CODEFLOW_HUMAN_OVERRIDE=1` lets the first push of the default branch to
+/// an empty remote, and a commit on it, through the installed hooks; without
+/// it both are refused. Force-pushing and deleting the protected branch stay
+/// refused with the override set.
+#[test]
+fn human_override_lands_protected_commits_and_pushes_but_nothing_destructive() {
+    const HUMAN: &[(&str, &str)] = &[("CODEFLOW_HUMAN_OVERRIDE", "1")];
+    let (tmp, root) = project();
+    init(&root, "--minimal");
+    git_ok(
+        tmp.path(),
+        &["init", "--bare", "-q", "remote.git"],
+        "bare init",
+    );
+    let remote = tmp.path().join("remote.git");
+    git_ok(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+        "remote add",
+    );
+    let head = git(&root, &["branch", "--show-current"]);
+    let main = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let stderr = |out: &Output| String::from_utf8_lossy(&out.stderr).to_string();
+
+    // The bootstrap push: refused without the override, landed with it.
+    let out = git(&root, &["push", "-q", "origin", &main]);
+    assert!(
+        !out.status.success(),
+        "agent-path bootstrap push went through"
+    );
+    assert!(
+        stderr(&out).contains("git.push_to_protected"),
+        "{}",
+        stderr(&out)
+    );
+    let out = git_env(&root, &["push", "-q", "origin", &main], HUMAN);
+    assert!(
+        out.status.success(),
+        "human bootstrap push refused:\n{}",
+        stderr(&out)
+    );
+
+    // A commit on the protected branch: refused without, made with it.
+    std::fs::write(root.join("notes.txt"), "one\n").unwrap();
+    git_ok(&root, &["add", "notes.txt"], "add");
+    let out = git(&root, &["commit", "-q", "-m", "docs: add notes"]);
+    assert!(
+        !out.status.success(),
+        "agent-path protected commit went through"
+    );
+    assert!(
+        stderr(&out).contains("git.commit_to_protected"),
+        "{}",
+        stderr(&out)
+    );
+    let out = git_env(&root, &["commit", "-q", "-m", "docs: add notes"], HUMAN);
+    assert!(
+        out.status.success(),
+        "human protected commit refused:\n{}",
+        stderr(&out)
+    );
+    let out = git_env(&root, &["push", "-q", "origin", &main], HUMAN);
+    assert!(
+        out.status.success(),
+        "human fast-forward push refused:\n{}",
+        stderr(&out)
+    );
+
+    // Destructive updates stay refused with the override.
+    let amend = ["commit", "-q", "--amend", "-m", "docs: add the notes"];
+    git_ok_env(&root, &amend, HUMAN, "amend");
+    let out = git_env(&root, &["push", "-q", "-f", "origin", &main], HUMAN);
+    assert!(
+        !out.status.success(),
+        "force push of a protected branch went through"
+    );
+    assert!(
+        stderr(&out).contains("git.force_push_protected"),
+        "{}",
+        stderr(&out)
+    );
+    let delete = format!(":{main}");
+    let out = git_env(&root, &["push", "-q", "origin", &delete], HUMAN);
+    assert!(
+        !out.status.success(),
+        "deletion of a protected branch went through"
+    );
+    assert!(
+        stderr(&out).contains("git.delete_protected"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// [`git_ok`] with extra environment.
+fn git_ok_env(dir: &Path, args: &[&str], envs: &[(&str, &str)], what: &str) {
+    let out = git_env(dir, args, envs);
+    assert!(
+        out.status.success(),
+        "{what} failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// The restored v1 commit standard (ADR-0020) is enforced by the floor: after

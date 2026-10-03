@@ -60,9 +60,11 @@ use crate::remedy::Remedy;
 /// the hard line.
 pub const INTEGRATE_TOKEN_ENV: &str = "CODEFLOW_INTEGRATE_TOKEN";
 
-/// Environment variable a **human** exports to override the git-layer merge
-/// guard — `CODEFLOW_HUMAN_OVERRIDE=1 git merge …` lets a person land a merge
-/// on a protected branch from their own terminal (ADR-0007).
+/// Environment variable a **human** exports to override the git layer's
+/// protected-branch rules from their own terminal (ADR-0007):
+/// `CODEFLOW_HUMAN_OVERRIDE=1` lets a person commit, merge or fast-forward
+/// push on a protected branch, such as the first push of `main` to an empty
+/// remote. Force pushes, deletions and the secret checks never step aside.
 ///
 /// HUMAN-ONLY by contract: it is honored **only** by the git-client hook
 /// plane (which cannot tell who invoked git), never by the Claude `git-guard`
