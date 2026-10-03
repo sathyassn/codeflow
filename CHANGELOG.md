@@ -69,7 +69,11 @@ erratum below, never an edit of the section.
   for the protected-branch rules, as the merge hooks already did:
   `CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main` works. A force push
   or deletion of a protected branch and the secret checks stay refused, and
-  the git-guard still refuses an agent that sets the override.
+  the git-guard still refuses an agent that sets the override. A push to a
+  protected branch whose remote tip this clone has not fetched cannot be
+  proven a fast-forward, so it is refused as a force push until you fetch.
+  The git-guard also catches an override hidden in a git alias declared
+  through a launcher such as `command git config`.
 
 ## [3.0.0]
 

@@ -623,8 +623,11 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
 
     // An override var carried inside any token (e.g. a `git config alias.*`
     // value `!CODEFLOW_HUMAN_OVERRIDE=1 git …`) — the assignment is embedded,
-    // not a leading prefix, so the positional scan below would miss it.
-    if tokens.first().map(|t| basename(t)) == Some("git") && tokens.iter().any(|t| t == "config") {
+    // not a leading prefix, so the positional scan below would miss it. The
+    // `git` word may follow a launcher (`command git config …`,
+    // `env X=1 git config …`), so it is found anywhere before `config`.
+    let git_at = tokens.iter().position(|t| basename(t) == "git");
+    if git_at.is_some_and(|at| tokens[at + 1..].iter().any(|t| t == "config")) {
         if let Some(var) = tokens.iter().find_map(|t| embedded_override_assignment(t)) {
             return Some(var);
         }
@@ -6321,6 +6324,10 @@ mod tests {
             "typeset -x CODEFLOW_INTEGRATE_TOKEN=abc",
             "readonly CODEFLOW_HUMAN_OVERRIDE=1",
             "git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git merge'",
+            // A launcher before `git` does not hide the alias body.
+            "command git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push origin main'",
+            "env GIT_TRACE=0 git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "/usr/bin/git config --global alias.x '!CODEFLOW_INTEGRATE_TOKEN=x git push'",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(

@@ -656,6 +656,40 @@ fn human_override_lands_protected_commits_and_pushes_but_nothing_destructive() {
         "{}",
         stderr(&out)
     );
+
+    refuses_a_force_push_over_an_unfetched_tip(tmp.path(), &root, &remote, &main);
+}
+
+/// A remote tip a clone never fetched cannot be proven a fast-forward, so
+/// a human's forced push over it is refused (TSK-207).
+fn refuses_a_force_push_over_an_unfetched_tip(tmp: &Path, root: &Path, remote: &Path, main: &str) {
+    const HUMAN: &[(&str, &str)] = &[("CODEFLOW_HUMAN_OVERRIDE", "1")];
+    // Another clone moves the remote; a forced push from here would discard
+    // a commit this clone cannot see.
+    let other = tmp.join("other");
+    git_ok(
+        tmp,
+        &["clone", "-q", remote.to_str().unwrap(), "other"],
+        "clone",
+    );
+    std::fs::write(other.join("more.txt"), "two\n").unwrap();
+    git_ok(&other, &["add", "more.txt"], "add in the other clone");
+    git_ok(&other, &["commit", "-q", "-m", "docs: add more"], "commit");
+    git_ok(
+        &other,
+        &["push", "-q", "origin", main],
+        "push from the other clone",
+    );
+    let out = git_env(root, &["push", "-q", "-f", "origin", main], HUMAN);
+    assert!(
+        !out.status.success(),
+        "force push over an unfetched remote tip went through"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot be proven a fast-forward"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// [`git_ok`] with extra environment.

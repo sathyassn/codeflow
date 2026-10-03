@@ -979,7 +979,23 @@ pub fn pre_push(
             ));
         }
 
-        if is_force_update(&repo, r) {
+        // A protected branch moves only by a proven fast-forward: when the
+        // remote tip is not in this repository, ancestry cannot be judged,
+        // so the update is refused as a force push. Otherwise a push the
+        // integrate token or a human's override lets through could rewrite
+        // history unseen.
+        if protected && policy.force_push_protected.is_active() && ancestry_unknown(&repo, r) {
+            report.violations.push(Violation::new(
+                "git.force_push_protected",
+                policy.force_push_protected,
+                format!(
+                    "push to protected branch '{branch}' cannot be proven a fast-forward: \
+                     its remote tip {} is not in this repository; fetch it first",
+                    r.remote_sha
+                ),
+                crate::remedy::PROTECTED_BRANCH.remedy(),
+            ));
+        } else if is_force_update(&repo, r) {
             if protected {
                 if policy.force_push_protected.is_active() {
                     report.violations.push(Violation::new(
@@ -1081,6 +1097,22 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> bool {
         Ok(descends) => !descends,
         Err(_) => false, // remote sha unknown locally — cannot judge
     }
+}
+
+/// `true` when an update of an existing remote branch cannot be classified:
+/// a sha does not parse, or the remote tip is not in this repository, so
+/// [`is_force_update`] could not judge it.
+fn ancestry_unknown(repo: &Repository, r: &PushRef) -> bool {
+    if is_zero_sha(&r.remote_sha) || r.remote_sha.is_empty() || r.local_sha == r.remote_sha {
+        return false;
+    }
+    let (Ok(local), Ok(remote)) = (
+        git2::Oid::from_str(&r.local_sha),
+        git2::Oid::from_str(&r.remote_sha),
+    ) else {
+        return true;
+    };
+    repo.graph_descendant_of(local, remote).is_err()
 }
 
 /// Time budget for the whole pre-push set. A push set that takes longer still
@@ -2587,6 +2619,36 @@ mod tests {
         init_repo(dir.path(), "main");
         let refs = [pref("refs/heads/main", "abc1", "refs/heads/main", ZERO)];
         let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, true).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn test_pre_push_unknown_remote_tip_is_refused_on_protected() {
+        // A remote tip this repository never fetched cannot be proven a
+        // fast-forward, so the override does not let the update through.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "main");
+        let head = rev_parse(dir.path(), "HEAD");
+        let absent = "1111111111111111111111111111111111111111";
+        let refs = [pref("refs/heads/main", &head, "refs/heads/main", absent)];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, true, true).unwrap();
+        let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            ["git.force_push_protected"],
+            "{:?}",
+            report.violations
+        );
+        assert!(report.violations[0].message.contains("fetch it first"));
+
+        // On an unprotected branch the same unknown tip is not judged.
+        let refs = [pref(
+            "refs/heads/feat/x",
+            &head,
+            "refs/heads/feat/x",
+            absent,
+        )];
+        let report = pre_push(dir.path(), &GitPolicy::default(), &refs, false, false).unwrap();
         assert!(report.violations.is_empty(), "{:?}", report.violations);
     }
 
