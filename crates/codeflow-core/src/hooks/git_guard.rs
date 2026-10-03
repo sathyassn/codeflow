@@ -1257,6 +1257,69 @@ enum GlobStop {
     TooManyEntries,
 }
 
+/// One file-name component of a shell pattern, read as the shell reads it
+/// (TSK-216 round 13). The pattern always compiles, so no text becomes a
+/// match-everything glob: a `[` without its closing `]` and a stray `]` are
+/// literal characters, a run of `*` is one `*`, a `^` negation is `!`, and
+/// a bracket holding a POSIX class (`[[:alpha:]]`) matches any one
+/// character, which over-approximates it.
+fn shell_pattern(text: &str) -> glob::Pattern {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => {
+                while chars.get(i + 1) == Some(&'*') {
+                    i += 1;
+                }
+                out.push('*');
+            }
+            '[' => {
+                let mut end = i + 1;
+                if matches!(chars.get(end), Some('!' | '^')) {
+                    end += 1;
+                }
+                if chars.get(end) == Some(&']') {
+                    end += 1;
+                }
+                while end < chars.len() && chars[end] != ']' {
+                    end += 1;
+                }
+                if end == chars.len() {
+                    out.push_str("[[]");
+                } else {
+                    let set: String = chars[i + 1..end].iter().collect();
+                    if set.contains("[:") {
+                        out.push('?');
+                        // The class's own `]` closes it; skip the outer one.
+                        if chars.get(end + 1) == Some(&']') {
+                            end += 1;
+                        }
+                    } else {
+                        out.push('[');
+                        match set.strip_prefix('^') {
+                            Some(rest) => {
+                                out.push('!');
+                                out.push_str(rest);
+                            }
+                            None => out.push_str(&set),
+                        }
+                        out.push(']');
+                    }
+                    i = end;
+                }
+            }
+            ']' => out.push_str("[]]"),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    glob::Pattern::new(&out)
+        .or_else(|_| glob::Pattern::new(&glob::Pattern::escape(text)))
+        .unwrap_or_default()
+}
+
 /// Expand a shell glob over the file system, as the shell would before the
 /// command runs. Only `*`, `?` and `[...]` in a component are wildcards; a
 /// name starting with `.` matches only a component that starts with `.`;
@@ -1283,7 +1346,7 @@ fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
             }
             continue;
         }
-        let matcher = glob::Pattern::new(&text).ok();
+        let matcher = shell_pattern(&text);
         let dotted = text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
@@ -1298,10 +1361,7 @@ fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
                 let name = entry.file_name();
                 let keep = match name.to_str() {
                     Some(text) => {
-                        (dotted || !text.starts_with('.'))
-                            && matcher
-                                .as_ref()
-                                .is_none_or(|m| m.matches_with(text, options))
+                        (dotted || !text.starts_with('.')) && matcher.matches_with(text, options)
                     }
                     None => true,
                 };
@@ -1397,7 +1457,7 @@ fn word_could_name(word: &str) -> Option<&'static str> {
     let component_matches = |pattern: &str, name: &str| {
         if pattern.contains(['*', '?', '[']) {
             (pattern.starts_with('.') || !name.starts_with('.'))
-                && glob::Pattern::new(pattern).is_ok_and(|p| p.matches_with(name, options))
+                && shell_pattern(pattern).matches_with(name, options)
         } else {
             pattern.eq_ignore_ascii_case(name)
         }
@@ -1732,7 +1792,7 @@ fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
             }
         }
     }
-    glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches(name))
+    shell_pattern(pattern).matches(name)
 }
 
 fn integrity_disk_case(path: &Path) -> PathBuf {
@@ -2623,7 +2683,7 @@ fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
             case_sensitive: !insensitive,
             ..glob::MatchOptions::new()
         };
-        glob::Pattern::new(pattern).map_or(true, |p| p.matches_with(&name, options))
+        shell_pattern(pattern).matches_with(&name, options)
     })
 }
 
@@ -9015,6 +9075,43 @@ mod tests {
         assert_eq!(found, vec![dir.path().join("a1.o")]);
         assert_eq!(expand_glob(&dir.path().join(".*.o")).unwrap().len(), 1);
         assert!(expand_glob(&dir.path().join("none*")).unwrap().is_empty());
+        // An unclosed bracket is a literal character, never a pattern that
+        // matches every entry (TSK-216 round 13).
+        assert!(expand_glob(&dir.path().join("e[32mhello"))
+            .unwrap()
+            .is_empty());
+        std::fs::write(dir.path().join("x["), "").unwrap();
+        assert_eq!(
+            expand_glob(&dir.path().join("x[")).unwrap(),
+            vec![dir.path().join("x[")]
+        );
+    }
+
+    /// A shell pattern always compiles, reading brackets, stars and
+    /// negation as the shell does (TSK-216 round 13).
+    #[test]
+    fn test_shell_pattern_reads_brackets_as_the_shell_does() {
+        for (pattern, name, matches) in [
+            ("e[32mhello", "e[32mhello", true),
+            ("e[32mhello", "policy.json", false),
+            ("x]", "x]", true),
+            ("pol*", "policy.json", true),
+            ("pol***", "policy.json", true),
+            ("a**b", "axyb", true),
+            ("[pq]olicy.json", "policy.json", true),
+            ("[!p]olicy.json", "policy.json", false),
+            ("[^p]olicy.json", "policy.json", false),
+            ("[^p]olicy.json", "xolicy.json", true),
+            ("[]x]", "]", true),
+            ("[[:alpha:]]olicy.json", "policy.json", true),
+            ("?olicy.json", "policy.json", true),
+        ] {
+            assert_eq!(
+                shell_pattern(pattern).matches(name),
+                matches,
+                "{pattern} {name}"
+            );
+        }
     }
 
     /// A glob over more entries than the guard reads stops, and is then

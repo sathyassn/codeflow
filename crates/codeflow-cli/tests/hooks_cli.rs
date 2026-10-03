@@ -889,6 +889,11 @@ const REVIEWER_ALLOWED: &[&str] = &[
     r#"cd "$dir" && cat < policy.json"#,
     r#"cd "$dir" && make 2>&1 >&2 3<&0 4>&- | tee build.log"#,
     "pushd -n review-stack; cd build; cd ~1; cat policy.json",
+    // Round thirteen: colour escapes and an unclosed bracket are not a
+    // match-everything glob, with `alias` linked to the policy folder.
+    r"printf $'\e[32mhello\e[0m\n' > build.log",
+    r"printf $'\e[32mhello\e[0m\n' 2>&1",
+    "find . -name 'x[' -delete",
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 
