@@ -3791,10 +3791,17 @@ fn declared_task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) 
 }
 
 #[test]
-fn push_set_declared_target_rebase_checks_only_own_commits() {
+fn push_set_declared_target_rebase_checks_the_line_s_commits_from_the_default() {
     // TSK-115: a task branch rebased onto its moved integration line and
     // force-pushed. The line's new commit is on the destination through the
-    // line's own ref, so only the task's commit is checked.
+    // line's own ref, so the range of the other checks holds only the
+    // task's commit.
+    // TSK-212 review round five: the declared line still bounds the other
+    // checks, but the commit checks run from the default branch's tip, the
+    // candidate authority, for every branch: nothing proves the pull request
+    // targets the line, and the line's commits must pass that policy when
+    // the line reaches it anyway. So the line's inherited legacy commits are
+    // judged too, and refuse the push.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = declared_task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     git(local.path(), &["rebase", "-q", "dest/integration/line"]);
@@ -3804,27 +3811,32 @@ fn push_set_declared_target_rebase_checks_only_own_commits() {
         err.contains("uses advertised target 'integration/line'"),
         "{err}"
     );
-    assert_eq!(code, Some(0), "{err}");
     assert!(
         err.contains("'task/TSK-001-change' rewrites the destination's")
             && err.contains("checks 1 commit(s), leaving out history"),
         "{err}"
     );
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
 
-    // A bad own commit in the rebased branch still blocks.
+    // A bad own commit in the rebased branch blocks as well.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "task/TSK-001-change", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
 }
 
 #[test]
 fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
     // The rewrite drops the branch's second commit, adds a bad one and moves
     // onto the line's new tip. The dropped commit's history does not hide
-    // the bad one, and the line's commit is not checked again.
+    // the bad one.
+    // TSK-212 review round five: the declared line still bounds the other
+    // checks, but the commit checks run from the default branch's tip, the
+    // candidate authority, for every branch: nothing proves the pull request
+    // targets the line, and the line's commits must pass that policy when
+    // the line reaches it anyway. So the line's inherited legacy commits are
+    // judged too, and refuse the push.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = declared_task_on_moved_line(
         bare.path(),
@@ -3850,7 +3862,7 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
     );
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
     assert!(
         err.contains("checks 2 commit(s), leaving out history"),
         "{err}"
@@ -3858,9 +3870,15 @@ fn push_set_declared_target_rewrite_checks_the_added_bad_commit() {
 }
 
 #[test]
-fn push_set_declared_target_new_branch_checks_only_own_commits() {
-    // The task record anchors the target on the line before the branch starts.
-    // The clean target selection reports its base without a failure remedy.
+fn push_set_declared_target_new_branch_checks_the_line_s_commits_from_the_default() {
+    // The task record anchors the target on the line before the branch
+    // starts, and the target selection reports its base.
+    // TSK-212 review round five: the declared line still bounds the other
+    // checks, but the commit checks run from the default branch's tip, the
+    // candidate authority, for every branch: nothing proves the pull request
+    // targets the line, and the line's commits must pass that policy when
+    // the line reaches it anyway. So the line's inherited legacy commits are
+    // judged too, and refuse the push.
     let (bare, local) = stable_destination("chore: legacy base");
     declared_line(bare.path(), local.path());
     git(
@@ -3873,8 +3891,8 @@ fn push_set_declared_target_new_branch_checks_only_own_commits() {
         err.contains("uses advertised target 'integration/line'"),
         "{err}"
     );
-    assert_eq!(code, Some(0), "{err}");
-    assert!(!err.contains("fix the findings above"), "{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject."), "{err}");
     assert!(
         !err.contains("did not run for 'task/TSK-001-change'"),
         "{err}"
@@ -3885,7 +3903,6 @@ fn push_set_declared_target_new_branch_checks_only_own_commits() {
     let (code, err) = push_hook(local.path(), "dest", &[("task/TSK-001-change", &bad)]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("Not conventional."), "{err}");
-    assert!(!err.contains("Legacy line subject."), "{err}");
 }
 
 #[test]
@@ -4533,12 +4550,13 @@ fn gate_destination(policy: &str, tracking: bool) -> (tempfile::TempDir, tempfil
     if tracking {
         std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
         std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
-        // A tracked default target carries its policy: the release scope
-        // is read there, and an unreadable one refuses (SPC-013 R-120).
-        write_policy(local.path(), policy);
-        git(local.path(), &["add", ".codeflow"]);
-        git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
     }
+    // The default target carries the policy: the push gate and the rules
+    // are read there (sathyassn/codeflow#22), and for a tracked target the
+    // release scope too, where an unreadable one refuses (SPC-013 R-120).
+    write_policy(local.path(), policy);
+    git(local.path(), &["add", ".codeflow"]);
+    git(local.path(), &["commit", "-q", "-m", "chore: the policy"]);
     receive(bare.path(), local.path(), "main:stable");
     git(
         local.path(),

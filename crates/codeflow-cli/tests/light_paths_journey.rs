@@ -204,7 +204,7 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
     );
     land(&root, line, "task/TSK-001-leaf");
 
-    // A follow-up: refused off a planning branch, one command on one.
+    // A follow-up of an epic task: refused on a branch that is not a plan/ branch, one command on a plan/ branch.
     let refused = codeflow(&root, &["task", "new", "--follow-up-of", "TSK-001", "Tidy"]);
     assert_eq!(refused.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&refused.stderr).contains("plan/ branch"));
@@ -305,8 +305,8 @@ fn complete(root: &Path, scratch: &Path, id: &str) {
 }
 
 /// Journey (TSK-214 AC-1, sathyassn/codeflow#21): a follow-up of a
-/// standalone task is itself a standalone task. Filed off a `plan/` branch,
-/// its record lands with its work on its own task branch in one tracked pull
+/// standalone task is itself a standalone task. Filed on a task branch cut
+/// from the target, its record lands with its work in one tracked pull
 /// request, as its source did; on a `plan/` branch, where no epic exists to
 /// name, the command refuses and names that route.
 #[test]
@@ -378,7 +378,7 @@ fn a_follow_up_of_a_standalone_task_lands_with_its_work() {
         ],
     );
 
-    // Off a planning branch: one command, then the claim names its branch.
+    // A standalone source: file the follow-up on a task branch, commit its record, then claim it.
     git(&root, &["switch", "-q", "-c", "task/tidy", &main]);
     let follow = ok(
         &codeflow(&root, &["task", "new", "--follow-up-of", "TSK-001", "Tidy"]),

@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use codeflow_core::hooks::adoption::{self, EffectiveLevel, LevelOrigin};
-use codeflow_core::hooks::policy::{AutomationProfile, Policy, UNKNOWN_ACTOR};
+use codeflow_core::hooks::policy::{AutomationProfile, UNKNOWN_ACTOR};
 use codeflow_core::hooks::policy_schema;
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 
@@ -78,14 +78,14 @@ pub(super) fn trusted_actor(
 pub(super) fn resolve(
     root: &Path,
     git: &GitPolicy,
-    base_sha: Option<&str>,
+    raw: &Result<Option<serde_json::Value>, String>,
+    profiles: &[AutomationProfile],
     actor: &str,
     branch: &str,
     has_body: bool,
 ) -> Adoption {
-    let raw = adoption::raw_policy(root);
     let mut effective = git.clone();
-    let pr_sections = adoption::pr_sections_effective(&raw, git);
+    let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
     let pr_summary = adoption::pr_summary_effective(&raw, git, pr_sections);
     effective.pr_summary = pr_summary.level;
@@ -98,18 +98,14 @@ pub(super) fn resolve(
     if let Some(why) = why {
         println!("codeflow ci: {why}");
     }
-    let profiles = match base_sha {
-        Some(base) => target_profiles(root, base),
-        None => Vec::new(),
-    };
-    let profile = adoption::matching_profile(&profiles, actor, branch).cloned();
+    let profile = adoption::matching_profile(profiles, actor, branch).cloned();
     if let Some(p) = &profile {
         println!(
             "codeflow ci: automation profile '{}' applies (actor '{actor}', branch '{branch}', read from the target side): branch naming, the commit message shape rules and the PR Summary shape are skipped; classification: automation profile",
             p.name
         );
         effective = adoption::apply_profile_exemptions(&effective);
-    } else if let Some(p) = adoption::pattern_only_profile(&profiles, branch) {
+    } else if let Some(p) = adoption::pattern_only_profile(profiles, branch) {
         println!(
             "codeflow ci: branch '{branch}' matches automation profile '{}' but actor '{actor}' is not one of its trusted actors: no exemption or supplied content applies",
             p.name
@@ -118,7 +114,7 @@ pub(super) fn resolve(
 
     let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(root).unwrap_or(false);
     print_levels(
-        &raw,
+        raw,
         git,
         &effective,
         Levels {
@@ -201,33 +197,6 @@ pub(super) fn supply_sections(profile: Option<&AutomationProfile>, body: &str) -
         }
     }
     out
-}
-
-/// The automation profiles in the policy of `base`, the target side of the
-/// range. A head cannot add or widen a profile for itself. A missing or
-/// invalid target policy yields no profile.
-fn target_profiles(root: &Path, base: &str) -> Vec<AutomationProfile> {
-    let Ok(out) = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["show", &format!("{base}:.codeflow/policy.json")])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    if policy_schema::validate_policy_str(&text).is_err() {
-        println!(
-            "codeflow ci: the target-side policy is not valid for this binary; no automation profile applies"
-        );
-        return Vec::new();
-    }
-    serde_json::from_str::<Policy>(&text)
-        .map(|p| p.git.automation_profiles)
-        .unwrap_or_default()
 }
 
 /// Validate the head's own policy and project state as data (SPC-013 R-113;

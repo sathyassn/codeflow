@@ -710,8 +710,10 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
         "{}",
         stdout(&output)
     );
+    // The anchored ref is named above; the stale local branch needs no
+    // step (sathyassn/codeflow#27).
     assert!(
-        stderr(&output).contains("behind its upstream 'refs/remotes/origin/main'"),
+        !stderr(&output).contains("behind its upstream"),
         "{}",
         stderr(&output)
     );
