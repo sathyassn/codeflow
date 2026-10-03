@@ -148,14 +148,14 @@ pub enum WorkStartError {
     },
 }
 
-/// A work target resolved to a ref, with a note when a stale local branch was
-/// passed over for its remote-tracking ref.
+/// A work target resolved to a ref. A local branch strictly behind its
+/// upstream is passed over for the upstream without a note: `work start`
+/// reports the anchored ref, the stale branch needs no fast-forward, and the
+/// guards refuse the ones an agent could run (sathyassn/codeflow#27).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedWorkTarget {
     /// The target to anchor on (`main`, `origin/main` or a full ref).
     pub target: String,
-    /// Why the remote-tracking ref was chosen, for the caller to print.
-    pub note: Option<crate::remedy::Finding>,
 }
 
 /// How a refusal of the readiness core reads in a derived view (R-27).
@@ -276,8 +276,8 @@ pub fn resolve_work_target(repo_root: &Path, declared: Option<&str>) -> Option<S
 /// Git has configured for it (`main@{upstream}`):
 /// - no configured upstream, equal, or the local branch ahead (unpushed
 ///   commits): the local branch;
-/// - the local branch strictly behind: the upstream, with a note saying so,
-///   since a stale local branch anchors on an old snapshot;
+/// - the local branch strictly behind: the upstream, since a stale local
+///   branch anchors on an old snapshot;
 /// - diverged: an error, since neither is clearly the target.
 ///
 /// A same-named branch of another remote is never substituted. Without a
@@ -292,11 +292,9 @@ pub fn resolve_work_target_checked(
     declared: Option<&str>,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
     let Some(target) = declared.filter(|value| !value.trim().is_empty()) else {
-        return Ok(
-            default_work_target(repo_root).map(|target| ResolvedWorkTarget { target, note: None })
-        );
+        return Ok(default_work_target(repo_root).map(|target| ResolvedWorkTarget { target }));
     };
-    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target, note: None }));
+    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target }));
     let Ok(repo) = Repository::discover(repo_root) else {
         return plain(target.to_string());
     };
@@ -344,7 +342,6 @@ fn local_or_upstream(
     let keep = || {
         Ok(Some(ResolvedWorkTarget {
             target: local.to_string(),
-            note: None,
         }))
     };
     let Some(upstream_ref) = repo
@@ -377,17 +374,7 @@ fn local_or_upstream(
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
     match (ahead, behind) {
         (_, 0) => keep(),
-        (0, behind) => Ok(Some(ResolvedWorkTarget {
-            note: Some(crate::remedy::Finding::new(
-                format!(
-                    "local branch '{local}' is {behind} commit(s) behind its upstream \
-                     '{upstream}'; anchoring on '{upstream}'"
-                ),
-                crate::remedy::TARGET_BEHIND_UPSTREAM
-                    .with(&[("local", local), ("upstream", upstream.as_str())]),
-            )),
-            target: upstream,
-        })),
+        (0, _) => Ok(Some(ResolvedWorkTarget { target: upstream })),
         (ahead, behind) => Err(WorkStartError::DivergedTarget {
             local: local.to_string(),
             remote: upstream,
@@ -2657,7 +2644,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "refs/remotes/origin/main");
-        assert!(resolved.note.is_some());
     }
 
     #[test]
@@ -2680,7 +2666,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "main");
-        assert_eq!(resolved.note, None);
     }
 
     #[test]
@@ -2741,11 +2726,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "refs/remotes/upstream/main");
-        assert!(resolved
-            .note
-            .unwrap()
-            .text
-            .contains("behind its upstream 'refs/remotes/upstream/main'"));
         assert!(is_stable_work_target(&resolved.target));
         assert!(work_target_resolves(dir.path(), &resolved.target));
     }
@@ -2757,27 +2737,15 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "main");
-        assert_eq!(resolved.note, None);
     }
 
     #[test]
-    fn a_local_target_strictly_behind_resolves_to_the_tracking_ref_and_says_so() {
+    fn a_local_target_strictly_behind_resolves_to_the_tracking_ref() {
         let dir = tracking_fixture(false, true);
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "refs/remotes/origin/main");
-        let note = resolved.note.unwrap();
-        assert!(
-            note.text
-                .contains("'main' is 1 commit(s) behind its upstream 'refs/remotes/origin/main'"),
-            "{note}"
-        );
-        assert!(
-            note.remedy
-                .contains("`git fetch . refs/remotes/origin/main:main`"),
-            "{note}"
-        );
         assert_eq!(
             resolve_work_target(dir.path(), Some("main")).as_deref(),
             Some("refs/remotes/origin/main")
@@ -2791,7 +2759,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(resolved.target, "main");
-        assert_eq!(resolved.note, None);
     }
 
     #[test]
