@@ -283,7 +283,8 @@ fn warn_steps_before_secret_scan(root: &Path, dest: &str, report: &mut Report) {
 /// The steps of a workflow's `secret-scan` job that run before its gitleaks
 /// step, other than `actions/checkout`, each named by its `name`, `uses` or
 /// first `run` line. Empty when the workflow does not parse (a conflict
-/// proposal with markers), has no such job, or has no gitleaks step.
+/// proposal with markers), has no such job, or has no step named `gitleaks`
+/// with `TRUSTED_SHA` in its env, as the shipped scan step has.
 fn steps_before_secret_scan(workflow: &str) -> Vec<String> {
     use serde_yaml::Value;
     let Ok(doc) = serde_yaml::from_str::<Value>(workflow) else {
@@ -298,9 +299,15 @@ fn steps_before_secret_scan(workflow: &str) -> Vec<String> {
         return vec![];
     };
     let text = |step: &Value, key: &str| step.get(key).and_then(Value::as_str).map(str::to_string);
+    // The scanner is the shipped step: named `gitleaks` and reading the
+    // trusted commit from its env. A step that merely mentions gitleaks, such
+    // as a canary or an install, is never taken for it.
     let is_scan = |step: &Value| {
-        text(step, "name").is_some_and(|name| name.trim().eq_ignore_ascii_case("gitleaks"))
-            || text(step, "run").is_some_and(|run| run.contains("gitleaks"))
+        text(step, "name").as_deref() == Some("gitleaks")
+            && step
+                .get("env")
+                .and_then(|env| env.get("TRUSTED_SHA"))
+                .is_some()
     };
     let Some(scan) = steps.iter().position(is_scan) else {
         return vec![];
@@ -1144,6 +1151,23 @@ mod tests {
         assert_eq!(
             super::steps_before_secret_scan(&added),
             ["`setup`", "`uses: ./.github/actions/prepare`"]
+        );
+        // A step that mentions gitleaks before the scan is listed, never
+        // taken for the scan.
+        let canary = shipped.replacen(
+            checkout,
+            &format!(
+                "{checkout}      - run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"\n      \
+                 - name: setup\n        run: ./scripts/setup.sh\n"
+            ),
+            1,
+        );
+        assert_eq!(
+            super::steps_before_secret_scan(&canary),
+            [
+                "`run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"`",
+                "`setup`"
+            ]
         );
         let conflicted = format!("<<<<<<< ours\n{added}=======\n{shipped}>>>>>>> theirs\n");
         assert!(super::steps_before_secret_scan(&conflicted).is_empty());

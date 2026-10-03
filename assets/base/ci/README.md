@@ -158,13 +158,19 @@ as extra steps when your stack warrants:
   before this release and the secret-scan job runs a step of yours before
   the gitleaks step, `codeflow update` keeps it through the merge and warns
   about it on every run: move it after the gitleaks step or into another
-  job. The scan reads HEAD's history (on a pull request, the pull request
-  merged into its base), what each merge adds beyond its automatic result,
+  job. gitleaks reads the whole history of HEAD, the base's included (on a
+  pull request, the pull request merged into its base; on a push, the
+  pushed commit), with what each merge adds beyond its automatic result,
   files whose type changes and files git judges binary, which gitleaks'
-  default history scan leaves out. Branches and tags HEAD does not reach
-  are scanned by their own pull requests. In the commits a pull request
-  brings, git cannot show what an octopus merge adds, so the step refuses
-  one; merge the branches one at a time. It also refuses a path with a
+  default history scan leaves out. That scope is narrower on purpose: a
+  branch with no pull request, or a tag, is not scanned by this workflow
+  unless its commits become reachable from a scanned HEAD, so a
+  repository-wide audit needs a scan of its own. The refusals below check
+  only the commits a pull request brings, those HEAD holds and the trusted
+  commit does not; on a push that range is empty, since the pushed commit
+  is the trusted commit, so a push scan reads its history without them.
+  In those commits, git cannot show what an octopus merge adds, so the
+  step refuses one; merge the branches one at a time. It also refuses a path with a
   backslash, a double quote or a control character that one of those
   commits changes, or that either side of a merge among them changes,
   since gitleaks cannot read such names reliably. Each refusal names the

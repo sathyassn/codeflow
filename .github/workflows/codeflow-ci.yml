@@ -374,15 +374,19 @@ jobs:
       # diff.noprefix, for one, gitleaks would drop each path's first
       # directory, and an exemption for leak.txt would cover dir/leak.txt.
       #
-      # The scan reads HEAD's history: on a pull request, the pull request
-      # merged into its base; on a push, the pushed commit. Branches and tags
-      # that HEAD does not reach are left to their own pull requests, so an
-      # unrelated ref can neither fail this scan nor hide a leak from it.
-      # Before it scans, the step checks the history the pull request brings,
-      # the commits HEAD holds and the trusted commit does not, for what
-      # gitleaks cannot read reliably, and names the commit and the refs that
-      # hold it. On a push that range is empty: the pushed commit is the
-      # trusted commit. git cannot show what an octopus merge (three or more
+      # gitleaks reads the whole history of HEAD, the trusted commit's
+      # ancestors included: on a pull request, the pull request merged into
+      # its base; on a push, the pushed commit. That is narrower, on purpose,
+      # than a scan of every fetched branch and tag: a branch with no pull
+      # request, or a tag, is not scanned by this workflow until its commits
+      # become reachable from a scanned HEAD, so an unrelated ref can neither
+      # fail this scan nor hide a leak from it. A repository-wide audit needs
+      # a scan of its own. Before gitleaks runs, the step checks only the
+      # history the pull request brings, the commits HEAD holds and the
+      # trusted commit does not, for what gitleaks cannot read reliably, and
+      # names the commit and the refs that hold it. On a push that range is
+      # empty, since the pushed commit is the trusted commit, so a push scan
+      # reads its history without these refusals. git cannot show what an octopus merge (three or more
       # parents) adds, so one in that range is refused; merge the branches one
       # at a time. gitleaks' patch parser misreads some names that git
       # quotes: it skips one that ends in a backslash without an error, and a

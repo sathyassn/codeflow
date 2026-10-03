@@ -159,10 +159,16 @@ erratum below, never an edit of the section.
   already runs a step of yours before the gitleaks step, move that step
   after the scan or into another job when you update:** the 3-way merge
   keeps it, and `codeflow update` now warns about it on every run until it
-  moves. The scan now reads HEAD's history (on a pull request, the pull
-  request merged into its base) instead of every fetched branch and tag,
-  so an unrelated branch can no longer fail a pull request's scan; each
-  branch is scanned by its own pull request. It also reads what a merge
+  moves. gitleaks now reads the whole history of HEAD, the base's
+  included (on a pull request, the pull request merged into its base; on
+  a push, the pushed commit), instead of every fetched branch and tag, so
+  an unrelated branch can no longer fail a pull request's scan. This
+  narrows coverage on purpose: a branch with no pull request, or a tag, is
+  not scanned by this workflow unless its commits become reachable from a
+  scanned HEAD, so a repository-wide audit needs a scan of its own. The
+  refusals below check only the commits a pull request brings; on a push
+  that range is empty, since the pushed commit is the trusted commit, so a
+  push scan reads its history without them. gitleaks also reads what a merge
   itself adds, files whose type changes and files git judges binary, which
   gitleaks' default history scan leaves out, so a secret added in a merge
   resolution, in a file that replaces a link or after a NUL byte is

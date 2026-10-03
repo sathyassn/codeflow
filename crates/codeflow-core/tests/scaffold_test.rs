@@ -1969,12 +1969,34 @@ fn init_and_update_write_the_adoption_marker_and_never_a_table() {
     assert!(state.contains("release_rules = 2"), "kept: {state}");
 }
 
-/// A project that added a step before the secret scan, in a workflow
-/// customised before TSK-210, keeps it through the 3-way merge of the new
-/// shipped workflow. Update keeps the step as written and warns on every run
-/// until it moves, since such a step can steer the scan's environment.
+/// A project that added steps before the secret scan, in a workflow
+/// customised before TSK-210, keeps them through the 3-way merge of the new
+/// shipped workflow. Update keeps them as written and warns on every run
+/// until they move, since such a step can steer the scan's environment. A
+/// step that only mentions gitleaks, such as a canary or an install, is one
+/// of them, never taken for the scan itself.
 #[test]
 fn update_warns_about_a_kept_step_before_the_secret_scan() {
+    const SETUP: &str = "      - name: setup\n        run: ./scripts/setup.sh\n";
+    const CANARY: &str = "      - name: canary\n        \
+                          run: sh scripts/check-gitleaks-allowlist.sh \"$RUNNER_TEMP/gitleaks\"\n";
+    const INSTALL: &str =
+        "      - run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks\n";
+    let layouts = [
+        (vec![SETUP], "`setup`"),
+        (vec![CANARY, SETUP], "`canary`, `setup`"),
+        (
+            vec![INSTALL, SETUP],
+            "`run: curl -sSfL https://example.invalid/gitleaks.tar.gz | tar -xz gitleaks`, `setup`",
+        ),
+        (vec![SETUP, CANARY], "`setup`, `canary`"),
+    ];
+    for (steps, named) in layouts {
+        kept_steps_are_warned_about(&steps.concat(), named);
+    }
+}
+
+fn kept_steps_are_warned_about(steps: &str, named: &str) {
     const SHIPPED: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
     const CHECKOUT: &str = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
                             - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
@@ -1991,11 +2013,7 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
 
     let workflow = ".github/workflows/codeflow-ci.yml";
     assert!(read(&root, workflow).contains(CHECKOUT));
-    let mine = read(&root, workflow).replacen(
-        CHECKOUT,
-        &format!("{CHECKOUT}      - name: setup\n        run: ./scripts/setup.sh\n"),
-        1,
-    );
+    let mine = read(&root, workflow).replacen(CHECKOUT, &format!("{CHECKOUT}{steps}"), 1);
     std::fs::write(root.join(workflow), &mine).unwrap();
 
     let (a2, _) = fixture_assets(true);
@@ -2008,31 +2026,34 @@ fn update_warns_about_a_kept_step_before_the_secret_scan() {
         merged.contains("GITLEAKS_VERSION=8.30.1"),
         "upstream change applied"
     );
-    assert!(
-        merged.contains("run: ./scripts/setup.sh"),
-        "the step is kept"
-    );
+    assert!(merged.contains(steps), "the steps are kept");
     let warned = |report: &Report| {
         report.warnings.iter().any(|warning| {
             warning.starts_with(workflow)
-                && warning.contains("runs `setup` before its gitleaks step")
+                && warning.contains(&format!("runs {named} before its gitleaks step"))
                 && warning.contains("move it after the gitleaks step or into another job")
         })
     };
-    assert!(warned(&report), "{report}");
+    assert!(warned(&report), "{named}: {report}");
 
     // The warning stands on a later update with nothing to merge.
     let again = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
     assert_eq!(action_of(&again, workflow), Action::KeptUserModified);
-    assert!(warned(&again), "{again}");
+    assert!(warned(&again), "{named}: {again}");
 
-    // Moved after the scan, it is no longer reported.
-    let moved = merged.replace("      - name: setup\n        run: ./scripts/setup.sh\n", "");
+    // Moved to a job of their own, they are no longer reported.
+    let moved = merged.replace(steps, "");
     std::fs::write(
         root.join(workflow),
-        format!("{moved}\n  setup:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: ./scripts/setup.sh\n"),
+        format!("{moved}\n  setup:\n    runs-on: ubuntu-24.04\n    steps:\n{steps}"),
     )
     .unwrap();
     let after = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
-    assert!(!warned(&after), "{after}");
+    assert!(
+        after
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("before its gitleaks step")),
+        "{named}: {after}"
+    );
 }
