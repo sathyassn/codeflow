@@ -176,7 +176,13 @@ pub const SCHEMA: [KeySpec; 64] = [
         purpose: "Any local update of a protected ref that did not come from the remote.",
         notes: "The reference-transaction backstop (ADR-0007): catches \
                 fast-forward merges, reset --hard, and branch -D that classic \
-                client hooks miss.",
+                client hooks miss. In session, git-guard also refuses a forced \
+                branch move aimed at a protected branch (`git branch -f`, `-M` \
+                or `-C`, `git checkout -B`, `git switch -C`, `git worktree add \
+                -B`, flag clusters and abbreviations included), resolving \
+                `@{-N}` and `@{upstream}` in the target repository and refusing \
+                one it cannot resolve or that an earlier git command on the line \
+                may change.",
     },
     KeySpec {
         path: "git.hook_integrity",
@@ -184,7 +190,16 @@ pub const SCHEMA: [KeySpec; 64] = [
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
         notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
-                of remote-tracking refs, packed-refs or Git config authority metadata.",
+                of remote-tracking refs, packed-refs or Git config authority metadata. \
+                git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
+                can change files when its command line names an enforcement \
+                path in any spelling the file system reads as one, a recursive \
+                `rm` or a `chmod` or `chown` of a directory holding enforcement \
+                files, and a recursive `rm`, `trash`, `find -delete` or `git \
+                clean -ff` of a registered worktree, a directory holding one, or \
+                a target it cannot resolve where worktrees live. A path built at \
+                run time is past the guard; the OS sandbox's write denies are \
+                the backstop.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {

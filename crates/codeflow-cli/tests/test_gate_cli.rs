@@ -561,6 +561,12 @@ fn unavailable_gate_lock_refuses_before_start() {
         "{}",
         stderr(&output)
     );
+    // TSK-216 AC-2: the refusal points at the check that names the fix.
+    assert!(
+        stderr(&output).contains("codeflow doctor --check permissions"),
+        "{}",
+        stderr(&output)
+    );
     assert!(!stderr(&output).contains("starting target"));
 }
 

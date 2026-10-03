@@ -92,6 +92,94 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The full gate runs inside CodeFlow's own Claude sandbox.** The full
+  gate takes a machine-wide lock under `~/.codeflow/locks` and keeps its
+  evidence under `~/.codeflow/gate-runs`, which the shipped Claude settings
+  presets did not let a sandboxed command write, so every full gate in a
+  sandboxed session refused with `gate lock unavailable`. The presets now
+  allow writes to those two directories and nothing else in the CodeFlow
+  home, and `codeflow update` adds them to existing settings. Two full
+  gates still never run at once on one machine. The refusal now points at
+  `codeflow doctor --check permissions`, which names each gate directory
+  this process cannot write. When `SANDBOX_RUNTIME` is set, doctor notes
+  it, probes the network over HTTPS instead of a DNS lookup the sandbox
+  cannot make and passes only on an HTTP 2xx or 3xx answer, and reports a
+  failed Codex sign-in probe as unconfirmed, quoting its error, unless the
+  probe says you are signed out.
+
+<!-- codeflow:release-impact patch -->
+- **An in-place `sed` on macOS is no longer read as an edit of the
+  enforcement files.** In a worktree under `.claude/worktrees/`, the git
+  guard refused `sed -i '' ...` on any file, and an empty operand of `rm`
+  and the other write commands, as an edit of the repository's enforcement
+  files. It now reads GNU and BSD sed's own option grammars (BSD `-i` and
+  `-I` take a separate backup suffix, `-l` is a flag), never treats an
+  empty argument as a path, and judges a worktree nested in the main
+  checkout's `.claude/` by its own files. Writes to the worktree's own
+  `.claude/settings.json` or `.codeflow/policy.json` are still refused,
+  and so is any `sed` whose script, options or `-f` script file names an
+  enforcement path; a plain read such as `sed -n p <file>` passes.
+
+<!-- codeflow:release-impact patch -->
+- **The git guard judges what `find` and `xargs` run, and protects live
+  worktrees.** `find -exec`, `-execdir` and `-delete` and `xargs` could
+  edit or delete the enforcement files. As new hardening that keeps every
+  refusal 3.0.0 made, a `sed`, `find`, `xargs` or `parallel` that can
+  change files is now refused when its command line names an enforcement
+  path anywhere, including a `sh -c` string or a producer piped into
+  `xargs`, in any spelling the file system reads as one (`//`, `/./`,
+  another case, or a glob that matches it). Each command, a pipeline
+  member or a `sh -c` body included, is judged from every directory a
+  literal `cd`, `pushd`, `env -C` or `env --chdir` on its line can move it
+  to, and a glob is expanded from there with each match judged through
+  symbolic links and registered worktrees, so `alias/pol*` with `alias`
+  linked to `.codeflow` is refused. A `cd` or `pushd` operand other than a
+  plain literal path, such as `~1`, `cd -` or a pattern, counts as an
+  unknown directory, and a redirection counts as a read only when it is
+  `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and
+  `{fd}>` writes are judged, after line continuations are joined. On a
+  command with `$'...'` or `$"..."` quoting and a `>`, any word that
+  could name an enforcement path is refused as a possible write target.
+  Where a directory is filled in at run
+  time, or a stack rotation or `popd` can reach a directory `pushd -n`
+  stacked, a writing command or write redirect whose words could name an
+  enforcement path by their names alone, such as `policy.json` or `pol*`,
+  is refused, while a
+  command proven to only read passes: a plain `sed` read, a `find` that
+  changes nothing, or `xargs` running a read-only program. The guard
+  follows at most 64 such directories per line and treats more as
+  unknown. One
+  expansion reads at most 4,096 directory entries; past that,
+  the directory it starts from decides, so a glob over a large build tree
+  passes and one over a tree holding enforcement files is refused.
+  Launchers such as `nice`, `timeout`, `stdbuf` and `env --unset` no longer
+  hide the command, and a launcher option the guard cannot read is
+  refused.
+  `find` actions are also judged on each protected path they can reach,
+  in expression order and from each match's own directory for
+  `-execdir`. A recursive `rm`, or a `chmod` or `chown`, of a directory
+  holding enforcement files is refused from any checkout. A recursive
+  `rm`, `trash`, `find -delete` or `git clean -ff` (through git's global
+  options, abbreviations and aliases) of a registered worktree, of a
+  directory holding one such as `.worktrees` or `.claude/worktrees`, or
+  of a target the guard cannot resolve in a checkout that holds
+  worktrees, is refused with `git worktree remove` as the way to remove
+  it. A path built at run time, which no argument spells, is past the
+  guard; in Claude sessions the sandbox's write denies are the backstop.
+
+<!-- codeflow:release-impact patch -->
+- **The git guard refuses a forced move of a protected branch.**
+  `git branch -f main HEAD~3` passed the guard, and the
+  reference-transaction hook lets a rewind behind the remote through. The
+  guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B`,
+  `git switch -C` and `git worktree add -B` aimed at a protected branch
+  under `git.local_ref_protection`, as it already refused `git
+  update-ref`. It reads flag clusters such as `-fv` and abbreviations
+  such as `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
+  repository, and refuses a forced move it cannot resolve, or one whose
+  expression an earlier git command on the same line may change.
+
+<!-- codeflow:release-impact patch -->
 - **The pre-push hook judges a push by the default branch's policy.**
   `codeflow ci` and the pre-push hook judged commit, branch and PR-body
   standards with the branch's own `.codeflow/policy.json`, while the hosted

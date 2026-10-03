@@ -299,6 +299,28 @@ fn clears_hook_integrity() {
 }
 
 #[test]
+fn clears_worktree_delete() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    git(
+        root,
+        &["worktree", "add", "-q", ".worktrees/w", "-b", "feat/w"],
+    );
+    prove(
+        "WORKTREE_DELETE",
+        "git.hook_integrity",
+        || guard(root, "git-guard", "rm -rf .worktrees"),
+        |printed| {
+            let step = printed_command(printed, "WORKTREE_DELETE", None);
+            let fills = [("<path>", ".worktrees/w")];
+            assert_passes(root, "git-guard", &step.replace("<path>", ".worktrees/w"));
+            run_printed(root, &step, &fills, &[]);
+        },
+    );
+    assert!(!root.join(".worktrees/w").exists());
+}
+
+#[test]
 fn clears_guard_unclassifiable() {
     let dir = with_origin();
     let root = dir.path();

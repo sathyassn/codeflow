@@ -523,17 +523,29 @@ fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
     }
 }
 
-/// The only extra sandbox write root is the per-user state directory
-/// `codeflow present` needs (macOS, then Linux without `XDG_STATE_HOME`), so
-/// an agent can run it without a sandbox bypass. `present_cli` proves the
-/// the runtime keeps its state under the matching root.
+/// The extra sandbox write roots, so an agent can run these commands without
+/// a sandbox bypass: the per-user state directory `codeflow present` needs
+/// (macOS, then Linux without `XDG_STATE_HOME`), whose runtime match
+/// `present_cli` proves, and the two `CodeFlow` home directories a full gate
+/// writes (TSK-216): its machine-wide lock and its durable evidence. The rest
+/// of the home, which holds qualification and binding state, stays out.
 const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
     "~/Library/Application Support/codeflow/present",
     "~/.local/state/codeflow/present",
 ];
 
 #[test]
-fn sandbox_allows_writes_only_to_the_present_state_directory() {
+fn sandbox_allows_writes_only_to_present_state_and_the_gate_directories() {
+    use codeflow_core::testing::gate_guard::{HOME_EVIDENCE_DIR, HOME_LOCK_DIR};
+    let gate_roots = [
+        format!("~/.codeflow/{HOME_LOCK_DIR}"),
+        format!("~/.codeflow/{HOME_EVIDENCE_DIR}"),
+    ];
+    let expected: Vec<&str> = PRESENT_STATE_WRITE_ROOTS
+        .iter()
+        .copied()
+        .chain(gate_roots.iter().map(String::as_str))
+        .collect();
     for name in preset_files() {
         let value = load(&name);
         let allow_write: Vec<&str> = value["sandbox"]["filesystem"]["allowWrite"]
@@ -543,8 +555,8 @@ fn sandbox_allows_writes_only_to_the_present_state_directory() {
             .filter_map(serde_json::Value::as_str)
             .collect();
         assert_eq!(
-            allow_write, PRESENT_STATE_WRITE_ROOTS,
-            "{name}: the sandbox may add only the cf-present state directory as a write root"
+            allow_write, expected,
+            "{name}: the sandbox may add only the cf-present state directory and the full gate's lock and evidence directories as write roots"
         );
         assert!(
             value["sandbox"]["filesystem"]["denyWrite"].is_null(),

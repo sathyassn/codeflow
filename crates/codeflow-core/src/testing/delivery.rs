@@ -51,7 +51,7 @@ pub fn durable_root(root: &Path, home: &Path) -> PathBuf {
         .ok()
         .and_then(|r| r.commondir().canonicalize().ok())
         .unwrap_or_else(|| root.to_path_buf());
-    home.join("gate-runs")
+    home.join(super::gate_guard::HOME_EVIDENCE_DIR)
         .join(&digest(identity.to_string_lossy().as_bytes())[..16])
 }
 
