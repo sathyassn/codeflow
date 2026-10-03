@@ -2631,3 +2631,201 @@ fn a_task_on_the_target_keeps_its_criteria_on_reopen() {
         );
     }
 }
+
+const FIXED_UID: &str = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
+
+/// `record` for TSK-001 as a standalone task with a fixed uid.
+fn standalone_one(record: &str) -> String {
+    record
+        .replace("id: TSK-001\n", &format!("id: TSK-001\nuid: {FIXED_UID}\n"))
+        .replace(
+            "epic_id: EPC-001\nstandalone_reason: null",
+            "epic_id: null\nstandalone_reason: \"a fixture\"",
+        )
+}
+
+/// On the current branch, write TSK-001 at `path` through `shape`, complete
+/// it, reopen it with AC-3 added, review a fix and complete it again; then
+/// run the verb and `codeflow ci` from `base`. Returns both results.
+fn complete_reopen_complete(
+    root: &Path,
+    path: &str,
+    shape: &dyn Fn(String) -> String,
+    base: &str,
+) -> [(i32, String); 2] {
+    let branch = git_out(root, &["branch", "--show-current"]);
+    write(
+        root,
+        path,
+        &shape(task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
+    write(root, "src/lib.rs", "pub fn initial() {}\n");
+    let first = commit(root, "feat: initial work");
+    let old = fix_block(&first);
+    write(
+        root,
+        path,
+        &shape(task("TSK-001", "complete", OWN_JOURNEY, &old)),
+    );
+    commit(root, "docs(records): complete the task");
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: one more criterion\n",
+    );
+    write(
+        root,
+        path,
+        &shape(task("TSK-001", "todo", REOPEN_ADDS, &archived)),
+    );
+    commit(root, "docs: reopen with one more criterion");
+    write(root, "src/lib.rs", "pub fn fixed() {}\n");
+    let reviewed = commit(root, "fix: keep working when rerun");
+    let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
+    write(
+        root,
+        path,
+        &shape(task("TSK-001", "todo", REOPEN_ADDS, &closeout)),
+    );
+    let verb = status_complete(root, "TSK-001");
+    write(
+        root,
+        path,
+        &shape(task("TSK-001", "complete", REOPEN_ADDS, &closeout)),
+    );
+    commit(root, "docs(records): record the acceptance");
+    [verb, ci_on(root, base, &branch, "Task: TSK-001")]
+}
+
+/// A record moved to another supported layout is the same task: the
+/// target's copy keeps its criteria, by the verb as by CI (TSK-217).
+#[test]
+fn a_moved_record_keeps_the_target_criteria_on_reopen() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let original = record_path("TSK-001");
+    let planned = standalone_one(&std::fs::read_to_string(root.join(&original)).unwrap());
+    write(root, &original, &planned);
+    commit(root, "docs: plan the standalone task");
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    std::fs::remove_file(root.join(&original)).unwrap();
+    let moved = "project-management/epics/EPC-001/tasks/TSK-001.md";
+    let shape = |record: String| standalone_one(&record);
+    for result in complete_reopen_complete(root, moved, &shape, "main") {
+        assert_blocks(
+            &result,
+            "a reopen of a moved record the target holds",
+            &["reopened task keeps its criteria"],
+        );
+    }
+}
+
+/// Neither a stale local target, nor an older comparison base, nor a record
+/// retargeted to a branch that predates it makes a task the target holds
+/// look new: the verb and CI both refuse the changed criteria (TSK-217).
+#[test]
+fn every_anchor_sees_the_target_record_on_reopen() {
+    let mut accepted = Vec::new();
+    for case in ["stale-local", "old-base", "retarget"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let early = head(root);
+        let path = record_path("TSK-001");
+        write(
+            root,
+            &path,
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+        );
+        let planned = commit(root, "docs: plan the standalone task");
+        git(root, &["branch", "alternate", &early]);
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        if case == "stale-local" {
+            git(root, &["update-ref", "refs/remotes/origin/main", &planned]);
+            git(root, &["branch", "-f", "main", &early]);
+        }
+        let shape = |record: String| {
+            let record = standalone_one(&record);
+            if case == "retarget" {
+                record.replace("integration_target: main", "integration_target: alternate")
+            } else {
+                record
+            }
+        };
+        let base = match case {
+            "stale-local" => "origin/main".to_string(),
+            "old-base" => early.clone(),
+            _ => "main".to_string(),
+        };
+        let [verb, check] = complete_reopen_complete(root, &path, &shape, &base);
+        for (who, result) in [("verb", verb), ("ci", check)] {
+            if result.0 == 0 || !result.1.contains("reopened task keeps its criteria") {
+                accepted.push(format!("{case} {who}: {}", result.1));
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "{}", accepted.join("\n---\n"));
+}
+
+/// A new task's reopen still binds its review: a review taken before the
+/// criteria changed is refused by the verb and by CI.
+#[test]
+fn a_new_task_review_before_its_criteria_change_is_refused() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    git(root, &["switch", "-c", "task/TSK-002-new"]);
+    let path = record_path("TSK-002");
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
+    let first = commit(root, "feat: initial work");
+    let old = fix_block(&first);
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "complete", OWN_JOURNEY, &old)),
+    );
+    commit(root, "docs(records): complete the task");
+    let admitted = codeflow()
+        .args(["ids", "admit", &path])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(admitted.status.success());
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: reopen\n",
+    );
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, &archived)),
+    );
+    let reviewed = commit(root, "docs: reopen before the criteria change");
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "todo", REOPEN_ADDS, &archived)),
+    );
+    commit(root, "docs: change the criteria after the review");
+    let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "todo", REOPEN_ADDS, &closeout)),
+    );
+    let verb = status_complete(root, "TSK-002");
+    write(
+        root,
+        &path,
+        &new_standalone(&task("TSK-002", "complete", REOPEN_ADDS, &closeout)),
+    );
+    commit(root, "docs(records): record the acceptance");
+    for result in [verb, ci(root, "task/TSK-002-new", "TSK-002")] {
+        assert_ne!(
+            result.0, 0,
+            "a review before the criteria change: {}",
+            result.1
+        );
+    }
+}

@@ -225,6 +225,7 @@ pub(crate) fn bind_completion_with_amendment(
     // task landing may carry its review. Otherwise this range completed and
     // reopened the task itself.
     let mut recovered = false;
+    let mut unreadable = None;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
@@ -244,21 +245,9 @@ pub(crate) fn bind_completion_with_amendment(
             reopened.then_some((anchor, old))
         })
         .or_else(|| {
-            // The recovered completion supplies the archive and the old
-            // review boundary. Its criteria may predate a planning pull
-            // request that amended them on the target after the reopen
-            // (R-52), so the criteria are the anchored record's. A task new
-            // in this range has no anchored record and no criteria on the
-            // target to keep: its own pull request may change them with the
-            // reopen, as the range freeze in `codeflow ci` allows (TSK-217).
-            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
-            if let Some(anchor) = anchor {
-                old.criteria = blob_at(repo, anchor, &task.path)
-                    .and_then(|content| {
-                        RecordView::parse(RecordKind::Task, &task.path, &content).ok()
-                    })
-                    .map_or_else(|| task.criteria.clone(), |anchored| anchored.criteria);
-            }
+            let (at, old, note) =
+                recovered_completion(repo, task, &block, landing, anchor, default_target)?;
+            unreadable = note;
             recovered = true;
             Some((at, old))
         });
@@ -270,6 +259,7 @@ pub(crate) fn bind_completion_with_amendment(
         .is_some_and(|(at, _)| !recovered || !before_range(*at));
     let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
+    findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
     if let Some((_, old)) = &reopen {
         findings.extend(
             super::lifecycle::reopen_problems(Some(old), task)
@@ -697,6 +687,177 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
         Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
         None => default_target,
     }
+}
+
+/// The completion this range reopened, recovered from the history below
+/// the landing, with the criteria a re-completion must keep. The recovered
+/// completion supplies the archive and the old review boundary. Its
+/// criteria may predate a planning pull request that amended them on the
+/// target after the reopen (R-52), so the criteria are the target's
+/// record's, found by identity in any layout. A task no reference point of
+/// its target holds is new in this range: its own pull request may change
+/// its criteria with the reopen (TSK-217). When a record that may be the
+/// task cannot be read, the recovered criteria stay and a changed set gets
+/// the returned refusal.
+fn recovered_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+    anchor: Option<Oid>,
+    default_target: Option<Oid>,
+) -> Option<(Oid, RecordView, Option<String>)> {
+    let (at, mut old) = previous_completion(repo, task, block, landing)?;
+    let mut refusal = None;
+    if let Some(anchor) = anchor {
+        match target_record(repo, task, anchor, default_target) {
+            Presence::Present(record) => old.criteria = record.criteria,
+            Presence::Absent => old.criteria = task.criteria.clone(),
+            Presence::Unreadable(reason) => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: cannot tell whether the target holds this task, so its criteria stay as they were: {reason}",
+                        task.id
+                    ));
+                }
+            }
+        }
+    }
+    Some((at, old, refusal))
+}
+
+/// Whether a reference point holds a task, found by identity.
+enum Presence {
+    /// No record there carries the task's id or uid.
+    Absent,
+    /// The record that carries it.
+    Present(Box<RecordView>),
+    /// A record that may carry it could not be read; the reason.
+    Unreadable(String),
+}
+
+/// The target's record of `task`, read at every reference point the verb or
+/// `codeflow ci` could judge it against, so neither an older range base nor
+/// a stale local branch nor a retargeted record makes a task the target
+/// holds look new (TSK-217). The points, in order: the range `anchor`; the
+/// tips of the declared target, local and remote-tracking; `default_target`
+/// (the pull request's base in CI); and the tips of the default work
+/// target. The first point that holds the task supplies its record;
+/// otherwise a point that cannot be read makes the answer unreadable.
+fn target_record(
+    repo: &Repository,
+    task: &RecordView,
+    anchor: Oid,
+    default_target: Option<Oid>,
+) -> Presence {
+    let mut points = vec![anchor];
+    points.extend(default_target);
+    let mut names: Vec<String> = task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    if let Some(name) = repo
+        .workdir()
+        .and_then(super::work_start::default_work_target)
+    {
+        names.push(name.strip_prefix("origin/").unwrap_or(&name).to_string());
+    }
+    for name in &names {
+        for reference in super::work_start::target_reference_names(name).unwrap_or_default() {
+            if let Ok(commit) = repo
+                .find_reference(&reference)
+                .and_then(|found| found.peel_to_commit())
+            {
+                points.push(commit.id());
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    points.retain(|point| seen.insert(*point));
+    let uid = record_uid(&task.content);
+    let mut unreadable = None;
+    for point in points {
+        match presence_at(repo, point, &task.id, uid.as_deref()) {
+            Presence::Absent => {}
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            present @ Presence::Present(_) => return present,
+        }
+    }
+    unreadable.map_or(Presence::Absent, Presence::Unreadable)
+}
+
+/// Whether the tree at `at` holds a task record with `id` or `uid` in any
+/// supported layout. A task path whose record does not parse and names the
+/// id or uid is unreadable, never absent.
+fn presence_at(repo: &Repository, at: Oid, id: &str, uid: Option<&str>) -> Presence {
+    let Ok(tree) = repo.find_commit(at).and_then(|commit| commit.tree()) else {
+        return Presence::Unreadable(format!("cannot read the tree of {at}"));
+    };
+    let mut found = Presence::Absent;
+    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        let Ok(name) = entry.name() else {
+            return git2::TreeWalkResult::Ok;
+        };
+        let path = format!("{root}{name}");
+        if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
+            return git2::TreeWalkResult::Ok;
+        }
+        let Ok(blob) = repo.find_blob(entry.id()) else {
+            found = Presence::Unreadable(format!("cannot read {path} at {at}"));
+            return git2::TreeWalkResult::Abort;
+        };
+        let content = String::from_utf8_lossy(blob.content());
+        match RecordView::parse(RecordKind::Task, &path, &content) {
+            Ok(record) => {
+                let same_uid = uid.is_some() && record_uid(&record.content).as_deref() == uid;
+                if record.id == id || same_uid {
+                    found = Presence::Present(Box::new(record));
+                    return git2::TreeWalkResult::Abort;
+                }
+            }
+            Err(_) => {
+                if path.contains(id)
+                    || content.contains(id)
+                    || uid.is_some_and(|uid| content.contains(uid))
+                {
+                    found = Presence::Unreadable(format!("{path} at {at} does not parse"));
+                    return git2::TreeWalkResult::Abort;
+                }
+            }
+        }
+        git2::TreeWalkResult::Ok
+    });
+    if walked.is_err() && matches!(found, Presence::Absent) {
+        return Presence::Unreadable(format!("cannot walk the tree of {at}"));
+    }
+    found
+}
+
+/// A record's frontmatter `uid`, when it has one.
+fn record_uid(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    lines
+        .take_while(|line| line.trim() != "---")
+        .find_map(|line| line.strip_prefix("uid:"))
+        .map(|value| {
+            value
+                .split('#')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .trim_matches('"')
+                .to_string()
+        })
+        .filter(|value| !value.is_empty())
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
@@ -1323,6 +1484,64 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// A task is found by its id or uid in any supported layout; a task
+    /// path that names it but does not parse is unreadable, never absent.
+    #[test]
+    fn presence_finds_a_task_by_identity_in_any_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let uid = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
+        let record = |id: &str| {
+            format!(
+                "---\nid: {id}\nuid: \"{uid}\"  # written once\nstatus: todo\n---\n\n# {id}: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n"
+            )
+        };
+        let commit = |path: &str, text: &str| {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-qm", "record"]);
+            Repository::open(root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        assert_eq!(record_uid(&record("TSK-001")).as_deref(), Some(uid));
+        let legacy = commit(
+            "project-management/epics/EPC-001/tasks/TSK-001.md",
+            &record("TSK-001"),
+        );
+        let repo = Repository::open(root).unwrap();
+        assert!(matches!(
+            presence_at(&repo, legacy, "TSK-001", None),
+            Presence::Present(_)
+        ));
+        // The same uid under another number is the same record.
+        assert!(matches!(
+            presence_at(&repo, legacy, "TSK-009", Some(uid)),
+            Presence::Present(_)
+        ));
+        assert!(matches!(
+            presence_at(&repo, legacy, "TSK-002", None),
+            Presence::Absent
+        ));
+        let broken = commit(
+            "project-management/tasks/TSK-002.md",
+            "---\nid: TSK-002\nstatus: [unclosed\n---\n",
+        );
+        assert!(matches!(
+            presence_at(&repo, broken, "TSK-002", None),
+            Presence::Unreadable(_)
+        ));
     }
 
     /// The merge rule takes a landing merge only when its tree is the clean
