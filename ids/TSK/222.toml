@@ -1,0 +1,11 @@
+id = "TSK-222"
+uid = "34a30fd2-b96d-4f91-afa0-ad2be74fe818"
+kind = "TSK"
+title = "The docs portal claim quarantine test passes on every run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T23:31:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
