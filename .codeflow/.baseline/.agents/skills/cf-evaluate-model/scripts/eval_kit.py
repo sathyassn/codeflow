@@ -396,6 +396,11 @@ SCRIPTED_GATES = frozenset({"hard", "paired-negative"})
 COMPACTION_ENV_BOUNDS = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": (100_000, 1_000_000)}
 COMPACTION_HOSTS = ["claude"]
 COMPACTION_SETTINGS_FILE = ".claude/settings.local.json"
+# The scaffold's shared settings lower the compaction percentage by default.
+# The materializer pins it at 100 in the same local file: Claude Code ignores
+# a percentage above its default, so the fixture's window alone sets the
+# threshold, whatever the project default is. Fixtures never set it.
+COMPACTION_PCT_PIN = {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "100"}
 DETECTOR_KEYS = frozenset({"skill", "command", "text"})
 GUIDANCE_HOOK = "hook session-orient"
 
@@ -3359,7 +3364,10 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(
             output,
             COMPACTION_SETTINGS_FILE,
-            json.dumps({"env": plan["compaction"]["env"]}, indent=2) + "\n",
+            json.dumps(
+                {"env": {**plan["compaction"]["env"], **COMPACTION_PCT_PIN}}, indent=2
+            )
+            + "\n",
         )
     assert_no_grader_material(output)
     host_contents: dict[str, str] = {}

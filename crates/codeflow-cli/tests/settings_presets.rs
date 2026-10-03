@@ -27,10 +27,11 @@ const HOOK_NAMES: [&str; 4] = [
 /// Hardcoded union of top-level keys actually used across the three presets.
 /// A typo'd or stray key in any preset fails here; a deliberate new key means
 /// updating this list in the same change.
-const TOP_LEVEL_KEYS: [&str; 8] = [
+const TOP_LEVEL_KEYS: [&str; 9] = [
     "$schema",
     "attribution",
     "effortLevel",
+    "env",
     "hooks",
     "includeCoAuthoredBy",
     "permissions",
@@ -177,25 +178,22 @@ fn presets_parse_as_json() {
     }
 }
 
+/// TSK-211 AC-1: every preset, and this repository's own settings, carry the
+/// compaction default as strings, and nothing else in `env`.
 #[test]
-fn repository_context_policy_is_exact_and_generic_presets_stay_opt_in() {
+fn every_preset_and_the_repository_carry_the_compaction_default() {
+    let expected = serde_json::json!({
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+    });
     let path = settings_dir().join("../../../.claude/settings.json");
     let bytes =
         std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
     let repository: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        repository["env"],
-        serde_json::json!({
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
-        })
-    );
+    assert_eq!(repository["env"], expected, "repository settings");
 
     for name in preset_files() {
-        assert!(
-            load(&name).get("env").is_none(),
-            "{name}: a consuming project must opt into the context policy"
-        );
+        assert_eq!(load(&name)["env"], expected, "{name}");
     }
 }
 
@@ -221,23 +219,39 @@ fn context_policy_guidance_pins_scope_effect_and_lifecycle_caution() {
 
     assert!(customize.contains("references/claude-context-policy.md"));
     for marker in [
-        "This is project customization, not a generic CodeFlow default",
-        "effective 1M window",
-        "200K-limited session remains 200K",
-        "roughly 100K",
-        "environment controls outrank corresponding command, flag, or settings choices",
-        "percentage override applies to qualifying main and subagent sessions",
-        "preserves the whole value and does not deep-merge incoming keys",
+        "`codeflow init` writes these string values",
+        "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"1000000\"",
+        "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"50\"",
+        "capped at the model's real context window",
+        "can only lower the compaction threshold",
+        "applies to main sessions and to subagents",
+        "| Model with a native 1M window | compacts at about 967K tokens | compacts at about 500K tokens |",
+        "| Session limited to 200K | compacts at the 200K boundary | compacts at about 100K tokens |",
+        "`used_percentage` measures against the full model window, so it no longer shows when compaction runs",
+        "Update keeps every value the project set",
+        "a key it wrote that the project has since deleted stays deleted",
+        "delete both keys or the whole `env` object. It stays deleted",
+        "With no recorded baseline, update adds the keys only when the project has no `env` at all",
+        "Update reports key names, never values",
         "inspect without printing sensitive values",
         "Present only the proposed non-secret context-key delta and any conflicts",
         "A malformed object is a reported configuration error",
         "configured value, or requested launch is not runtime evidence",
         "manual compaction/resume check",
         "does not prove the automatic threshold",
+        "never copy this `env` into the immutable delegated task settings",
     ] {
         assert!(policy.contains(marker), "context policy lost: {marker}");
     }
+    for stale in [
+        "opt-in",
+        "Do not add it to CodeFlow's generic settings presets",
+    ] {
+        assert!(!policy.contains(stale), "context policy kept: {stale}");
+    }
+    assert!(customize.contains("init writes a compaction default"));
     for marker in [
+        "carries a context-window/compaction environment by default",
         "Never copy that `env` into the immutable task settings",
         "requested values are not applied evidence",
         "any compact restart poisons this run",
