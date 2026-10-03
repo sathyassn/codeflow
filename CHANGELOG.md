@@ -38,7 +38,9 @@ erratum below, never an edit of the section.
   never meets it; a project that sets it runs 3.1.0 or later locally and in
   CI.
   cf-ship also says that a pull request already reported ready goes back
-  to draft before any further change to its branch.
+  to draft before any further change to its branch, and its release
+  integration steps move to their own reference, read only after an
+  epic-line landing with a configured release branch.
 
 <!-- codeflow:release-impact minor -->
 - **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs

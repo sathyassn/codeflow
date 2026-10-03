@@ -2195,11 +2195,10 @@ fn installed_ship_reads_release_integration_only_when_configured() {
         let text =
             std::fs::read_to_string(dir.path().join(format!("{tree}/skills/cf-ship/SKILL.md")))
                 .unwrap();
-        assert!(text.contains("references/pr-evidence.md#release-integration-after-landing"));
-        let reference = std::fs::read_to_string(
-            dir.path()
-                .join(format!("{tree}/skills/cf-ship/references/pr-evidence.md")),
-        )
+        assert!(text.contains("references/release-integration.md"));
+        let reference = std::fs::read_to_string(dir.path().join(format!(
+            "{tree}/skills/cf-ship/references/release-integration.md"
+        )))
         .unwrap();
         let text = format!("{text}\n{reference}");
         for required in [
