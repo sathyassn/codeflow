@@ -1076,10 +1076,13 @@ fn check_grok(opts: &Options) -> CheckResult {
                 status,
                 format!("{message}; the CodeFlow shell guard in {files} differs from the shipped handler (its command, timeout or env), and doctor never runs hook text or environment from the repository, so it is unverified{note}"),
             ),
-            GrokCanary::NoGuard => (
-                Status::Warn(remedy::DOCTOR_GROK_HOOKS.with(&[("path", ".grok/hooks/codeflow.json")])),
-                format!(".grok/hooks present, {presence}: no CodeFlow exec-guard is bound to PreToolUse in the hook files grok reads, so grok runs shell commands unguarded (git hooks and CI enforce regardless)"),
-            ),
+            GrokCanary::NoGuard => {
+                let (remedy, why) = missing_guard_repair(opts, root);
+                (
+                    Status::Warn(remedy),
+                    format!(".grok/hooks present, {presence}: no CodeFlow exec-guard is bound to PreToolUse in the hook files grok reads, so grok runs shell commands unguarded{why} (git hooks and CI enforce regardless)"),
+                )
+            }
             GrokCanary::NotRefused(why) => (
                 Status::Warn(remedy::DOCTOR_GROK_HOOKS.with(&[("path", ".grok/hooks/codeflow.json")])),
                 format!(".grok/hooks present, {presence}: the shell guard grok runs did not refuse a canary dangerous command ({why}), so it does not protect a grok session (git hooks and CI enforce regardless){note}"),
@@ -1095,23 +1098,22 @@ fn check_grok(opts: &Options) -> CheckResult {
         let mut left = String::new();
         for path in &templated {
             use crate::scaffold::update::Decision;
-            match opts.update_plan.and_then(|plan| plan(root, path)) {
-                Some(Decision::Rewrite | Decision::ConflictProposal) => managed.push(path),
-                Some(Decision::KeptUserModification) => {
-                    let baseline = format!(".codeflow/.baseline/{path}");
-                    let shipped = if root.join(&baseline).is_file() {
-                        format!(", and {baseline} holds that shipped version")
-                    } else {
-                        String::new()
-                    };
-                    left = format!("{left}; `codeflow update` leaves your edit to {path} as it is and writes no `.new`, since the shipped version has not changed since it was last installed{shipped}");
-                    unmanaged.push(path);
-                }
-                Some(Decision::Skipped(reason)) => {
-                    left = format!("{left}; `codeflow update` skips {path}: {reason}");
-                    unmanaged.push(path);
-                }
-                Some(Decision::Current) | None => unmanaged.push(path),
+            let decision = opts.update_plan.and_then(|plan| plan(root, path));
+            let repairs = match &decision {
+                Some(Decision::Rewrite(text)) => !grok_hooks::keeps_templates(text),
+                Some(Decision::ConflictProposal(_)) => true,
+                _ => false,
+            };
+            if repairs {
+                managed.push(path);
+            } else {
+                left.push_str(&update_leaves(
+                    root,
+                    path,
+                    decision.as_ref(),
+                    "a CodeFlow hook command with a `$` stays",
+                ));
+                unmanaged.push(path);
             }
         }
         let pending: Vec<String> = managed
@@ -1127,10 +1129,14 @@ fn check_grok(opts: &Options) -> CheckResult {
                 pending.join(", ")
             )
         };
-        let remedy = if managed.is_empty() {
-            remedy::DOCTOR_GROK_UNMANAGED_HOOKS.with(&[("path", &unmanaged.join(", "))])
-        } else {
-            remedy::DOCTOR_GROK_HOOKS.with(&[("path", &managed.join(", "))])
+        // Each file gets its own step: update for those it repairs, the
+        // hand edit for the rest, both when both kinds are present.
+        let by_update = remedy::DOCTOR_GROK_HOOKS.with(&[("path", &managed.join(", "))]);
+        let by_hand = remedy::DOCTOR_GROK_UNMANAGED_HOOKS.with(&[("path", &unmanaged.join(", "))]);
+        let remedy = match (managed.is_empty(), unmanaged.is_empty()) {
+            (false, false) => by_update.and(&by_hand),
+            (false, true) => by_update,
+            (true, _) => by_hand,
         };
         (
             Status::Warn(remedy),
@@ -1143,6 +1149,76 @@ fn check_grok(opts: &Options) -> CheckResult {
         message,
         duration: start.elapsed(),
     }
+}
+
+/// Why `codeflow update` leaves a hook file grok reads unrepaired, as a
+/// `; ...` clause, by its own decision for the file; `consequence` says
+/// what stays wrong where update merges the project's edit.
+fn update_leaves(
+    root: &Path,
+    path: &str,
+    decision: Option<&crate::scaffold::update::Decision>,
+    consequence: &str,
+) -> String {
+    use crate::scaffold::update::Decision;
+    match decision {
+        Some(Decision::KeptUserModification) => {
+            let baseline = format!(".codeflow/.baseline/{path}");
+            let shipped = if root.join(&baseline).is_file() {
+                format!(", and {baseline} holds that shipped version")
+            } else {
+                String::new()
+            };
+            format!("; `codeflow update` leaves your edit to {path} as it is and writes no `.new`, since the shipped version has not changed since it was last installed{shipped}")
+        }
+        Some(Decision::Skipped(reason)) => format!("; `codeflow update` skips {path}: {reason}"),
+        Some(Decision::Rewrite(_)) => {
+            format!("; `codeflow update` merges {path} and keeps your edit, so {consequence}")
+        }
+        Some(Decision::ConflictProposal(_)) => format!(
+            "; the merge `codeflow update` proposes for {path} keeps your edit, so {consequence}"
+        ),
+        None if root.join(path).exists() => {
+            format!("; `codeflow update` does not manage {path}")
+        }
+        Some(Decision::Current) | None => String::new(),
+    }
+}
+
+/// The step that binds the shell guard again, with why update leaves each
+/// file: `codeflow update` where its own steps would bind a shipped guard
+/// in a file it manages (a rewrite, or a `.new` proposal holding it), else
+/// the hand edit that adds the shipped guard group, which the clause
+/// quotes.
+fn missing_guard_repair(opts: &Options, root: &Path) -> (remedy::Remedy, String) {
+    use crate::scaffold::update::Decision;
+    let mut why = String::new();
+    for path in grok_hooks::GUARD_FILES {
+        let decision = opts.update_plan.and_then(|plan| plan(root, path));
+        let restores = match &decision {
+            Some(Decision::Rewrite(text)) => grok_hooks::binds_shipped_guard(text),
+            Some(Decision::ConflictProposal(text)) => grok_hooks::proposes_shipped_guard(text),
+            _ => false,
+        };
+        if restores {
+            return (
+                remedy::DOCTOR_GROK_HOOKS.with(&[("path", path)]),
+                String::new(),
+            );
+        }
+        why.push_str(&update_leaves(
+            root,
+            path,
+            decision.as_ref(),
+            "the shell guard stays out of it",
+        ));
+    }
+    let path = grok_hooks::GUARD_FILES[0];
+    let group = grok_hooks::shipped_guard_group();
+    (
+        remedy::DOCTOR_GROK_MISSING_GUARD.with(&[("path", path)]),
+        format!("{why}; the shipped guard group is `{group}`"),
+    )
 }
 
 /// The outcome of checking the shell guard grok would run.
@@ -3733,7 +3809,7 @@ mod tests {
         opts.guard_canary = Some(|_| canary_refused());
         opts.update_plan = Some(|_, path| {
             (path == ".grok/hooks/codeflow.json")
-                .then_some(crate::scaffold::update::Decision::Rewrite)
+                .then(|| crate::scaffold::update::Decision::Rewrite(SHIPPED_GROK_HOOKS.to_string()))
         });
         (dir, opts, home)
     }

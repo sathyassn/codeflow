@@ -298,6 +298,74 @@ pub(super) fn shell_guard(root: &Path) -> ShellGuard {
     }
 }
 
+/// The shipped files grok reads that bind the shell guard, which
+/// `codeflow update` can bind again: the Grok hook file first.
+pub(super) const GUARD_FILES: [&str; 2] = [".grok/hooks/codeflow.json", ".claude/settings.json"];
+
+/// Whether a hook file's text binds a shipped exec-guard handler where
+/// Grok's shell tool hits it.
+pub(super) fn binds_shipped_guard(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return false;
+    };
+    let shipped = shipped_exec_guard_handlers();
+    shell_guard_handlers(value.get("hooks").unwrap_or(&Value::Null))
+        .iter()
+        .any(|handler| shipped.contains(handler))
+}
+
+/// Whether a `.new` proposal `codeflow update` writes, a 3-way merge that
+/// may carry conflict markers, holds a shipped exec-guard command, so that
+/// resolving it in favour of the shipped commands binds the guard.
+pub(super) fn proposes_shipped_guard(text: &str) -> bool {
+    binds_shipped_guard(text)
+        || shipped_exec_guard_handlers().iter().any(|handler| {
+            serde_json::to_string(&handler.command)
+                .is_ok_and(|quoted| text.contains(quoted.trim_matches('"')))
+        })
+}
+
+/// Whether a hook file's text still holds a `CodeFlow` command Grok would
+/// skip, or does not read as hooks at all.
+pub(super) fn keeps_templates(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return true;
+    };
+    codeflow_commands(value.get("hooks").unwrap_or(&Value::Null))
+        .iter()
+        .any(|(_, command)| command.contains('$'))
+}
+
+/// The shell guard as the shipped Grok hook file binds it, as compact JSON
+/// for an adopter to add: its `PreToolUse` matcher and exec-guard handler.
+pub(super) fn shipped_guard_group() -> String {
+    let value: Value =
+        serde_json::from_str(SHIPPED_HOOK_FILES[0]).expect("the shipped grok hooks are JSON");
+    value["hooks"]["PreToolUse"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|group| selects_shell(group.get("matcher")))
+        .find_map(|group| {
+            let handlers: Vec<Value> = group
+                .get("hooks")?
+                .as_array()?
+                .iter()
+                .filter(|handler| {
+                    handler
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_exec_guard)
+                })
+                .cloned()
+                .collect();
+            (!handlers.is_empty()).then(|| {
+                serde_json::json!({"matcher": group.get("matcher"), "hooks": handlers}).to_string()
+            })
+        })
+        .expect("the shipped grok hooks bind the shell guard")
+}
+
 /// Whether a guard's stdout is the deny answer Grok honours: a JSON object
 /// whose `decision` is `deny` with a nonempty `reason`.
 pub(super) fn is_deny_answer(stdout: &str) -> bool {
@@ -558,6 +626,26 @@ mod tests {
         assert_eq!(value["toolInput"], value["tool_input"]);
         let payload = crate::hooks::git_guard::HookPayload::parse(CANARY_PAYLOAD).unwrap();
         assert_eq!(payload.shell_command(), Some("dd if=/dev/zero of=/dev/sda"));
+    }
+
+    /// PR 35 review round 5: the guard group doctor quotes for the hand
+    /// edit binds the shipped guard on its own; a `.new` proposal counts as
+    /// restoring the guard only when it holds the shipped command, conflict
+    /// markers and all.
+    #[test]
+    fn the_quoted_guard_group_binds_the_shipped_guard() {
+        let group: Value = serde_json::from_str(&shipped_guard_group()).unwrap();
+        let bound = serde_json::json!({"hooks": {"PreToolUse": [group]}}).to_string();
+        assert!(binds_shipped_guard(&bound));
+        assert!(!keeps_templates(&bound));
+        let unbound = serde_json::json!({"hooks": {"PreToolUse": []}}).to_string();
+        assert!(!binds_shipped_guard(&unbound));
+        let proposal = format!("<<<<<<< yours\n{unbound}\n=======\n{bound}\n>>>>>>> shipped\n");
+        assert!(proposes_shipped_guard(&proposal));
+        assert!(!proposes_shipped_guard(&format!(
+            "<<<<<<< yours\n{unbound}\n>>>>>>> shipped\n"
+        )));
+        assert!(keeps_templates("not json"));
     }
 
     #[test]

@@ -87,6 +87,13 @@ impl Remedy {
     pub(crate) fn sanctioned(text: &str) -> Self {
         Self(text.to_string())
     }
+
+    /// This remedy and then `other`, for one finding whose parts clear in
+    /// different ways; each part keeps its own catalogued step.
+    #[must_use]
+    pub fn and(self, other: &Remedy) -> Self {
+        Self(format!("{}. Also, {}", self.0, other.0))
+    }
 }
 
 impl serde::Serialize for Remedy {
@@ -512,6 +519,11 @@ catalog! {
     /// `.claude/settings.local.json`, one it skips, or an edit it keeps.
     DOCTOR_GROK_UNMANAGED_HOOKS = Step::Edit("{path}"),
         "`codeflow update` does not rewrite {path}: in it, replace each CodeFlow hook command that carries a `$` with the matching command from the shipped hook file (.grok/hooks/codeflow.json, or .claude/settings.json for Claude settings), or remove it where that file already runs that hook; then `codeflow doctor --check grok` confirms it, and a dangerous shell command in a live grok session should be refused";
+    /// No `CodeFlow` exec-guard is bound where grok's shell tool hits it,
+    /// and `codeflow update` would not bind it again in any file it
+    /// manages.
+    DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
+        "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";

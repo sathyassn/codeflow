@@ -180,6 +180,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GROK_HOOKS", Runs),
     ("DOCTOR_GROK_UNMANAGED_HOOKS", Runs),
+    ("DOCTOR_GROK_MISSING_GUARD", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -2102,6 +2103,158 @@ fn clears_doctor_grok_unmanaged_hooks() {
                 &serde_json::to_string_pretty(&fixed).unwrap(),
             );
         },
+    );
+}
+
+/// The hook file with every `PreToolUse` exec-guard handler removed.
+fn without_exec_guard(text: &str) -> String {
+    let mut value: serde_json::Value = serde_json::from_str(text).unwrap();
+    for group in value["hooks"]["PreToolUse"].as_array_mut().unwrap() {
+        group["hooks"].as_array_mut().unwrap().retain(|h| {
+            !h["command"]
+                .as_str()
+                .unwrap_or("")
+                .contains("hook exec-guard")
+        });
+    }
+    serde_json::to_string_pretty(&value).unwrap()
+}
+
+/// PR 35 review round 5: no exec-guard is bound in any file grok reads,
+/// and `codeflow update` cannot bring it back, since the project opted both
+/// files that ship it out with `[scaffold] ignore`. Doctor gives the hand
+/// edit that restores the binding, quoting the shipped guard group, never
+/// `codeflow update`; adding the quoted group clears it. Where update does
+/// restore it, through the Claude settings it still manages, doctor gives
+/// `codeflow update` and running it clears the finding.
+#[test]
+fn clears_doctor_grok_missing_guard() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let project_toml = read(&root, ".codeflow/project.toml");
+    write(
+        &root,
+        ".codeflow/project.toml",
+        &format!("{project_toml}\n[scaffold]\nignore = [\".grok/hooks/codeflow.json\", \".claude/settings.json\"]\n"),
+    );
+    for path in [".grok/hooks/codeflow.json", ".claude/settings.json"] {
+        let text = without_exec_guard(&read(&root, path));
+        write(&root, path, &text);
+    }
+    codeflow(&root, &["update"]);
+    let finding = "no CodeFlow exec-guard is bound to PreToolUse";
+    let before = doctor(&root, "grok");
+    assert!(before.contains(finding), "{before}");
+    assert!(!before.contains("run `codeflow update`"), "{before}");
+    assert!(
+        before.contains("`codeflow update` skips .grok/hooks/codeflow.json: ignored"),
+        "{before}"
+    );
+    prove(
+        "DOCTOR_GROK_MISSING_GUARD",
+        finding,
+        || doctor(&root, "grok"),
+        |printed| {
+            let flat = printed.split_whitespace().collect::<Vec<_>>().join(" ");
+            let start = flat.find("the shipped guard group is `").unwrap()
+                + "the shipped guard group is `".len();
+            let end = flat[start..].find('`').unwrap() + start;
+            let group: serde_json::Value = serde_json::from_str(&flat[start..end]).unwrap();
+            let path = ".grok/hooks/codeflow.json";
+            let mut hooks: serde_json::Value = serde_json::from_str(&read(&root, path)).unwrap();
+            hooks["hooks"]["PreToolUse"]
+                .as_array_mut()
+                .unwrap()
+                .push(group);
+            write(&root, path, &serde_json::to_string_pretty(&hooks).unwrap());
+        },
+    );
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+        "{after}"
+    );
+
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    for path in [".grok/hooks/codeflow.json", ".claude/settings.json"] {
+        let text = without_exec_guard(&read(&root, path));
+        write(&root, path, &text);
+    }
+    let before = doctor(&root, "grok");
+    assert!(before.contains(finding), "{before}");
+    assert!(
+        before.contains(
+            "run `codeflow update` so the CodeFlow hook commands in .claude/settings.json"
+        ),
+        "{before}"
+    );
+    codeflow(&root, &["update"]);
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+        "{after}"
+    );
+}
+
+/// PR 35 review round 5: `.grok/hooks/codeflow.json`, which update
+/// rewrites, and `.claude/settings.local.json`, which it does not manage,
+/// both hold old wrappers. Doctor names both files and gives both steps:
+/// `codeflow update` for the first and the hand edit for the second;
+/// following both clears the finding.
+#[test]
+fn clears_doctor_grok_hooks_with_an_unmanaged_file_too() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let old = grok_hooks_3_0_0();
+    write(&root, ".codeflow/.baseline/.grok/hooks/codeflow.json", &old);
+    write(&root, ".grok/hooks/codeflow.json", &old);
+    let stale = serde_json::json!({"hooks": {"PreToolUse": [{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "codeflow hook git-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then exit 2; fi"}]
+    }]}});
+    write(
+        &root,
+        ".claude/settings.local.json",
+        &serde_json::to_string_pretty(&stale).unwrap(),
+    );
+    let finding = "grok skips the CodeFlow hook commands in .grok/hooks/codeflow.json, .claude/settings.local.json";
+    let before = doctor(&root, "grok");
+    assert!(before.contains(finding), "{before}");
+    assert!(
+        before.contains(
+            "run `codeflow update` so the CodeFlow hook commands in .grok/hooks/codeflow.json match"
+        ),
+        "{before}"
+    );
+    assert!(
+        before.contains("`codeflow update` does not rewrite .claude/settings.local.json"),
+        "{before}"
+    );
+    prove(
+        "DOCTOR_GROK_HOOKS",
+        finding,
+        || doctor(&root, "grok"),
+        |printed| {
+            assert_prints_row(printed, "DOCTOR_GROK_UNMANAGED_HOOKS");
+            let step = printed_command(printed, "DOCTOR_GROK_HOOKS", None);
+            run_printed(&root, &step, &[], &[]);
+            let settings: serde_json::Value =
+                serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+            let mut fixed = stale.clone();
+            fixed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] =
+                settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].clone();
+            write(
+                &root,
+                ".claude/settings.local.json",
+                &serde_json::to_string_pretty(&fixed).unwrap(),
+            );
+        },
+    );
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shipped shell guard grok runs refused"),
+        "{after}"
     );
 }
 

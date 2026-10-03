@@ -103,11 +103,13 @@ pub enum Decision {
     /// The file already is what update would leave.
     Current,
     /// Update writes the file: it installs or replaces it, merges it
-    /// cleanly, or merges its managed entries or block.
-    Rewrite,
+    /// cleanly, or merges its managed entries or block. Holds the text it
+    /// writes, which keeps any edit of the project's that the merge keeps.
+    Rewrite(String),
     /// Update leaves the file as it is and writes `<dest>.new` beside it,
-    /// holding the shipped version or a 3-way merge to resolve.
-    ConflictProposal,
+    /// holding the shipped version or a 3-way merge to resolve; holds that
+    /// proposal.
+    ConflictProposal(String),
     /// Update leaves a file that differs from the shipped version as it is
     /// and writes no `.new`: the shipped version has not changed since the
     /// recorded baseline, so the project's edit stands.
@@ -179,45 +181,47 @@ pub fn decide(
             false,
         );
         return Some(match step {
-            ManagedStep::Add
-            | ManagedStep::Replace
-            | ManagedStep::Force
-            | ManagedStep::Merge(_) => Decision::Rewrite,
+            ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
+                Decision::Rewrite(rendered)
+            }
+            ManagedStep::Merge(merged) => Decision::Rewrite(merged),
             ManagedStep::Adopt => Decision::Current,
-            ManagedStep::NoBaseline | ManagedStep::Conflict(_) => Decision::ConflictProposal,
+            ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
+            ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
             ManagedStep::Kept => Decision::KeptUserModification,
         });
     }
-    let Some(current) = current else {
-        return Some(Decision::Rewrite);
-    };
-    let unchanged = match entry.region.unwrap_or(RegionFormat::Markdown) {
-        RegionFormat::Json => {
+    let format = entry.region.unwrap_or(RegionFormat::Markdown);
+    let next = match (format, &current) {
+        (RegionFormat::Json, None) => rendered.clone(),
+        (RegionFormat::Json, Some(current)) => {
             let previous = Baseline::read(root, dest);
-            let merged = merge_json_region(
+            merge_json_region(
                 entry,
-                &current,
+                current,
                 previous.as_deref(),
                 &rendered,
                 &mut Vec::new(),
             )
-            .ok()?;
-            merged == current
+            .ok()?
         }
-        format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
+        (format @ (RegionFormat::Markdown | RegionFormat::Hash), current) => {
             let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
-            let block = region::extract_block(&rendered, format)
+            let extracted = region::extract_block(&rendered, format);
+            let block = extracted
+                .clone()
                 .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
-            matches!(
-                region::upsert_block(&current, &block, format).1,
-                BlockOutcome::Unchanged
-            )
+            match current {
+                Some(current) => region::upsert_block(current, &block, format).0,
+                None if extracted.is_some() => rendered.clone(),
+                None => format!("{block}\n"),
+            }
         }
     };
-    Some(match (unchanged, current == rendered) {
-        (false, _) => Decision::Rewrite,
-        (true, true) => Decision::Current,
-        (true, false) => Decision::KeptUserModification,
+    Some(match current {
+        Some(current) if next == current && current == rendered => Decision::Current,
+        Some(current) if next == current => Decision::KeptUserModification,
+        _ => Decision::Rewrite(next),
     })
 }
 
