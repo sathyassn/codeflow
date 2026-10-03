@@ -11,7 +11,7 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    pull_request_findings, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
+    pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::classify::is_planning_path;
 use codeflow_core::workgraph::release_line;
@@ -42,8 +42,9 @@ pub(super) fn dispatch(
     let branch = names.branch;
     let found = match judge(root, range, names) {
         Some(judged) => judged,
-        None => criteria(root, range, branch, class)
-            .and_then(|criteria| pull_request_findings(root, range.base, range.head, &criteria)),
+        None => criteria(root, range, branch, class).and_then(|criteria| {
+            pull_request_findings_judged(root, range.base, range.head, &criteria, names.candidate)
+        }),
     };
     match found {
         Ok(found) => {

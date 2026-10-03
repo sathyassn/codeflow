@@ -2750,7 +2750,7 @@ fn anything_but_a_clean_target_merge_still_blocks_and_names_the_commit() {
             _ => vec![
                 format!("after the reviewed commit {reviewed}"),
                 format!("merge {culprit} brings"),
-                "which is not on the first-parent line of the task's target main".to_string(),
+                "which is not on the first-parent line of the target tip this run is judged against".to_string(),
             ],
         };
         let mut all = vec!["work.acceptance_binding", "TSK-001"];
@@ -2785,4 +2785,266 @@ fn a_task_into_a_moved_integration_line_keeps_the_binding() {
         &ci_on(root, &format!("origin/{LINE}"), BRANCH, "Task: TSK-001"),
         "a clean merge of the moved line",
     );
+}
+
+/// Round 1 of the TSK-220 review: locally writable refs and configuration
+/// are never target authority. With the run's base held at the published
+/// target, a merge of an unpublished commit refuses whether the local
+/// `main` tracks another remote that holds it or `origin/main` is forged to
+/// it; a graft that puts it on the target's first-parent line refuses as an
+/// overlay.
+#[test]
+fn local_refs_and_overlays_never_make_a_merge_the_target() {
+    for case in ["alternate-remote", "forged-origin", "graft"] {
+        let (dir, _remote, reviewed) = reviewed_standalone();
+        let root = dir.path();
+        let published = if case == "graft" {
+            advance_origin(root, "main", "src/published.rs", "pub fn published() {}\n")
+        } else {
+            git_out(root, &["rev-parse", "origin/main"])
+        };
+        git(root, &["switch", "-q", "-c", "feat/unreviewed", "main"]);
+        write(root, "src/unreviewed.rs", "pub fn unreviewed() {}\n");
+        let foreign = commit(root, "feat: unpublished work");
+        git(root, &["switch", "-q", BRANCH]);
+        match case {
+            "alternate-remote" => {
+                git(
+                    root,
+                    &[
+                        "remote",
+                        "add",
+                        "alternate",
+                        "https://example.test/alternate",
+                    ],
+                );
+                git(
+                    root,
+                    &["update-ref", "refs/remotes/alternate/main", &foreign],
+                );
+                git(root, &["config", "branch.main.remote", "alternate"]);
+            }
+            "forged-origin" => git(root, &["update-ref", "refs/remotes/origin/main", &foreign]),
+            _ => write(
+                root,
+                ".git/info/grafts",
+                &format!("{published} {foreign}\n"),
+            ),
+        }
+        git(
+            root,
+            &[
+                "merge",
+                "--no-ff",
+                "-m",
+                "chore: merge the target",
+                &foreign,
+            ],
+        );
+        let merge = head(root);
+        let needle = if case == "graft" {
+            "overlays its recorded history with the graft file".to_string()
+        } else {
+            format!("merge {merge} brings {foreign}, which is not on the first-parent line of the target tip this run is judged against ({published})")
+        };
+        assert_blocks(
+            &ci_on(root, &published, BRANCH, "Task: TSK-001"),
+            case,
+            &[
+                "work.acceptance_binding",
+                &format!("src/unreviewed.rs changed after the reviewed commit {reviewed}"),
+                &needle,
+            ],
+        );
+    }
+}
+
+/// Round 1 of the TSK-220 review: a stopped stack refuses even when the
+/// change from the review nets out (SPC-013 R-60), so an octopus merge
+/// that keeps the reviewed tree and an unreviewed change followed by its
+/// removal each refuse, naming the commit.
+#[test]
+fn a_stopped_stack_refuses_even_when_the_change_nets_out() {
+    for case in ["octopus", "transient"] {
+        let (dir, _remote, reviewed) = reviewed_standalone();
+        let root = dir.path();
+        let base = git_out(root, &["rev-parse", "origin/main"]);
+        let culprit = if case == "octopus" {
+            git(root, &["switch", "-q", "-c", "feat/side", "main"]);
+            write(root, "src/side.rs", "pub fn side() {}\n");
+            let side = commit(root, "feat: side work");
+            git(root, &["switch", "-q", BRANCH]);
+            let current = head(root);
+            let tree = git_out(root, &["rev-parse", "HEAD^{tree}"]);
+            let octopus = git_out(
+                root,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &current,
+                    "-p",
+                    &side,
+                    "-p",
+                    &base,
+                    "-m",
+                    "chore: octopus",
+                ],
+            );
+            git(root, &["reset", "-q", "--hard", &octopus]);
+            octopus
+        } else {
+            write(root, "src/temp.rs", "pub fn temporary() {}\n");
+            let added = commit(root, "feat: unreviewed transient");
+            std::fs::remove_file(root.join("src/temp.rs")).unwrap();
+            commit(root, "fix: remove the transient");
+            added
+        };
+        let needle = if case == "octopus" {
+            format!("merge {culprit} has more than two parents")
+        } else {
+            // The walk meets the removal first; it names that commit.
+            "src/temp.rs changed".to_string()
+        };
+        assert_blocks(
+            &ci_on(root, &base, BRANCH, "Task: TSK-001"),
+            case,
+            &[
+                "work.acceptance_binding",
+                &format!("the history after the reviewed commit {reviewed} does not stack on it"),
+                &needle,
+            ],
+        );
+    }
+}
+
+/// TSK-220 (TSK-213's refusal): a task completed, reopened and given a new
+/// criterion inside its own unmerged branch completes again when its record
+/// is not on the target, since no landed criteria exist to protect; the
+/// same reopen of a task whose record is on the target still refuses.
+#[test]
+fn an_unlanded_task_may_change_its_criteria_when_reopened_in_its_range() {
+    const EXTENDED: &str = "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n- AC-3 When reopened, the system shall still work.\n";
+    for on_target in [false, true] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        if on_target {
+            write(
+                root,
+                &record_path("TSK-001"),
+                &standalone("TSK-001", "todo", "main", "Pending.\n"),
+            );
+            commit(root, "docs(records): the task on the target");
+        }
+        git(root, &["switch", "-q", "-c", BRANCH, "main"]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &standalone("TSK-001", "todo", "main", "Pending.\n"),
+        );
+        write(root, "src/lib.rs", "pub fn first() {}\n");
+        let first = commit(root, "feat: first attempt");
+        let old = fix_block(&first);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &standalone("TSK-001", "complete", "main", &old),
+        );
+        commit(root, "docs(records): complete the task");
+        let archived = old.replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: a criterion was missing\n",
+        );
+        write(
+            root,
+            &record_path("TSK-001"),
+            &standalone("TSK-001", "todo", "main", &archived).replace(OWN_JOURNEY, EXTENDED),
+        );
+        commit(root, "docs(records): reopen and add AC-3");
+        write(root, "src/lib.rs", "pub fn second() {}\n");
+        let reviewed = commit(root, "feat: meet AC-3");
+        let closeout = format!(
+            "{archived}{}",
+            block(
+                &reviewed,
+                &[
+                    "AC-1: verified | unit",
+                    "AC-2: verified | journey",
+                    "AC-3: verified | unit",
+                ],
+                "verified | journey",
+                "none: nothing deferred",
+            )
+        );
+        write(
+            root,
+            &record_path("TSK-001"),
+            &standalone("TSK-001", "todo", "main", &closeout).replace(OWN_JOURNEY, EXTENDED),
+        );
+        let verb = status_complete(root, "TSK-001");
+        if on_target {
+            assert_ne!(verb.0, 0, "a landed record keeps its criteria: {}", verb.1);
+            assert!(
+                verb.1.contains("a reopened task keeps its criteria"),
+                "{}",
+                verb.1
+            );
+            continue;
+        }
+        assert_passes(&verb, "the verb on an unlanded in-range reopen");
+        commit(root, "docs(records): complete the task again");
+        // The fixture has no id registry, so CI refuses the added record
+        // under `work.id_registry`; the binding and the freeze accept it.
+        let result = ci(root, BRANCH, "TSK-001");
+        for rule in ["work.acceptance_binding", "work.criteria_frozen (block)"] {
+            assert!(!result.1.contains(rule), "{rule}: {}", result.1);
+        }
+        assert!(result.1.contains("TSK-001 criteria delta"), "{}", result.1);
+    }
+}
+
+/// TSK-220: the pre-push hook can judge a range from an old fork point,
+/// whose first-parent line does not reach the target commit a refresh
+/// merged; the hook's candidate authority, the destination default
+/// branch's tip passed as `--policy-from`, is the target tip that carries
+/// it.
+#[test]
+fn the_pre_push_candidate_authority_carries_a_target_merge() {
+    let (dir, _remote, _reviewed) = reviewed_standalone();
+    let root = dir.path();
+    let pushed = git_out(root, &["rev-parse", "main"]);
+    let tip = advance_origin(root, "main", "src/line.rs", "pub fn line() {}\n");
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "chore: merge the target",
+            "origin/main",
+        ],
+    );
+    let run = |authority: Option<&str>| {
+        let mut args = vec![
+            "ci", "--base", &pushed, "--head", "HEAD", "--branch", BRANCH,
+        ];
+        if let Some(tip) = authority {
+            args.extend(["--policy-from", tip]);
+        }
+        let out = codeflow().args(&args).current_dir(root).output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+    assert_blocks(
+        &run(None),
+        "the branch's own last push alone",
+        &["work.acceptance_binding", "not on the first-parent line"],
+    );
+    assert_passes(&run(Some(&tip)), "with the candidate authority");
 }
