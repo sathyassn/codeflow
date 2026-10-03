@@ -709,9 +709,16 @@ fn awaiting_selection_errors(
     errs
 }
 
-/// How many merged pull requests landed a branch carrying `task_id`, counted
-/// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
-/// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
+/// How many merges in the history of `HEAD` landed a branch carrying
+/// `task_id`: merges whose merged-in branch names the task (`Merge pull
+/// request #N from <prefix>/TSK-NNN-...`, `Merge branch '<prefix>/TSK-NNN-...'`).
+/// A catch-up merge of the target into the task branch (`Merge
+/// remote-tracking branch 'origin/main' into task/TSK-NNN-...`) names the
+/// task only as its destination, so it is not a landing. The whole history
+/// is read, not only the first-parent line, so a task that landed twice on
+/// an integration line still counts twice after that line lands on `main`.
+/// `codeflow integrate` fast-forwards and writes no merge, so its landings
+/// are not counted. Zero when git is unavailable.
 fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
     let Ok(out) = crate::git::command()
         .arg("-C")
@@ -724,8 +731,17 @@ fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
     let needle = format!("/{task_id}-");
     String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|subject| subject.starts_with("Merge") && subject.contains(&needle))
+        .filter_map(merged_in)
+        .filter(|source| source.contains(&needle))
         .count()
+}
+
+/// The merged-in side of a merge subject: the text after `Merge ` and before
+/// ` into `, which git and GitHub both write first. `None` for a subject that
+/// is not a merge subject.
+fn merged_in(subject: &str) -> Option<&str> {
+    let rest = subject.strip_prefix("Merge ")?;
+    Some(rest.split_once(" into ").map_or(rest, |(source, _)| source))
 }
 
 // ---------------------------------------------------------------------------
@@ -883,6 +899,32 @@ mod tests {
     use crate::models::{EpicStatus, TaskStatus};
 
     use super::*;
+
+    #[test]
+    fn merged_in_reads_the_source_side_of_merge_subjects() {
+        for (subject, source) in [
+            (
+                "Merge pull request #10 from task/TSK-197-native-windows",
+                Some("pull request #10 from task/TSK-197-native-windows"),
+            ),
+            (
+                "Merge branch 'task/TSK-001-a' into feat/line",
+                Some("branch 'task/TSK-001-a'"),
+            ),
+            (
+                "Merge branch 'task/TSK-001-a'",
+                Some("branch 'task/TSK-001-a'"),
+            ),
+            (
+                "Merge remote-tracking branch 'origin/main' into task/TSK-197-native-windows",
+                Some("remote-tracking branch 'origin/main'"),
+            ),
+            ("Merge main into fix/TSK-201-ci-env-hermetic", Some("main")),
+            ("fix: merge task/TSK-001-a", None),
+        ] {
+            assert_eq!(merged_in(subject), source, "{subject}");
+        }
+    }
 
     fn valid_task_content() -> String {
         r#"---
