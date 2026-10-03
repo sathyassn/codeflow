@@ -4326,11 +4326,128 @@ def evaluator_key_path() -> Path:
     return (evaluator_home() / EVALUATOR_KEY).resolve()
 
 
+# Windows has no POSIX mode bits (every folder reads as 0o777 there), so the
+# key's privacy is its access list: the kit makes the folder and the key
+# owner-only, then reads each list back and refuses one it cannot prove
+# private. SYSTEM and the Administrators group can read any file anyway, so
+# their entries are no exposure.
+WINDOWS_TRUSTED = {"S-1-5-18", "S-1-5-32-544"}
+
+
+def windows_api():
+    """advapi32 and kernel32 with the signatures this check calls."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    pointer = ctypes.POINTER(ctypes.c_void_p)
+    advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer, pointer]
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.c_int]
+    advapi.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, pointer]
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    return ctypes, wintypes, advapi, kernel
+
+
+def windows_sid_text(sid: int) -> str:
+    ctypes, _, advapi, kernel = windows_api()
+    text = ctypes.c_void_p()
+    if not advapi.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+        raise EvalError(f"cannot read a Windows account (error {ctypes.get_last_error()})")
+    try:
+        return ctypes.wstring_at(text.value)
+    finally:
+        kernel.LocalFree(text)
+
+
+def windows_user() -> str:
+    """The SID of the account this process runs as."""
+
+    ctypes, wintypes, advapi, kernel = windows_api()
+    token = wintypes.HANDLE()
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+        raise EvalError(f"cannot read this process's Windows account (error {ctypes.get_last_error()})")
+    try:
+        needed = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not advapi.GetTokenInformation(token, 1, buffer, needed, ctypes.byref(needed)):
+            raise EvalError(f"cannot read this process's Windows account (error {ctypes.get_last_error()})")
+        # TOKEN_USER begins with the pointer to the account's SID.
+        return windows_sid_text(ctypes.c_void_p.from_buffer(buffer).value)
+    finally:
+        kernel.CloseHandle(token)
+
+
+def windows_access(path: Path) -> tuple[str, set[str]]:
+    """The owner of `path` and every account its access list allows anything
+    to, read through the Windows security API. Refused when the list cannot be
+    read or holds an entry this check cannot judge."""
+
+    ctypes, _, advapi, kernel = windows_api()
+    owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    # SE_FILE_OBJECT; OWNER_ and DACL_SECURITY_INFORMATION.
+    status = advapi.GetNamedSecurityInfoW(str(path), 1, 0x1 | 0x4, ctypes.byref(owner), None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
+    if status != 0:
+        raise EvalError(f"cannot read the access list of {path} (error {status})")
+    try:
+        if not dacl.value:
+            # A missing list grants everyone everything.
+            return windows_sid_text(owner.value), {"S-1-1-0"}
+        size = (ctypes.c_uint32 * 3)()
+        if not advapi.GetAclInformation(dacl, size, ctypes.sizeof(size), 2):
+            raise EvalError(f"cannot read the access list of {path} (error {ctypes.get_last_error()})")
+        allowed = set()
+        for index in range(size[0]):
+            ace = ctypes.c_void_p()
+            if not advapi.GetAce(dacl, index, ctypes.byref(ace)):
+                raise EvalError(f"cannot read the access list of {path} (error {ctypes.get_last_error()})")
+            kind, flags = ctypes.string_at(ace.value, 2)
+            if flags & 0x08 or kind == 1:
+                continue  # inherit-only (judged on the child) or a denial
+            if kind != 0:
+                raise EvalError(f"the access list of {path} holds an entry of type {kind} this check cannot judge")
+            # ACCESS_ALLOWED_ACE: a 4-byte header and a 4-byte mask, then the SID.
+            allowed.add(windows_sid_text(ace.value + 8))
+        return windows_sid_text(owner.value), allowed
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def windows_make_private(path: Path, user: str) -> None:
+    """Replace the access list of `path` with one entry: full control for
+    `user`, inherited by what the folder holds."""
+
+    grant = f"*{user}:(OI)(CI)F" if path.is_dir() else f"*{user}:F"
+    done = subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", grant], capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise EvalError(f"cannot make {path} owner-only: {(done.stdout + done.stderr).strip()}")
+
+
+def windows_exposure(path: Path, user: str) -> str | None:
+    """Why `path` is not private to `user`, or None when it is."""
+
+    owner, allowed = windows_access(path)
+    if owner != user and owner not in WINDOWS_TRUSTED:
+        return f"owned by another account ({owner})"
+    others = sorted(allowed - {user} - WINDOWS_TRUSTED)
+    return f"open to other accounts ({', '.join(others)})" if others else None
+
+
 def evaluator_key(*, create: bool = False) -> bytes | None:
     """The evaluator's signing key, made owner-only on first use when
     `create`; None when there is none. Refused when the key or its folder
     belongs to another user, others can write the folder, or others can read
-    the key."""
+    the key; on Windows, when either access list lets in another account or
+    cannot be read."""
 
     path = evaluator_key_path()
     try:
@@ -4345,17 +4462,26 @@ def evaluator_key(*, create: bool = False) -> bytes | None:
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(path.parent, 0o700)
+        if sys.platform == "win32":
+            windows_make_private(path.parent, windows_user())
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(secrets.token_hex(32) + "\n")
+        if sys.platform == "win32":
+            windows_make_private(path, windows_user())
+    if sys.platform == "win32":
+        user = windows_user()
+        for target, name in ((path.parent, "the evaluator key's folder"), (path, "the evaluator key")):
+            exposure = windows_exposure(target, user)
+            if exposure is not None:
+                raise EvalError(f"{name} is {exposure}; make it owner-only, for example with icacls: {target}")
+        return bytes.fromhex(path.read_text(encoding="utf-8").strip())
     folder, key = path.parent.stat(), path.stat()
     if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
         raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
-    # Windows has no POSIX mode bits (every folder reads as 0o777 there);
-    # the key's privacy rests on the user profile's access list instead.
-    if os.name == "posix" and stat.S_IMODE(folder.st_mode) & 0o022:
+    if stat.S_IMODE(folder.st_mode) & 0o022:
         raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
-    if os.name == "posix" and stat.S_IMODE(key.st_mode) & 0o077:
+    if stat.S_IMODE(key.st_mode) & 0o077:
         raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
     return bytes.fromhex(path.read_text(encoding="utf-8").strip())
 

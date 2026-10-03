@@ -42,8 +42,12 @@ erratum below, never an edit of the section.
   can be read by a second gate on Windows; a directory in the way of a
   ledger file is named as a directory there; a shipped spec checked out
   with CRLF line endings no longer counts as edited; and the model
-  evaluation kit no longer refuses its key folder for POSIX mode bits
-  Windows does not have.
+  evaluation kit keeps its signing key owner-only through the key's and
+  its folder's access lists, refusing either list that lets in another
+  account, since Windows has no POSIX mode bits.
+  On Windows the guards refuse a recursive delete under a `/`-rooted
+  temporary path such as `/tmp/scratch`: that path names no fixed place
+  there, and a junction can send the delete anywhere.
 
 ### Changed
 

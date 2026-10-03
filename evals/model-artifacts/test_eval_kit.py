@@ -4947,6 +4947,48 @@ print(json.dumps(seen, sort_keys=True))
         finally:
             os.chmod(folder, 0o700)
 
+    def test_a_windows_key_is_made_and_kept_owner_only(self) -> None:
+        # Windows has no mode bits: the kit sets each access list to the user
+        # alone and refuses one it cannot prove private. The security API is
+        # faked here; retention_pack reads the real lists on Windows.
+        user = "S-1-5-21-1-2-3-1001"
+        lists: dict[str, tuple[str, set[str]]] = {}
+        made: list[str] = []
+
+        def make_private(path: Path, account: str) -> None:
+            made.append(path.name)
+            lists[str(path)] = (account, {account})
+
+        with patch.object(eval_kit.sys, "platform", "win32"), \
+                patch.object(eval_kit, "windows_user", return_value=user), \
+                patch.object(eval_kit, "windows_make_private", side_effect=make_private), \
+                patch.object(eval_kit, "windows_access", side_effect=lambda path: lists[str(path)]):
+            key = eval_kit.evaluator_key(create=True)
+            path = eval_kit.evaluator_key_path()
+            self.assertEqual(["eval", "judgement.key"], made)
+            self.assertEqual(key, eval_kit.evaluator_key())
+            for target in (path.parent, path):
+                for label, entry, refusal in (
+                    ("system and administrators", (user, {user, "S-1-5-18", "S-1-5-32-544"}), None),
+                    ("owned by administrators", ("S-1-5-32-544", {user}), None),
+                    ("everyone", (user, {user, "S-1-1-0"}), r"open to other accounts \(S-1-1-0\)"),
+                    ("another owner", ("S-1-5-21-9", {user}), "owned by another account"),
+                ):
+                    with self.subTest(target=target.name, label=label):
+                        saved = lists[str(target)]
+                        lists[str(target)] = entry
+                        try:
+                            if refusal is None:
+                                self.assertEqual(key, eval_kit.evaluator_key())
+                            else:
+                                with self.assertRaisesRegex(eval_kit.EvalError, refusal):
+                                    eval_kit.evaluator_key()
+                        finally:
+                            lists[str(target)] = saved
+            with patch.object(eval_kit, "windows_access", side_effect=eval_kit.EvalError("cannot read the access list")):
+                with self.assertRaisesRegex(eval_kit.EvalError, "cannot read the access list"):
+                    eval_kit.evaluator_key()
+
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():
             result = valid_result("full")
