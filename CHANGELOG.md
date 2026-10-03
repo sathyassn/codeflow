@@ -159,6 +159,24 @@ erratum below, never an edit of the section.
   release commit with `dirty=false`. A dirty build, a build from another
   commit, or an archive without a binary stops the release.
 
+<!-- codeflow:release-impact patch -->
+- **Catch-up merges no longer count as extra pull requests.**
+  `codeflow validate --docs` warned that most completed standalone tasks
+  were "completed by N pull requests", because it counted every merge whose
+  subject names the task branch, including the merges of the target into
+  that branch that the rules ask for. It now counts only merges that brought
+  the task branch in, so a task that landed once draws no warning and a
+  task that really landed twice still does. A task landed with
+  `codeflow integrate`, which fast-forwards, is not counted, as before.
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow present show` says when the browser is already open.** On a
+  session whose browser is still running, `show` exited 4 with
+  "presentation browser launch is not qualified". It now says the session's
+  browser is already open and tells you to switch to its window, or quit
+  that browser and run `show` again; `show --no-launch` prints the
+  session's address. The exit code is still 4.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
