@@ -150,21 +150,30 @@ as extra steps when your stack warrants:
   counts only on a commit the trusted commit already holds. The step fails
   before it scans when the trusted commit is not in the checkout, and it
   downloads gitleaks under the runner's temp directory. Nothing from the
-  checkout runs or steers the scan: its Python helpers run isolated, git
-  reads `.gitattributes` from the trusted commit (git 2.41 or later), and
-  no step before the scan runs code from the checkout, since such a step
-  could set the scan's environment. Add any new step to that job after
-  the scan. The scan reads what each merge adds beyond its automatic
-  result, files whose type changes and files git judges binary, which
-  gitleaks' default history scan leaves out. git cannot show what an
-  octopus merge adds, so the step refuses one the trusted commit does not
-  hold; merge the branches one at a time. It also refuses a path with a
-  backslash, a double quote or a control character in a commit the trusted
-  commit does not hold, or on either side of a merge it does not hold,
-  since gitleaks cannot read such names reliably; rename the file, or rebase
-  instead of merging. Names with spaces or non-ASCII letters pass. The scan
-  pins git's patch format, so git configuration on the runner, such as
-  `diff.noprefix`, cannot move a finding to another path. It then drops one
+  checkout runs or steers the scan: its Python helpers run isolated (they
+  need Python 3.11 or later), git reads `.gitattributes` from the trusted
+  commit (git 2.41 or later), and no step before the scan runs code from
+  the checkout, since such a step could set the scan's environment. Add
+  any new step to that job after the scan. If you customised the workflow
+  before this release and the secret-scan job runs a step of yours before
+  the gitleaks step, `codeflow update` keeps it through the merge and warns
+  about it on every run: move it after the gitleaks step or into another
+  job. The scan reads HEAD's history (on a pull request, the pull request
+  merged into its base), what each merge adds beyond its automatic result,
+  files whose type changes and files git judges binary, which gitleaks'
+  default history scan leaves out. Branches and tags HEAD does not reach
+  are scanned by their own pull requests. In the commits a pull request
+  brings, git cannot show what an octopus merge adds, so the step refuses
+  one; merge the branches one at a time. It also refuses a path with a
+  backslash, a double quote or a control character that one of those
+  commits changes, or that either side of a merge among them changes,
+  since gitleaks cannot read such names reliably. Each refusal names the
+  commit and the refs that hold it. Renaming the file in a later commit
+  leaves the name in the earlier one, so rewrite the pull request's
+  commits, or rebase onto the base when the change is on the base's side.
+  Names with spaces or non-ASCII letters pass. The scan pins git's patch
+  format, so git configuration on the runner, such as `diff.noprefix`,
+  cannot move a finding to another path. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

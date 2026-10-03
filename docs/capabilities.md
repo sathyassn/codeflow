@@ -278,9 +278,8 @@ The duo develop flow's mandatory security and red-team stage (ADR-0016). The
 CI `security-review` job runs `osv-scanner` for software composition analysis
 (SCA) over every lockfile ecosystem. It blocks CI only when the
 `security_review` or `dep_audit` policy key is set to `block`; the shipped
-default is warn. Secrets found by gitleaks always block, and the scan
-reads its exemptions from the trusted commit, so a pull request cannot
-exempt the leak it adds. The
+default is warn. Secrets found by gitleaks always block, with exemptions
+read from the trusted commit. The
 `cf-security-reviewer` agent runs a two-vendor adversarial review; its
 findings warn locally and force bounded rework, with the human merger as the
 backstop (ADR-0007). Detail:

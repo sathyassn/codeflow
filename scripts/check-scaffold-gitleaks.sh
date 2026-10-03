@@ -21,10 +21,12 @@
 #      secret added in a merge resolution or in a file that replaces a link
 #      is reported, as is one in a file git judges binary, under its own
 #      path, whatever git configuration the runner inherits; merges report
-#      nothing twice; an octopus merge the trusted commit does not hold, a
-#      path gitleaks cannot read reliably (a backslash, a double quote or a
-#      control character) in one or on either side of a merge in one, and
-#      a git older than 2.41 are refused; spaced and non-ASCII names pass;
+#      nothing twice; in the history HEAD holds and the trusted commit does
+#      not, an octopus merge and a path gitleaks cannot read reliably (a
+#      backslash, a double quote or a control character), in a commit or on
+#      either side of a merge, are refused with the commit and its refs
+#      named, as is a git older than 2.41; spaced and non-ASCII names pass;
+#      branches and tags HEAD does not reach neither refuse nor fail it;
 #   4. this repository's own gitleaks step is the template's, and in both
 #      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
@@ -268,8 +270,7 @@ PIPELINES=".claude/workflows/pipeline.workflow.js:3 .codeflow/.baseline/.claude/
 # the credential on the same line and the prose elsewhere are not.
 expect defaults 1 $PIPELINES notes.md:1
 
-# The prose alone passes, in a history of its own (gitleaks reads every
-# branch).
+# The prose alone passes, in a history of its own.
 SCAFFOLD=$REPO
 REPO="$TMP/prose-only"
 for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
@@ -297,7 +298,7 @@ expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
 # A git that cannot list the paths the scan will read fails the step before
 # gitleaks runs.
 STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
-MESSAGE="cannot list the paths that commits the trusted commit does not hold change; refusing to scan"
+MESSAGE="cannot check the history the pull request brings; refusing to scan"
 NO_SCAN=1
 expect listing-failure 1
 NO_SCAN=
@@ -667,7 +668,7 @@ SH
 chmod +x "$TMP/git-2.40/git"
 new_repo old-git
 STEP_ENV="PATH=$TMP/fake-bin:$TMP/git-2.40:$PATH"
-MESSAGE="git version 2.40.4 cannot read .gitattributes from the trusted commit; refusing to scan"
+MESSAGE="git version 2.40.4 cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"
 NO_SCAN=1
 expect old-git 1
 STEP_ENV=
@@ -695,7 +696,7 @@ as_canary commit -q --amend -m octopus
 git -C "$REPO" rm -q octopus.txt
 commit "remove what the octopus added"
 NO_SCAN=1
-MESSAGE="is not in the trusted commit, and git cannot show what it adds"
+MESSAGE="(in HEAD, refs/heads/$MAIN) is not in the trusted commit, and git cannot show what it adds"
 on_base "$BASE" pr-octopus 1
 NO_SCAN=
 MESSAGE=
@@ -706,6 +707,25 @@ printf 'changed\n' >>"$REPO/README.md"
 printf 'untracked\n' >"$REPO/untracked.txt"
 as_canary stash push -q -u
 on_base "$BASE" local-stash 0
+# Branches and tags that HEAD does not reach are not the pull request's: an
+# octopus merge, an odd name and a leak on them neither refuse nor fail it.
+new_repo unrelated-ref
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+for branch in one two; do
+  git -C "$REPO" checkout -q -b "$branch" "$BASE"
+  printf '%s\n' "$branch" >"$REPO/$branch.txt"
+  commit "$branch"
+done
+git -C "$REPO" checkout -q -b stale "$BASE"
+as_canary merge -q --no-ff -m octopus one two >/dev/null 2>&1
+printf 'odd\n' >"$REPO/stale\\"
+printf '%s\n' "$PLANTED" >"$REPO/stale-leak.txt"
+commit "an odd name and a leak"
+git -C "$REPO" tag stale-tag
+git -C "$REPO" checkout -q "$MAIN"
+printf 'more\n' >>"$REPO/README.md"
+commit "the pull request"
+on_base "$BASE" unrelated-ref 0
 
 # A NUL byte, which makes git call a file binary, does not hide its text,
 # in a commit or in what a merge adds.
@@ -786,14 +806,15 @@ useDefault = true
 [[allowlists]]
 description = \"a real b/ directory\"
 paths = ['''^b/''']"
-ODD_NAME="gitleaks cannot read its backslash, double quote or control character reliably; rename it, or rebase instead of merging; refusing to scan"
+REWRITE="gitleaks cannot read a backslash, double quote or control character in a path reliably; rewrite the pull request's commits so that none uses the name"
+REBASE="rebase the pull request onto the trusted commit instead of merging it in; refusing to scan"
 new_repo backslash-name
 printf '%s\n' "$PLANTED" >"$REPO/leak\\"
 commit "a name that ends in a backslash"
 rm "$REPO/leak\\"
 commit "delete it"
 NO_SCAN=1
-MESSAGE=$ODD_NAME
+MESSAGE=$REWRITE
 on_base "$BASE" pr-backslash-name 1
 # A newline in the name of a file both sides change: the conflicted merge's
 # header would span lines, and the trusted ^b/ allowlist would then cover
@@ -854,6 +875,7 @@ git -C "$REPO" rm -q --cached -r . >/dev/null
 rm -f "$REPO/side.txt" "$REPO/trusted${NL}123456${NL}x.txt"
 printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/orig.txt"
 commit "resolve with a secret at the old name"
+MESSAGE=$REBASE
 on_base "$BASE" pr-trusted-rename-newline 1
 NO_SCAN=
 MESSAGE=

@@ -191,6 +191,13 @@ fn update_writes(
     }
 
     prune_orphans(root, &manifest, &ignore, &mut installed, &mut report)?;
+    for entry in manifest.entries.iter().filter(|entry| {
+        entry.src == SECRET_SCAN_WORKFLOW
+            && entry.applies(state.tier, &state.permission_preset)
+            && !ignore.is_ignored(&entry.dest)
+    }) {
+        warn_steps_before_secret_scan(root, &entry.dest, &mut report);
+    }
     if let Some(kept) = &kept_template {
         if root.join(".codeflow/policy.json").exists() {
             let diagnosis = pr_template::diagnose(root, kept, false)?;
@@ -241,6 +248,80 @@ fn update_writes(
     }
 
     Ok(report)
+}
+
+/// The shipped CI workflow whose secret-scan job must run nothing but the
+/// checkout before its gitleaks step (TSK-210).
+const SECRET_SCAN_WORKFLOW: &str = "ci/codeflow-ci.yml";
+
+/// Warns, on every update, about a step the project runs before the gitleaks
+/// step in the secret-scan job of `dest` or of its conflict proposal
+/// `dest.new`. Such a step can set the scan's environment through
+/// `GITHUB_ENV` or `GITHUB_PATH`, and one that runs the pull request's code
+/// lets the pull request hide its own leak. A 3-way merge keeps a step the
+/// project added before this protection shipped, so the step is kept as
+/// written and the warning stands until it moves.
+fn warn_steps_before_secret_scan(root: &Path, dest: &str, report: &mut Report) {
+    for path in [dest.to_string(), format!("{dest}.new")] {
+        let Ok(text) = std::fs::read_to_string(root.join(&path)) else {
+            continue;
+        };
+        let steps = steps_before_secret_scan(&text);
+        if steps.is_empty() {
+            continue;
+        }
+        report.warnings.push(format!(
+            "{path}: the secret-scan job runs {} before its gitleaks step. A step there can set \
+             the scan's environment through GITHUB_ENV or GITHUB_PATH, and one that runs the \
+             pull request's code lets the pull request hide a leak from the scan; move it after \
+             the gitleaks step or into another job. Update kept it as you wrote it.",
+            steps.join(", ")
+        ));
+    }
+}
+
+/// The steps of a workflow's `secret-scan` job that run before its gitleaks
+/// step, other than `actions/checkout`, each named by its `name`, `uses` or
+/// first `run` line. Empty when the workflow does not parse (a conflict
+/// proposal with markers), has no such job, or has no gitleaks step.
+fn steps_before_secret_scan(workflow: &str) -> Vec<String> {
+    use serde_yaml::Value;
+    let Ok(doc) = serde_yaml::from_str::<Value>(workflow) else {
+        return vec![];
+    };
+    let Some(steps) = doc
+        .get("jobs")
+        .and_then(|jobs| jobs.get("secret-scan"))
+        .and_then(|job| job.get("steps"))
+        .and_then(Value::as_sequence)
+    else {
+        return vec![];
+    };
+    let text = |step: &Value, key: &str| step.get(key).and_then(Value::as_str).map(str::to_string);
+    let is_scan = |step: &Value| {
+        text(step, "name").is_some_and(|name| name.trim().eq_ignore_ascii_case("gitleaks"))
+            || text(step, "run").is_some_and(|run| run.contains("gitleaks"))
+    };
+    let Some(scan) = steps.iter().position(is_scan) else {
+        return vec![];
+    };
+    steps[..scan]
+        .iter()
+        .filter(|step| {
+            !(text(step, "uses").is_some_and(|uses| uses.starts_with("actions/checkout@"))
+                && step.get("run").is_none())
+        })
+        .map(|step| {
+            let label = text(step, "name")
+                .or_else(|| text(step, "uses").map(|uses| format!("uses: {uses}")))
+                .or_else(|| {
+                    text(step, "run")
+                        .map(|run| format!("run: {}", run.lines().next().unwrap_or("").trim()))
+                })
+                .unwrap_or_else(|| "a step".to_string());
+            format!("`{label}`")
+        })
+        .collect()
 }
 
 /// The work-record migration (SPC-013 R-83): an existing project whose
@@ -1040,6 +1121,34 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// The shipped workflow and this repository's own run only the checkout
+    /// before the gitleaks step; a step added there is named, and a
+    /// conflict proposal that does not parse is left alone (TSK-210).
+    #[test]
+    fn steps_before_secret_scan_names_only_added_steps() {
+        let shipped = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        let own = include_str!("../../../../.github/workflows/codeflow-ci.yml");
+        assert!(super::steps_before_secret_scan(shipped).is_empty());
+        assert!(super::steps_before_secret_scan(own).is_empty());
+
+        let checkout = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
+                        - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
+        assert!(shipped.contains(checkout));
+        let added = shipped.replacen(
+            checkout,
+            &format!(
+                "{checkout}      - name: setup\n        run: ./scripts/setup.sh\n      - uses: ./.github/actions/prepare\n"
+            ),
+            1,
+        );
+        assert_eq!(
+            super::steps_before_secret_scan(&added),
+            ["`setup`", "`uses: ./.github/actions/prepare`"]
+        );
+        let conflicted = format!("<<<<<<< ours\n{added}=======\n{shipped}>>>>>>> theirs\n");
+        assert!(super::steps_before_secret_scan(&conflicted).is_empty());
+    }
+
     /// `CodeFlow`'s release jobs live in its own `codeflow-release.yml`, not
     /// in its copy of the managed CI file (TSK-106, SPC-013 R-96), so an
     /// update proposal for that file carries none of them (TSK-107 kept them

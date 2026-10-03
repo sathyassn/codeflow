@@ -199,13 +199,17 @@ jobs:
       #
       # Nothing from the checkout runs or steers the scan. The Python
       # helpers run isolated (python3 -I), so a module the pull request
-      # commits beside them is never imported. git reads .gitattributes from
-      # the trusted commit (GIT_ATTR_SOURCE, git 2.41 or later), so a
-      # pull request cannot mark its own files -diff to hide their changes.
+      # commits beside them is never imported; they need Python 3.11 or
+      # later, for tomllib. git reads .gitattributes from the trusted commit
+      # (GIT_ATTR_SOURCE, git 2.41 or later), so a pull request cannot mark
+      # its own files -diff to hide their changes.
       # No step before this one runs code from the checkout: a step that
       # did could write GITHUB_ENV or GITHUB_PATH for this one, so
       # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
-      # this workflow's own env. Keep it that way when you add steps.
+      # this workflow's own env. Keep it that way when you add steps. A
+      # workflow you customised before this protection may already run such
+      # a step; codeflow update keeps it and warns until you move it after
+      # this step or into another job.
       #
       # gitleaks' default git log leaves out what a merge itself adds, any
       # file whose type changes and any file git judges binary, so a secret
@@ -224,25 +228,34 @@ jobs:
       # the medium format with full hashes and the root commit's diff. With
       # diff.noprefix, for one, gitleaks would drop each path's first
       # directory, and an exemption for leak.txt would cover dir/leak.txt.
-      # git cannot show what an octopus merge (three or more parents) adds,
-      # so the step refuses one that the trusted commit does not hold; merge
-      # the branches one at a time instead. A local stash, which git also
-      # records with three parents, is not refused; a CI checkout has none.
       #
-      # gitleaks' patch parser misreads some names that git quotes: it skips
-      # one that ends in a backslash without an error, and a newline in a
-      # name splits a conflicted merge's header into lines the wrapper cannot
-      # tell apart. So before it scans, the step lists every path that a
-      # commit the trusted commit does not hold adds, changes, renames or
-      # copies, merges included, and refuses a name with a backslash, a
-      # double quote or a control character. A conflicted merge's header can
-      # also name a file either side renamed or deleted, the trusted side
-      # included, so for each such merge the list also holds every path that
-      # differs between a merge base and either parent. Names with spaces or
-      # non-ASCII letters are read correctly and pass. gitleaks is not shown
-      # deleted files, so a pull request that merges nothing may delete such
-      # a file; one that merges across a change to it is refused, and
-      # rebasing instead passes.
+      # The scan reads HEAD's history: on a pull request, the pull request
+      # merged into its base; on a push, the pushed commit. Branches and tags
+      # that HEAD does not reach are left to their own pull requests, so an
+      # unrelated ref can neither fail this scan nor hide a leak from it.
+      # Before it scans, the step checks the history the pull request brings,
+      # the commits HEAD holds and the trusted commit does not, for what
+      # gitleaks cannot read reliably, and names the commit and the refs that
+      # hold it. On a push that range is empty: the pushed commit is the
+      # trusted commit. git cannot show what an octopus merge (three or more
+      # parents) adds, so one in that range is refused; merge the branches one
+      # at a time. gitleaks' patch parser misreads some names that git
+      # quotes: it skips one that ends in a backslash without an error, and a
+      # newline in a name splits a conflicted merge's header into lines the
+      # wrapper cannot tell apart. So the step refuses a path with a
+      # backslash, a double quote or a control character that a commit in the
+      # range adds, changes, renames or copies, or that a merge in it changes
+      # beyond its automatic result. A conflicted merge's header can also name
+      # a file either side renamed or deleted, the trusted side included, so
+      # each merge's own sides count too: every path that differs between a
+      # merge base and either parent. Renaming the file in a later commit
+      # leaves the name in the earlier one, so the fix is to rewrite the pull
+      # request's commits, or, for a change on the trusted side, to rebase
+      # onto the base instead of merging it in. Names with spaces or
+      # non-ASCII letters are read correctly and pass, and gitleaks is not
+      # shown deleted files, so a pull request that merges nothing may delete
+      # such a file. History the trusted commit holds is not checked: it met
+      # these checks, or predates them, when it merged.
       #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
@@ -264,13 +277,9 @@ jobs:
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
           if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
-            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; refusing to scan"; exit 1
+            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"; exit 1
           fi
           export GIT_ATTR_SOURCE="$TRUSTED_SHA"
-          octopi=$(git rev-list --min-parents=3 --exclude=refs/stash --all --not "$TRUSTED_SHA")
-          if [ -n "$octopi" ]; then
-            echo "::error::octopus merge $(printf '%s\n' "$octopi" | head -n 1) is not in the trusted commit, and git cannot show what it adds; merge its branches one at a time; refusing to scan"; exit 1
-          fi
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -298,34 +307,87 @@ jobs:
           GIT
           chmod +x "$trusted/bin/git"
           export PATH="$trusted/bin:$PATH"
-          if ! git log -z --format= --name-status --full-history --diff-filter=uxdb --remerge-diff \
-            --no-ext-diff --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/paths" \
-            || ! git rev-list --merges --exclude=refs/stash --all --not "$TRUSTED_SHA" >"$trusted/merges"; then
-            echo "::error::cannot list the paths that commits the trusted commit does not hold change; refusing to scan"; exit 1
-          fi
-          empty=$(git hash-object -t tree /dev/null)
-          while read -r merge; do
-            bases=$(git merge-base --all "$merge^1" "$merge^2") || bases=$empty
-            for base in $bases; do
-              for parent in "$merge^1" "$merge^2"; do
-                if ! git diff-tree -r -z --name-only "$base" "$parent" >>"$trusted/paths"; then
-                  echo "::error::cannot list the paths that merge $merge joins; refusing to scan"; exit 1
-                fi
-              done
-            done
-          done <"$trusted/merges"
-          odd=$(python3 -I - "$trusted/paths" <<'PY'
+          # Refuses what gitleaks cannot read reliably in the history the pull
+          # request brings: what HEAD holds and the trusted commit does not.
+          python3 -I - "$TRUSTED_SHA" <<'PY'
+          import re
+          import subprocess
           import sys
 
-          with open(sys.argv[1], "rb") as handle:
-              names = handle.read().split(b"\0")
-          odd = [n for n in names if any(c < 32 or c == 127 or c in b'"\\' for c in n)]
-          print(ascii(odd[0].decode("utf-8", "replace"))[1:-1] if odd else "")
+          sha = sys.argv[1]
+          unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
+          rewrite = ("rewrite the pull request's commits so that none uses the name; "
+                     "renaming it in a later commit leaves it in this one")
+
+
+          def refuse(message):
+              print(f"::error::{message}; refusing to scan")
+              sys.exit(1)
+
+
+          def git(*args, codes=(0,)):
+              run = subprocess.run(["git", *args], capture_output=True, check=False)
+              if run.returncode not in codes:
+                  error = run.stderr.decode("utf-8", "replace").strip()
+                  refuse(f"git {args[0]} failed ({error}), so the step cannot check the history the pull request brings")
+              return run
+
+
+          def where(commit):
+              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)").stdout.decode("utf-8", "replace").split()
+              more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
+              return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
+
+
+          def odd(name):
+              return any(c < 32 or c == 127 or c in b'"\\' for c in name)
+
+
+          def named(name):
+              return ascii(name.decode("utf-8", "replace"))[1:-1]
+
+
+          commits = [line.split() for line in git("rev-list", "--parents", "HEAD", "--not", sha).stdout.decode().splitlines()]
+          for commit, *parents in commits:
+              if len(parents) > 2:
+                  refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
+                         "rewrite the pull request's history to merge its branches one at a time")
+          # Each path a commit adds, changes, renames or copies, and each path
+          # a merge changes beyond its automatic result.
+          listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
+                        "--no-ext-diff", "HEAD", "--not", sha).stdout.split(b"\0")
+          commit, names = None, 0
+          for token in listing:
+              if names:
+                  names -= 1
+                  if odd(token):
+                      refuse(f"commit {where(commit)} adds, changes or renames the path \"{named(token)}\"; {unreadable}; {rewrite}")
+                  continue
+              token = token.lstrip(b"\n")
+              if token.startswith(b"\x01"):
+                  commit = token[1:].decode()
+              elif re.fullmatch(rb"[RC][0-9]*", token):
+                  names = 2
+              elif re.fullmatch(rb"[A-Z][0-9]*", token):
+                  names = 1
+              elif token:
+                  refuse(f"cannot read git's list of the paths that commit {commit} changes")
+          # A conflicted merge's header can also name a path that either side
+          # changed since a merge base, the trusted side included.
+          empty = git("hash-object", "-t", "tree", "/dev/null").stdout.decode().strip()
+          for commit, *parents in commits:
+              if len(parents) != 2:
+                  continue
+              bases = git("merge-base", "--all", *parents, codes=(0, 1)).stdout.decode().split() or [empty]
+              for base in bases:
+                  for parent in parents:
+                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent).stdout.split(b"\0"):
+                          if odd(name):
+                              held = git("merge-base", "--is-ancestor", parent, sha, codes=(0, 1)).returncode == 0
+                              fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
+                              refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
+                                     f"parent {parent}; {unreadable}; {fix}")
           PY
-          )
-          if [ -n "$odd" ]; then
-            echo "::error::a commit the trusted commit does not hold touches the path \"${odd}\", or a merge joins changes to it, and gitleaks cannot read its backslash, double quote or control character reliably; rename it, or rebase instead of merging; refusing to scan"; exit 1
-          fi
           rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
           # needs one named, and each file that configuration extends.
@@ -453,7 +515,7 @@ jobs:
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv HEAD" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?

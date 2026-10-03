@@ -152,21 +152,32 @@ erratum below, never an edit of the section.
   downloaded and unpacked under the runner's temp directory, so a file or
   link a pull request commits at that name is not written through. Nothing
   from the checkout runs or steers the scan: its Python helpers run
-  isolated, git reads `.gitattributes` from the trusted commit (git 2.41 or
-  later), and no step before the scan runs code from the checkout. If you
-  add a step to the secret-scan job, add it after the scan. The scan also
-  reads what a merge itself adds, files whose type changes and files git
-  judges binary, which gitleaks' default history scan leaves out, so a
-  secret added in a merge resolution, in a file that replaces a link or
-  after a NUL byte is reported, under the file's own path. git cannot show
-  what an octopus merge adds, so the step refuses one the trusted commit
-  does not hold; merge the branches one at a time. It also refuses a path
-  with a backslash, a double quote or a control character in a commit the
-  trusted commit does not hold, or on either side of a merge it does not
-  hold, since gitleaks cannot read such names reliably; rename the file, or
-  rebase instead of merging. Names with spaces or non-ASCII letters pass.
-  The scan pins git's patch format, so git configuration on the runner,
-  such as `diff.noprefix`, cannot move a finding to another path.
+  isolated (Python 3.11 or later), git reads `.gitattributes` from the
+  trusted commit (git 2.41 or later), and no step before the scan runs
+  code from the checkout. If you add a step to the secret-scan job, add it
+  after the scan. **If you customised the workflow and the secret-scan job
+  already runs a step of yours before the gitleaks step, move that step
+  after the scan or into another job when you update:** the 3-way merge
+  keeps it, and `codeflow update` now warns about it on every run until it
+  moves. The scan now reads HEAD's history (on a pull request, the pull
+  request merged into its base) instead of every fetched branch and tag,
+  so an unrelated branch can no longer fail a pull request's scan; each
+  branch is scanned by its own pull request. It also reads what a merge
+  itself adds, files whose type changes and files git judges binary, which
+  gitleaks' default history scan leaves out, so a secret added in a merge
+  resolution, in a file that replaces a link or after a NUL byte is
+  reported, under the file's own path. In the commits a pull request
+  brings, git cannot show what an octopus merge adds, so the step refuses
+  one; merge the branches one at a time. It also refuses a path with a
+  backslash, a double quote or a control character that one of those
+  commits changes, or that either side of a merge among them changes,
+  since gitleaks cannot read such names reliably. Each refusal names the
+  commit and the refs that hold it; rewrite the pull request's commits, or
+  rebase onto the base when the change is on the base's side, since a
+  later rename leaves the name in the earlier commit. Names with spaces or
+  non-ASCII letters pass. The scan pins git's patch format, so git
+  configuration on the runner, such as `diff.noprefix`, cannot move a
+  finding to another path.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
