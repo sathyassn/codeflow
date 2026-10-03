@@ -1,35 +1,56 @@
 #!/bin/sh
 # What adopters get from the scaffold passes their secret scan (TSK-206,
-# sathyassn/codeflow#13). Two checks, with the pinned gitleaks:
+# sathyassn/codeflow#13). With the pinned gitleaks:
 #   1. the shipped scaffold sources under assets/ hold nothing gitleaks'
-#      default rules report, with no allowance of ours in play;
-#   2. the adopter CI template's own gitleaks step, run on a history that
-#      holds the 3.0.0 pipeline line, allows that exact prose in the two
-#      managed paths and still reports a planted secret beside it, the same
-#      prose anywhere else, and an adopter's own findings.
+#      default rules report; given a codeflow binary as the second
+#      argument, fresh `codeflow init` output at each tier is scanned too;
+#   2. the adopter CI template's own gitleaks step, run with bash -e as
+#      GitHub runs it, drops only the 3.0.0 pipeline prose in its two
+#      managed paths and still fails on a credential on that same line, the
+#      same prose anywhere else, and every finding an adopter's own
+#      configuration makes, wherever gitleaks reads that configuration from;
+#      a scan that does not complete fails the step.
+# Usage: check-scaffold-gitleaks.sh [gitleaks] [codeflow]
 set -eu
+# The finding lists below are word-split on purpose.
+# shellcheck disable=SC2086
 
 GITLEAKS=${1:-gitleaks}
-case $GITLEAKS in /*) ;; */*) GITLEAKS="$(pwd)/$GITLEAKS" ;; esac
+CODEFLOW=${2:-}
+absolute() { case $1 in /*) printf '%s' "$1" ;; */*) printf '%s/%s' "$(pwd)" "$1" ;; *) printf '%s' "$1" ;; esac; }
+GITLEAKS=$(absolute "$GITLEAKS")
+[ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 
 printf '[extend]\nuseDefault = true\n' >"$TMP/default.toml"
-"$GITLEAKS" detect --no-git --source "$ROOT/assets" --config "$TMP/default.toml" \
-  --no-banner --redact --report-format json --report-path "$TMP/assets.json" \
-  --exit-code 0 >/dev/null
-python3 - "$TMP/assets.json" <<'PY'
+no_findings() { # label, then the directory to scan with the default rules
+  "$GITLEAKS" detect --no-git --source "$2" --config "$TMP/default.toml" \
+    --no-banner --redact --report-format json --report-path "$TMP/plain.json" \
+    --exit-code 0 >/dev/null 2>&1
+  python3 - "$TMP/plain.json" "$1" <<'PY'
 import json
 import sys
 
 findings = json.load(open(sys.argv[1], encoding="utf-8"))
 if findings:
     found = sorted((f.get("RuleID"), f.get("File"), f.get("StartLine")) for f in findings)
-    raise SystemExit(f"shipped scaffold sources fail gitleaks' default rules: {found}")
+    raise SystemExit(f"{sys.argv[2]} fails gitleaks' default rules: {found}")
 PY
+}
+no_findings "shipped scaffold sources" "$ROOT/assets"
+if [ -n "$CODEFLOW" ]; then
+  for tier in minimal standard full; do
+    mkdir "$TMP/init-$tier"
+    git -C "$TMP/init-$tier" init -q -b main
+    (cd "$TMP/init-$tier" && "$CODEFLOW" init "--$tier" --yes >/dev/null 2>&1)
+    no_findings "a fresh --$tier scaffold" "$TMP/init-$tier"
+  done
+fi
 
-# The template step after its download lines, scanning with a report.
+# The template step after its download lines, with the downloaded binary
+# replaced by the one under test.
 python3 - "$ROOT/assets/base/ci/codeflow-ci.yml" "$TMP/step.sh" <<'PY'
 import sys
 
@@ -42,79 +63,172 @@ for line in lines[start + 2:]:
         break
     body.append(line[10:])
 script = "\n".join(body)
-marker = 'config="$RUNNER_TEMP'
-if marker not in script:
-    raise SystemExit("the template's gitleaks step builds no scan config, so the "
+marker = 'tar -xzf "$archive" gitleaks\n'
+assert marker in script, script
+script = script.split(marker, 1)[1]
+if '"$report"' not in script:
+    raise SystemExit("the template's gitleaks step reads no report, so the "
                      "3.0.0 pipeline line fails every adopter's secret scan")
-script = script[script.index(marker):]
-old = "./gitleaks detect --source . --config \"$config\" --redact --no-banner --exit-code 1"
-assert old in script, script
-script = script.replace(old, "\"$GITLEAKS\" detect --source . --config \"$config\" --redact "
-                        "--no-banner --exit-code 0 --report-format json --report-path \"$REPORT\"")
-open(sys.argv[2], "w", encoding="utf-8").write("set -eu\n" + script + "\n")
+assert script.count("./gitleaks detect") == 1, script
+open(sys.argv[2], "w", encoding="utf-8").write(script.replace("./gitleaks detect", '"$GITLEAKS" detect'))
 PY
 
-LINE_209=$(printf 'Cover secret/PII exposure, authz gaps, %s%s, general vuln classes' \
+PROSE=$(printf 'Cover secret/PII exposure, authz gaps, %s%s, general vuln classes' \
   'vulnerable/' 'malicious deps')
-PLANTED=$(printf 'api_key = "%s%s"' '9fK2pQ7xLm4R' 't8Wz1Vb6Nc3H')
+KEY=$(printf '%s%s' '9fK2pQ7xLm4R' 't8Wz1Vb6Nc3H')
+PLANTED="api_key = \"$KEY\""
 REPO="$TMP/adopter"
 for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
   mkdir -p "$REPO/$path"
-  printf '// seeded by CodeFlow 3.0.0\n%s\n%s\n' "$LINE_209" "$PLANTED" \
+  # Line 2 is the 3.0.0 prose; line 3 is the same prose with a credential
+  # on the same line.
+  printf '// seeded by CodeFlow 3.0.0\n%s\n%s %s\n' "$PROSE" "$PROSE" "$PLANTED" \
     >"$REPO/$path/pipeline.workflow.js"
 done
-printf '%s\n' "$LINE_209" >"$REPO/notes.md"
+printf '%s\n' "$PROSE" >"$REPO/notes.md"
 git -C "$REPO" init -q
-git -C "$REPO" add -A
-git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
-  -c commit.gpgsign=false commit -q -m "scaffold"
-
-scan() {
-  (cd "$REPO" && RUNNER_TEMP="$TMP" GITLEAKS="$GITLEAKS" REPORT="$TMP/$1.json" sh "$TMP/step.sh")
+commit() {
+  git -C "$REPO" add -A
+  git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
+    -c commit.gpgsign=false commit -q -m "$1"
 }
-expect() { # report name, then the expected "file:line" findings
-  report=$1
-  shift
-  python3 - "$TMP/$report.json" "$@" <<'PY'
-import json
+commit scaffold
+
+# One case: a name, the exit status the step must end with, then the
+# "file:line" findings it must name, exactly. Extra environment is passed
+# through STEP_ENV.
+expect() {
+  name=$1
+  status=$2
+  shift 2
+  set +e
+  (cd "$REPO" && env RUNNER_TEMP="$TMP" GITLEAKS="$GITLEAKS" ${STEP_ENV:-} \
+    bash -e "$TMP/step.sh") >"$TMP/$name.out" 2>&1
+  rc=$?
+  set -e
+  python3 - "$TMP/$name.out" "$name" "$status" "$rc" "$KEY" "$@" <<'PY'
+import re
 import sys
 
-findings = json.load(open(sys.argv[1], encoding="utf-8"))
-found = sorted(f"{f.get('File')}:{f.get('StartLine')}" for f in findings)
-expected = sorted(sys.argv[2:])
+out = open(sys.argv[1], encoding="utf-8").read()
+name, status, rc, key = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+expected = sorted(sys.argv[6:])
+found = sorted(f"{f}:{l}" for f, l in re.findall(r"::error file=([^,]+),line=(\d+)::", out))
+problems = []
+if (rc == 0) != (status == 0):
+    problems.append(f"exit {rc}, expected {'0' if status == 0 else 'non-zero'}")
 if found != expected:
-    raise SystemExit(f"template secret scan: expected {expected}, got {found}")
+    problems.append(f"findings {found}, expected {expected}")
+if key in out:
+    problems.append("the log shows a credential's value")
+if problems:
+    raise SystemExit(f"template secret scan, {name}: " + "; ".join(problems) + "\n" + out)
 PY
 }
+PIPELINES=".claude/workflows/pipeline.workflow.js:3 .codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3"
 
-# No adopter config: the default rules plus the allowance.
-scan defaults
-expect defaults \
-  .claude/workflows/pipeline.workflow.js:3 \
-  .codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3 \
-  notes.md:1
+# No adopter configuration: the default rules. The prose alone is dropped;
+# the credential on the same line and the prose elsewhere are not.
+expect defaults 1 $PIPELINES notes.md:1
 
-# An adopter config is extended, never replaced: its own allowance holds
-# and its own findings are still reported.
-cat >"$REPO/.gitleaks.toml" <<'TOML'
+# The prose alone passes, in a history of its own (gitleaks reads every
+# branch).
+SCAFFOLD=$REPO
+REPO="$TMP/prose-only"
+for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
+  mkdir -p "$REPO/$path"
+  printf '// seeded by CodeFlow 3.0.0\n%s\n' "$PROSE" >"$REPO/$path/pipeline.workflow.js"
+done
+git -C "$REPO" init -q
+commit "prose only"
+expect prose-only 0
+REPO=$SCAFFOLD
+
+# An adopter configuration is read as gitleaks reads it, whatever its
+# shape: a path chain two levels deep, ordinary and rule-targeted
+# allowlists, and disabled rules.
+cat >"$REPO/organization.toml" <<'TOML'
 [extend]
 useDefault = true
+TOML
+cat >"$REPO/.gitleaks.toml" <<TOML
+[extend]
+path = "organization.toml"
 
 [[allowlists]]
 description = "adopter fixtures"
 paths = ['''^docs/fixtures/''']
+
+[[allowlists]]
+description = "adopter's accepted sample key"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = ['''^${KEY}$''']
 TOML
 mkdir -p "$REPO/docs/fixtures"
 printf '%s\n' "$PLANTED" >"$REPO/docs/fixtures/sample.txt"
-printf '%s\n' "$PLANTED" >"$REPO/real.txt"
-git -C "$REPO" add -A
-git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
-  -c commit.gpgsign=false commit -q -m "adopter config"
-scan adopter
-expect adopter \
-  .claude/workflows/pipeline.workflow.js:3 \
-  .codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3 \
-  notes.md:1 \
-  real.txt:1
+printf 'token = "%s"\n' "$KEY" >"$REPO/accepted.txt"
+printf 'password = "%s%s"\n' 'Zq8vR2mN6k' 'T4wX1pL9sB' >"$REPO/real.txt"
+commit "adopter config"
+# The rule-targeted allowlist accepts the sample key wherever it appears,
+# the pipeline line included; the path allowlist covers the fixture.
+expect adopter-config 1 notes.md:1 real.txt:1
+
+# A configuration named by GITLEAKS_CONFIG wins over .gitleaks.toml, as it
+# does for gitleaks itself: its own rule reports its canary.
+cat >"$TMP/env.toml" <<'TOML'
+[extend]
+useDefault = true
+
+[[rules]]
+id = "adopter-canary"
+regex = '''ADOPTER_CANARY_[0-9]{6}'''
+TOML
+printf 'ADOPTER_CANARY_%s\n' '424242' >"$REPO/canary.txt"
+commit canary
+# None of .gitleaks.toml's allowlists apply then.
+STEP_ENV="GITLEAKS_CONFIG=$TMP/env.toml"
+expect env-config 1 $PIPELINES notes.md:1 \
+  real.txt:1 accepted.txt:1 docs/fixtures/sample.txt:1 canary.txt:1
+STEP_ENV=
+
+# A configuration gitleaks cannot load fails the step; it never passes.
+printf '[extend\n' >"$REPO/.gitleaks.toml"
+commit "broken config"
+expect broken-config 1
+
+# The README's recipe for a wrapper with no configuration of its own keeps
+# gitleaks' default rules: plain gitleaks with it allows the prose and still
+# reports the credential on the same line.
+REPO="$TMP/readme-recipe"
+for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
+  mkdir -p "$REPO/$path"
+  printf '// seeded by CodeFlow 3.0.0\n%s\n%s %s\n' "$PROSE" "$PROSE" "$PLANTED" \
+    >"$REPO/$path/pipeline.workflow.js"
+done
+python3 - "$ROOT/assets/base/ci/README.md" "$REPO/.gitleaks.toml" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+recipe = re.search(r"\n  ```toml\n(  \[extend\]\n.*?)\n  ```\n", text, re.S)
+if recipe is None:
+    raise SystemExit("the CI README shows no complete gitleaks configuration for a wrapper")
+lines = recipe.group(1).split("\n")
+open(sys.argv[2], "w", encoding="utf-8").write("\n".join(line[2:] for line in lines) + "\n")
+PY
+git -C "$REPO" init -q
+commit recipe
+"$GITLEAKS" detect --source "$REPO" --no-banner --redact --report-format json \
+  --report-path "$TMP/recipe.json" --exit-code 0 >/dev/null 2>&1
+python3 - "$TMP/recipe.json" <<'PY'
+import json
+import sys
+
+found = sorted(f"{f['File']}:{f['StartLine']}" for f in json.load(open(sys.argv[1], encoding="utf-8")))
+expected = [".claude/workflows/pipeline.workflow.js:3", ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3"]
+if found != expected:
+    raise SystemExit(f"the CI README's gitleaks recipe: expected {expected}, got {found}")
+PY
 
 printf '%s\n' "scaffold secret scan passed"

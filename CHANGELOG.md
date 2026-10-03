@@ -67,11 +67,12 @@ erratum below, never an edit of the section.
   the pipeline workflow's security stage (line 209 of
   `.claude/workflows/pipeline.workflow.js` and its baseline copy) for a key.
   New scaffolds word it differently. For repositories that already hold the
-  3.0.0 line, the CI workflow `codeflow update` installs scans with your own
-  `.gitleaks.toml`, or gitleaks' defaults, plus an allowance for that exact
-  value in those two paths only, so the scan passes without editing history.
-  Anything else on the line or in the file is still reported. A wrapper that
-  runs gitleaks itself adds the same entry; the CI README shows it.
+  3.0.0 line, the CI workflow `codeflow update` installs runs gitleaks with
+  your configuration as before, then drops only `generic-api-key` findings
+  whose value is exactly that prose in those two paths, so the scan passes
+  without editing history. Anything else, on the same line included, still
+  fails the job, and so does a scan that does not complete. A wrapper that
+  runs gitleaks itself can add the entry the CI README shows.
 
 ## [3.0.0]
 

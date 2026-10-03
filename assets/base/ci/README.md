@@ -135,16 +135,22 @@ The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
 - **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
-  The GitHub workflow scans with a config it builds at run time: your own
-  `.gitleaks.toml` when you have one (it extends it, never replaces it), else
-  gitleaks' default rules, plus one allowance for the security-stage prose
-  CodeFlow 3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js`
-  and its baseline copy, which the `generic-api-key` rule mistakes for a key.
-  The allowance covers that exact value in those two paths only. A wrapper
-  that runs gitleaks itself on a repository scaffolded by 3.0.0 needs the
-  same entry in its `.gitleaks.toml`:
+  The GitHub workflow runs gitleaks with your configuration exactly as
+  gitleaks finds it (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`,
+  `.gitleaks.toml`, else its default rules). It then drops one known false
+  positive from the report: the security-stage prose CodeFlow 3.0.0 seeded on
+  line 209 of `.claude/workflows/pipeline.workflow.js` and its baseline copy,
+  which the `generic-api-key` rule mistakes for a key. Only a
+  `generic-api-key` finding whose value is exactly that prose, in those two
+  paths, is dropped; every other finding fails the job, as does a scan that
+  does not complete. A wrapper that runs gitleaks itself on a repository
+  scaffolded by 3.0.0 can allow the same prose in its own configuration.
+  With no `.gitleaks.toml` yet, create one that keeps the default rules:
 
   ```toml
+  [extend]
+  useDefault = true
+
   [[allowlists]]
   description = "CodeFlow 3.0.0 seeded pipeline workflow: security-stage prose, not a credential"
   condition = "AND"
@@ -152,4 +158,7 @@ as extra steps when your stack warrants:
   regexTarget = "secret"
   regexes = ['''^vulnerable/malicious$''']
   ```
+
+  With a `.gitleaks.toml` already, add only the `[[allowlists]]` block to
+  that file; leave its `[extend]` section as it is.
 - **osv-scanner** — dependency/supply-chain audit: `osv-scanner scan -r .`

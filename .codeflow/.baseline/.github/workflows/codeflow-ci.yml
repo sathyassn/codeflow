@@ -170,6 +170,14 @@ jobs:
 
       # Run the gitleaks binary directly (pinned) rather than the
       # gitleaks-action wrapper, which requires a GitHub token/license.
+      # gitleaks finds your configuration as it always does (GITLEAKS_CONFIG,
+      # GITLEAKS_CONFIG_TOML, `.gitleaks.toml`, else its default rules); this
+      # step never changes it. It then drops one known false positive from
+      # the report: the security-stage prose CodeFlow 3.0.0 seeded on line
+      # 209 of the pipeline workflow ("vulnerable/malicious deps"), which the
+      # generic-api-key rule mistakes for a key. Only a generic-api-key
+      # finding whose value is exactly that, in those two paths, is dropped;
+      # anything else, on the same line included, fails the job.
       - name: gitleaks
         run: |
           GITLEAKS_VERSION=8.30.1
@@ -178,7 +186,30 @@ jobs:
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$archive"
           printf '%s  %s\n' "$GITLEAKS_SHA256" "$archive" | sha256sum -c -
           tar -xzf "$archive" gitleaks
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1
+          # The report stays in the runner's temp directory; the log names
+          # each finding's rule, file, line and commit, never its value.
+          report="$RUNNER_TEMP/gitleaks-report.json"
+          rc=0
+          ./gitleaks detect --source . --no-banner --exit-code 0 \
+            --report-format json --report-path "$report" || rc=$?
+          if [ "$rc" -ne 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
+            echo "::error::gitleaks did not complete a scan (exit ${rc})"
+            exit 1
+          fi
+          # The value is split so this file does not hold the text it allows.
+          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and (.File | test("^(\\.codeflow/\\.baseline/)?\\.claude/workflows/pipeline\\.workflow\\.js$")))'
+          allowed=$(jq "[.[] | $known] | length" "$report")
+          if [ "$allowed" -gt 0 ]; then
+            echo "Allowed ${allowed} finding(s) of the CodeFlow 3.0.0 pipeline prose \"vulnerable/malicious\"."
+          fi
+          leaks=$(jq "[.[] | select(([.] | map($known) | length) == 0)]" "$report")
+          count=$(printf '%s' "$leaks" | jq length)
+          if [ "$count" -gt 0 ]; then
+            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
+            echo "gitleaks found ${count} leak(s)."
+            exit 1
+          fi
+          echo "No leaks found."
 
   security-review:
     name: security review
