@@ -133,25 +133,22 @@ the project accepts.
    ```
 
 5. Inspect every created, skipped or merged file. Init preserves existing
-   content mechanically, but a skipped file or a combined instruction file may
-   still need reconciling by hand. Do not use `--force` to get past a collision.
+   content mechanically, but a skipped file or combined instruction file may
+   still need reconciling by hand. Never use `--force` to pass a collision.
 6. At standard or full, run `/cf-customize`. It verifies the installed harness
    settings and tools, then walks the consuming project's `docs/product.md`,
    `docs/architecture.md`, `AGENTS.md`, `CLAUDE.md` differences, README and
    manifests, CI commands, policy, and required Model Context Protocol (MCP)
    servers. CodeFlow never invents these facts or silently changes global
    harness settings, so review them and commit.
-7. For a new repository with an empty remote, push the scaffold commit
-   yourself from your own terminal. The pre-push hook refuses a push to
-   protected `main`, so a human makes this one push with the override:
+7. With an empty remote, push the scaffold commit from your terminal
+   with the override, which lifts only the protected-branch rules:
 
    ```sh
    git remote add origin <url>
    CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main
    ```
 
-   The override lifts only the protected-branch rules, never a force push,
-   a deletion or the secret checks, and an agent cannot set it.
 8. Start the first feature on a `feat/*` branch in a worktree and land it by
    PR, or with `codeflow integrate` when there is no remote.
 
@@ -428,8 +425,8 @@ One task, one pull request, and a check at every step.
    evidenced green. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
-   A human can override the git layer for a local merge, commit or push on
-   a protected branch with `CODEFLOW_HUMAN_OVERRIDE=1`.
+   A human can override the git layer for a local merge or a protected
+   push with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
 | Hook | Checks |
 |---|---|
