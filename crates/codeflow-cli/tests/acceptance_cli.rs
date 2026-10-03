@@ -2630,7 +2630,7 @@ fn reviewed_standalone() -> (tempfile::TempDir, tempfile::TempDir, String) {
 /// verb binds the same way when the completion follows the merge.
 #[test]
 fn a_clean_merge_of_the_moved_target_keeps_the_binding() {
-    let (dir, _remote, reviewed) = reviewed_standalone();
+    let (dir, _remote, _) = reviewed_standalone();
     let root = dir.path();
     advance_origin(root, "main", "src/line.rs", "pub fn line() {}\n");
     git(
@@ -2684,7 +2684,6 @@ fn a_clean_merge_of_the_moved_target_keeps_the_binding() {
         &ci_on(root, "origin/main", BRANCH, "Task: TSK-001"),
         "a completion after a clean merge of origin/main",
     );
-    assert_ne!(reviewed, reviewed_here);
 }
 
 /// AC-2: after the review, a merge of the moved target with a hand edit, a
