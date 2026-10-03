@@ -137,7 +137,10 @@ erratum below, never an edit of the section.
   plain literal path, such as `~1`, `cd -` or a pattern, counts as an
   unknown directory, and a redirection counts as a read only when it is
   `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and
-  `{fd}>` writes are judged. Where a directory is filled in at run
+  `{fd}>` writes are judged, after line continuations are joined. On a
+  command with `$'...'` or `$"..."` quoting and a `>`, any word that
+  could name an enforcement path is refused as a possible write target.
+  Where a directory is filled in at run
   time, or a stack rotation or `popd` can reach a directory `pushd -n`
   stacked, a writing command or write redirect whose words could name an
   enforcement path by their names alone, such as `policy.json` or `pol*`,

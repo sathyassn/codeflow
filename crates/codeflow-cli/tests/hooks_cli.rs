@@ -706,7 +706,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to eleven of PR 36 that
+/// The reviewers' exact commands from rounds two to twelve of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -786,6 +786,14 @@ const REVIEWER_REFUSALS: &[&str] = &[
     ": {fd}>.codeflow/policy.json",
     "printf x>.codeflow/policy.json",
     "printf x &>>.codeflow/policy.json",
+    // Round twelve: a target joined by a line continuation, and ANSI-C or
+    // locale quoting the redirection reader does not read.
+    "printf x > \\\n  .codeflow/policy.json",
+    "printf x > .codeflow/po\\\nlicy.json",
+    "cd \"$dir\" && printf x > \\\n  policy.json",
+    r"printf '%s\n' $'it\'s' > .codeflow/policy.json",
+    r#"cd "$dir" && printf x > $'policy.json'"#,
+    r#"cd "$dir" && printf x >$"policy.json""#,
 ];
 
 /// On unix, where the fixture's `build/link`, `build/review-stack` and

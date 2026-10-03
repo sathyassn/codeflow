@@ -940,7 +940,7 @@ fn normalize_path(s: &str) -> String {
 
 fn integrity_write_in_dirs(
     tokens: &[String],
-    redirects: &[String],
+    redirects: &Redirects,
     level: PolicyLevel,
     cwd: &Path,
     dirs: &Cwd,
@@ -1152,13 +1152,13 @@ fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
 /// (`cd "$d" && sed -n p policy.json`).
 fn unknown_dir_name_violation(
     tokens: &[String],
-    redirects: &[String],
+    redirects: &Redirects,
     level: PolicyLevel,
     line: &str,
     why: &str,
 ) -> Option<Violation> {
     let why = shown_word(why);
-    let redirected = words_of(redirects);
+    let redirected = words_of(&redirects.targets);
     if let Some((target, p)) = redirected
         .iter()
         .find_map(|w| word_could_name(w).map(|p| (w, p)))
@@ -1659,7 +1659,7 @@ fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
 /// it from a listed directory proves nothing (TSK-216 round 5).
 fn integrity_write_in_run(
     tokens: &[String],
-    redirects: &[String],
+    redirects: &Redirects,
     level: PolicyLevel,
     run: &RunDirs,
     payload_cwd: &Path,
@@ -1792,7 +1792,65 @@ fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option
 /// `<>`, `{name}>` or one attached mid-word (`x>file`) included, opens its
 /// target for writing. A process substitution (`>(...)`, `<(...)`) is a
 /// command, judged as one, not a redirection.
-fn redirect_writes(segment: &str) -> Vec<String> {
+///
+/// Line continuations are joined first, as the shell joins them (TSK-216
+/// round 12). The reader does not read ANSI-C or locale quoting (`$'...'`,
+/// `$"..."`): on a command that holds either and a `>`, every word is kept
+/// in [`Redirects::unread`] and judged by name.
+fn redirect_writes(segment: &str) -> Redirects {
+    let joined = join_continuations(segment);
+    if (joined.contains("$'") || joined.contains("$\"")) && joined.contains('>') {
+        let unread = line_words(&joined.replace(['\'', '"', '$', '\\'], " "))
+            .map(str::to_string)
+            .collect();
+        return Redirects {
+            targets: Vec::new(),
+            unread,
+        };
+    }
+    Redirects {
+        targets: redirect_targets(&joined),
+        unread: Vec::new(),
+    }
+}
+
+/// What the redirections of one command can write ([`redirect_writes`]).
+#[derive(Default)]
+struct Redirects {
+    /// The targets of its write redirections, read as written.
+    targets: Vec<String>,
+    /// Every word of a command whose quoting the reader does not read:
+    /// any of them may be a write target, so each is judged by name.
+    unread: Vec<String>,
+}
+
+/// `text` with each backslash-newline outside single quotes removed, as the
+/// shell removes line continuations before it reads a command.
+fn join_continuations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut single, mut double) = (false, false);
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => match chars.next() {
+                Some('\n') => continue,
+                Some(next) => {
+                    out.push('\\');
+                    out.push(next);
+                    continue;
+                }
+                None => {}
+            },
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn redirect_targets(segment: &str) -> Vec<String> {
     let chars: Vec<char> = segment.chars().collect();
     let mut targets = Vec::new();
     let (mut single, mut double) = (false, false);
@@ -2442,7 +2500,7 @@ fn wrapped_violation(
             }
         }
     }
-    integrity_write_violation(tokens, &[], level, cwd, payload_cwd, line)
+    integrity_write_violation(tokens, &Redirects::default(), level, cwd, payload_cwd, line)
 }
 
 /// The arguments of `sed` that a grammar reads as input files.
@@ -3080,19 +3138,37 @@ fn wrapper_write_violation(
 /// `xargs` or `find -exec` has none.
 fn integrity_write_violation(
     tokens: &[String],
-    redirects: &[String],
+    redirects: &Redirects,
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
     if let Some(p) = redirects
+        .targets
         .iter()
+        .chain(&redirects.unread)
         .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
     {
         return Some(hook_integrity_violation(
             level,
             format!("redirect would overwrite the integrity path `{p}`"),
+        ));
+    }
+    // A command whose quoting the redirection reader does not read: any
+    // word that could name an enforcement path from some directory may be
+    // what it writes (TSK-216 round 12).
+    if let Some((word, p)) = redirects
+        .unread
+        .iter()
+        .find_map(|w| word_could_name(w).map(|p| (w, p)))
+    {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "a redirect on a command with `$'...'` or `$\"...\"` quoting, which the guard does not read, and `{}` could name `{p}`",
+                shown_word(word)
+            ),
         ));
     }
     let (program, args) = strip_launchers(tokens)?;
@@ -8754,7 +8830,7 @@ mod tests {
         let why = run.unknown.expect("a run-time directory");
         let v = unknown_dir_name_violation(
             &shell_tokens("rm policy.json"),
-            &[],
+            &Redirects::default(),
             PolicyLevel::Block,
             line,
             &why,
@@ -8791,9 +8867,32 @@ mod tests {
             ("printf x >& a", vec!["a"]),
             ("printf x >a;", vec!["a"]),
             ("printf x >a|cat", vec!["a"]),
+            // Line continuations are joined first (round 12).
+            ("printf x > \\\n  a", vec!["a"]),
+            ("printf x > p\\\nolicy.json", vec!["policy.json"]),
+            ("printf x \\\n> a", vec!["a"]),
+            ("printf 'x\\\n' > a", vec!["a"]),
         ] {
-            assert_eq!(redirect_writes(segment), writes, "{segment}");
+            let read = redirect_writes(segment);
+            assert_eq!(read.targets, writes, "{segment}");
+            assert!(read.unread.is_empty(), "{segment}");
         }
+        // ANSI-C or locale quoting with a `>`: every word is judged by name.
+        for segment in [
+            "printf '%s\\n' $'it\\'s' > .codeflow/policy.json",
+            "printf x > $'policy.json'",
+            "printf x >$\"policy.json\"",
+        ] {
+            let read = redirect_writes(segment);
+            assert!(read.targets.is_empty(), "{segment}");
+            assert!(
+                read.unread.iter().any(|w| word_could_name(w).is_some()),
+                "{segment}: {:?}",
+                read.unread
+            );
+        }
+        let quoted_read = redirect_writes("printf '%s' $'a\\tb'");
+        assert!(quoted_read.unread.is_empty() && quoted_read.targets.is_empty());
         for segment in [
             "cat < a",
             "cat <a",
@@ -8814,7 +8913,11 @@ mod tests {
             "printf x 'a>b'",
             "diff <(cat a) >(cat b)",
         ] {
-            assert!(redirect_writes(segment).is_empty(), "{segment}");
+            let read = redirect_writes(segment);
+            assert!(
+                read.targets.is_empty() && read.unread.is_empty(),
+                "{segment}"
+            );
         }
     }
 
