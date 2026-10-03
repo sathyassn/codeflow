@@ -2519,3 +2519,115 @@ fn a_completion_reopened_in_its_own_range_has_no_own_range_waiver() {
         );
     }
 }
+
+/// The criteria a reopen may add to: `OWN_JOURNEY` plus AC-3.
+const REOPEN_ADDS: &str = "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n- AC-3 When rerun, the system shall still work.\n";
+
+/// An approved block for `reviewed` that verifies AC-1 to AC-3.
+fn three_criteria_block(reviewed: &str) -> String {
+    block(
+        reviewed,
+        &[
+            "AC-1: verified | unit",
+            "AC-2: verified | journey",
+            "AC-3: verified | unit",
+        ],
+        "verified | journey",
+        "none: nothing deferred",
+    )
+}
+
+/// `record` as a standalone task with a fixed uid, as `task new` writes a
+/// record that exists only on its own branch.
+fn new_standalone(record: &str) -> String {
+    record.replace(
+        "id: TSK-002\nepic_id: EPC-001\nstandalone_reason: null",
+        "id: TSK-002\nuid: 6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d\nepic_id: null\nstandalone_reason: \"a fixture\"",
+    )
+}
+
+/// Reopen the task completed by `old` on the current branch with
+/// `criteria`, review a fix, and complete it; returns the verb and CI.
+fn reopen_with_criteria(root: &Path, id: &str, old: &str, criteria: &str) -> [(i32, String); 2] {
+    let branch = git_out(root, &["branch", "--show-current"]);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: one more criterion\n",
+    );
+    let standalone = |text: String| {
+        if id == "TSK-001" {
+            text
+        } else {
+            new_standalone(&text)
+        }
+    };
+    write(
+        root,
+        &record_path(id),
+        &standalone(task(id, "todo", criteria, &archived)),
+    );
+    commit(root, "docs: reopen with one more criterion");
+    write(root, "src/lib.rs", "pub fn rerun() {}\n");
+    let reviewed = commit(root, "fix: keep working when rerun");
+    let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
+    write(
+        root,
+        &record_path(id),
+        &standalone(task(id, "todo", criteria, &closeout)),
+    );
+    let verb = status_complete(root, id);
+    write(
+        root,
+        &record_path(id),
+        &standalone(task(id, "complete", criteria, &closeout)),
+    );
+    commit(root, "docs(records): record the acceptance");
+    [verb, ci(root, &branch, id)]
+}
+
+/// A standalone task whose record exists only on its own branch may add a
+/// criterion when the branch reopens it (TSK-217): the target holds no
+/// criteria to keep, so the verb and CI accept the same change.
+#[test]
+fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-002-new", "pub fn initial() {}\n");
+    let old = fix_block(&reviewed);
+    let record = new_standalone(&task("TSK-002", "complete", OWN_JOURNEY, &old));
+    write(root, &record_path("TSK-002"), &record);
+    commit(root, "docs(records): complete the new task");
+    // The range adds the record, so its id is bound in the local registry.
+    let admitted = codeflow()
+        .args(["ids", "admit", &record_path("TSK-002")])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        admitted.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&admitted.stdout),
+        String::from_utf8_lossy(&admitted.stderr)
+    );
+    for result in reopen_with_criteria(root, "TSK-002", &old, REOPEN_ADDS) {
+        assert_passes(&result, "a reopen of a task new in its range");
+    }
+}
+
+/// A task the target already records keeps its criteria across a reopen in
+/// its own range, by the verb as by CI.
+#[test]
+fn a_task_on_the_target_keeps_its_criteria_on_reopen() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, "task/TSK-001-fix", "pub fn initial() {}\n");
+    let old = fix_block(&reviewed);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    for result in reopen_with_criteria(root, "TSK-001", &old, REOPEN_ADDS) {
+        assert_blocks(
+            &result,
+            "a reopen of a task the target records",
+            &["reopened task keeps its criteria"],
+        );
+    }
+}

@@ -247,13 +247,17 @@ pub(crate) fn bind_completion_with_amendment(
             // The recovered completion supplies the archive and the old
             // review boundary. Its criteria may predate a planning pull
             // request that amended them on the target after the reopen
-            // (R-52), so the criteria are the anchored record's.
+            // (R-52), so the criteria are the anchored record's. A task new
+            // in this range has no anchored record and no criteria on the
+            // target to keep: its own pull request may change them with the
+            // reopen, as the range freeze in `codeflow ci` allows (TSK-217).
             let (at, mut old) = previous_completion(repo, task, &block, landing)?;
-            if let Some(anchored) = anchor.and_then(|anchor| {
-                let content = blob_at(repo, anchor, &task.path)?;
-                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
-            }) {
-                old.criteria = anchored.criteria;
+            if let Some(anchor) = anchor {
+                old.criteria = blob_at(repo, anchor, &task.path)
+                    .and_then(|content| {
+                        RecordView::parse(RecordKind::Task, &task.path, &content).ok()
+                    })
+                    .map_or_else(|| task.criteria.clone(), |anchored| anchored.criteria);
             }
             recovered = true;
             Some((at, old))
