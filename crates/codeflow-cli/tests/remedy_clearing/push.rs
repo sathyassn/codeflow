@@ -705,3 +705,962 @@ fn clears_secret_scan_incomplete() {
         String::from_utf8(run("git", &root, &["ls-tree", "HEAD", "app.txt"]).stdout).unwrap();
     assert!(tree.contains(sha), "{tree}");
 }
+
+// ---------------------------------------------------------------------------
+// The target's policy judges the push (sathyassn/codeflow#22).
+// ---------------------------------------------------------------------------
+
+const POLICY: &str = ".codeflow/policy.json";
+const FOUR_BULLETS: &str = "feat: add y\n\n- one\n- two\n- three\n- four\n";
+
+/// Set `git.<key>` in the working copy's policy.
+fn set_policy(root: &Path, entries: &[(&str, serde_json::Value)]) {
+    let mut policy: serde_json::Value = serde_json::from_str(&read(root, POLICY)).unwrap();
+    for (key, value) in entries {
+        policy["git"][*key] = value.clone();
+    }
+    write(
+        root,
+        POLICY,
+        &serde_json::to_string_pretty(&policy).unwrap(),
+    );
+}
+
+fn loosen(root: &Path) {
+    set_policy(
+        root,
+        &[
+            ("commit_body_max_bullets", 10.into()),
+            ("commit_body_bullet_max_len", 100.into()),
+        ],
+    );
+}
+
+/// Commit a four-bullet change, which the working copy's policy lets in.
+fn four_bullets(root: &Path) {
+    write(root, "y.txt", "y\n");
+    let said = commit_all(root, FOUR_BULLETS);
+    let subject = text(&run("git", root, &["log", "-1", "--format=%s"]));
+    assert_eq!(subject.trim(), "feat: add y", "{said}");
+}
+
+/// The destination's default branch name.
+fn default_branch(dest: &Path) -> String {
+    String::from_utf8(run("git", dest, &["symbolic-ref", "--short", "HEAD"]).stdout)
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// Land a policy change on the destination's default branch, as a merged
+/// pull request would, and fetch it; the checkout stays where it was.
+fn land_on_default(root: &Path, dest: &Path, change: impl FnOnce(&Path)) {
+    let target = default_branch(dest);
+    let here = text(&run("git", root, &["branch", "--show-current"]));
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "land/policy",
+            &format!("origin/{target}"),
+        ],
+    );
+    change(root);
+    commit_all(root, "chore: change the policy");
+    git(
+        dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("land/policy:{target}"),
+        ],
+    );
+    git(root, &["switch", "-q", here.trim()]);
+    git(root, &["branch", "-q", "-D", "land/policy"]);
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+/// The push was refused for the commit-body rule and left the destination
+/// without `feat/x` at `local`.
+fn refused(dest: &Path, out: &str, local: &str) {
+    refused_at(dest, out, "feat/x", local);
+}
+
+/// The push was refused for the commit-body rule and left the destination
+/// without `branch` at `local`.
+fn refused_at(dest: &Path, out: &str, branch: &str, local: &str) {
+    assert!(out.contains("git.commit_body"), "{out}");
+    not_landed(dest, out, branch, local);
+}
+
+fn not_landed(dest: &Path, out: &str, branch: &str, local: &str) {
+    let there = text(&run("git", dest, &["rev-parse", "--verify", "-q", branch]));
+    assert_ne!(there.trim(), local, "the push went through:\n{out}");
+}
+
+/// Publish `branch` at the destination from the default branch with
+/// `change` applied, as a landed pull request would, and fetch it.
+fn land_branch(root: &Path, dest: &Path, branch: &str, change: impl FnOnce(&Path)) {
+    let target = default_branch(dest);
+    let here = text(&run("git", root, &["branch", "--show-current"]));
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "land/branch",
+            &format!("origin/{target}"),
+        ],
+    );
+    change(root);
+    commit_all(root, "chore: change the policy");
+    git(
+        dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("land/branch:{branch}"),
+        ],
+    );
+    git(root, &["switch", "-q", here.trim()]);
+    git(root, &["branch", "-q", "-D", "land/branch"]);
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+/// A task record declaring `target` as its integration target.
+fn declare(root: &Path, id: &str, target: &str) {
+    write(
+        root,
+        &format!("project-management/tasks/{id}.md"),
+        &format!(
+            "---\nid: {id}\nepic_id: null\nstandalone_reason: \"a fixture\"\ntitle: \"the work\"\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: \"{target}\"\nexternal_refs: []\ncreated: 2026-10-03\n---\n\n# {id}: the work\n\n## Description\n\nA fixture.\n\n## Acceptance Criteria\n\n- AC-1 the fixture holds; evidence: this test.\n"
+        ),
+    );
+}
+
+/// Add `pattern` to the working copy's protected branches.
+fn protect(root: &Path, pattern: &str) {
+    let mut protected: Vec<serde_json::Value> =
+        serde_json::from_str::<serde_json::Value>(&read(root, POLICY)).unwrap()["git"]
+            ["protected_branches"]
+            .as_array()
+            .unwrap()
+            .clone();
+    protected.push(pattern.into());
+    set_policy(root, &[("protected_branches", protected.into())]);
+}
+
+/// Turn off the working copy's own protected-branch rules, so a branch it
+/// protects can be committed to and pushed from here.
+fn unguard(root: &Path) {
+    set_policy(
+        root,
+        &[
+            ("commit_to_protected", "off".into()),
+            ("push_to_protected", "off".into()),
+            ("local_ref_protection", "off".into()),
+        ],
+    );
+}
+
+fn head_sha(root: &Path) -> String {
+    text(&run("git", root, &["rev-parse", "HEAD"]))
+        .trim()
+        .to_string()
+}
+
+/// A branch that loosens its own commit-body rules commits under them, but
+/// its first push is judged by the policy at its target.
+#[test]
+fn a_push_is_judged_by_the_policy_the_destination_holds() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+    assert!(out.contains("judges 'feat/x' with the policy at"), "{out}");
+}
+
+/// A branch already at the destination with its own looser policy: the
+/// next push's range starts at that branch's own tip, which never judges
+/// it.
+#[test]
+fn a_second_push_is_not_judged_by_the_branch_s_own_last_push() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    let first = pushed(&root);
+    let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// The target tightens its policy after the branch forked: the merge base
+/// would let the change in, the target's tip does not.
+#[test]
+fn a_push_is_judged_by_the_target_s_tip_not_the_fork_point() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// A head cannot lower or turn off the gate its target sets for its
+/// `codeflow ci`: `git.test_gate_on_push` comes from the target too.
+#[test]
+fn a_head_cannot_lower_or_turn_off_the_target_s_push_gate() {
+    for level in ["warn", "off"] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+        loosen(&root);
+        set_policy(&root, &[("test_gate_on_push", level.into())]);
+        commit_all(&root, "chore: loosen the push gate");
+        four_bullets(&root);
+        let out = pushed(&root);
+        refused(&dest, &out, &head_sha(&root));
+        assert!(out.contains("(block)"), "{level}: {out}");
+    }
+}
+
+/// A declared target the default branch's policy does not protect is a
+/// hint from the branch, so it never chooses the policy that judges it
+/// (review round two, finding 1).
+#[test]
+fn a_declared_target_the_default_does_not_protect_is_not_trusted() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_branch(&root, &dest, "integration/lenient", loosen);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-work",
+            "origin/integration/lenient",
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/lenient");
+    commit_all(&root, "docs: plan the work");
+    four_bullets(&root);
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}
+
+/// A branch that names itself protected in its own working copy is still
+/// judged by the default branch's policy, not by its own last push.
+#[test]
+fn a_branch_cannot_protect_itself_into_its_own_authority() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    let first = pushed(&root);
+    let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    protect(&root, "feat/x");
+    unguard(&root);
+    commit_all(&root, "chore: protect the branch");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// An `integration/` branch the destination already has is not its own
+/// authority unless the default branch's policy protects it.
+#[test]
+fn a_new_integration_branch_is_not_its_own_authority() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "integration/lenient",
+            &format!("origin/{target}"),
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    let first = push(&root, &["origin", "HEAD"]);
+    let there = text(&run("git", &dest, &["rev-parse", "integration/lenient"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    four_bullets(&root);
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "integration/lenient", &head_sha(&root));
+}
+
+/// A declared target the destination does not have, with the working
+/// copy's push gate off: the head cannot turn the check off (finding 2).
+#[test]
+fn an_unknown_declared_target_does_not_let_the_head_skip_the_check() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    git(&root, &["switch", "-q", "-c", "task/TSK-001-work"]);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/nonexistent");
+    loosen(&root);
+    set_policy(&root, &[("test_gate_on_push", "off".into())]);
+    commit_all(&root, "docs: plan the work");
+    four_bullets(&root);
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}
+
+/// A push to a fork cannot know its pull request's target: it is judged
+/// by the fork's default branch, whatever the working copy's gate, and the
+/// hook says the upstream's policy can differ.
+#[test]
+fn a_push_to_a_fork_is_judged_by_a_named_candidate_authority() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    let upstream = root.parent().unwrap().join("upstream.git");
+    git(
+        &root,
+        &["remote", "add", "upstream", upstream.to_str().unwrap()],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    set_policy(&root, &[("test_gate_on_push", "off".into())]);
+    commit_all(&root, "chore: loosen the commit body rules");
+    four_bullets(&root);
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+    assert!(out.contains("may target the upstream"), "{out}");
+    assert!(out.contains("a candidate authority"), "{out}");
+}
+
+/// A default branch whose policy fails strict validation cannot turn the
+/// check off through a key the lenient reader accepts (finding 5).
+#[test]
+fn an_invalid_target_policy_does_not_turn_the_check_off() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    write(&root, "x.txt", "x\n");
+    commit_all(&root, "feat: add x");
+    land_invalid_policy(&root, &dest);
+    let out = pushed(&root);
+    assert!(out.contains("is not valid for this codeflow"), "{out}");
+    not_landed(&dest, &out, "feat/x", &head_sha(&root));
+}
+
+/// Land a default-branch policy that fails strict validation and turns the
+/// push check off.
+fn land_invalid_policy(root: &Path, dest: &Path) {
+    land_unchecked_policy(root, dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("test_gate_on_push", "off".into()),
+                ("no_such_key", true.into()),
+            ],
+        );
+    });
+}
+
+/// Land `change` to the default branch's policy. The local hooks refuse to
+/// commit a policy they cannot use, so it lands with them off, as a change
+/// made elsewhere would arrive; the checkout returns to `feat/x`.
+fn land_unchecked_policy(root: &Path, dest: &Path, change: impl FnOnce(&Path)) {
+    let target = default_branch(dest);
+    git(
+        root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "land/policy",
+            &format!("origin/{target}"),
+        ],
+    );
+    change(root);
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-am",
+            "chore: an invalid policy",
+        ],
+    );
+    git(
+        dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("land/policy:{target}"),
+        ],
+    );
+    git(root, &["switch", "-q", "feat/x"]);
+    git(root, &["fetch", "-q", "origin"]);
+}
+
+/// A malformed default policy refuses the push even when its range has no
+/// base and `codeflow ci` cannot run (review round three, finding 2).
+#[test]
+fn an_invalid_default_policy_refuses_a_push_with_no_range() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_invalid_policy(&root, &dest);
+    // A history the destination shares nothing with: a root commit of this
+    // tree, so no advertised tip bounds its range.
+    let made = run(
+        "git",
+        &root,
+        &[
+            "commit-tree",
+            "HEAD^{tree}",
+            "-m",
+            "feat: an unrelated root",
+        ],
+    );
+    let unrelated = text(&made).trim().to_string();
+    assert!(made.status.success(), "{unrelated}");
+    let out = push(
+        &root,
+        &["origin", &format!("{unrelated}:refs/heads/feat/unrelated")],
+    );
+    assert!(out.contains("is not valid for this codeflow"), "{out}");
+    not_landed(&dest, &out, "feat/unrelated", &unrelated);
+}
+
+/// A protected wildcard does not make a branch the push creates its own
+/// authority: after a first push of a line that relaxes its own policy,
+/// the next push is still judged by the default branch (review round
+/// three, finding 1).
+#[test]
+fn a_protected_wildcard_does_not_make_a_branch_its_own_authority() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| protect(root, "integration/*"));
+    // The landed policy keeps a protected name from being made here, so
+    // the line is pushed to it from a branch of another name.
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "feat/self",
+            &format!("origin/{target}"),
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    unguard(&root);
+    set_policy(&root, &[("test_gate_on_push", "off".into())]);
+    commit_all(&root, "chore: relax the line's own policy");
+    let line = ["origin", "HEAD:refs/heads/integration/self"];
+    let first = push(&root, &line);
+    let there = text(&run("git", &dest, &["rev-parse", "integration/self"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    four_bullets(&root);
+    let out = push(&root, &line);
+    refused_at(&dest, &out, "integration/self", &head_sha(&root));
+}
+
+/// A protected symbolic branch at the destination does not lend the
+/// policy of the branch it points at to a push that declares it as its
+/// target (review round three, finding 1).
+#[test]
+fn a_protected_alias_does_not_lend_its_referent_s_policy() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, |root| protect(root, "integration/*"));
+    land_branch(&root, &dest, "feat/lenient", |root| {
+        loosen(root);
+        set_policy(root, &[("test_gate_on_push", "off".into())]);
+    });
+    git(
+        &dest,
+        &[
+            "symbolic-ref",
+            "refs/heads/integration/alias",
+            "refs/heads/feat/lenient",
+        ],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-work",
+            "origin/feat/lenient",
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/alias");
+    commit_all(&root, "docs: plan the work");
+    four_bullets(&root);
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}
+
+/// Advance the destination's default branch by a commit this clone does
+/// not have, so judging a push needs a fetch.
+#[cfg(unix)]
+fn advance_unseen(dest: &Path) {
+    let target = default_branch(dest);
+    let made = run(
+        "git",
+        dest,
+        &[
+            "commit-tree",
+            &format!("{target}^{{tree}}"),
+            "-p",
+            &target,
+            "-m",
+            "chore: advance",
+        ],
+    );
+    let sha = text(&made).trim().to_string();
+    assert!(made.status.success(), "{sha}");
+    git(dest, &["update-ref", &format!("refs/heads/{target}"), &sha]);
+}
+
+/// Push with `args`, every object fetch from the destination refused by
+/// its upload-pack and recorded. `uploadpack.packObjectsHook` is read only
+/// from protected configuration, and git drops the command scope for a
+/// local transport, so it is set in the global file the hook's own git
+/// processes read. Returns the push's output and the number of fetches
+/// refused.
+#[cfg(unix)]
+fn push_refusing_fetches(root: &Path, args: &[&str]) -> (String, usize) {
+    let dir = root.parent().unwrap();
+    let log = dir.join("fetches.log");
+    write(
+        dir,
+        "refuse-pack",
+        &format!("#!/bin/sh\necho fetch >> '{}'\nexit 1\n", log.display()),
+    );
+    let made = run("chmod", dir, &["+x", "refuse-pack"]);
+    assert!(made.status.success(), "{}", text(&made));
+    write(
+        dir,
+        "refusing.gitconfig",
+        &format!(
+            "[uploadpack]\n\tpackObjectsHook = {}\n",
+            dir.join("refuse-pack").display()
+        ),
+    );
+    let out = command("git", root)
+        .env("GIT_CONFIG_GLOBAL", dir.join("refusing.gitconfig"))
+        .arg("push")
+        .arg("-q")
+        .args(args)
+        .output()
+        .unwrap();
+    let fetches = std::fs::read_to_string(&log).unwrap_or_default();
+    (text(&out), fetches.lines().count())
+}
+
+/// A failed fetch of the default branch's tip is tried once per push, with
+/// durable work tracking off and on: the release scope reuses the failure
+/// instead of fetching again (review round three, finding 3).
+#[cfg(unix)]
+#[test]
+fn a_failed_authority_fetch_is_tried_once_in_both_tracking_modes() {
+    for tier in ["--standard", "--full"] {
+        let dir = scaffolded(tier);
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        write(&root, "x.txt", "x\n");
+        commit_all(&root, "feat: add x");
+        advance_unseen(&dest);
+        let (out, fetches) = push_refusing_fetches(&root, &["origin", "HEAD"]);
+        not_landed(&dest, &out, "feat/x", &head_sha(&root));
+        assert!(out.contains("SPC-013 R-120"), "{tier}: {out}");
+        assert_eq!(fetches, 1, "{tier}: {out}");
+    }
+}
+
+/// A default-branch policy whose bytes are not UTF-8 is content this
+/// codeflow cannot read, not a missing authority: the push is refused
+/// (review round four, finding 2).
+#[test]
+fn a_default_policy_that_is_not_utf8_refuses_the_push() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    write(&root, "x.txt", "x\n");
+    commit_all(&root, "feat: add x");
+    land_unchecked_policy(&root, &dest, |root| {
+        let mut bytes = std::fs::read(root.join(POLICY)).unwrap();
+        bytes.extend_from_slice(b"\n\xff\n");
+        std::fs::write(root.join(POLICY), bytes).unwrap();
+    });
+    let out = pushed(&root);
+    assert!(out.contains("cannot be read by this codeflow"), "{out}");
+    not_landed(&dest, &out, "feat/x", &head_sha(&root));
+}
+
+/// A commit the destination already holds under a tag is still checked
+/// when a branch carries it: the advertised tag would leave the range
+/// empty (review round four, finding 1).
+#[test]
+fn a_commit_published_as_a_tag_is_still_checked_on_its_branch() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    loosen(&root);
+    commit_all(&root, "chore: loosen the commit body rules");
+    four_bullets(&root);
+    let tagged = push(&root, &["origin", "HEAD:refs/tags/v0.0.1-bad"]);
+    let there = text(&run("git", &dest, &["rev-parse", "v0.0.1-bad^{commit}"]));
+    assert_eq!(there.trim(), head_sha(&root), "{tagged}");
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// A commit an earlier push carried, which the default branch's policy
+/// has since come to forbid, is checked again on the next push, as the
+/// hosted job checks the whole branch from the target tip (review round
+/// four, finding 1).
+#[test]
+fn an_earlier_push_is_checked_again_after_the_default_tightens() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    commit_all(&root, "chore: add a quick target");
+    four_bullets(&root);
+    let first = pushed(&root);
+    let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+    assert_eq!(there.trim(), head_sha(&root), "{first}");
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    write(&root, "z.txt", "z\n");
+    commit_all(&root, "feat: add z");
+    let out = pushed(&root);
+    refused(&dest, &out, &head_sha(&root));
+}
+
+/// A target the task record declares does not shorten the commit checks:
+/// a four-bullet commit published on `integration/seed` while the default
+/// branch allowed ten is judged again once the default allows three, since
+/// nothing proves the pull request targets the line (review round five).
+#[test]
+fn a_declared_line_does_not_hide_its_commits_from_the_default_s_policy() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    land_on_default(&root, &dest, loosen);
+    let target = default_branch(&dest);
+    git(
+        &root,
+        &["switch", "-q", "-c", "seed", &format!("origin/{target}")],
+    );
+    four_bullets(&root);
+    git(
+        &dest,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            "seed:integration/seed",
+        ],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+    land_on_default(&root, &dest, |root| {
+        set_policy(
+            root,
+            &[
+                ("commit_body_max_bullets", 3.into()),
+                ("commit_body_bullet_max_len", 72.into()),
+            ],
+        );
+    });
+    git(
+        &root,
+        &[
+            "switch",
+            "-q",
+            "-c",
+            "task/TSK-001-work",
+            "origin/integration/seed",
+        ],
+    );
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    declare(&root, "TSK-001", "integration/seed");
+    commit_all(&root, "docs: plan the work");
+    let out = push(&root, &["origin", "HEAD"]);
+    refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
+}
+
+/// The empty tree's id, written here.
+fn empty_tree(root: &Path) -> String {
+    let made = command("git", root)
+        .arg("mktree")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", text(&made));
+    text(&made).trim().to_string()
+}
+
+/// `git commit-tree` of `tree` with `parents` and `message`: a commit no
+/// local hook judges, as a deployment tool or another clone makes it.
+fn commit_tree(root: &Path, tree: &str, parents: &[&str], message: &str) -> String {
+    let mut args = vec!["commit-tree", tree];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    args.extend(["-m", message]);
+    let made = run("git", root, &args);
+    assert!(made.status.success(), "{}", text(&made));
+    text(&made).trim().to_string()
+}
+
+/// A destination whose default branch's policy takes `entries` with branch
+/// naming off, and a `gh-pages` deployment branch there whose history
+/// shares nothing with it, made by a tool whose first commit is not
+/// conventional. Returns the destination and the deployment branch's tip.
+fn deployment(root: &Path, entries: &[(&str, serde_json::Value)]) -> (PathBuf, String) {
+    let dest = with_destination(root);
+    let mut entries = entries.to_vec();
+    entries.push(("branch_naming", "off".into()));
+    land_on_default(root, &dest, |root| set_policy(root, &entries));
+    let target = default_branch(&dest);
+    git(
+        root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    let tree = empty_tree(root);
+    let old = commit_tree(root, &tree, &[], "Deployed old pages");
+    git(root, &["branch", "gh-pages", &old]);
+    git(
+        &dest,
+        &["fetch", "-q", root.to_str().unwrap(), "gh-pages:gh-pages"],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+    (dest, old)
+}
+
+/// An existing deployment branch that shares no history with the default
+/// branch keeps its own new commits as its commit range, under the default
+/// branch's policy, and says this is not default-target parity: a
+/// conventional deployment commit lands, and with commit formats off a
+/// tool's own message lands too (review round six).
+#[test]
+fn an_unrelated_deployment_branch_checks_only_its_own_new_commits() {
+    for (entries, message) in [
+        (vec![], "docs: deploy the site"),
+        (vec![("commit_format", "off".into())], "Deploy the site"),
+    ] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let (dest, old) = deployment(&root, &entries);
+        let tree = empty_tree(&root);
+        let new = commit_tree(&root, &tree, &[&old], message);
+        git(&root, &["branch", "-f", "gh-pages", &new]);
+        let out = push(&root, &["origin", "gh-pages"]);
+        let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
+        assert_eq!(there.trim(), new, "{message}: {out}");
+        assert!(out.contains("this is not default-target parity"), "{out}");
+    }
+}
+
+/// The deployment branch's own new commits are still judged by the
+/// default branch's policy.
+#[test]
+fn an_unrelated_deployment_branch_s_new_commit_is_still_judged() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let (dest, old) = deployment(&root, &[]);
+    let tree = empty_tree(&root);
+    let new = commit_tree(&root, &tree, &[&old], "Deploy the site");
+    git(&root, &["branch", "-f", "gh-pages", &new]);
+    let out = push(&root, &["origin", "gh-pages"]);
+    assert!(out.contains("git.commit_format"), "{out}");
+    assert!(!out.contains("Deployed old pages"), "{out}");
+    not_landed(&dest, &out, "gh-pages", &new);
+}
+
+/// History that shares nothing with the default branch, joined into a
+/// branch that does, is checked from the default tip in full: its
+/// inherited commit is judged (review round six).
+#[test]
+fn an_unrelated_history_joined_into_a_related_branch_is_checked_in_full() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let (dest, old) = deployment(&root, &[]);
+    let head = head_sha(&root);
+    let tree = text(&run("git", &root, &["rev-parse", "HEAD^{tree}"]));
+    let joined = commit_tree(&root, tree.trim(), &[&head, &old], "feat: join the pages");
+    let out = push(
+        &root,
+        &["origin", &format!("{joined}:refs/heads/feat/joined")],
+    );
+    assert!(out.contains("Deployed old pages"), "{out}");
+    assert!(!out.contains("not default-target parity"), "{out}");
+    not_landed(&dest, &out, "feat/joined", &joined);
+}
+
+/// A related branch whose old remote tip an overlay makes parentless is
+/// not taken for unrelated history: with a replace ref or a graft, the
+/// four-bullet commit it carries is still judged by the tightened default
+/// (review round seven).
+#[test]
+fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
+    for overlay in ["replace", "graft"] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        land_on_default(&root, &dest, loosen);
+        let target = default_branch(&dest);
+        git(
+            &root,
+            &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+        );
+        write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+        commit_all(&root, "chore: add a quick target");
+        four_bullets(&root);
+        let first = pushed(&root);
+        let old = head_sha(&root);
+        let there = text(&run("git", &dest, &["rev-parse", "feat/x"]));
+        assert_eq!(there.trim(), old, "{first}");
+        land_on_default(&root, &dest, |root| {
+            set_policy(
+                root,
+                &[
+                    ("commit_body_max_bullets", 3.into()),
+                    ("commit_body_bullet_max_len", 72.into()),
+                ],
+            );
+        });
+        write(&root, "z.txt", "z\n");
+        commit_all(&root, "feat: add z");
+        if overlay == "replace" {
+            git(&root, &["replace", "--graft", &old]);
+        } else {
+            write(&root, ".git/info/grafts", &format!("{old}\n"));
+        }
+        let out = pushed(&root);
+        assert!(
+            !out.contains("not default-target parity"),
+            "{overlay}: {out}"
+        );
+        assert!(
+            out.contains("overlays its recorded history"),
+            "{overlay}: {out}"
+        );
+        refused(&dest, &out, &head_sha(&root));
+    }
+}
+
+/// A new branch whose history shares nothing with the default branch, and
+/// which the destination already holds under a tag, keeps the advertised
+/// boundary as its commit range instead of a diff against the unrelated
+/// default: at the tagged commit, and with one more valid commit (review
+/// round seven).
+#[test]
+fn a_new_unrelated_branch_already_published_under_a_tag_lands() {
+    for extra in [false, true] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let dest = with_destination(&root);
+        land_on_default(&root, &dest, |root| {
+            set_policy(root, &[("branch_naming", "off".into())]);
+        });
+        let target = default_branch(&dest);
+        git(
+            &root,
+            &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+        );
+        let tree = empty_tree(&root);
+        let published = commit_tree(&root, &tree, &[], "docs: publish the pages");
+        git(&root, &["tag", "pages-v1", &published]);
+        git(
+            &dest,
+            &[
+                "fetch",
+                "-q",
+                root.to_str().unwrap(),
+                "refs/tags/pages-v1:refs/tags/pages-v1",
+            ],
+        );
+        git(&root, &["fetch", "-q", "origin"]);
+        let head = if extra {
+            commit_tree(&root, &tree, &[&published], "docs: deploy the site")
+        } else {
+            published
+        };
+        git(&root, &["branch", "gh-pages", &head]);
+        let out = push(&root, &["origin", "gh-pages"]);
+        let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
+        assert_eq!(there.trim(), head, "{extra}: {out}");
+        assert!(out.contains("this is not default-target parity"), "{out}");
+    }
+}
