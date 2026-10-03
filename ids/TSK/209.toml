@@ -1,0 +1,11 @@
+id = "TSK-209"
+uid = "a15c1134-ec1e-4d28-8021-5f07df66d91f"
+kind = "TSK"
+title = "Unblock CI from an unreachable docs portal advisory"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T00:27:10Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
