@@ -609,26 +609,103 @@ fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
     protected
 }
 
+/// One enforcement path, resolved both ways [`normalized`] reads paths
+/// (lexically, and through symbolic links): the path, whether it protects
+/// a whole directory, and the base its ancestors must lie in, resolved
+/// when first needed. `None` where that reading fails.
+struct ProtectedPath {
+    path: [Option<PathBuf>; 2],
+    directory: bool,
+    base: PathBuf,
+    resolved_base: [std::cell::OnceCell<Option<PathBuf>>; 2],
+}
+
+type Protected = std::rc::Rc<Vec<ProtectedPath>>;
+
+thread_local! {
+    static PROTECTED: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Option<Protected>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While alive, each repository's enforcement paths are read and resolved
+/// once on this thread. One guard evaluation judges many words against the
+/// same repository, which the command being judged has not changed yet
+/// (TSK-216 round 16).
+pub(crate) struct RepoFactsScope {
+    outer: bool,
+}
+
+impl RepoFactsScope {
+    pub(crate) fn enter() -> Self {
+        let outer = PROTECTED.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let outer = cache.is_none();
+            if outer {
+                *cache = Some(std::collections::HashMap::new());
+            }
+            outer
+        });
+        Self { outer }
+    }
+}
+
+impl Drop for RepoFactsScope {
+    fn drop(&mut self) {
+        if self.outer {
+            PROTECTED.with(|cache| *cache.borrow_mut() = None);
+        }
+    }
+}
+
+/// The enforcement paths of the repository at `root` ([`protected_paths`]),
+/// resolved once per [`RepoFactsScope`] and otherwise on each call. `None`
+/// outside a repository.
+fn protected_at(root: &Path) -> Option<Protected> {
+    let read = || {
+        let repo = git2::Repository::discover(root).ok()?;
+        let both = |path: &Path| [false, true].map(|resolve| normalized(path, resolve).ok());
+        let resolved = protected_paths(&repo)
+            .iter()
+            .map(|(path, directory, base)| ProtectedPath {
+                path: both(path),
+                directory: *directory,
+                base: base.clone(),
+                resolved_base: Default::default(),
+            })
+            .collect();
+        Some(std::rc::Rc::new(resolved))
+    };
+    PROTECTED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        match cache.as_mut() {
+            Some(map) => map.entry(root.to_path_buf()).or_insert_with(read).clone(),
+            None => read(),
+        }
+    })
+}
+
 /// Resolve enforcement paths in every checkout sharing this repository.
 /// Native edits protect files; shell writes also protect their ancestors.
 pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    let Ok(repo) = git2::Repository::discover(root) else {
+    let Some(protected) = protected_at(root) else {
         return false;
     };
-    let protected = protected_paths(&repo);
-    for resolve in [false, true] {
+    for (reading, resolve) in [false, true].into_iter().enumerate() {
         let Ok(target) = normalized(target, resolve) else {
             continue;
         };
-        for (path, directory, base) in &protected {
-            let Ok(path) = normalized(path, resolve) else {
+        for entry in protected.iter() {
+            let Some(path) = &entry.path[reading] else {
                 continue;
             };
-            if target == path
-                || (*directory && target.starts_with(&path))
+            if target == *path
+                || (entry.directory && target.starts_with(path))
                 || (ancestors
                     && path.starts_with(&target)
-                    && normalized(base, resolve).is_ok_and(|base| target.starts_with(base)))
+                    && entry.resolved_base[reading]
+                        .get_or_init(|| normalized(&entry.base, resolve).ok())
+                        .as_ref()
+                        .is_some_and(|base| target.starts_with(base)))
             {
                 return true;
             }

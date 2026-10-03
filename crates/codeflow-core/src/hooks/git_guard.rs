@@ -460,6 +460,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 #[must_use]
 #[allow(clippy::too_many_lines)] // The ordered shell tracker and dispatch share one state transition.
 pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> Evaluation {
+    let _facts = super::edit_guard::RepoFactsScope::enter();
     let mut report = Evaluation::default();
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
