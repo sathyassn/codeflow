@@ -7466,8 +7466,12 @@ mod tests {
     #[test]
     fn a_rooted_deletion_is_unproven_where_rooted_paths_are_unplaced() {
         let read = |command: &str| super::read_deletion(command, None, true);
-        let rooted = super::super::guard_forms::ROOTED_DELETIONS.iter().copied();
-        for command in rooted.chain(["rm -r /scratch/Windows", "rm -rf /c/Users/me/app/target"]) {
+        // Each is refused; a temp path may already be refused as an
+        // unresolved temp path where the host cannot place it (Windows).
+        for command in super::super::guard_forms::ROOTED_DELETIONS {
+            assert!(read(command).is_some(), "{command}");
+        }
+        for command in ["rm -r /scratch/Windows", "rm -rf /c/Users/me/app/target"] {
             let reason = read(command)
                 .and_then(|found| found.unproven)
                 .map(|u| u.reason);
