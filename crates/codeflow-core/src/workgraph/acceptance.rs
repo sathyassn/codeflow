@@ -229,6 +229,7 @@ pub(crate) fn bind_completion_with_amendment(
     // task landing may carry its review. Otherwise this range completed and
     // reopened the task itself.
     let mut recovered = false;
+    let mut unreadable = None;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
@@ -248,17 +249,9 @@ pub(crate) fn bind_completion_with_amendment(
             reopened.then_some((anchor, old))
         })
         .or_else(|| {
-            // The recovered completion supplies the archive and the old
-            // review boundary. Its criteria may predate a planning pull
-            // request that amended them on the target after the reopen
-            // (R-52), so the criteria are the anchored record's.
-            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
-            if let Some(anchored) = anchor.and_then(|anchor| {
-                let content = blob_at(repo, anchor, &task.path)?;
-                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
-            }) {
-                old.criteria = anchored.criteria;
-            }
+            let (at, old, note) =
+                recovered_completion(repo, task, &block, landing, anchor, default_target)?;
+            unreadable = note;
             recovered = true;
             Some((at, old))
         });
@@ -270,6 +263,7 @@ pub(crate) fn bind_completion_with_amendment(
         .is_some_and(|(at, _)| !recovered || !before_range(*at));
     let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
+    findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
     if let Some((_, old)) = &reopen {
         findings.extend(
             super::lifecycle::reopen_problems(Some(old), task)
@@ -837,6 +831,534 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
         Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
         None => default_target,
     }
+}
+
+/// The completion this range reopened, recovered from the history below
+/// the landing, with the criteria a re-completion must keep. The recovered
+/// completion supplies the archive and the old review boundary. Its
+/// criteria may predate a planning pull request that amended them on the
+/// target after the reopen (R-52), so the criteria are the target's
+/// record's, found by identity in any layout. A task no reference point of
+/// its targets holds, and no branch outside the range records, is new in
+/// this range: its own pull request may change its criteria with the
+/// reopen (TSK-217). When a record that may be the task cannot be read, a
+/// target it names does not resolve, or a branch outside the range records
+/// it, the recovered criteria stay and a changed set gets the returned
+/// refusal.
+fn recovered_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+    anchor: Option<Oid>,
+    default_target: Option<Oid>,
+) -> Option<(Oid, RecordView, Option<String>)> {
+    let (at, mut old) = previous_completion(repo, task, block, landing)?;
+    let mut refusal = None;
+    if let Some(anchor) = anchor {
+        let range = Range {
+            anchor,
+            head: landing.commit(),
+        };
+        match target_record(repo, task, range, &old, default_target) {
+            Presence::Present(record) => old.criteria = record.criteria,
+            Presence::Absent => old.criteria = task.criteria.clone(),
+            Presence::Unreadable(reason) => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: cannot tell whether a target holds this task, so its criteria stay as they were: {reason}",
+                        task.id
+                    ));
+                }
+            }
+            Presence::Elsewhere { holder, commit } => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: `{holder}` records this task outside this range (commit {commit:.9} adds or changes its record), so the task is not new here and its criteria stay as they were; if `{holder}` is a stale copy, delete it, or merge it if it is newer work on this task, and run this again",
+                        task.id
+                    ));
+                }
+            }
+        }
+    }
+    Some((at, old, refusal))
+}
+
+/// The commits a completion is judged over: those `head` reaches and
+/// `anchor` does not, and the anchor itself.
+#[derive(Clone, Copy)]
+struct Range {
+    anchor: Oid,
+    head: Oid,
+}
+
+/// Whether a reference point holds a task, found by identity.
+enum Presence {
+    /// No record there carries the task's id or uid.
+    Absent,
+    /// The record that carries it.
+    Present(Box<RecordView>),
+    /// The answer is unknown: a required target does not resolve here, or
+    /// a record at the task's own path does not parse; the reason.
+    Unreadable(String),
+    /// No target point holds it, but a branch or remote-tracking ref
+    /// outside the range records it: `commit`, which `holder` reaches and
+    /// the range's head does not, adds or changes the task's record.
+    Elsewhere { holder: String, commit: Oid },
+}
+
+/// The target's record of `task`, read at every reference point the verb or
+/// `codeflow ci` could judge it against, so neither an older range base, a
+/// stale local branch, an upstream on another remote, nor a retargeted
+/// record makes a task a target holds look new (TSK-217).
+///
+/// The targets are every integration target the task's record has named:
+/// the declared one, the recovered completion's, and each version of the
+/// record in the range, the anchor's version included. A record retargeted
+/// in this pull request still names its former target in an earlier
+/// version, and a branch cut from an integration line carries that line's
+/// version, so the record's own history supplies its provenance.
+///
+/// The first point that holds the task supplies the criteria to keep, so
+/// the order is deliberate: the range anchor first, the record this range
+/// was cut from (R-52); then the tips of the declared target, remote ones
+/// before the local branch, since a planning amendment landed there after
+/// the reopen is the criteria that bind and a local branch may be stale;
+/// then the tips of each former target; then `default_target` (the pull
+/// request's base in CI, the resolved default target in the verb); then
+/// the tips of the default target, which catch a record retargeted away
+/// from it.
+///
+/// It fails closed: a required target (each one the record names, and the
+/// default target) with no tip here makes the answer unreadable, never
+/// absent. And when no point holds the task, it is new only if no branch
+/// or remote-tracking ref outside the range records it ([`holder_outside`]):
+/// the range's own history is the branch's to rewrite, other refs are not.
+fn target_record(
+    repo: &Repository,
+    task: &RecordView,
+    range: Range,
+    recovered: &RecordView,
+    default_target: Option<Oid>,
+) -> Presence {
+    let uid = record_uid(&task.content);
+    let mut index = RecordIndex::new(repo, &task.id, uid.clone());
+    let mut targets = Vec::new();
+    let mut add = |name: Option<&str>| {
+        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        if let Some(name) = name {
+            if !targets.iter().any(|known| known == name) {
+                targets.push(name.to_string());
+            }
+        }
+    };
+    add(task.integration_target.as_deref());
+    add(recovered.integration_target.as_deref());
+    match named_targets(repo, &mut index, range) {
+        Ok(names) => names.iter().for_each(|name| add(Some(name))),
+        Err(reason) => return Presence::Unreadable(reason),
+    }
+    let mut points = vec![range.anchor];
+    for name in &targets {
+        let tips = target_tips(repo, name);
+        if tips.is_empty() {
+            return Presence::Unreadable(format!(
+                "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
+            ));
+        }
+        points.extend(tips);
+    }
+    points.extend(default_target);
+    match default_target_name(repo) {
+        Ok(name) => {
+            let tips = target_tips(repo, &name.name);
+            if tips.is_empty() {
+                return Presence::Unreadable(format!(
+                    "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
+                    name.name,
+                    if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
+                ));
+            }
+            points.extend(tips);
+        }
+        Err(reason) => return Presence::Unreadable(reason),
+    }
+    let mut seen = std::collections::HashSet::new();
+    points.retain(|point| seen.insert(*point));
+    let own_file = std::path::Path::new(&task.path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut unreadable = None;
+    for point in points {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            present @ Presence::Present(_) => return present,
+            Presence::Absent | Presence::Elsewhere { .. } => {}
+        }
+    }
+    if let Some(reason) = unreadable {
+        return Presence::Unreadable(reason);
+    }
+    match holder_outside(repo, &mut index, range.head) {
+        Ok(Some((holder, commit))) => Presence::Elsewhere { holder, commit },
+        Ok(None) => Presence::Absent,
+        Err(reason) => Presence::Unreadable(reason),
+    }
+}
+
+/// The versions of one task's record, found by parsed identity (`id` or
+/// `uid`) in the task directories of every layout, read once per distinct
+/// `project-management` tree and once per record file.
+struct RecordIndex<'r> {
+    repo: &'r Repository,
+    id: String,
+    uid: Option<String>,
+    trees: std::collections::HashMap<Oid, Vec<Oid>>,
+    blobs: std::collections::HashMap<Oid, Option<RecordView>>,
+}
+
+impl<'r> RecordIndex<'r> {
+    fn new(repo: &'r Repository, id: &str, uid: Option<String>) -> Self {
+        Self {
+            repo,
+            id: id.to_string(),
+            uid,
+            trees: std::collections::HashMap::new(),
+            blobs: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The record files at `commit` that are this task, as sorted blob ids;
+    /// `None` when the commit or its tree cannot be read.
+    fn versions(&mut self, commit: Oid) -> Option<Vec<Oid>> {
+        let tree = self.repo.find_commit(commit).and_then(|c| c.tree()).ok()?;
+        let Some(records) = tree
+            .get_name("project-management")
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .map(|entry| entry.id())
+        else {
+            return Some(Vec::new());
+        };
+        if let Some(found) = self.trees.get(&records) {
+            return Some(found.clone());
+        }
+        let records_tree = self.repo.find_tree(records).ok()?;
+        let mut found = Vec::new();
+        for (path, blob) in task_entries_in(self.repo, &records_tree) {
+            if !self.blobs.contains_key(&blob) {
+                let record = self.read(&path, blob);
+                self.blobs.insert(blob, record);
+            }
+            if self.blobs.get(&blob).is_some_and(Option::is_some) {
+                found.push(blob);
+            }
+        }
+        found.sort();
+        found.dedup();
+        self.trees.insert(records, found.clone());
+        Some(found)
+    }
+
+    /// The record in `blob` when it is this task. Only a file that names
+    /// the id or uid literally, or holds an escape (a double-quoted YAML
+    /// value can spell either one with `\x` escapes), is parsed.
+    fn read(&self, path: &str, blob: Oid) -> Option<RecordView> {
+        let blob = self.repo.find_blob(blob).ok()?;
+        let content = String::from_utf8_lossy(blob.content());
+        let mentions = content.contains(self.id.as_str())
+            || self.uid.as_deref().is_some_and(|uid| content.contains(uid))
+            || content.contains('\\');
+        if !mentions {
+            return None;
+        }
+        let record = RecordView::parse(RecordKind::Task, path, &content).ok()?;
+        is_same_task(&record, &self.id, self.uid.as_deref()).then_some(record)
+    }
+
+    /// The task's record held in `blob`, once [`Self::versions`] found it.
+    fn record(&self, blob: Oid) -> Option<&RecordView> {
+        self.blobs.get(&blob).and_then(Option::as_ref)
+    }
+}
+
+/// A branch or remote-tracking ref that records the task outside the
+/// range ending at `head`: some commit it reaches and `head` does not adds
+/// the task's record or changes it from every parent's version. A copy
+/// inherited from the range's own commits (a branch stacked on this one,
+/// or this branch's remote copy with unrelated commits on top) adds
+/// nothing and does not count. Returns the ref's short name and the
+/// commit; an unreadable history is the reason returned, so the caller
+/// fails closed.
+fn holder_outside(
+    repo: &Repository,
+    index: &mut RecordIndex<'_>,
+    head: Oid,
+) -> Result<Option<(String, Oid)>, String> {
+    let unreadable =
+        |error: git2::Error| format!("cannot read the branches of this clone: {error}");
+    let mut refs = Vec::new();
+    for reference in repo.references().map_err(unreadable)? {
+        let reference = reference.map_err(unreadable)?;
+        let Ok(name) = reference.name() else { continue };
+        let tracked = name.starts_with("refs/heads/") || name.starts_with("refs/remotes/");
+        if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+        if let Ok(commit) = reference.peel_to_commit() {
+            let short = reference.shorthand().unwrap_or(name).to_string();
+            refs.push((name.to_string(), short, commit.id()));
+        }
+    }
+    refs.sort();
+    let mut walk = repo.revwalk().map_err(unreadable)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        .map_err(unreadable)?;
+    for (_, _, tip) in &refs {
+        walk.push(*tip).map_err(unreadable)?;
+    }
+    walk.hide(head).map_err(unreadable)?;
+    for commit in walk {
+        let commit = commit.map_err(unreadable)?;
+        let tree_error = || format!("cannot read the tree of {commit}");
+        let versions = index.versions(commit).ok_or_else(tree_error)?;
+        if versions.is_empty() {
+            continue;
+        }
+        let parents: Vec<Oid> = repo
+            .find_commit(commit)
+            .map_err(unreadable)?
+            .parent_ids()
+            .collect();
+        let mut inherited = std::collections::HashSet::new();
+        for parent in parents {
+            let parent_versions = index
+                .versions(parent)
+                .ok_or_else(|| format!("cannot read the tree of {parent}"))?;
+            inherited.extend(parent_versions);
+        }
+        if versions.iter().all(|version| inherited.contains(version)) {
+            continue;
+        }
+        let holder = refs
+            .iter()
+            .find(|(_, _, tip)| {
+                *tip == commit || repo.graph_descendant_of(*tip, commit).unwrap_or(false)
+            })
+            .map_or_else(|| commit.to_string(), |(_, short, _)| short.clone());
+        return Ok(Some((holder, commit)));
+    }
+    Ok(None)
+}
+
+/// The integration targets that versions of the task's record name in
+/// `range`, the anchor's version included, in first-seen order from the
+/// head back. A history that cannot be walked is the reason returned, so
+/// the caller fails closed.
+fn named_targets(
+    repo: &Repository,
+    index: &mut RecordIndex<'_>,
+    range: Range,
+) -> Result<Vec<String>, String> {
+    let unwalkable = |error: git2::Error| {
+        format!(
+            "cannot read the history from {} to {}: {error}",
+            range.anchor, range.head
+        )
+    };
+    let mut walk = repo.revwalk().map_err(unwalkable)?;
+    walk.push(range.head).map_err(unwalkable)?;
+    walk.hide(range.anchor).map_err(unwalkable)?;
+    let mut commits = walk.collect::<Result<Vec<_>, _>>().map_err(unwalkable)?;
+    commits.push(range.anchor);
+    let mut names = Vec::new();
+    for commit in commits {
+        let versions = index
+            .versions(commit)
+            .ok_or_else(|| format!("cannot read the tree of {commit}"))?;
+        for blob in versions {
+            let target = index
+                .record(blob)
+                .and_then(|record| record.integration_target.clone());
+            if let Some(target) = target {
+                if !names.contains(&target) {
+                    names.push(target);
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The default target this check reads, and whether `origin/HEAD` named it.
+struct DefaultName {
+    name: String,
+    from_origin_head: bool,
+}
+
+/// The default target: the branch `origin/HEAD` names when this clone
+/// records one, else the first of `main` and `master` that resolves
+/// ([`super::work_start::default_work_target`]). Any other default branch is
+/// found only through `origin/HEAD`, so its absence is the refusal returned.
+fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
+    let origin_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|head| {
+            head.symbolic_target()
+                .ok()
+                .flatten()
+                .and_then(|target| target.strip_prefix("refs/remotes/origin/"))
+                .map(str::to_string)
+        });
+    if let Some(name) = origin_head {
+        return Ok(DefaultName {
+            name,
+            from_origin_head: true,
+        });
+    }
+    repo.workdir()
+        .and_then(super::work_start::default_work_target)
+        .map(|name| DefaultName {
+            name: name.strip_prefix("origin/").unwrap_or(&name).to_string(),
+            from_origin_head: false,
+        })
+        .ok_or_else(|| {
+            "no default target is found here: discovery reads `origin/HEAD`, then `main` and `master`, and none resolves. \
+             If the default branch is `main` or `master`, fetch it (`git fetch origin main`); \
+             for another default branch, record it (`git remote set-head origin --auto`)"
+                .to_string()
+        })
+}
+
+/// Every tip of the target `name` this clone knows: the configured
+/// upstream of its local branch (on any remote), its `origin` tracking ref,
+/// and the local branch, in that order. Empty when none resolves.
+fn target_tips(repo: &Repository, name: &str) -> Vec<Oid> {
+    let mut names = Vec::new();
+    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
+        if let Ok(upstream) = upstream.as_str() {
+            names.push(upstream.to_string());
+        }
+    }
+    let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
+    candidates.reverse();
+    names.extend(candidates);
+    names
+        .iter()
+        .filter_map(|reference| {
+            repo.find_reference(reference)
+                .and_then(|found| found.peel_to_commit())
+                .ok()
+                .map(|commit| commit.id())
+        })
+        .collect()
+}
+
+/// The task records in the tree at `at`, as path and blob, read only in the
+/// task directories of the supported layouts (`project-management/tasks/`
+/// and `project-management/epics/<EPC>/tasks/`). `None` when the tree
+/// cannot be read.
+fn task_entries(repo: &Repository, at: Oid) -> Option<Vec<(String, Oid)>> {
+    let tree = repo.find_commit(at).and_then(|commit| commit.tree()).ok()?;
+    let Some(records) = tree
+        .get_name("project-management")
+        .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+        .and_then(|entry| repo.find_tree(entry.id()).ok())
+    else {
+        return Some(Vec::new());
+    };
+    Some(task_entries_in(repo, &records))
+}
+
+/// The task records under one `project-management` tree, as path and blob.
+fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Vec<(String, Oid)> {
+    let subtree = |tree: &git2::Tree<'_>, name: &str| {
+        tree.get_name(name)
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .and_then(|entry| repo.find_tree(entry.id()).ok())
+    };
+    let mut directories = Vec::new();
+    if let Some(tasks) = subtree(records, "tasks") {
+        directories.push(("project-management/tasks".to_string(), tasks));
+    }
+    if let Some(epics) = subtree(records, "epics") {
+        for epic in &epics {
+            let Ok(name) = epic.name() else { continue };
+            let Some(epic_tree) = subtree(&epics, name) else {
+                continue;
+            };
+            if let Some(tasks) = subtree(&epic_tree, "tasks") {
+                directories.push((format!("project-management/epics/{name}/tasks"), tasks));
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    for (directory, tasks) in directories {
+        for entry in &tasks {
+            let Ok(name) = entry.name() else { continue };
+            let path = format!("{directory}/{name}");
+            if super::work_start::record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
+                entries.push((path, entry.id()));
+            }
+        }
+    }
+    entries
+}
+
+/// Whether `record` is the task with `id` or `uid`, by parsed identity.
+fn is_same_task(record: &RecordView, id: &str, uid: Option<&str>) -> bool {
+    record.id == id || (uid.is_some() && record_uid(&record.content).as_deref() == uid)
+}
+
+/// Whether the tree at `at` holds a task record with `id` or `uid`, read
+/// in the task directories ([`task_entries`]). Identity is the parsed `id`
+/// and `uid` frontmatter values. A record that does not parse is this
+/// task's only when it sits at the task's own file name, and then the
+/// answer is unreadable, never absent.
+fn presence_at(
+    repo: &Repository,
+    at: Oid,
+    id: &str,
+    uid: Option<&str>,
+    own_file: &str,
+) -> Presence {
+    let Some(entries) = task_entries(repo, at) else {
+        return Presence::Unreadable(format!("cannot read the tree of {at}"));
+    };
+    let mut unreadable = None;
+    for (path, blob) in entries {
+        let own = path.rsplit('/').next() == Some(own_file);
+        let Ok(blob) = repo.find_blob(blob) else {
+            if own {
+                unreadable.get_or_insert(format!("cannot read {path} at {at}"));
+            }
+            continue;
+        };
+        let content = String::from_utf8_lossy(blob.content());
+        match RecordView::parse(RecordKind::Task, &path, &content) {
+            Ok(record) if is_same_task(&record, id, uid) => {
+                return Presence::Present(Box::new(record));
+            }
+            Err(_) if own => {
+                unreadable.get_or_insert(format!("{path} at {at} does not parse"));
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    unreadable.map_or(Presence::Absent, Presence::Unreadable)
+}
+
+/// A record's `uid` as the frontmatter parser reads it, so every YAML
+/// form of one value (plain, single or double quoted) is the same uid.
+fn record_uid(content: &str) -> Option<String> {
+    let (data, _) = crate::validate::parse_frontmatter(content.as_bytes()).ok()?;
+    let uid = crate::validate::get_string_field(&data, "uid");
+    let uid = uid.trim();
+    (!uid.is_empty()).then(|| uid.to_string())
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
@@ -1468,6 +1990,118 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// A task is found by its id or uid in any supported layout; a task
+    /// path that names it but does not parse is unreadable, never absent.
+    #[test]
+    fn presence_finds_a_task_by_identity_in_any_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let uid = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
+        let record = |id: &str| {
+            format!(
+                "---\nid: {id}\nuid: \"{uid}\"  # written once\nstatus: todo\n---\n\n# {id}: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n"
+            )
+        };
+        // Every YAML form of one value is the same uid.
+        for form in [uid.to_string(), format!("'{uid}'"), format!("\"{uid}\"")] {
+            let text = format!("---\nid: TSK-001\nuid: {form}\nstatus: todo\n---\n");
+            assert_eq!(record_uid(&text).as_deref(), Some(uid), "{form}");
+        }
+        let commit = |path: &str, text: &str| {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-qm", "record"]);
+            Repository::open(root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        let legacy = commit(
+            "project-management/epics/EPC-001/tasks/TSK-001.md",
+            &record("TSK-001"),
+        );
+        let repo = Repository::open(root).unwrap();
+        let at = |commit, id, uid, own| presence_at(&repo, commit, id, uid, own);
+        assert!(matches!(
+            at(legacy, "TSK-001", None, "TSK-001.md"),
+            Presence::Present(_)
+        ));
+        // The same uid under another number is the same record.
+        assert!(matches!(
+            at(legacy, "TSK-009", Some(uid), "TSK-009.md"),
+            Presence::Present(_)
+        ));
+        assert!(matches!(
+            at(legacy, "TSK-002", None, "TSK-002.md"),
+            Presence::Absent
+        ));
+        // A broken record that only mentions the task is not the task; one
+        // at the task's own file name is unreadable.
+        let mentions = commit(
+            "project-management/tasks/TSK-099.md",
+            "---\nid: TSK-099\nstatus: [unclosed\n---\nSee TSK-002.\n",
+        );
+        assert!(matches!(
+            at(mentions, "TSK-002", None, "TSK-002.md"),
+            Presence::Absent
+        ));
+        let broken = commit(
+            "project-management/tasks/TSK-002.md",
+            "---\nid: TSK-002\nstatus: [unclosed\n---\n",
+        );
+        assert!(matches!(
+            at(broken, "TSK-002", None, "TSK-002.md"),
+            Presence::Unreadable(_)
+        ));
+    }
+
+    /// The record index finds a task whose id and uid are spelled with YAML
+    /// escapes, so no spelling hides a version from the history walks.
+    #[test]
+    fn the_record_index_reads_an_escaped_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let path = root.join("project-management/tasks/TSK-003.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "---\nid: \"\\x54SK-003\"\nuid: \"\\x36f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d\"\nstatus: todo\nintegration_target: main\n---\n\n# Work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n",
+        )
+        .unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "record"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap().id();
+        for (id, uid) in [
+            ("TSK-003", None),
+            (
+                "TSK-777",
+                Some("6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d".to_string()),
+            ),
+        ] {
+            let mut index = RecordIndex::new(&repo, id, uid);
+            let versions = index.versions(head).unwrap();
+            assert_eq!(versions.len(), 1, "{id}");
+            assert_eq!(
+                index
+                    .record(versions[0])
+                    .and_then(|r| r.integration_target.clone()),
+                Some("main".to_string())
+            );
+        }
     }
 
     /// The merge rule takes a landing merge only when its tree is the clean

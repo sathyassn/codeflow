@@ -583,9 +583,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
                 println!("http://{authority}/app/ profile={}", profile.display());
                 return Ok(());
             }
-            return Err(PresentError::BrowserUnavailable(
-                "this presentation already has an owned browser window".to_string(),
-            ));
+            return Err(PresentError::BrowserAlreadyOpen(id.to_string()));
         }
         let _ = store.clear_browser(id, instance_id)?;
     }
@@ -628,9 +626,7 @@ fn launch_or_focus_guard(
     let session = store.load(id)?;
     if let (Some(pid), Some(instance_id)) = (session.browser_pid, session.browser_instance) {
         if browser::is_isolated_running(pid, instance_id, profile)? {
-            return Err(PresentError::BrowserUnavailable(
-                "this presentation already has an owned browser window".to_string(),
-            ));
+            return Err(PresentError::BrowserAlreadyOpen(id.to_string()));
         }
         let _ = store.clear_browser(id, instance_id)?;
     }
@@ -1055,7 +1051,9 @@ fn exit_code(error: &PresentError) -> i32 {
         | PresentError::Review { .. }
         | PresentError::Json(_) => 2,
         PresentError::SessionNotFound(_) => 3,
-        PresentError::BrowserUnavailable(_) | PresentError::ServiceUnavailable(_) => 4,
+        PresentError::BrowserUnavailable(_)
+        | PresentError::BrowserAlreadyOpen(_)
+        | PresentError::ServiceUnavailable(_) => 4,
         PresentError::UnsafePath(_) | PresentError::CorruptState(_) => 5,
         PresentError::RevisionConflict { .. } => 8,
         PresentError::SessionClosed(_)

@@ -2027,7 +2027,7 @@ pub(crate) fn target_reference<'repo>(
         .find_map(|name| repo.find_reference(&name).ok()?.peel_to_commit().ok())
 }
 
-fn target_reference_names(target: &str) -> Option<Vec<String>> {
+pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
     if target.is_empty() || target.trim() != target || logical_target(target) == "HEAD" {
         return None;
     }
