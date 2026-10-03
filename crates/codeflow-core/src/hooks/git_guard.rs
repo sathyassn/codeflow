@@ -919,7 +919,7 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
             .strip_prefix(&base)
             .ok()
             .or_else(|| Path::new(token).is_absolute().then_some(path.as_path()))?;
-        integrity_target(&normalize_path(&target.to_string_lossy()))
+        integrity_target(&normalize_path(&crate::portable_path::slashed(target)))
     })
 }
 
@@ -4393,10 +4393,20 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             }
             '\\' if !in_single => {
                 // A backslash-newline is a line continuation: both vanish.
-                if let Some(next) = chars.next().filter(|next| *next != '\n') {
-                    cur.push(next);
-                    started = true;
-                    prefix_open = false;
+                // Inside double quotes a backslash escapes only `$`, a
+                // backquote, `"` and `\`; before anything else it stays, so
+                // a quoted Windows path such as "C:\Users\a" keeps its
+                // separators, as the shell passes them.
+                match chars.next() {
+                    Some('\n') | None => {}
+                    Some(next) => {
+                        if in_double && !matches!(next, '$' | '`' | '"' | '\\') {
+                            cur.push('\\');
+                        }
+                        cur.push(next);
+                        started = true;
+                        prefix_open = false;
+                    }
                 }
             }
             c if c.is_whitespace() && !in_single && !in_double => {
@@ -5740,6 +5750,25 @@ mod tests {
     #[test]
     fn test_shell_tokens_escapes() {
         assert_eq!(shell_tokens(r"echo a\ b"), vec!["echo", "a b"]);
+    }
+
+    #[test]
+    fn a_double_quoted_backslash_escapes_only_what_the_shell_escapes() {
+        // TSK-197: a quoted Windows path keeps its separators, as bash
+        // passes them; an unquoted one loses them, as bash removes them.
+        assert_eq!(
+            shell_tokens(r#"git -C "C:\Users\a b\repo" status"#),
+            vec!["git", "-C", r"C:\Users\a b\repo", "status"]
+        );
+        assert_eq!(
+            shell_tokens(r"git -C C:\Users\a"),
+            vec!["git", "-C", "C:Usersa"]
+        );
+        assert_eq!(
+            shell_tokens(r#"echo "a\$b \"q\" c\\d \`e""#),
+            vec!["echo", r#"a$b "q" c\d `e"#]
+        );
+        assert_eq!(shell_tokens("echo \"a\\\nb\""), vec!["echo", "ab"]);
     }
 
     fn has_rule(v: &[Violation], rule: &str) -> bool {

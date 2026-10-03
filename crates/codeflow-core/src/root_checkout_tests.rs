@@ -33,7 +33,7 @@ fn repo_with_commit(dir: &Path) -> PathBuf {
     std::fs::write(dir.join("README.md"), "x\n").unwrap();
     git(dir, &["add", "README.md"]);
     git(dir, &["commit", "--quiet", "-m", "init"]);
-    dir.canonicalize().unwrap()
+    crate::portable_path::canonicalize(dir).unwrap()
 }
 
 fn umbrella_policy() -> GitPolicy {
@@ -645,7 +645,11 @@ fn the_guard_judges_git_dash_c_from_a_linked_worktree_by_the_root_it_names() {
     assert!(rule_hits(&guard(&worktree, &policy, "git commit -m x")).is_empty());
     // Aimed at the root checkout on main, it is fine too; on feat/x it is
     // refused.
-    let at_root = format!("git -C {} commit -m x", root.display());
+    // A bare word in a Bash command: on Windows with `/`, which Bash keeps.
+    let at_root = format!(
+        "git -C {} commit -m x",
+        crate::portable_path::slashed(&root)
+    );
     assert!(rule_hits(&guard(&worktree, &policy, &at_root)).is_empty());
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
     let v = guard(&worktree, &policy, &at_root);
@@ -1279,7 +1283,7 @@ fn a_sibling_worktree_and_an_unignored_one_inside_the_tree_are_reported() {
         .iter()
         .map(ToString::to_string)
         .collect();
-    let sibling = sibling.canonicalize().unwrap();
+    let sibling = crate::portable_path::canonicalize(&sibling).unwrap();
     assert!(
         lines.contains(&format!(
             "git.worktree_locations: linked worktree {s} of {r} is outside every \

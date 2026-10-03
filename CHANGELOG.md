@@ -30,6 +30,27 @@ erratum below, never an edit of the section.
   refused before any target starts. With `--all`, the named targets keep
   the full-strength checks of the epic close.
 
+<!-- codeflow:release-impact patch -->
+- **Native Windows support returns.** The release publishes an x86-64
+  Windows archive with `codeflow.exe` and a PowerShell installer again,
+  beside the macOS and Linux builds; 3.0.0 published neither. The Windows
+  jobs gate every pull request to `main` and every publication again,
+  behind one `windows` check.
+  The defects it found are fixed: the guards, `codeflow doctor` and the
+  Codex and Grok trust checks now treat the short (`RUNNER~1`), long and
+  `\\?\` spellings of one Windows path as the same file; the full-gate lock
+  can be read by a second gate on Windows; a directory in the way of a
+  ledger file is named as a directory there; a shipped spec checked out
+  with CRLF line endings no longer counts as edited; and the model
+  evaluation kit keeps its signing key owner-only through the key's and
+  its folder's access lists, since Windows has no POSIX mode bits: it
+  writes the key only once both lists are proven private and refuses
+  either list that lets in another account.
+  On Windows the guards refuse a recursive delete below any `/`-rooted
+  path, such as `rm -r /tmp/scratch`: that path names no fixed place
+  there, and a junction can send the delete anywhere. A relative path is
+  judged as before.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -59,6 +80,13 @@ erratum below, never an edit of the section.
   tagged source: the release job writes cargo-dist's manifest into the
   checkout before it builds, and the build counted that untracked file.
   The file is now ignored, so a release build reports `dirty=false`.
+
+<!-- codeflow:release-impact patch -->
+- **A double-quoted backslash stays in the guards' reading.** Inside double
+  quotes Bash removes a backslash only before `$`, a backquote, `"` or
+  another backslash. The git guard removed it everywhere, so
+  `git -C "C:\Users\a\repo" commit` was judged against a path that does not
+  exist and refused. It now reads the path the shell passes.
 
 <!-- codeflow:release-impact patch -->
 - **The dependency audit names the suppression file osv-scanner reads.**

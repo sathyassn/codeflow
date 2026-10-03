@@ -1009,7 +1009,7 @@ pub fn is_valid_location(entry: &str) -> bool {
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::portable_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Doctor's findings for linked worktrees: one outside every location, and

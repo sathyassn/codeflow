@@ -118,6 +118,11 @@ fn only_plain_docs_and_records_are_light() {
         ("assets/guide.md", false),
         (".agents/skills/explain/SKILL.md", false),
     ] {
+        // Windows file names cannot hold a quote; `café` still makes git
+        // quote the path there.
+        if cfg!(windows) && path.contains('"') {
+            continue;
+        }
         let dir = tempfile::tempdir().unwrap();
         repo(dir.path(), extra, &[]);
         write(dir.path(), path, "changed\n");

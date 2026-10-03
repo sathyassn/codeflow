@@ -28,6 +28,7 @@
   "required_publication_checks": [
     "release state",
     "codeflow gates",
+    "windows",
     "secret scan",
     "security review"
   ],

@@ -24,7 +24,9 @@ pub mod actions;
 pub mod dangerous;
 mod deletion;
 pub mod git;
+// Some tables serve only the Unix symlink tests.
 #[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) mod guard_forms;
 pub mod headless;
 pub(crate) mod interpreter;

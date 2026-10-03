@@ -156,6 +156,10 @@ class NodePinControls(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "requires cmd.exe and the Windows CI Node install")
     def test_docs_portal_target_runs_through_cmd_on_windows(self):
+        # The target ends with `$CODEFLOW_BIN validate --portal`, which
+        # `codeflow test` supplies; run directly, the caller must.
+        if not os.environ.get("CODEFLOW_BIN"):
+            self.fail("set CODEFLOW_BIN to a built codeflow: the docs-portal target validates the portal with it")
         command = full_command(CONFIG, PORTAL)
         run = subprocess.run(f'cmd.exe /D /S /C "{command}"', cwd=ROOT,
                              capture_output=True, text=True, check=False)
