@@ -313,6 +313,12 @@ fn assert_update_round_trips(root: &Path) {
     let settings_path = root.join(".claude/settings.json");
     let mut settings: serde_json::Value =
         serde_json::from_str(&read(root, ".claude/settings.json")).unwrap();
+    // The project changes one shipped compaction key, removes the other and
+    // adds its own entry; update keeps all three choices (TSK-211 AC-2).
+    assert_eq!(
+        settings["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50",
+        "init did not write the compaction default"
+    );
     settings["env"] = serde_json::json!({
         "KEEP_PROJECT_VALUE": "opaque",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000"
