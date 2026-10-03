@@ -193,6 +193,22 @@ erratum below, never an edit of the section.
   its Closeout by hand in that pull request; an epic is never reopened.
   The cf-method project-organization reference states the same route.
 
+<!-- codeflow:release-impact patch -->
+- **A reviewed task can take its moved target without a new review.** The
+  release-impact check needs a pull request to contain the current target,
+  so after every merge to `main` a reviewed task merges `main` in. In a
+  clone whose local `main` lags `origin/main`, such as a root checkout that
+  is never pulled, `codeflow ci` and the pre-push hook then refused the
+  completion with `work.acceptance_binding`, because they read the task's
+  target from the stale local branch, took the merge for foreign work and
+  asked for a new review. The binding now reads the target as `codeflow
+  work start` does: the local branch, or its configured upstream when the
+  local branch is strictly behind it. A merge whose second parent is on that
+  line and whose tree is git's clean merge of its parents keeps the
+  binding. A hand edit or conflict resolution in the merge, a merge of
+  another branch, or a later commit beyond the record's status and
+  Closeout still refuses, and the refusal now names that commit.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a

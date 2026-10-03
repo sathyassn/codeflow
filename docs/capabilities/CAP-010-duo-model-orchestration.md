@@ -298,6 +298,15 @@ and the landed task head; unrelated line work before the landing does not
 invalidate that source. Direct work and transported work use the same
 binding predicate. At a batch landing each completion binds at the commit
 that introduced its block, so reviewed heads land together on one candidate.
+A task pull request that merges its moved target after the review keeps its
+binding when each merge brings a commit on the first-parent line of the
+task's declared target, read as `work start` reads it (the local branch, or
+its configured upstream when the local branch is strictly behind it, and
+`origin/<name>` in a clone without one), or of the range's base when the
+task declares none, and its tree equals git's clean merge of its parents
+(TSK-220). A hand edit or conflict resolution in such a merge, a merge of
+another branch, or a later commit beyond the record's status and Closeout
+still unbinds it, and the refusal names that commit.
 A task pull request may change its own criteria, and CI prints the change
 for the reviewer; a reopened task keeps its criteria, and another task's
 criteria change only in its own pull request, a planning-only change or a
