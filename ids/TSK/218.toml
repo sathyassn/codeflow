@@ -1,0 +1,11 @@
+id = "TSK-218"
+uid = "b9ff107e-5a81-4fde-8cdb-3c59b9f5724c"
+kind = "TSK"
+title = "PR summaries open with a prose lead then bullets"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T14:13:02Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
