@@ -278,6 +278,48 @@ erratum below, never an edit of the section.
   commit, or an archive without a binary stops the release.
 
 <!-- codeflow:release-impact patch -->
+- **Catch-up merges no longer count as extra pull requests.**
+  `codeflow validate --docs` warned that most completed standalone tasks
+  were "completed by N pull requests", because it counted every merge whose
+  subject names the task branch, including the merges of the target into
+  that branch that the rules ask for. It now counts only merges that brought
+  the task branch in. With the default merge subjects (GitHub's "Merge pull
+  request", git's and GitLab's "Merge branch"), a task that landed once
+  draws no warning and a task that really landed twice still does. A merge
+  with a custom subject may still be miscounted, and a task landed by
+  squash, rebase or `codeflow integrate`, which write no merge, is not
+  counted, as before.
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow present show` says when the browser is already open.** On a
+  session whose browser is still running, `show` exited 4 with
+  "presentation browser launch is not qualified". It now says the session's
+  browser is already open and tells you to switch to its window, or quit
+  that browser and run `show` again; `show --no-launch` prints the
+  session's address. The exit code is still 4.
+
+<!-- codeflow:release-impact patch -->
+- **A new task may change its criteria after a reopen in its own pull
+  request.** A standalone task whose record exists only on its branch,
+  completed, reopened and given another criterion there, could not be
+  completed again: `codeflow task status` and `codeflow ci` refused with
+  "a reopened task keeps its criteria as the anchored target has them",
+  though the target holds no criteria to keep. Such a task now completes
+  with its new criteria. A task the target already records still keeps
+  its criteria across a reopen, also when the branch moves its record to
+  another layout, renumbers it with its uid kept, or retargets it away
+  from `main` or from the integration line it was planned on, and
+  whether the target is read from a stale local branch, an upstream on
+  another remote or an older comparison base. A task is new only when no
+  other branch adds or edits its record, so rewriting the branch's own
+  history cannot hide a recorded task; the refusal names the branch that
+  records it. The default branch is the
+  one `origin/HEAD` names, else `main` or `master`. A clone that lacks a
+  target the task's record names or the default branch cannot tell, so
+  it refuses the change and names the branch to fetch, or explains how
+  to record `origin/HEAD` when it finds no default branch.
+
+<!-- codeflow:release-impact patch -->
 - **A follow-up of a standalone task can land.** `codeflow task new
   --follow-up-of` ran only on a `plan/` branch, but a planning pull request
   must name an epic, and a standalone task has none, so no branch or

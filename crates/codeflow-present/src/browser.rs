@@ -99,9 +99,7 @@ fn launch_url(
     let _launch_lease = store.acquire_browser_launch_lease(session_id)?;
     recover_launch_records_locked(store, session_id, profile_dir)?;
     if store.load(session_id)?.browser_instance.is_some() {
-        return Err(PresentError::BrowserUnavailable(
-            "this presentation already has an owned browser window".to_string(),
-        ));
+        return Err(PresentError::BrowserAlreadyOpen(session_id.to_string()));
     }
     create_private_dir_all(profile_dir)?;
     let executable = qualified_browser()?;

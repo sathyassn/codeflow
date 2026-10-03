@@ -102,7 +102,7 @@ jobs:
           portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
           test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
           echo "version=$present" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}

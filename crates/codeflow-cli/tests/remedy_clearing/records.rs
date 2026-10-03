@@ -238,8 +238,9 @@ fn clears_ci_range_unreadable() {
 // Record edits named by `codeflow validate --docs`.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn clears_standalone_split() {
+/// A standard project whose standalone task TSK-001 is planned and
+/// committed, checked out on the line `feat/line` it lands on.
+fn standalone_on_line() -> tempfile::TempDir {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     git(&root, &["switch", "-q", "-c", "plan/x"]);
@@ -259,18 +260,15 @@ fn clears_standalone_split() {
     let task = read(&root, TASK).replacen("- AC-1\n", CRITERION, 1);
     write(&root, TASK, &task);
     commit_all(&root, "docs: plan the work");
-    // Two pull requests deliver the standalone task onto one line.
     git(&root, &["switch", "-q", "-c", "feat/line"]);
-    for part in ["a", "b"] {
-        let branch = format!("task/TSK-001-{part}");
-        git(&root, &["switch", "-q", "-c", &branch, "feat/line"]);
-        commit(&root, &format!("{part}.txt"), &format!("feat: add {part}"));
-        git(&root, &["switch", "-q", "feat/line"]);
-        git(&root, &["merge", "-q", "--no-ff", "--no-edit", &branch]);
-    }
-    let acceptance = review_head(&root);
+    dir
+}
+
+/// Mark TSK-001 complete with an approved acceptance block.
+fn complete_task(root: &Path) {
+    let acceptance = review_head(root);
     let out = codeflow(
-        &root,
+        root,
         &[
             "task",
             "status",
@@ -281,6 +279,43 @@ fn clears_standalone_split() {
         ],
     );
     assert!(out.contains("todo -> complete"), "{out}");
+}
+
+/// Advance `feat/line` with a commit, then merge it into `branch` with
+/// `message` (git's own subject when `None`), as a catch-up merge of the
+/// target into a task branch does.
+fn catch_up(root: &Path, branch: &str, file: &str, message: Option<&str>) {
+    git(root, &["switch", "-q", "feat/line"]);
+    commit(root, file, &format!("feat: add {file}"));
+    git(root, &["switch", "-q", branch]);
+    match message {
+        Some(message) => git(
+            root,
+            &["merge", "-q", "--no-ff", "-m", message, "feat/line"],
+        ),
+        None => git(root, &["merge", "-q", "--no-ff", "--no-edit", "feat/line"]),
+    }
+}
+
+/// Land `branch` on `feat/line` with a merge commit titled `message`.
+fn land(root: &Path, branch: &str, message: &str) {
+    git(root, &["switch", "-q", "feat/line"]);
+    git(root, &["merge", "-q", "--no-ff", "-m", message, branch]);
+}
+
+#[test]
+fn clears_standalone_split() {
+    let dir = standalone_on_line();
+    let root = project(&dir);
+    // Two pull requests deliver the standalone task onto one line.
+    for part in ["a", "b"] {
+        let branch = format!("task/TSK-001-{part}");
+        git(&root, &["switch", "-q", "-c", &branch, "feat/line"]);
+        commit(&root, &format!("{part}.txt"), &format!("feat: add {part}"));
+        git(&root, &["switch", "-q", "feat/line"]);
+        git(&root, &["merge", "-q", "--no-ff", "--no-edit", &branch]);
+    }
+    complete_task(&root);
     prove(
         "STANDALONE_SPLIT",
         "was completed by 2 pull requests",
@@ -294,6 +329,91 @@ fn clears_standalone_split() {
             set_field(&root, TASK, "standalone_reason", "null");
         },
     );
+}
+
+/// The catch-up merges the rules require name the task branch as their
+/// destination; they are not landings, so a task branch that took two of
+/// them and landed once is one pull request, read from the line and from
+/// the task branch itself.
+#[test]
+fn catch_up_merges_are_not_landings() {
+    let dir = standalone_on_line();
+    let root = project(&dir);
+    let branch = "task/TSK-001-work";
+    git(&root, &["switch", "-q", "-c", branch, "feat/line"]);
+    commit(&root, "work.txt", "feat: add the work");
+    catch_up(&root, branch, "one.txt", None);
+    catch_up(
+        &root,
+        branch,
+        "two.txt",
+        Some("Merge remote-tracking branch 'origin/main' into task/TSK-001-work"),
+    );
+    land(
+        &root,
+        branch,
+        "Merge pull request #7 from task/TSK-001-work",
+    );
+    complete_task(&root);
+    let on_line = validate(&root);
+    assert!(!on_line.contains("was completed by"), "{on_line}");
+    // The completed record carries over unchanged to the task branch, whose
+    // first-parent line holds both catch-up merges.
+    git(&root, &["switch", "-q", branch]);
+    let on_branch = validate(&root);
+    assert!(!on_branch.contains("was completed by"), "{on_branch}");
+}
+
+/// Two real landings still warn, counted once each, with catch-up merges on
+/// the second branch and GitHub's owner-prefixed merge subject.
+#[test]
+fn two_landings_warn_beside_catch_up_merges() {
+    let dir = standalone_on_line();
+    let root = project(&dir);
+    git(
+        &root,
+        &["switch", "-q", "-c", "task/TSK-001-a", "feat/line"],
+    );
+    commit(&root, "a.txt", "feat: add a");
+    land(
+        &root,
+        "task/TSK-001-a",
+        "Merge pull request #7 from task/TSK-001-a",
+    );
+    git(&root, &["switch", "-q", "-c", "fix/TSK-001-b", "feat/line"]);
+    commit(&root, "b.txt", "fix: add b");
+    catch_up(&root, "fix/TSK-001-b", "one.txt", None);
+    catch_up(
+        &root,
+        "fix/TSK-001-b",
+        "two.txt",
+        Some("Merge main into fix/TSK-001-b"),
+    );
+    land(
+        &root,
+        "fix/TSK-001-b",
+        "Merge pull request #8 from owner/fix/TSK-001-b",
+    );
+    complete_task(&root);
+    let warning = "standalone task TSK-001 was completed by 2 pull requests";
+    let on_line = validate(&root);
+    assert!(on_line.contains(warning), "{on_line}");
+    // The line then lands on a release line in one merge; the two landings
+    // stay visible from there.
+    git(&root, &["switch", "-q", "-c", "feat/release", "plan/x"]);
+    git(
+        &root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge pull request #9 from owner/feat/line",
+            "feat/line",
+        ],
+    );
+    let on_release = validate(&root);
+    assert!(on_release.contains(warning), "{on_release}");
 }
 
 #[test]
