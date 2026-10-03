@@ -61,13 +61,15 @@ erratum below, never an edit of the section.
   The file is now ignored, so a release build reports `dirty=false`.
 
 <!-- codeflow:release-impact patch -->
-- **A docs portal no longer fails its dependency audit on an unreachable
-  advisory.** GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which Astro
-  uses only to time its build-time cache of remote images, has no fixed
-  version yet. The portal starter now ships an `osv-scanner.toml` that
-  ignores it, with its reason, until 2026-11-30. The CI template's audit
-  step also now names that file correctly: osv-scanner reads
-  `osv-scanner.toml` beside the lockfile, never `.osv-scanner.toml`.
+- **The dependency audit names the suppression file osv-scanner reads.**
+  When the CI template's audit step fails, it told you to record a
+  justified suppression in `.osv-scanner.toml`, a name osv-scanner never
+  reads. It now names `osv-scanner.toml` in the same directory as the
+  lockfile it covers. A docs portal scaffolded by CodeFlow currently reports
+  GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which has no fixed
+  version; Astro uses it only to time its build-time cache of remote
+  images. If your policy blocks on advisories and you accept that reasoning,
+  add the entry to `docs-portal/osv-scanner.toml` with an expiry date.
 
 ## [3.0.0]
 

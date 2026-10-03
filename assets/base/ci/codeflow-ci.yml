@@ -207,8 +207,9 @@ jobs:
       #   off   — skipped (only when both keys are off).
       # Record a justified suppression for an accepted or unreachable advisory in
       # an osv-scanner.toml in the same directory as the lockfile it covers
-      # (osv-scanner reads no other name and no parent directory), so a
-      # transitive advisory in unchanged code cannot block an unrelated PR.
+      # (with no --config, as here, osv-scanner reads no other name and no
+      # parent directory), so a transitive advisory in unchanged code cannot
+      # block an unrelated PR.
       - name: dependency audit (osv-scanner)
         run: |
           set -u

@@ -305,9 +305,9 @@ jobs:
       # `git.dep_audit` (SCA-specific sub-gate). The advisory blocks when EITHER is
       # `block`, reports when either is `warn` (the default), and is skipped only
       # when BOTH are `off`. Record justified suppressions in an osv-scanner.toml
-      # beside the lockfile they cover (osv-scanner reads no other name and no
-      # parent directory) so a transitive advisory in unchanged code cannot
-      # block a PR.
+      # beside the lockfile they cover (with no --config, as here, osv-scanner
+      # reads no other name and no parent directory) so a transitive advisory
+      # in unchanged code cannot block a PR.
       - name: dependency audit (osv-scanner)
         run: |
           set -u
