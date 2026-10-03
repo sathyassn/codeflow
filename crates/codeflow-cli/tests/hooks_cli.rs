@@ -434,7 +434,9 @@ fn git_guard_refuses_recursive_deletion_of_registered_worktrees() {
         &["worktree", "add", "-b", "task/v", &shell_path(&plain_tree)],
     );
     std::fs::write(plain_tree.join("dirty.txt"), "unsaved\n").unwrap();
-    let mut refused = vec![
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join(".worktrees"), root.join("trees")).unwrap();
+    let refused: Vec<&str> = [
         "rm -rf .claude/worktrees",
         "rm -rf .worktrees",
         "rm -r .worktrees/v",
@@ -442,12 +444,10 @@ fn git_guard_refuses_recursive_deletion_of_registered_worktrees() {
         "rm --recursive --force ./.worktrees/../.worktrees",
         "find .worktrees -delete",
         "find .claude -name worktrees -exec rm -rf {} +",
-    ];
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(root.join(".worktrees"), root.join("trees")).unwrap();
-        refused.push("rm -rf trees/");
-    }
+    ]
+    .into_iter()
+    .chain(cfg!(unix).then_some("rm -rf trees/"))
+    .collect();
     assert_guard(
         &root,
         &refused,
@@ -530,7 +530,102 @@ fn git_guard_resolves_forced_moves_of_a_protected_branch() {
     );
     git(root, &["checkout", "-q", "-b", "feat/y"]);
     git(root, &["checkout", "-q", "feat/x"]);
-    assert_guard(root, &[], &["git branch -f @{-1} HEAD"], "");
+    assert_guard(
+        root,
+        &[
+            "git switch feat/y && git branch -f @{-1} HEAD",
+            "git checkout feat/y; git checkout -B @{-1} HEAD",
+            "git worktree add -B main ../other HEAD",
+            "git worktree add -fB main ../other HEAD",
+        ],
+        &[
+            "git branch -f @{-1} HEAD",
+            "git status && git branch -f @{-1} HEAD",
+            "git worktree add -B feat/w ../w2 HEAD",
+            "git worktree add -b feat/w ../w2 HEAD",
+        ],
+        "git.local_ref_protection",
+    );
+}
+
+/// TSK-216 review round 2: the guard never judges a wrapped write more
+/// weakly than 3.0.0's text rule. A mutating `sed`, `find` or `xargs`
+/// whose command line names an enforcement path is refused wherever the
+/// name sits; `find` actions are judged in expression order and from each
+/// match's own directory; shell positional arguments are bound; worktrees
+/// are kept from unresolved and alternative deletions. Cleanups that name
+/// nothing protected stay allowed.
+#[test]
+fn git_guard_holds_the_text_floor_for_wrapped_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    let claude_tree = root.join(".claude/worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&claude_tree)],
+    );
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/v",
+            &shell_path(&root.join(".worktrees/v")),
+        ],
+    );
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
+    let refused: Vec<&str> = [
+        r"printf 'w .codeflow/policy.json\n' | sed -f - README.md",
+        "sed -e 'e rm .codeflow/policy.json' README.md",
+        "sed -e '# w .codeflow/policy.json' README.md",
+        "find . -type f -delete -name '*.o'",
+        r"find . -exec rm -f {} \; -name '*.o'",
+        r"find . -name settings.json -execdir rm settings.json \;",
+        r"find . -name settings.json -execdir sh -c 'rm settings.json' \;",
+        r#"find . -name settings.json -exec sh -c 'rm "$1"' _ {} \;"#,
+        r#"printf '%s\n' .codeflow/policy.json | xargs -n1 sh -c 'rm "$1"' _"#,
+        r#"d=.claude/worktrees; rm -rf "$d""#,
+        r#"rm -rf "$(printf .claude/worktrees)""#,
+        "git clean -ffdx .claude/worktrees",
+        "git clean -ffdx",
+        "trash .claude/worktrees",
+        "ls .worktrees | xargs rm -rf",
+        r#"p=.codeflow/policy.json; rm "$p""#,
+        r#"sed -i '' 's/a/b/' "$(echo .codeflow/policy.json)""#,
+    ]
+    .into_iter()
+    .chain(cfg!(unix).then_some("find -L build -name policy.json -exec sed -i '' 's/a/b/' {} +"))
+    .collect();
+    assert_guard(
+        &root,
+        &refused,
+        &[
+            r"printf 'build/a.o\0' | xargs -0 rm",
+            "find build -type f -print0 | xargs -0 rm",
+            "find build -delete",
+            "find . -name '*.o' -delete",
+            "find . -name '*.o' -exec rm {} +",
+            "sed -n '1,5p' .codeflow/policy.json",
+            "git clean -ffdxn",
+            "rm -rf .worktrees/v/target",
+            r#"rm -f "$d""#,
+            // `PATH` is set wherever the tests run, and the line leaves it.
+            r#"rm -rf "$PATH/codeflow-scratch-tsk216""#,
+        ],
+        "git.hook_integrity",
+    );
+    // A worktree holds no other worktree, so an unresolved target there
+    // is not refused for that reason.
+    assert_guard(
+        &claude_tree,
+        &[],
+        &[r#"d=build; rm -rf "$d""#, "git clean -ffdx"],
+        "",
+    );
 }
 
 /// TSK-216 review finding 5: `xargs`, `find -exec`, `find -execdir` and
@@ -547,8 +642,6 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
         &root,
         &[
             r"printf '%s\n' .codeflow/policy.json | xargs sed -i '' 's/a/b/'",
-            "git ls-files | xargs rm -f",
-            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
             r"find .codeflow -name policy.json -exec sed -i '' 's/a/b/' {} \;",
             r"find . -maxdepth 0 -exec rm -rf .codeflow \;",
             "find . -name policy.json -delete",
@@ -562,6 +655,8 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
             "find docs -delete",
             "printf x | xargs echo",
             "git ls-files | xargs grep -n a",
+            "git ls-files | xargs rm -f",
+            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
             "find . -name '*.md' -print0 | xargs -0 grep -n a",
         ],
         "git.hook_integrity",

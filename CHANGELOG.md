@@ -117,29 +117,36 @@ erratum below, never an edit of the section.
   empty argument as a path, and judges a worktree nested in the main
   checkout's `.claude/` by its own files. Writes to the worktree's own
   `.claude/settings.json` or `.codeflow/policy.json` are still refused,
-  and so is a `sed` script that writes one through its `w` command, the
-  `w` flag of `s`, or an in-place backup name.
+  and so is any `sed` whose script, options or `-f` script file names an
+  enforcement path; a plain read such as `sed -n p <file>` passes.
 
 <!-- codeflow:release-impact patch -->
 - **The git guard judges what `find` and `xargs` run, and protects live
   worktrees.** `find -exec`, `-execdir` and `-delete` and `xargs` could
-  edit or delete the enforcement files without naming them. The guard now
-  judges the command `find` runs on each path it may reach, and refuses an
-  `xargs` whose command would write a path it reads from its input. A
-  recursive `rm` or `find -delete` of a registered worktree, or of a
-  directory holding one such as `.worktrees` or `.claude/worktrees`, is
-  refused with `git worktree remove` as the way to remove it.
+  edit or delete the enforcement files. A `sed`, `find` or `xargs` that
+  can change files is now refused when its command line names an
+  enforcement path anywhere, including a `sh -c` string or a producer
+  piped into `xargs`. `find` actions are also judged on each protected
+  path they can reach, in expression order and from each match's own
+  directory for `-execdir`. A recursive `rm`, `trash`, `find -delete` or
+  `git clean -ff` of a registered worktree, of a directory holding one
+  such as `.worktrees` or `.claude/worktrees`, or of a target the guard
+  cannot resolve in a checkout that holds worktrees, is refused with
+  `git worktree remove` as the way to remove it. A path built at run
+  time, which no argument spells, is past the guard; in Claude sessions
+  the sandbox's write denies are the backstop.
 
 <!-- codeflow:release-impact patch -->
 - **The git guard refuses a forced move of a protected branch.**
   `git branch -f main HEAD~3` passed the guard, and the
   reference-transaction hook lets a rewind behind the remote through. The
-  guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B` and
-  `git switch -C` aimed at a protected branch under
-  `git.local_ref_protection`, as it already refused `git update-ref`. It
-  reads flag clusters such as `-fv` and abbreviations such as
-  `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
-  repository, and refuses a forced move it cannot resolve.
+  guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B`,
+  `git switch -C` and `git worktree add -B` aimed at a protected branch
+  under `git.local_ref_protection`, as it already refused `git
+  update-ref`. It reads flag clusters such as `-fv` and abbreviations
+  such as `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
+  repository, and refuses a forced move it cannot resolve, or one whose
+  expression an earlier git command on the same line may change.
 
 <!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print

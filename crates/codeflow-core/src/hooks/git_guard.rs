@@ -480,7 +480,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // with the enforcement plane, evaluated on ANY command (not just git).
         let moved = line.moves_for(&shell, top_level, &tokens);
         if let Some(mut v) =
-            integrity_write_in_dirs(&tokens, ctx.policy.hook_integrity, cwd, &moved.cwd)
+            integrity_write_in_dirs(&tokens, ctx.policy.hook_integrity, cwd, &moved.cwd, command)
         {
             let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH);
             if authority {
@@ -935,12 +935,13 @@ fn integrity_write_in_dirs(
     level: PolicyLevel,
     cwd: &Path,
     dirs: &Cwd,
+    line: &str,
 ) -> Option<Violation> {
     match dirs {
         Cwd::Paths(dirs) => dirs
             .iter()
-            .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd)),
-        Cwd::Unknown(_) => integrity_write_violation(tokens, level, cwd, cwd),
+            .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd, line)),
+        Cwd::Unknown(_) => integrity_write_violation(tokens, level, cwd, cwd, line),
     }
 }
 
@@ -1227,8 +1228,8 @@ fn rm_recursive(args: &[String]) -> bool {
         })
 }
 
-/// The operands of an `rm`: every non-option word, and every word after
-/// `--`.
+/// The operands of a command that takes options then paths: every
+/// non-option word, and every word after `--`.
 fn rm_operands(args: &[String]) -> Vec<&str> {
     let mut operands = Vec::new();
     let mut options = true;
@@ -1240,6 +1241,238 @@ fn rm_operands(args: &[String]) -> Vec<&str> {
         }
     }
     operands
+}
+
+// ---------------------------------------------------------------------------
+// the text floor (TSK-216 review round 2)
+// ---------------------------------------------------------------------------
+
+/// Enforcement paths as a command line spells them. A command that can
+/// change files and names one of these anywhere in its text (a `sed`
+/// script, a `find` action, a `sh -c` string, a producer piped into
+/// `xargs`) is refused. This is the floor 3.0.0 held; the precise readings
+/// below may clear a match they prove harmless, never remove it otherwise.
+/// A path built at run time, which no argument spells, is past this floor;
+/// the OS sandbox's write denies are the backstop there.
+const ENFORCEMENT_TEXT: &[&str] = &[
+    ".codeflow/policy.json",
+    ".codeflow/project.toml",
+    ".codeflow/git-hooks",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".git/hooks",
+    ".git/config",
+    ".git/packed-refs",
+    ".git/refs/remotes",
+    ".github/workflows/codeflow-ci.yml",
+    ".codex",
+    ".grok",
+];
+
+/// Directories that hold enforcement paths, matched only when the text
+/// names the directory itself (`.codeflow`, `.codeflow/`, `.codeflow/*`).
+const ENFORCEMENT_DIRS: &[&str] = &[
+    ".codeflow",
+    ".claude",
+    ".git",
+    ".github/workflows",
+    ".github",
+];
+
+/// The folders linked worktrees live in, matched when the text names the
+/// folder or one entry of it (`.worktrees`, `.worktrees/<name>`).
+const WORKTREE_DIRS: &[&str] = &[".claude/worktrees", ".worktrees"];
+
+/// Programs that only read the paths they are given, so running them
+/// through `find -exec` or `xargs` changes nothing.
+const READ_ONLY_PROGRAMS: &[&str] = &[
+    "echo",
+    "printf",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "ls",
+    "stat",
+    "file",
+    "test",
+    "[",
+    "true",
+    "false",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "du",
+    "diff",
+    "cmp",
+    "sort",
+    "uniq",
+    "od",
+    "xxd",
+    "hexdump",
+    "strings",
+    "jq",
+    "md5",
+    "md5sum",
+    "shasum",
+    "sha1sum",
+    "sha256sum",
+];
+
+fn path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')
+}
+
+/// The text after each place `needle` occurs in `text` as the start of a
+/// path, not inside a longer name.
+fn path_mentions<'t>(text: &'t str, needle: &'t str) -> impl Iterator<Item = &'t str> + 't {
+    text.match_indices(needle).filter_map(move |(at, _)| {
+        if text[..at].chars().next_back().is_some_and(path_char) {
+            return None;
+        }
+        Some(&text[at + needle.len()..])
+    })
+}
+
+/// Whether `after` ends a name: the end, or a character no name holds.
+fn ends_name(after: &str) -> bool {
+    after
+        .chars()
+        .next()
+        .is_none_or(|c| !path_char(c) && c != '/')
+}
+
+/// Whether `after`, the text after a directory name, leaves it naming the
+/// directory itself: nothing more, a trailing `/`, or a glob over it.
+fn names_whole_dir(after: &str) -> bool {
+    ends_name(after)
+        || after
+            .strip_prefix('/')
+            .is_some_and(|rest| ends_name(rest) || rest.starts_with(['*', '?', '[', '{']))
+}
+
+/// The enforcement path `text` names, when it names one.
+fn enforcement_text(text: &str) -> Option<&'static str> {
+    ENFORCEMENT_TEXT
+        .iter()
+        .copied()
+        .find(|needle| {
+            path_mentions(text, needle).any(|after| ends_name(after) || after.starts_with('/'))
+        })
+        .or_else(|| {
+            ENFORCEMENT_DIRS
+                .iter()
+                .copied()
+                .find(|needle| path_mentions(text, needle).any(names_whole_dir))
+        })
+}
+
+/// The worktree folder `text` names, as itself or as one entry of it.
+fn worktree_text(text: &str) -> Option<&'static str> {
+    WORKTREE_DIRS.iter().copied().find(|needle| {
+        path_mentions(text, needle).any(|after| {
+            names_whole_dir(after)
+                || after.strip_prefix('/').is_some_and(|rest| {
+                    let name = rest.len() - rest.trim_start_matches(path_char).len();
+                    name > 0 && names_whole_dir(&rest[name..])
+                })
+        })
+    })
+}
+
+/// Whether the shell fills in part of `word` when the command runs: a
+/// variable, or a command substitution the tokenizer cut out.
+fn unresolved_word(word: &str) -> bool {
+    word.contains(['$', '`']) || has_substitution(word)
+}
+
+/// The enforcement path the command line names, when one of `args` is
+/// filled in by the shell: the value may come from that text
+/// (`p=<path>; rm "$p"`, `"$(echo <path>)"`).
+fn unresolved_names_enforcement<'a>(
+    args: impl IntoIterator<Item = &'a String>,
+    line: &str,
+) -> Option<&'static str> {
+    args.into_iter()
+        .any(|arg| unresolved_word(arg))
+        .then(|| enforcement_text(line))
+        .flatten()
+}
+
+fn read_only_program(tokens: &[String]) -> bool {
+    strip_launchers(tokens).is_some_and(|(program, _)| {
+        let name = basename(program);
+        READ_ONLY_PROGRAMS.contains(&name) && !is_shell(name)
+    })
+}
+
+/// A variable the line does not set, read from the guard's own
+/// environment: every other occurrence of the name on the line must be an
+/// expansion of it.
+fn environment_value(name: &str, line: &str) -> Option<String> {
+    let bare = line.match_indices(name).any(|(at, _)| {
+        let before = &line[..at];
+        let after = &line[at + name.len()..];
+        let word_start = !before
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        let word_end = !after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        word_start && word_end && !before.ends_with('$') && !before.ends_with("${")
+    });
+    if bare {
+        return None;
+    }
+    std::env::var(name).ok()
+}
+
+/// The paths a destructive command's target word names, or `None` when
+/// the guard cannot resolve it: a command substitution, a variable the line
+/// sets or the guard cannot read, or a brace expansion. A glob is expanded
+/// against the file system.
+fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> {
+    if token.contains('`') || token.contains("$(") || has_substitution(token) {
+        return None;
+    }
+    let mut text = String::new();
+    let mut rest = token;
+    while let Some(at) = rest.find('$') {
+        text.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let (name, used) = if let Some(braced) = after.strip_prefix('{') {
+            let end = braced.find('}')?;
+            (&braced[..end], end + 2)
+        } else {
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            (&after[..end], end)
+        };
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        text.push_str(&environment_value(name, line)?);
+        rest = &after[used..];
+    }
+    text.push_str(rest);
+    if text.contains('{') && (text.contains(',') || text.contains("..")) {
+        return None;
+    }
+    if text.contains(['*', '?', '[']) {
+        let pattern = crate::portable_path::slashed(&integrity_shell_path(&text, cwd));
+        return glob::glob(&pattern)
+            .ok()
+            .map(|paths| paths.flatten().collect());
+    }
+    Some(vec![integrity_shell_path(&text, cwd)])
 }
 
 /// A recursive delete of a registered worktree, or of a directory holding
@@ -1257,47 +1490,277 @@ fn checkout_delete_violation(level: PolicyLevel, what: &str, checkout: &Path) ->
     )
 }
 
-/// The registered worktree a recursive `rm` would delete, when any.
-fn rm_deletes_checkout(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<PathBuf> {
-    if !rm_recursive(args) {
+/// The registered checkout under `path`, read in the repository at `cwd`
+/// and, when that fails, at the session's own cwd.
+fn checkout_under(
+    path: &Path,
+    cwd: &Path,
+    payload_cwd: &Path,
+    except: Option<&Path>,
+) -> Option<PathBuf> {
+    super::edit_guard::registered_checkout_under(path, cwd, except)
+        .or_else(|| super::edit_guard::registered_checkout_under(path, payload_cwd, except))
+}
+
+/// Judge the targets of a command that deletes directories (TSK-216 review
+/// round 2): a target that resolves to a registered worktree or a directory
+/// holding one is refused, and so is one the guard cannot resolve, where
+/// registered worktrees live under the checkout or the text names their
+/// folder. `except` is a checkout the command never deletes, such as the
+/// one `git clean` cleans.
+fn worktree_delete_check(
+    what: &str,
+    targets: &[&str],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+    except: Option<&Path>,
+) -> Option<Violation> {
+    let held = super::edit_guard::holds_registered_worktrees(cwd);
+    for target in targets.iter().filter(|t| !t.is_empty()) {
+        match resolve_targets(target, cwd, line) {
+            Some(paths) => {
+                if let Some(checkout) = paths
+                    .iter()
+                    .find_map(|path| checkout_under(path, cwd, payload_cwd, except))
+                {
+                    return Some(checkout_delete_violation(level, what, &checkout));
+                }
+            }
+            None if held || worktree_text(target).is_some() => {
+                return Some(Violation::new(
+                    "git.hook_integrity",
+                    level,
+                    format!(
+                        "{what} would delete `{target}`, which the guard cannot resolve to a path, where registered worktrees live; it is judged as deleting one"
+                    ),
+                    crate::remedy::WORKTREE_DELETE.remedy(),
+                ));
+            }
+            None => {}
+        }
+    }
+    None
+}
+
+/// `git clean` with force given twice removes untracked directories that
+/// are other repositories, which is what a linked worktree inside the
+/// checkout is. A dry run deletes nothing.
+fn git_clean_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    let mut force = 0;
+    let mut dry_run = false;
+    let mut paths: Vec<&str> = Vec::new();
+    let mut options = true;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if !options {
+            paths.push(arg);
+        } else if arg == "--" {
+            options = false;
+        } else if let Some(long) = arg.strip_prefix("--") {
+            match long {
+                "force" => force += 1,
+                "dry-run" => dry_run = true,
+                "exclude" => at += 1,
+                _ => {}
+            }
+        } else if let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.is_empty()) {
+            for (offset, letter) in cluster.char_indices() {
+                match letter {
+                    'f' => force += 1,
+                    'n' => dry_run = true,
+                    'e' => {
+                        if offset + 1 == cluster.len() {
+                            at += 1;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            paths.push(arg);
+        }
+        at += 1;
+    }
+    if force < 2 || dry_run {
         return None;
     }
-    rm_operands(args)
-        .into_iter()
-        .filter(|target| !target.is_empty())
-        .find_map(|target| {
-            super::edit_guard::registered_checkout_under(
-                &integrity_shell_path(target, cwd),
-                payload_cwd,
-            )
-        })
+    if paths.is_empty() {
+        paths.push(".");
+    }
+    let own = super::edit_guard::checkout_root_of(cwd);
+    worktree_delete_check(
+        "`git clean -ff`",
+        &paths,
+        level,
+        cwd,
+        payload_cwd,
+        line,
+        own.as_deref(),
+    )
+}
+
+/// A `sh -c` script with its positional parameters written in (`$0` to
+/// `$9`, `${N}`, `$@`, `$*`), so `sh -c 'rm "$1"' _ <path>` is judged as
+/// `rm <path>`.
+fn bind_positional(script: &str, params: &[String]) -> String {
+    let word = |value: &str| {
+        if value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_./-:~+,@%=".contains(c))
+        {
+            value.to_string()
+        } else {
+            format!("'{}'", value.replace('\'', r"'\''"))
+        }
+    };
+    let all = params
+        .iter()
+        .skip(1)
+        .map(|p| word(p))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut out = script
+        .replace("\"$@\"", &all)
+        .replace("\"$*\"", &all)
+        .replace("$@", &all)
+        .replace("$*", &all);
+    for n in (0..=9).rev() {
+        let value = params.get(n).map_or(String::new(), |p| word(p));
+        out = out
+            .replace(&format!("${{{n}}}"), &value)
+            .replace(&format!("${n}"), &value);
+    }
+    out
 }
 
 /// A command run for its paths by `find -exec` or `xargs`: judged as the
 /// guard judges it written on its own, and a `sh -c` script inside it as
-/// the commands of that script.
+/// the commands of that script with its positional parameters bound.
 fn wrapped_violation(
     tokens: &[String],
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
+    line: &str,
 ) -> Option<Violation> {
     if let Some((program, args)) = strip_launchers(tokens) {
         if is_shell(basename(program)) {
             if let Some(script) = shell_c_argument(args) {
-                return expand_commands(script).iter().find_map(|segment| {
-                    integrity_write_violation(&shell_tokens(segment), level, cwd, payload_cwd)
+                let params = args
+                    .iter()
+                    .position(|arg| std::ptr::eq(arg, script))
+                    .map_or(&[][..], |at| &args[at + 1..]);
+                let bound = bind_positional(script, params);
+                return expand_commands(&bound).iter().find_map(|segment| {
+                    integrity_write_violation(&shell_tokens(segment), level, cwd, payload_cwd, line)
                 });
             }
         }
     }
-    integrity_write_violation(tokens, level, cwd, payload_cwd)
+    integrity_write_violation(tokens, level, cwd, payload_cwd, line)
+}
+
+/// The arguments of `sed` that a grammar reads as input files.
+fn sed_operands_in<'a>(args: &'a [String], spec: &OptionSpec) -> Vec<&'a str> {
+    let parsed = parse_options(args, spec);
+    let scripted = parsed.has_short(&['e', 'f'])
+        || parsed.has_long("--expression")
+        || parsed.has_long("--file");
+    let skip = usize::from(!scripted);
+    parsed.operands.into_iter().skip(skip).collect()
+}
+
+/// The largest `sed -f` script the guard reads; a larger one is refused.
+const SED_SCRIPT_LIMIT: u64 = 1 << 24;
+
+/// The text floor for `sed`: any argument that names an enforcement path
+/// refuses, script and option values included, so a `w`, `W` or GNU `e`
+/// command and a comment alike count. The one clearance is a plain read:
+/// without `-i`, a name that both grammars read as an input file. A `-f`
+/// script is read and judged the same way; one read from the input is
+/// judged by the rest of the command line.
+fn sed_text_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    let in_place = requests_in_place(args);
+    let gnu = sed_operands_in(args, &SED_OPTIONS);
+    let bsd = sed_operands_in(args, &BSD_SED_OPTIONS);
+    let read = |arg: &String| {
+        !in_place
+            && [&gnu, &bsd].iter().all(|operands| {
+                operands
+                    .iter()
+                    .any(|op| std::ptr::eq(op.as_ptr(), arg.as_ptr()) && op.len() == arg.len())
+            })
+    };
+    if let Some((arg, p)) = args
+        .iter()
+        .filter(|arg| !read(arg))
+        .find_map(|arg| enforcement_text(arg).map(|p| (arg, p)))
+    {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`sed` names the enforcement path `{p}` in `{arg}`, where its script or in-place edit can write it"),
+        ));
+    }
+    if let Some(p) = unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line) {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`sed` takes a word the shell fills in, and the command line names the enforcement path `{p}`"),
+        ));
+    }
+    // The rest of the line, without the files this `sed` only reads.
+    let mut elsewhere = line.to_string();
+    for arg in args.iter().filter(|arg| read(arg) && !arg.is_empty()) {
+        elsewhere = elsewhere.replace(arg.as_str(), "");
+    }
+    let line = elsewhere.as_str();
+    for spec in SED_GRAMMARS {
+        for file in parse_options(args, spec).values_of('f', "--file") {
+            let why = if matches!(file, "-" | "/dev/stdin") {
+                enforcement_text(line).map(|p| {
+                    format!("reads its script from its input, and the command line names `{p}`")
+                })
+            } else {
+                let path = cwd.join(file);
+                match std::fs::metadata(&path) {
+                    Ok(meta) if meta.len() > SED_SCRIPT_LIMIT => Some(format!(
+                        "runs the script file `{file}`, which is too large for the guard to read"
+                    )),
+                    Ok(_) => std::fs::read(&path)
+                        .ok()
+                        .and_then(|bytes| enforcement_text(&String::from_utf8_lossy(&bytes)))
+                        .map(|p| format!("runs the script file `{file}`, which names `{p}`")),
+                    Err(_) => enforcement_text(line).map(|p| {
+                        format!("runs the script file `{file}`, which the guard cannot read, and the command line names `{p}`")
+                    }),
+                }
+            };
+            if let Some(why) = why {
+                return Some(hook_integrity_violation(level, format!("`sed` {why}")));
+            }
+        }
+    }
+    None
 }
 
 /// The `-name` and `-iname` patterns a path must all match to reach a
-/// `find` action, or `None` when the expression can select a path in a way
-/// the guard does not model (`-o`, `!`, `-not`, `(`, path or regex tests),
-/// so every path may reach it.
+/// `find` action, read from the expression before that action only, or
+/// `None` when that part can select a path in a way the guard does not
+/// model (`-o`, `!`, `-not`, `(`, path or regex tests), so every path may
+/// reach it.
 fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
     let mut names = Vec::new();
     let mut at = 0;
@@ -1340,23 +1803,61 @@ fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     })
 }
 
-/// Judge what a `find` does to the paths it visits (TSK-216 review finding
-/// 5): `-delete`, `-exec`, `-execdir`, `-ok` and `-okdir`, and the files
-/// `-fprint`, `-fprint0`, `-fprintf` and `-fls` write. Each path the find
-/// may pass to an action that holds enforcement state or a registered
-/// worktree, and that its `-name` tests let through, is put in place of
-/// `{}` and judged as a direct command would be; the command's own words
-/// are judged from the cwd and from each starting point.
+/// The command of each `-exec`, `-execdir`, `-ok` or `-okdir` in a `find`
+/// expression.
+fn find_commands(args: &[String]) -> Vec<&[String]> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if matches!(arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
+            let tail = &args[at + 1..];
+            let len = tail
+                .iter()
+                .position(|a| matches!(a.as_str(), ";" | "+"))
+                .unwrap_or(tail.len());
+            out.push(&tail[..len]);
+            at += len + 1;
+        }
+        at += 1;
+    }
+    out
+}
+
+/// Whether a `find` expression changes files: `-delete`, an output-file
+/// action, or a command that is not read-only.
+fn find_mutates(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        matches!(
+            a.as_str(),
+            "-delete" | "-fprint" | "-fprint0" | "-fprintf" | "-fls"
+        )
+    }) || find_commands(args)
+        .into_iter()
+        .any(|command| !read_only_program(command))
+}
+
+/// Judge what a `find` does to the paths it visits. First the text floor:
+/// a `find` that changes files and names an enforcement path anywhere is
+/// refused, as is one that follows symbolic links (`-L`, `-follow`), reads
+/// its starting points from a file that names one, or starts from a target
+/// it cannot resolve where worktrees live. Then each action in expression
+/// order: every path holding enforcement state or a registered worktree
+/// that the starting points reach and the `-name` tests before the action
+/// let through is put in place of `{}` and judged as a direct command; an
+/// `-execdir` command runs from that path's own directory.
+#[allow(clippy::too_many_lines)] // One pass over the find expression.
 fn find_action_violation(
     args: &[String],
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
+    line: &str,
 ) -> Option<Violation> {
     let skip = args
         .iter()
         .take_while(|arg| matches!(arg.as_str(), "-H" | "-L" | "-P"))
         .count();
+    let follows = args[..skip].iter().any(|a| a == "-L") || args.iter().any(|a| a == "-follow");
     let rest = &args[skip..];
     let end = rest
         .iter()
@@ -1367,22 +1868,72 @@ fn find_action_violation(
     } else {
         rest[..end].iter().map(String::as_str).collect()
     };
-    let filter = find_name_filter(rest);
-    let candidates: Vec<PathBuf> = starts
+    if find_mutates(rest) {
+        if let Some(p) = rest
+            .iter()
+            .find_map(|a| enforcement_text(a))
+            .or_else(|| unresolved_names_enforcement(rest, line))
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`find` names the enforcement path `{p}` in a command that changes files"),
+            ));
+        }
+        if follows {
+            return Some(hook_integrity_violation(
+                level,
+                "`find -L` follows symbolic links the guard does not map, in a command that changes files".to_string(),
+            ));
+        }
+        if let Some(at) = rest.iter().position(|a| a == "-files0-from") {
+            let text = match rest.get(at + 1).map(String::as_str) {
+                Some("-") | None => line.to_string(),
+                Some(file) => std::fs::read(cwd.join(file)).map_or_else(
+                    |_| line.to_string(),
+                    |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+                ),
+            };
+            if let Some(p) = enforcement_text(&text).or_else(|| worktree_text(&text)) {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("`find -files0-from` reads starting points that name `{p}`, in a command that changes files"),
+                ));
+            }
+        }
+        if let Some(v) = worktree_delete_check(
+            "`find`",
+            &starts
+                .iter()
+                .copied()
+                .filter(|start| resolve_targets(start, cwd, line).is_none())
+                .collect::<Vec<_>>(),
+            level,
+            cwd,
+            payload_cwd,
+            line,
+            None,
+        ) {
+            return Some(v);
+        }
+    }
+    let reachable: Vec<PathBuf> = starts
         .iter()
         .flat_map(|start| {
             super::edit_guard::find_candidates(&integrity_shell_path(start, cwd), payload_cwd)
         })
-        .filter(|path| find_name_matches(filter.as_deref(), path))
         .collect();
     let mut at = end;
     while let Some(arg) = rest.get(at) {
+        let filter = find_name_filter(&rest[..at]);
+        let candidates = || {
+            reachable
+                .iter()
+                .filter(|path| find_name_matches(filter.as_deref(), path))
+        };
         match arg.as_str() {
             "-delete" => {
-                for candidate in &candidates {
-                    if let Some(checkout) =
-                        super::edit_guard::registered_checkout_under(candidate, payload_cwd)
-                    {
+                for candidate in candidates() {
+                    if let Some(checkout) = checkout_under(candidate, cwd, payload_cwd, None) {
                         return Some(checkout_delete_violation(
                             level,
                             "`find -delete`",
@@ -1411,6 +1962,7 @@ fn find_action_violation(
                 at += if arg == "-fprintf" { 2 } else { 1 };
             }
             "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                let in_dir = matches!(arg.as_str(), "-execdir" | "-okdir");
                 let tail = &rest[at + 1..];
                 let len = tail
                     .iter()
@@ -1420,17 +1972,29 @@ fn find_action_violation(
                 let literal: Vec<String> = command.iter().filter(|t| *t != "{}").cloned().collect();
                 let mut dirs = vec![cwd.to_path_buf()];
                 dirs.extend(starts.iter().map(|start| integrity_shell_path(start, cwd)));
+                if in_dir {
+                    dirs.extend(candidates().filter_map(|c| c.parent().map(Path::to_path_buf)));
+                }
                 for dir in &dirs {
-                    if let Some(v) = wrapped_violation(&literal, level, dir, payload_cwd) {
+                    if let Some(v) = wrapped_violation(&literal, level, dir, payload_cwd, line) {
                         return Some(v);
                     }
                 }
                 if command.iter().any(|t| t.contains("{}")) {
-                    for candidate in &candidates {
-                        let shown = crate::portable_path::slashed(candidate);
+                    for candidate in candidates() {
+                        let (shown, dir) = match (in_dir, candidate.parent(), candidate.file_name())
+                        {
+                            (true, Some(parent), Some(name)) => (
+                                format!("./{}", name.to_string_lossy()),
+                                parent.to_path_buf(),
+                            ),
+                            _ => (crate::portable_path::slashed(candidate), cwd.to_path_buf()),
+                        };
                         let substituted: Vec<String> =
                             command.iter().map(|t| t.replace("{}", &shown)).collect();
-                        if let Some(v) = wrapped_violation(&substituted, level, cwd, payload_cwd) {
+                        if let Some(v) =
+                            wrapped_violation(&substituted, level, &dir, payload_cwd, line)
+                        {
                             return Some(v);
                         }
                     }
@@ -1441,7 +2005,7 @@ fn find_action_violation(
             | "-iregex" | "-type" | "-xtype" | "-user" | "-group" | "-uid" | "-gid" | "-perm"
             | "-size" | "-links" | "-inum" | "-mtime" | "-mmin" | "-atime" | "-amin" | "-ctime"
             | "-cmin" | "-newer" | "-anewer" | "-cnewer" | "-newermt" | "-maxdepth"
-            | "-mindepth" | "-printf" => at += 1,
+            | "-mindepth" | "-printf" | "-files0-from" => at += 1,
             _ => {}
         }
         at += 1;
@@ -1449,10 +2013,8 @@ fn find_action_violation(
     None
 }
 
-/// The command an `xargs` runs and the replacement string it fills, when
-/// it names one (`-I`, `-J`, `-i`, `--replace`). GNU and BSD options.
-fn xargs_command(args: &[String]) -> Option<(&[String], Option<String>)> {
-    let mut replace = None;
+/// The command an `xargs` runs, GNU and BSD options read.
+fn xargs_command(args: &[String]) -> Option<&[String]> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "--" {
@@ -1466,9 +2028,7 @@ fn xargs_command(args: &[String]) -> Option<(&[String], Option<String>)> {
             let (name, value) = long
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
-            if "replace".starts_with(name) && name.len() >= 3 {
-                replace = Some(value.unwrap_or("{}").to_string());
-            } else if value.is_none()
+            if value.is_none()
                 && [
                     "arg-file",
                     "delimiter",
@@ -1489,67 +2049,111 @@ fn xargs_command(args: &[String]) -> Option<(&[String], Option<String>)> {
         for (offset, letter) in cluster.char_indices() {
             let attached = &cluster[offset + letter.len_utf8()..];
             match letter {
-                'I' | 'J' => {
-                    replace = if attached.is_empty() {
-                        at += 1;
-                        args.get(at).cloned()
-                    } else {
-                        Some(attached.to_string())
-                    };
-                    break;
-                }
-                'i' => {
-                    replace = Some(if attached.is_empty() { "{}" } else { attached }.to_string());
-                    break;
-                }
-                'e' | 'l' => break,
-                'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'R' | 'S' => {
+                'I' | 'J' | 'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'R' | 'S' => {
                     if attached.is_empty() {
                         at += 1;
                     }
                     break;
                 }
+                'i' | 'e' | 'l' => break,
                 _ => {}
             }
         }
         at += 1;
     }
-    let command = args.get(at..).filter(|c| !c.is_empty())?;
-    Some((command, replace))
+    args.get(at..).filter(|c| !c.is_empty())
 }
 
-/// An `xargs` takes its paths from its input, which the guard cannot see,
-/// so the command it runs is judged as if an enforcement file were among
-/// them (TSK-216 review finding 5): one that would write that path is
-/// refused, one that only reads, such as `grep`, passes.
+/// An `xargs` takes its paths from its input, which the guard cannot see.
+/// Its command is judged as written, and one that changes files is refused
+/// when the command line names an enforcement path or a worktree folder,
+/// as a producer feeding it would (TSK-216 review round 2). With nothing
+/// protected in sight it passes: `find build -print0 | xargs -0 rm`.
 fn xargs_violation(
     args: &[String],
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
+    line: &str,
 ) -> Option<Violation> {
-    const STAND_IN: &str = ".codeflow/policy.json";
-    let (command, replace) = xargs_command(args)?;
-    let probe: Vec<String> = match &replace {
-        Some(token) => command
-            .iter()
-            .map(|t| t.replace(token.as_str(), STAND_IN))
-            .collect(),
-        None => command
-            .iter()
-            .cloned()
-            .chain([STAND_IN.to_string()])
-            .collect(),
+    let command = xargs_command(args)?;
+    if read_only_program(command) {
+        return None;
+    }
+    if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
+        return Some(v);
+    }
+    let named = enforcement_text(line).or_else(|| worktree_text(line))?;
+    Some(hook_integrity_violation(
+        level,
+        format!(
+            "`xargs {}` changes the paths it reads from its input, and the command line names `{named}`; name the files on the command line",
+            command.join(" ")
+        ),
+    ))
+}
+
+/// The deletes of worktrees and the wrapped or scripted writes the text
+/// floor judges (TSK-216): `rm -r`, `trash`, `git clean -ff`, `find`,
+/// `xargs` and `sed`.
+fn wrapper_write_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    let deleted = match cmd {
+        "rm" if rm_recursive(args) => Some("`rm -r`"),
+        "trash" | "trash-put" => Some("`trash`"),
+        _ => None,
     };
-    wrapped_violation(&probe, level, cwd, payload_cwd).map(|_| {
-        hook_integrity_violation(
+    if let Some(what) = deleted {
+        if let Some(v) = worktree_delete_check(
+            what,
+            &rm_operands(args),
             level,
-            format!(
-                "`xargs {}` would write the paths it reads from its input, which the guard cannot see and which can include enforcement files; name the files on the command line",
-                command.join(" ")
-            ),
-        )
-    })
+            cwd,
+            payload_cwd,
+            line,
+            None,
+        ) {
+            return Some(v);
+        }
+    }
+    if cmd == "git" {
+        // `git [-C <dir>]... clean`
+        let mut dir = cwd.to_path_buf();
+        let mut at = 0;
+        while args.get(at).is_some_and(|a| a == "-C") {
+            if let Some(next) = args.get(at + 1) {
+                dir = integrity_shell_path(next, &dir);
+            }
+            at += 2;
+        }
+        if args.get(at).is_some_and(|a| a == "clean") {
+            if let Some(v) = git_clean_violation(&args[at + 1..], level, &dir, payload_cwd, line) {
+                return Some(v);
+            }
+        }
+    }
+    if cmd == "find" {
+        if let Some(v) = find_action_violation(args, level, cwd, payload_cwd, line) {
+            return Some(v);
+        }
+    }
+    if cmd == "xargs" {
+        if let Some(v) = xargs_violation(args, level, cwd, payload_cwd, line) {
+            return Some(v);
+        }
+    }
+    if cmd == "sed" {
+        if let Some(v) = sed_text_violation(args, level, cwd, line) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// Block a Bash write/remove that would disarm or falsify the enforcement
@@ -1562,6 +2166,7 @@ fn integrity_write_violation(
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
+    line: &str,
 ) -> Option<Violation> {
     if let Some(p) = redirect_integrity_path(tokens, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
@@ -1572,20 +2177,8 @@ fn integrity_write_violation(
     let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
 
-    if cmd == "rm" {
-        if let Some(checkout) = rm_deletes_checkout(args, cwd, payload_cwd) {
-            return Some(checkout_delete_violation(level, "`rm -r`", &checkout));
-        }
-    }
-    if cmd == "find" {
-        if let Some(v) = find_action_violation(args, level, cwd, payload_cwd) {
-            return Some(v);
-        }
-    }
-    if cmd == "xargs" {
-        if let Some(v) = xargs_violation(args, level, cwd, payload_cwd) {
-            return Some(v);
-        }
+    if let Some(v) = wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line) {
+        return Some(v);
     }
 
     let write_args = match cmd {
@@ -1600,6 +2193,7 @@ fn integrity_write_violation(
             token_integrity_path(".", cwd, payload_cwd)
         } else {
             arg_integrity_path(paths, cwd, payload_cwd)
+                .or_else(|| unresolved_names_enforcement(paths, line))
         }
     }) {
         return Some(hook_integrity_violation(
@@ -2383,6 +2977,10 @@ struct BranchTracker {
     config_changed: bool,
     /// Earlier shell steps may invalidate the disk snapshot for discard checks.
     discard_state_changed: bool,
+    /// A git command earlier in the line may have moved HEAD or changed an
+    /// upstream, so a branch expression (`@{-1}`, `@{upstream}`) read from
+    /// disk now may not be what git resolves when it runs.
+    head_may_move: bool,
 }
 
 impl BranchTracker {
@@ -2397,6 +2995,7 @@ impl BranchTracker {
             list: start,
             config_changed: false,
             discard_state_changed: false,
+            head_may_move: false,
         }
     }
 
@@ -2635,8 +3234,11 @@ fn check_git(
         if let Some(u) = &unclassified {
             out.extend(u.violation(ctx.policy, None));
         }
+        branches.head_may_move = true;
         return;
     };
+    let head_moved_before = branches.head_may_move;
+    branches.head_may_move |= !discard_readonly_git(sub, rest);
 
     // A subcommand that is not a builtin may be an alias: judge what it
     // expands to, as if written literally. One the guard cannot read is
@@ -2711,7 +3313,7 @@ fn check_git(
     // A branch expression is judged as the branch git resolves it to in the
     // targeted repository; one the guard cannot resolve is refused (TSK-216).
     let resolved_rest;
-    let rest = match resolve_forced_branch(sub, rest, args, moved, ctx) {
+    let rest = match resolve_forced_branch(sub, rest, args, moved, ctx, head_moved_before) {
         Ok(Some(resolved)) => {
             resolved_rest = resolved;
             resolved_rest.as_slice()
@@ -3665,7 +4267,7 @@ fn judge_git_sub(
                 }
             }
         }
-        "checkout" | "switch" => {
+        "checkout" | "switch" | "worktree" => {
             if let Some(target) = forced_branch_target(sub, rest) {
                 if policy.branch_is_protected(target) {
                     push_protected_move(sub, target, ctx, out);
@@ -4024,9 +4626,47 @@ fn forced_branch_target<'a>(sub: &str, rest: &'a [String]) -> Option<&'a str> {
             .values_of('C', "--force-create")
             .last()
             .copied(),
+        "worktree" => {
+            if rest.first().map(String::as_str) != Some("add") {
+                return None;
+            }
+            parse_options(&rest[1..], &GIT_WORKTREE_ADD_OPTIONS)
+                .values_of('B', "")
+                .last()
+                .copied()
+        }
         _ => None,
     }
 }
+
+/// `git worktree add` (git-worktree(1)), for the branch `-B` resets.
+const GIT_WORKTREE_ADD_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('b', Arity::Value),
+        ('B', Arity::Value),
+        ('f', Arity::Flag),
+        ('d', Arity::Flag),
+        ('q', Arity::Flag),
+    ],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--checkout", Arity::Flag),
+        ("--no-checkout", Arity::Flag),
+        ("--lock", Arity::Flag),
+        ("--reason", Arity::Value),
+        ("--orphan", Arity::Flag),
+        ("--track", Arity::Flag),
+        ("--no-track", Arity::Flag),
+        ("--guess-remote", Arity::Flag),
+        ("--no-guess-remote", Arity::Flag),
+        ("--relative-paths", Arity::Flag),
+        ("--no-relative-paths", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
 
 /// `git switch` (git-switch(1)), for the branch `-C`/`--force-create`
 /// resets. Its long options take any unambiguous prefix (`--force-c`).
@@ -4111,10 +4751,18 @@ fn resolve_forced_branch(
     args: &[String],
     moved: &Moves<'_>,
     ctx: &GuardContext<'_>,
+    head_moved_before: bool,
 ) -> Result<Option<Vec<String>>, String> {
     let Some(name) = forced_branch_target(sub, rest).filter(|n| needs_branch_resolution(n)) else {
         return Ok(None);
     };
+    // What `@{-1}` or `@{upstream}` names depends on what ran before it on
+    // the line; the guard reads the repository as it is now (TSK-216).
+    if head_moved_before {
+        return Err(format!(
+            "an earlier git command on this line may change what `{name}` names"
+        ));
+    }
     let lookup = ctx
         .branch_lookup
         .ok_or_else(|| format!("cannot resolve the branch expression `{name}`"))?;
@@ -4885,12 +5533,7 @@ fn requests_in_place(args: &[String]) -> bool {
 fn sed_file_operands(args: &[String]) -> Vec<&str> {
     let mut files = Vec::new();
     for spec in SED_GRAMMARS {
-        let parsed = parse_options(args, spec);
-        let scripted = parsed.has_short(&['e', 'f'])
-            || parsed.has_long("--expression")
-            || parsed.has_long("--file");
-        let skip = usize::from(!scripted);
-        for operand in parsed.operands.into_iter().skip(skip) {
+        for operand in sed_operands_in(args, spec) {
             if !files.contains(&operand) {
                 files.push(operand);
             }
@@ -6832,6 +7475,60 @@ mod tests {
         }
     }
 
+    /// The text floor matches an enforcement path or worktree folder as a
+    /// whole name, wherever it sits in an argument, and never inside a
+    /// longer name or a child of a folder it only holds.
+    #[test]
+    fn test_text_floor_matches_whole_names() {
+        let policy = [".codeflow", "policy.json"].join("/");
+        for (text, named) in [
+            (format!("w {policy}"), true),
+            (format!("1W ./{policy};p"), true),
+            (format!("x/{policy}"), true),
+            ("rm -rf .codeflow".to_string(), true),
+            ("rm -rf '.codeflow/'".to_string(), true),
+            ("rm .codeflow/*".to_string(), true),
+            ("sh -c 'rm .git/hooks/pre-commit'".to_string(), true),
+            (format!("{policy}.bak"), false),
+            ("docs/.codeflow/notes.md".to_string(), false),
+            (".gitignore".to_string(), false),
+            ("s/.codeflow/x/".to_string(), false),
+            ("my.codeflow".to_string(), false),
+        ] {
+            assert_eq!(enforcement_text(&text).is_some(), named, "{text}");
+        }
+        for (text, named) in [
+            (".worktrees", true),
+            ("ls .worktrees | xargs rm", true),
+            (".claude/worktrees/w/", true),
+            (".worktrees/v*", true),
+            (".worktrees/v/target", false),
+            ("my.worktrees", false),
+        ] {
+            assert_eq!(worktree_text(text).is_some(), named, "{text}");
+        }
+    }
+
+    /// Delete targets resolve through globs and variables the line does not
+    /// set; a command substitution or a variable the line sets does not.
+    #[test]
+    fn test_delete_targets_resolve_only_what_the_guard_can_read() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a1")).unwrap();
+        let cwd = dir.path();
+        assert_eq!(
+            resolve_targets("a*", cwd, "rm -rf a*").map(|p| p.len()),
+            Some(1)
+        );
+        assert!(resolve_targets("$d", cwd, "d=x; rm -rf $d").is_none());
+        assert!(resolve_targets("$(pwd)", cwd, "rm -rf $(pwd)").is_none());
+        assert!(resolve_targets("{a,b}", cwd, "rm -rf {a,b}").is_none());
+        // `PATH` is set wherever the tests run.
+        assert!(resolve_targets("$PATH/x", cwd, "rm -rf $PATH/x").is_some());
+        assert!(resolve_targets("${PATH}/x", cwd, "rm -rf ${PATH}/x").is_some());
+        assert!(resolve_targets("$PATH/x", cwd, "PATH=/; rm -rf $PATH/x").is_none());
+    }
+
     /// TSK-216 review findings 2 and 3, against the `sed` on this machine:
     /// every file a form changes or creates is among the paths the guard
     /// judges for it. Forms the local `sed` rejects are skipped, so BSD and
@@ -6866,7 +7563,8 @@ mod tests {
                 })
                 .collect()
         };
-        let mut ran = 0;
+        let mut ran: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
         for form in forms {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("f"), "a\n").unwrap();
@@ -6879,9 +7577,10 @@ mod tests {
                 .status()
                 .unwrap();
             if !status.success() {
+                skipped.push(format!("{form:?}"));
                 continue;
             }
-            ran += 1;
+            ran.push(format!("{form:?}"));
             let args: Vec<String> = form.iter().map(ToString::to_string).collect();
             let mut judged: Vec<String> = sed_script_writes(&args, dir.path());
             if requests_in_place(&args) {
@@ -6896,7 +7595,19 @@ mod tests {
                 }
             }
         }
-        assert!(ran >= 6, "the local sed ran only {ran} forms");
+        // Which forms this machine's `sed` accepted: BSD and GNU each
+        // reject the other's spellings, so the set differs by platform.
+        eprintln!(
+            "native sed ran {} of {} forms\nran: {}\nrejected by this sed: {}",
+            ran.len(),
+            forms.len(),
+            ran.join(" "),
+            skipped.join(" ")
+        );
+        assert!(
+            ran.len() >= 6,
+            "the local sed ran only {ran:?}; it rejected {skipped:?}"
+        );
     }
 
     /// Read-only `sed` over an integrity path, including scripts and script

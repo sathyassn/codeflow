@@ -713,20 +713,50 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
 /// delete of `target` would remove: one equal to `target` or inside it,
 /// the main working tree included. Read lexically and with symlinks
 /// resolved, so `..` and a symlinked spelling name the same checkout.
-pub(crate) fn registered_checkout_under(target: &Path, root: &Path) -> Option<PathBuf> {
+pub(crate) fn registered_checkout_under(
+    target: &Path,
+    root: &Path,
+    except: Option<&Path>,
+) -> Option<PathBuf> {
     let repo = git2::Repository::discover(root).ok()?;
     let checkouts = checkout_roots(&repo);
+    let except: Vec<PathBuf> = except
+        .into_iter()
+        .flat_map(|path| [normalized(path, false), normalized(path, true)])
+        .filter_map(Result::ok)
+        .collect();
     for resolve in [false, true] {
         let Ok(target) = normalized(target, resolve) else {
             continue;
         };
         for checkout in &checkouts {
-            if normalized(checkout, resolve).is_ok_and(|c| c.starts_with(&target)) {
+            let Ok(path) = normalized(checkout, resolve) else {
+                continue;
+            };
+            if path.starts_with(&target) && !except.contains(&path) {
                 return Some(checkout.clone());
             }
         }
     }
     None
+}
+
+/// The working tree of the checkout holding `dir`, when it is one.
+pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
+    git2::Repository::discover(dir)
+        .ok()?
+        .workdir()
+        .map(Path::to_path_buf)
+}
+
+/// Whether the checkout holding `dir` has another registered checkout
+/// inside its working tree, as a main checkout with `.worktrees/<name>`
+/// does. A command whose target cannot be resolved there may delete one.
+pub(crate) fn holds_registered_worktrees(dir: &Path) -> bool {
+    let Some(workdir) = checkout_root_of(dir) else {
+        return false;
+    };
+    registered_checkout_under(&workdir, dir, Some(&workdir)).is_some()
 }
 
 #[cfg(test)]
