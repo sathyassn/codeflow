@@ -705,7 +705,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to four of PR 36 that
+/// The reviewers' exact commands from rounds two to five of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -757,6 +757,11 @@ const REVIEWER_REFUSALS: &[&str] = &[
     "env --chdir=.codeflow rm policy.json",
     "timeout -- 1 rm .codeflow/policy.json",
     "env --frobnicate rm README.md",
+    // Round five: the directory a launcher gives a shell body, and a
+    // directory filled in at run time.
+    "env -C .codeflow sh -c 'rm policy.json'",
+    "env -C .codeflow sh -c 'sed -i.bak s/a/b/ policy.json'",
+    r#"cd "$(printf build)" && rm ../policy.json"#,
 ];
 
 /// On unix, where the fixture's `build/link` and `alias` point at the
@@ -767,6 +772,11 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     r"printf '%s\n' alias/pol* | xargs rm",
     "find alias/pol* -delete",
     "rm alias/pol*",
+    // Round five: directory context across a pipeline and into shell bodies.
+    r"cd build && printf '%s\n' ../alias/pol* | xargs rm",
+    "env -C alias sh -c 'rm policy.json'",
+    r"printf x | xargs sh -c 'cd alias && rm policy.json'",
+    r"find build -name a.o -exec sh -c 'cd ../alias && rm policy.json' \;",
 ];
 
 /// Round three, finding 5, from the linked worktree under
@@ -803,6 +813,9 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "env -C build rm a.o",
     "timeout -- 1 sed -n p README.md",
     "env -i PATH=/usr/bin rm build/a.o",
+    "env -C build sh -c 'rm a.o'",
+    r#"cd "$(printf build)" && rm -f a.o"#,
+    "cd build && make clean | tee log.txt",
 ];
 
 /// Harmless operands of the linked worktree's root, which the per-checkout

@@ -128,17 +128,20 @@ erratum below, never an edit of the section.
   change files is now refused when its command line names an enforcement
   path anywhere, including a `sh -c` string or a producer piped into
   `xargs`, in any spelling the file system reads as one (`//`, `/./`,
-  another case, or a glob that matches it). A glob is expanded from the
-  directory the command runs in, after any `cd`, and each match is judged
-  through symbolic links and registered worktrees, so `alias/pol*` with
-  `alias` linked to `.codeflow` is refused. Where the directory is unknown,
-  a writing command with a glob that could spell an enforcement path is
-  refused. One expansion reads at most 4,096 directory entries; past that,
+  another case, or a glob that matches it). Each command, a pipeline
+  member or a `sh -c` body included, is judged from every directory a
+  literal `cd`, `pushd`, `env -C` or `env --chdir` on its line can move it
+  to, and a glob is expanded from there with each match judged through
+  symbolic links and registered worktrees, so `alias/pol*` with `alias`
+  linked to `.codeflow` is refused. Where a directory is filled in at run
+  time, a writing command whose words could name an enforcement path by
+  their names alone, such as `policy.json` or `pol*`, is refused. One
+  expansion reads at most 4,096 directory entries; past that,
   the directory it starts from decides, so a glob over a large build tree
   passes and one over a tree holding enforcement files is refused.
   Launchers such as `nice`, `timeout`, `stdbuf` and `env --unset` no longer
-  hide the command, the directory `env -C` or `env --chdir` moves to is
-  applied, and a launcher option the guard cannot read is refused.
+  hide the command, and a launcher option the guard cannot read is
+  refused.
   `find` actions are also judged on each protected path they can reach,
   in expression order and from each match's own directory for
   `-execdir`. A recursive `rm`, or a `chmod` or `chown`, of a directory

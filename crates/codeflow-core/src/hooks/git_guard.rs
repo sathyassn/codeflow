@@ -452,6 +452,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     let roles = flat_top_level(command).and_then(|top| map_top_level(&segments, &top));
     let mut shell = ShellState::new(roles.is_some());
     let line = LineFacts::read(&segments, roles.as_deref(), command);
+    let run = run_dirs(&segments, cwd);
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -480,9 +481,14 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
         let moved = line.moves_for(&shell, top_level, &tokens);
-        if let Some(mut v) =
-            integrity_write_in_dirs(&tokens, ctx.policy.hook_integrity, cwd, &moved.cwd, command)
-        {
+        if let Some(mut v) = integrity_write_in_dirs(
+            &tokens,
+            ctx.policy.hook_integrity,
+            cwd,
+            &moved.cwd,
+            command,
+            &run,
+        ) {
             let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH);
             if authority {
                 v.level = PolicyLevel::Block;
@@ -937,13 +943,13 @@ fn integrity_write_in_dirs(
     cwd: &Path,
     dirs: &Cwd,
     line: &str,
+    run: &RunDirs,
 ) -> Option<Violation> {
     match dirs {
         Cwd::Paths(dirs) => dirs
             .iter()
             .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd, line)),
-        Cwd::Unknown(why) => unknown_dir_glob_violation(tokens, level, line, why)
-            .or_else(|| integrity_write_violation(tokens, level, cwd, cwd, line)),
+        Cwd::Unknown(_) => integrity_write_in_run(tokens, level, run, cwd, line),
     }
 }
 
@@ -974,28 +980,41 @@ const WRITING_PROGRAMS: &[&str] = &[
     "trash-put",
 ];
 
-/// Where the guard cannot tell the directory a command runs in, a glob
-/// that finds nothing from the session's directory proves nothing (TSK-216
-/// round 4). A command that changes files is refused when a glob on its
-/// line could name an enforcement path from some directory
-/// (`cd build && printf '%s\n' ../.codeflow/pol* | xargs rm`).
-fn unknown_dir_glob_violation(
+/// Programs that can change paths named elsewhere on the line: in their
+/// input, a script or a file list.
+const LINE_FED_PROGRAMS: &[&str] = &["xargs", "parallel", "sed", "find"];
+
+/// Where the guard cannot list every directory a command can run in, a
+/// path or glob judged from the directories it knows proves nothing
+/// (TSK-216 rounds 4 and 5). A command that changes files is refused when
+/// one of its words, or for a program fed from the rest of the line one of
+/// the line's words, could name an enforcement path from some directory
+/// (`cd "$d" && rm policy.json`, `printf '%s\n' ../alias/pol* | xargs rm`
+/// after an untracked move).
+fn unknown_dir_name_violation(
     tokens: &[String],
     level: PolicyLevel,
     line: &str,
     why: &str,
 ) -> Option<Violation> {
-    let (program, _) = strip_launchers(tokens)?;
-    if !WRITING_PROGRAMS.contains(&basename(program)) {
+    let (program, args) = strip_launchers(tokens)?;
+    let name = basename(program);
+    if !WRITING_PROGRAMS.contains(&name) {
         return None;
     }
     let canonical = canonical_text(line);
-    let (word, p) = line_words(&canonical).find_map(|w| glob_could_name(w).map(|p| (w, p)))?;
+    let found = if LINE_FED_PROGRAMS.contains(&name) {
+        line_words(&canonical).find_map(|w| word_could_name(w).map(|p| (w.to_string(), p)))
+    } else {
+        args.iter()
+            .map(|a| canonical_text(a))
+            .find_map(|w| word_could_name(&w).map(|p| (w, p)))
+    }?;
+    let (word, p) = found;
     Some(hook_integrity_violation(
         level,
         format!(
-            "`{}` runs where the guard cannot tell the directory ({why}), and the glob `{word}` on its line could name `{p}`",
-            basename(program)
+            "`{name}` runs where the guard cannot tell the directory ({why}), and `{word}` could name `{p}` from there"
         ),
     ))
 }
@@ -1162,11 +1181,34 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     }
 }
 
-/// Whether a glob word could name an enforcement path whatever directory
-/// it runs from: its last components, read as patterns, match one, as
-/// `../.codeflow/pol*` does.
-fn glob_could_name(word: &str) -> Option<&'static str> {
-    if !word.contains(['*', '?', '[']) {
+/// The enforcement path a relative word could name from a directory the
+/// guard cannot determine (TSK-216 round 5). The word is read by its names
+/// alone: its components after the last `..`, read as patterns, end an
+/// enforcement path (`policy.json`, `pol*`, `../.codeflow/pol*`), or lead
+/// into an enforcement directory whose every entry counts
+/// (`hooks/pre-commit` under `.git/hooks`). An absolute word, or one from
+/// the home directory, does not depend on the directory and is judged as
+/// written; an option's value after `=` is read as a word.
+fn word_could_name(word: &str) -> Option<&'static str> {
+    let value = if word.starts_with('-') {
+        word.split_once('=')?.1
+    } else {
+        word
+    };
+    if value.is_empty() || value.starts_with(['/', '~']) {
+        return None;
+    }
+    let parts: Vec<&str> = value.split('/').collect();
+    let after_parent = parts
+        .iter()
+        .rposition(|c| *c == "..")
+        .map_or(0, |at| at + 1);
+    let tail: Vec<&str> = parts[after_parent..]
+        .iter()
+        .copied()
+        .filter(|c| !c.is_empty() && *c != ".")
+        .collect();
+    if tail.is_empty() {
         return None;
     }
     let options = glob::MatchOptions {
@@ -1174,13 +1216,13 @@ fn glob_could_name(word: &str) -> Option<&'static str> {
         require_literal_separator: true,
         require_literal_leading_dot: false,
     };
-    let parts: Vec<&str> = word
-        .split('/')
-        .filter(|c| !c.is_empty() && *c != "." && *c != "..")
-        .collect();
     let component_matches = |pattern: &str, name: &str| {
-        (pattern.starts_with('.') || !name.starts_with('.'))
-            && glob::Pattern::new(pattern).is_ok_and(|p| p.matches_with(name, options))
+        if pattern.contains(['*', '?', '[']) {
+            (pattern.starts_with('.') || !name.starts_with('.'))
+                && glob::Pattern::new(pattern).is_ok_and(|p| p.matches_with(name, options))
+        } else {
+            pattern.eq_ignore_ascii_case(name)
+        }
     };
     ENFORCEMENT_TEXT
         .iter()
@@ -1192,14 +1234,139 @@ fn glob_could_name(word: &str) -> Option<&'static str> {
                 *needle,
                 ".codex" | ".grok" | ".codeflow/git-hooks" | ".git/hooks" | ".git/refs/remotes"
             );
-            (0..parts.len()).any(|start| {
-                let suffix = &parts[start..];
-                (suffix.len() == names.len() || (whole_dir && suffix.len() > names.len()))
-                    && names
+            // The word's first `k` components end the needle (the unknown
+            // directory supplies the rest) or hold it whole; any further
+            // component must lie inside a whole enforcement directory.
+            (1..=tail.len()).any(|k| {
+                let head = &tail[..k];
+                let n = head.len().min(names.len());
+                (k == tail.len() || whole_dir)
+                    && head[head.len() - n..]
                         .iter()
-                        .zip(suffix)
-                        .all(|(name, pattern)| component_matches(pattern, name))
+                        .zip(&names[names.len() - n..])
+                        .all(|(pattern, name)| component_matches(pattern, name))
             })
+        })
+}
+
+/// The most directories [`run_dirs`] lists before it gives up and reports
+/// the directory as unknown.
+const RUN_DIR_LIMIT: usize = 64;
+
+/// Every directory the commands of a script can run in (TSK-216 round 5).
+struct RunDirs {
+    /// The starting directory and each one a literal `cd`, `pushd` or
+    /// `env -C` on the script can reach from a directory listed before it.
+    dirs: Vec<PathBuf>,
+    /// Why the list may miss one: a directory filled in at run time, a
+    /// program that can move the shell untracked, or a move that repeats.
+    unknown: Option<String>,
+}
+
+/// The directories the commands in `segments` can run in, starting from
+/// `start`. Each literal directory change is applied, in order, to every
+/// directory listed before it, so the list holds wherever the shell can be
+/// whatever runs, a pipeline member, a subshell or a shell body included.
+/// It over-approximates: a command is judged from each listed directory.
+fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
+    let mut dirs = vec![start.to_path_buf()];
+    let mut unknown = None;
+    let mut repeats = false;
+    let mut moves = false;
+    for segment in segments {
+        let mut tokens = command_argv(segment);
+        repeats |= tokens.first().is_some_and(|t| {
+            matches!(
+                t.as_str(),
+                "for" | "while" | "until" | "select" | "function"
+            ) || t.ends_with("()")
+        });
+        strip_reserved_words(&mut tokens);
+        let Some((program, args)) = strip_launchers(&tokens) else {
+            continue;
+        };
+        let name = basename(program);
+        let mut targets: Vec<&str> = launcher_effects(&tokens).0;
+        if unresolved_word(program) {
+            unknown.get_or_insert_with(|| "a program filled in at run time".to_string());
+            continue;
+        }
+        if matches!(name, "source" | "." | "eval") {
+            unknown.get_or_insert_with(|| format!("`{name}`, which can move the shell"));
+            continue;
+        }
+        if matches!(name, "cd" | "pushd" | "chdir") {
+            match args
+                .iter()
+                .find(|a| !a.starts_with('-') || a.as_str() == "-")
+            {
+                Some(target) if target == "-" => {}
+                Some(target) => targets.push(target),
+                None => targets.push("~"),
+            }
+        }
+        for target in targets {
+            moves = true;
+            if unresolved_word(target) {
+                unknown.get_or_insert_with(|| {
+                    format!("`{target}`, a directory filled in at run time")
+                });
+                continue;
+            }
+            let mut reached = Vec::new();
+            for dir in &dirs {
+                let path = if target == "~" {
+                    std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
+                } else {
+                    integrity_shell_path(target, dir)
+                };
+                if target.contains(['*', '?', '[']) {
+                    match expand_glob(&path) {
+                        Ok(found) => reached.extend(found),
+                        Err(GlobStop::TooManyEntries) => {
+                            unknown.get_or_insert_with(|| {
+                                format!("`{target}`, a directory glob over too many entries")
+                            });
+                        }
+                    }
+                } else {
+                    reached.push(path);
+                }
+            }
+            for dir in reached {
+                if !dirs.contains(&dir) {
+                    dirs.push(dir);
+                }
+            }
+        }
+        if dirs.len() > RUN_DIR_LIMIT {
+            unknown.get_or_insert_with(|| "more directory changes than the guard follows".into());
+            break;
+        }
+    }
+    if repeats && moves {
+        unknown.get_or_insert_with(|| "a directory change in a loop or function".to_string());
+    }
+    RunDirs { dirs, unknown }
+}
+
+/// Judge a command from every directory it can run in. Where that list may
+/// be incomplete, a command that changes files is also refused when one of
+/// its words could name an enforcement path from any directory: expanding
+/// it from a listed directory proves nothing (TSK-216 round 5).
+fn integrity_write_in_run(
+    tokens: &[String],
+    level: PolicyLevel,
+    run: &RunDirs,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    run.dirs
+        .iter()
+        .find_map(|dir| integrity_write_violation(tokens, level, dir, payload_cwd, line))
+        .or_else(|| {
+            let why = run.unknown.as_deref()?;
+            unknown_dir_name_violation(tokens, level, line, why)
         })
 }
 
@@ -1927,8 +2094,18 @@ fn wrapped_violation(
                     .position(|arg| std::ptr::eq(arg, script))
                     .map_or(&[][..], |at| &args[at + 1..]);
                 let bound = bind_positional(script, params);
-                return expand_commands(&bound).iter().find_map(|segment| {
-                    integrity_write_violation(&shell_tokens(segment), level, cwd, payload_cwd, line)
+                // The body runs where the launchers in front of its shell
+                // put it, and follows its own directory changes.
+                let start = launcher_effects(tokens)
+                    .0
+                    .iter()
+                    .fold(cwd.to_path_buf(), |dir, change| {
+                        integrity_shell_path(change, &dir)
+                    });
+                let segments = expand_commands(&bound);
+                let run = run_dirs(&segments, &start);
+                return segments.iter().find_map(|segment| {
+                    integrity_write_in_run(&shell_tokens(segment), level, &run, payload_cwd, line)
                 });
             }
         }
@@ -2668,8 +2845,18 @@ pub(crate) fn expand_commands(command: &str) -> Vec<String> {
         if is_shell(name) {
             // `-c`/`--command`, or a clustered short flag containing `c`
             // (`-lc`, `-ec`): the wrapped command is the following argument.
+            // It runs in the directory its launchers move to (`env -C DIR
+            // sh -c ...`), which the body carries as its own leading `cd`
+            // so every check that follows directories sees it (TSK-216
+            // round 5).
             if let Some(inner) = shell_c_argument(args) {
-                split_into_segments(inner, &mut out, 1, false);
+                let mut moves = String::new();
+                for dir in launcher_effects(&toks).0 {
+                    moves.push_str("cd '");
+                    moves.push_str(&dir.replace('\'', "'\\''"));
+                    moves.push_str("' && ");
+                }
+                split_into_segments(&format!("{moves}{inner}"), &mut out, 1, false);
             }
         } else if name == "eval" {
             // `eval '<cmd>'` runs its (joined) arguments as a command.
@@ -8051,6 +8238,67 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// From a directory the guard cannot determine, a word is read by its
+    /// names alone: one that ends an enforcement path, or leads into a
+    /// whole enforcement directory, could name it; build output cannot.
+    #[test]
+    fn test_word_could_name_reads_names_alone() {
+        for word in [
+            "policy.json",
+            "pol*",
+            "../x/.git/hooks/pre-commit",
+            "../.codeflow/policy.json",
+            "config",
+            "hooks/pre-commit",
+            "*",
+            "--file=settings.json",
+        ] {
+            assert!(word_could_name(word).is_some(), "{word}");
+        }
+        for word in [
+            "a.o",
+            "*.o",
+            "build/a.o",
+            "target/debug",
+            ".git/index.lock",
+            "config.toml",
+            "-rf",
+            "/abs/policy.json",
+            "..",
+        ] {
+            assert!(word_could_name(word).is_none(), "{word}");
+        }
+    }
+
+    /// The directories a script can run in: each literal move applied to
+    /// every directory before it, across pipelines, subshells and launcher
+    /// moves; a directory filled in at run time or a move in a loop leaves
+    /// the list incomplete.
+    #[test]
+    fn test_run_dirs_follow_literal_moves() {
+        let start = Path::new("/r");
+        let run = run_dirs(&expand_commands("cd build && printf x | xargs rm"), start);
+        assert_eq!(
+            run.dirs,
+            vec![PathBuf::from("/r"), PathBuf::from("/r/build")]
+        );
+        assert!(run.unknown.is_none());
+        let run = run_dirs(&expand_commands("env -C sub sh -c 'cd a; rm x'"), start);
+        assert!(
+            run.dirs.contains(&PathBuf::from("/r/sub/a")),
+            "{:?}",
+            run.dirs
+        );
+        assert!(run.unknown.is_none());
+        let run = run_dirs(&expand_commands("cd \"$(printf b)\" && rm x"), start);
+        assert!(run.unknown.is_some());
+        let run = run_dirs(&expand_commands("for i in 1 2; do cd a; done; rm x"), start);
+        assert!(run.unknown.is_some());
+        let run = run_dirs(&expand_commands("rm build/a.o"), start);
+        assert_eq!(run.dirs, vec![PathBuf::from("/r")]);
+        assert!(run.unknown.is_none());
     }
 
     /// Glob expansion reads the file system as the shell does: a leading
