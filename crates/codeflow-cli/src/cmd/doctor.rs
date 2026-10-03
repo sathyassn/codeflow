@@ -23,6 +23,8 @@ pub fn run(args: &DoctorArgs) -> i32 {
         project_dir: super::repo_root().to_string_lossy().into_owned(),
         qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
         codeflow_home: home,
+        // The grok guard canary runs this binary, never one PATH finds.
+        codeflow_exe: std::env::current_exe().ok(),
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
@@ -131,6 +133,7 @@ mod tests {
             }),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
             exec_command_capture: None,
+            codeflow_exe: None,
             codeflow_home: None,
             qualification_dir: None,
             harness_home: Some(dir.path().join("home")),

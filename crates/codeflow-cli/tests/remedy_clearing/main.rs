@@ -179,7 +179,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GROK_HOOKS", Runs),
-    ("DOCTOR_GROK_LOCAL_HOOKS", Runs),
+    ("DOCTOR_GROK_UNMANAGED_HOOKS", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -1951,7 +1951,7 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
 /// `codeflow update`, which does not manage the file; doctor names it with
 /// the edit step, and the edit clears it.
 #[test]
-fn clears_doctor_grok_local_hooks() {
+fn clears_doctor_grok_unmanaged_hooks() {
     let dir = scaffolded("--minimal");
     let root = project(&dir);
     let stale = serde_json::json!({"hooks": {"PreToolUse": [{
@@ -1963,7 +1963,7 @@ fn clears_doctor_grok_local_hooks() {
     codeflow(&root, &["update"]);
     assert_eq!(read(&root, ".claude/settings.local.json"), local);
     prove(
-        "DOCTOR_GROK_LOCAL_HOOKS",
+        "DOCTOR_GROK_UNMANAGED_HOOKS",
         "grok skips the CodeFlow hook commands in .claude/settings.local.json",
         || doctor(&root, "grok"),
         |printed| {

@@ -332,6 +332,74 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
 /// only a hook's first stderr line as its deny reason, so the refusal also
 /// comes as Grok's deny decision on stdout with the rule and its sanctioned
 /// path; a Claude-shaped payload gets nothing on stdout.
+/// PR 35 review round 2, finding 1: doctor's Grok canary never runs a
+/// `codeflow` that PATH finds in the repository. A planted `bin/codeflow`
+/// ahead of the real one would write a marker outside the scratch
+/// directory and fake a refusal; doctor runs itself instead, leaves no
+/// marker, and names where PATH resolves `codeflow` as unverified.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_never_runs_a_codeflow_planted_on_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+    std::fs::create_dir_all(project.join("bin")).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::copy(
+        root.join("assets/base/grok/hooks.json"),
+        project.join(".grok/hooks/codeflow.json"),
+    )
+    .unwrap();
+    let marker = dir.path().join("marker");
+    let planted = project.join("bin/codeflow");
+    std::fs::write(
+        &planted,
+        format!(
+            "#!/bin/sh\ntouch '{}'\necho 'codeflow exec-guard: BLOCKED' >&2\necho '{{\"decision\":\"deny\",\"reason\":\"planted\"}}'\nexit 2\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        [project.join("bin"), exe.parent().unwrap().to_path_buf()]
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let out = std::process::Command::new(&exe)
+        .args(["doctor", "--check", "grok"])
+        .current_dir(&project)
+        .env("PATH", path)
+        .env("GROK_HOME", dir.path().join("grok-home"))
+        .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+        .env_remove("GROK_FOLDER_TRUST")
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!marker.exists(), "doctor ran the planted codeflow:\n{said}");
+    assert!(
+        said.contains("canary: the shipped shell guard grok runs refused"),
+        "{said}"
+    );
+    let canonical = std::fs::canonicalize(&planted).unwrap();
+    assert!(
+        said.contains(&format!(
+            "PATH resolves codeflow to {}, inside this repository",
+            canonical.display()
+        )),
+        "{said}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn grok_wiring_refuses_in_the_payload_grok_sends() {
