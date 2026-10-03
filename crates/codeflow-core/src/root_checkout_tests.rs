@@ -757,7 +757,7 @@ fn a_pre_commit_on_a_protected_root_branch_named_explicitly_keeps_todays_protect
         root_branch: "main".into(),
         ..GitPolicy::default()
     };
-    let report = crate::hooks::git_hook::pre_commit(&root, &policy, false).unwrap();
+    let report = crate::hooks::git_hook::pre_commit(&root, &policy, false, false).unwrap();
     let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
     assert_eq!(rules, ["git.commit_to_protected"]);
     let report = crate::hooks::git_hook::pre_merge_commit(&root, &policy, false, false).unwrap();
@@ -776,7 +776,7 @@ fn the_pre_commit_and_pre_merge_commit_hooks_judge_the_root_checkout() {
     let policy = GitPolicy::default();
     let expected = hook_level(PolicyLevel::Block, actor(&process_env));
     for report in [
-        crate::hooks::git_hook::pre_commit(&root, &policy, false).unwrap(),
+        crate::hooks::git_hook::pre_commit(&root, &policy, false, false).unwrap(),
         crate::hooks::git_hook::pre_merge_commit(&root, &policy, false, false).unwrap(),
     ] {
         let hits = rule_hits(&report.violations);

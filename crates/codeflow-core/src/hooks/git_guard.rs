@@ -623,8 +623,13 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
 
     // An override var carried inside any token (e.g. a `git config alias.*`
     // value `!CODEFLOW_HUMAN_OVERRIDE=1 git …`) — the assignment is embedded,
-    // not a leading prefix, so the positional scan below would miss it.
-    if tokens.first().map(|t| basename(t)) == Some("git") && tokens.iter().any(|t| t == "config") {
+    // not a leading prefix, so the positional scan below would miss it. The
+    // program is judged after its launchers (`command git config …`,
+    // `env X=1 git config …`), so printed text naming git is not.
+    let git_config = strip_launchers(tokens).is_some_and(|(program, args)| {
+        basename(program) == "git" && args.iter().any(|t| t == "config")
+    });
+    if git_config {
         if let Some(var) = tokens.iter().find_map(|t| embedded_override_assignment(t)) {
             return Some(var);
         }
@@ -641,11 +646,17 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
             idx += 1; // some other harmless assignment prefix — keep scanning
             continue;
         }
-        // `command`/`builtin` just prefix another simple command — skip and
-        // re-examine the word they wrap (`command env VAR=…`).
-        if t == "command" || t == "builtin" {
-            idx += 1;
-            continue;
+        // `command`/`builtin`/`exec` just prefix another simple command —
+        // skip them and their options and re-examine the word they wrap
+        // (`command env VAR=…`, `command -p env VAR=…`).
+        if is_prefix_launcher(t) {
+            match skip_launcher_options(t, tokens, idx + 1) {
+                Some(next) => {
+                    idx = next;
+                    continue;
+                }
+                None => break,
+            }
         }
         // `env` (any path form), `export`, and the declaration builtins all
         // carry the assignment in their arguments.
@@ -4488,9 +4499,15 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
             }
         }
         let t = tokens.get(idx)?.as_str();
-        if t == "command" || t == "builtin" || t == "exec" {
-            idx += 1;
-            continue;
+        if is_prefix_launcher(t) {
+            match skip_launcher_options(t, tokens, idx + 1) {
+                Some(next) => {
+                    idx = next;
+                    continue;
+                }
+                // `command -v git` only looks the name up; nothing runs.
+                None => return Some((t, &tokens[idx + 1..])),
+            }
         }
         if basename(t) == "env" {
             idx += 1;
@@ -4513,6 +4530,60 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
         }
         return Some((t, &tokens[idx + 1..]));
     }
+}
+
+/// `true` for the launchers that run the simple command after them: the
+/// `command`, `builtin` and `exec` builtins, `nohup`, and `time` in its
+/// program form (`/usr/bin/time`, `command time`), any path form.
+fn is_prefix_launcher(t: &str) -> bool {
+    matches!(
+        basename(t),
+        "command" | "builtin" | "exec" | "nohup" | "time"
+    )
+}
+
+/// Skip the options of a prefix launcher starting at `idx` and return the
+/// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
+/// `time -p -o FILE`, and `--` for all. `None` when the options make
+/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
+/// Any other option is skipped, never read as "runs nothing": a launcher's
+/// `--help` can be another option's value (`time --format --help git ...`),
+/// so a non-executing form such as `nohup --help git push` is judged as the
+/// command after it and may be refused, which fails closed.
+fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+    let launcher = basename(launcher);
+    while let Some(a) = tokens.get(idx).map(String::as_str) {
+        if a == "--" {
+            return Some(idx + 1);
+        }
+        if !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        if launcher == "command" && a.contains(['v', 'V']) {
+            return None;
+        }
+        idx += 1 + usize::from(takes_next_word(launcher, a));
+    }
+    Some(idx)
+}
+
+/// `true` when the option `a` takes the next word as its value: `exec -a
+/// NAME` (a name attached as in `-aNAME` is its own value), and `time -o
+/// FILE`, `time -f FORMAT`, `time --output FILE` or `time --format FORMAT`
+/// (`--output=FILE` carries its own).
+fn takes_next_word(launcher: &str, a: &str) -> bool {
+    if launcher == "time" && matches!(a, "--output" | "--format") {
+        return true;
+    }
+    let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
+        return false;
+    };
+    let valued: &[char] = match launcher {
+        "exec" => &['a'],
+        "time" => &['o', 'f'],
+        _ => return false,
+    };
+    flags.find(valued).is_some_and(|at| at + 1 == flags.len())
 }
 
 /// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
@@ -6350,6 +6421,15 @@ mod tests {
             "typeset -x CODEFLOW_INTEGRATE_TOKEN=abc",
             "readonly CODEFLOW_HUMAN_OVERRIDE=1",
             "git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git merge'",
+            // A launcher before `git` does not hide the alias body.
+            "command git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push origin main'",
+            "env GIT_TRACE=0 git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "/usr/bin/git config --global alias.x '!CODEFLOW_INTEGRATE_TOKEN=x git push'",
+            // Launcher options do not hide the program either.
+            "command -p git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "command -- git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "exec -a probe git config alias.x '!CODEFLOW_HUMAN_OVERRIDE=1 git push'",
+            "command -p env CODEFLOW_HUMAN_OVERRIDE=1 git merge feat/y",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(
@@ -6360,11 +6440,61 @@ mod tests {
     }
 
     #[test]
+    fn test_launcher_options_do_not_hide_git() {
+        let p = default_policy();
+        for cmd in [
+            "command -p git push origin main",
+            "command -- git push origin main",
+            "builtin -- git push origin main",
+            "exec -a probe git push origin main",
+            "exec -cl git push origin main",
+            "exec -aprobea git push origin main",
+            "exec -ca probe git push origin main",
+            "nohup git push origin main",
+            "/usr/bin/time git push origin main",
+            "command time -p git push origin main",
+            "/usr/bin/time -o out.txt git push origin main",
+            // An option value that looks like help is still a value.
+            "/usr/bin/time --format --help git push origin main",
+            "/usr/bin/time --output --version git push origin main",
+            "/usr/bin/time --output out.txt git push origin main",
+            "/usr/bin/time --output=out.txt git push origin main",
+            // Fails closed: a help option is skipped, not read as a no-op.
+            "nohup --help git push origin main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.push_to_protected"), "{cmd}: {v:?}");
+        }
+        // `command -v git` only looks git up, and a name attached to `-a`
+        // is not followed by another: `echo` is the program here.
+        assert!(evaluate("command -v git", &ctx(&p, "main")).is_empty());
+        let echo = evaluate(
+            "exec -aprobea echo git push origin main",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(echo.is_empty(), "{echo:?}");
+        // The shell after an attached name still has its heredoc judged.
+        let heredoc = "exec -aprobea bash -s cat <<'EOF'\nCODEFLOW_HUMAN_OVERRIDE=1 git push origin main\nEOF";
+        let laundered =
+            "/usr/bin/time --format --help env CODEFLOW_HUMAN_OVERRIDE=1 git push origin main";
+        let v = evaluate(laundered, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.override_token_laundering"), "{v:?}");
+        let v = evaluate(heredoc, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.override_token_laundering"), "{v:?}");
+    }
+
+    #[test]
     fn test_laundering_extra_forms_do_not_flag_unrelated() {
         let p = default_policy();
         assert!(evaluate("/usr/bin/env FOO=1 git status", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("declare -x EDITOR=vim", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("git config alias.st status", &ctx(&p, "feat/x")).is_empty());
+        // Printed text that names git config is not a git invocation.
+        assert!(evaluate(
+            "printf '%s\\n' git config '!CODEFLOW_HUMAN_OVERRIDE=1'",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     // -- review round 2: generalized matchers (B1-B7) --
