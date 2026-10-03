@@ -155,8 +155,10 @@ as extra steps when your stack warrants:
   no step before the scan runs code from the checkout, since such a step
   could set the scan's environment. Add any new step to that job after
   the scan. The scan reads what each merge adds beyond its automatic
-  result and files whose type changes, which gitleaks' default history
-  scan leaves out. It then drops one
+  result, files whose type changes and files git judges binary, which
+  gitleaks' default history scan leaves out. git cannot show what an
+  octopus merge adds, so the step refuses one the trusted commit does not
+  hold; merge the branches one at a time. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.

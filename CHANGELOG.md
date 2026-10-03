@@ -110,9 +110,12 @@ erratum below, never an edit of the section.
   isolated, git reads `.gitattributes` from the trusted commit (git 2.41 or
   later), and no step before the scan runs code from the checkout. If you
   add a step to the secret-scan job, add it after the scan. The scan also
-  reads what a merge itself adds and files whose type changes, which
-  gitleaks' default history scan leaves out, so a secret added in a merge
-  resolution or in a file that replaces a link is reported.
+  reads what a merge itself adds, files whose type changes and files git
+  judges binary, which gitleaks' default history scan leaves out, so a
+  secret added in a merge resolution, in a file that replaces a link or
+  after a NUL byte is reported, under the file's own path. git cannot show
+  what an octopus merge adds, so the step refuses one the trusted commit
+  does not hold; merge the branches one at a time.
 
 <!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README

@@ -19,8 +19,9 @@
 #      the pull request plants are never written through or followed, and
 #      no Python module or .gitattributes it commits steers the scan; a
 #      secret added in a merge resolution or in a file that replaces a link
-#      is reported, merges report nothing twice, and a git older than 2.41
-#      is refused;
+#      is reported, as is one in a file git judges binary, under its own
+#      path; merges report nothing twice; an octopus merge the trusted
+#      commit does not hold and a git older than 2.41 are refused;
 #   4. this repository's own gitleaks step is the template's, and in both
 #      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
@@ -654,6 +655,80 @@ expect old-git 1
 STEP_ENV=
 MESSAGE=
 NO_SCAN=
+
+# git cannot show what an octopus merge adds. One the trusted commit does
+# not hold is refused before gitleaks runs, even when a later commit
+# deletes what it added. One the trusted commit holds is not refused; its
+# own pull request met the check.
+as_canary() { git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
+  -c commit.gpgsign=false "$@"; }
+new_repo octopus
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+for branch in one two; do
+  git -C "$REPO" checkout -q -b "$branch" "$BASE"
+  printf '%s\n' "$branch" >"$REPO/$branch.txt"
+  commit "$branch"
+done
+git -C "$REPO" checkout -q "$MAIN"
+as_canary merge -q --no-ff -m octopus one two >/dev/null 2>&1
+printf '%s\n' "$PLANTED" >"$REPO/octopus.txt"
+git -C "$REPO" add -A
+as_canary commit -q --amend -m octopus
+git -C "$REPO" rm -q octopus.txt
+commit "remove what the octopus added"
+NO_SCAN=1
+MESSAGE="is not in the trusted commit, and git cannot show what it adds"
+on_base "$BASE" pr-octopus 1
+NO_SCAN=
+MESSAGE=
+on_base "$(tip)" trusted-octopus 0
+# A local stash also has three parents; it is not refused.
+new_repo stash
+printf 'changed\n' >>"$REPO/README.md"
+printf 'untracked\n' >"$REPO/untracked.txt"
+as_canary stash push -q -u
+on_base "$BASE" local-stash 0
+
+# A NUL byte, which makes git call a file binary, does not hide its text,
+# in a commit or in what a merge adds.
+new_repo binary
+printf '\000\n%s\n' "$PLANTED" >"$REPO/nul.txt"
+commit "a NUL byte first"
+on_base "$BASE" pr-binary 1 nul.txt:2
+new_repo binary-merge
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/side.txt"
+commit side
+git -C "$REPO" checkout -q "$MAIN"
+printf 'main\n' >"$REPO/main.txt"
+commit main
+merge side --no-commit
+printf '\000\n%s\n' "$PLANTED" >"$REPO/nul.txt"
+commit "merge side"
+on_base "$BASE" pr-binary-merge 1 nul.txt:2
+
+# A conflicted merge is reported under its file's own path, so a trusted
+# exemption for a real b/ path does not cover it, and still covers the
+# real b/ file.
+new_repo conflict-path
+MAIN=$(git -C "$REPO" symbolic-ref --short HEAD)
+mkdir "$REPO/b"
+printf 'one\ntwo\n%s\n' "$PLANTED" >"$REPO/b/f.txt"
+printf 'one\n' >"$REPO/f.txt"
+printf 'b/f.txt:generic-api-key:3\n' >"$REPO/.gitleaksignore"
+commit "a real b/f.txt and its exemption"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/f.txt"
+commit side
+git -C "$REPO" checkout -q "$MAIN"
+printf 'main\n' >"$REPO/f.txt"
+commit main
+as_canary merge -q side >/dev/null 2>&1 || true
+printf 'main\nside\n%s\n' "$PLANTED" >"$REPO/f.txt"
+commit "resolve with a secret"
+on_base "$BASE" pr-conflict-path 1 f.txt:3
 
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still

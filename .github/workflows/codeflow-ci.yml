@@ -330,13 +330,21 @@ jobs:
       # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
       # this workflow's own env. Keep it that way when you add steps.
       #
-      # gitleaks' default git log leaves out what a merge itself adds and
-      # any file whose type changes, so a secret added in a merge
-      # resolution, or a link replaced by a file that holds a secret, would
-      # go unread. The scan names its own log options: --remerge-diff shows
-      # only what each merge adds beyond its automatic result, so a branch's
-      # commits are not reported twice, and the diff filter keeps type
-      # changes.
+      # gitleaks' default git log leaves out what a merge itself adds, any
+      # file whose type changes and any file git judges binary, so a secret
+      # added in a merge resolution, in a file that replaces a link, or
+      # after a NUL byte would go unread. The scan names its own log
+      # options: --remerge-diff shows only what each merge adds beyond its
+      # automatic result, so a branch's commits are not reported twice; the
+      # diff filter keeps type changes; and --text shows every file as text.
+      # gitleaks runs git from PATH, and the git it finds there drops the
+      # "remerge" notes that --remerge-diff writes into a conflicted file's
+      # header. gitleaks' patch parser does not know them and would name the
+      # file b/<path>, so an exemption for a real b/ path could apply to it.
+      # git cannot show what an octopus merge (three or more parents) adds,
+      # so the step refuses one that the trusted commit does not hold; merge
+      # the branches one at a time instead. A local stash, which git also
+      # records with three parents, is not refused; a CI checkout has none.
       #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
@@ -361,6 +369,10 @@ jobs:
             echo "::error::$(git version) cannot read .gitattributes from the trusted commit; refusing to scan"; exit 1
           fi
           export GIT_ATTR_SOURCE="$TRUSTED_SHA"
+          octopi=$(git rev-list --min-parents=3 --exclude=refs/stash --all --not "$TRUSTED_SHA")
+          if [ -n "$octopi" ]; then
+            echo "::error::octopus merge $(printf '%s\n' "$octopi" | head -n 1) is not in the trusted commit, and git cannot show what it adds; merge its branches one at a time; refusing to scan"; exit 1
+          fi
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -371,6 +383,15 @@ jobs:
           workspace=$(pwd -P)
           trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
           mkdir "$trusted/tree"
+          real_git=$(command -v git)
+          mkdir "$trusted/bin"
+          cat >"$trusted/bin/git" <<GIT
+          #!/bin/bash
+          set -o pipefail
+          case " \$* " in *" log "*) ;; *) exec "$real_git" "\$@" ;; esac
+          "$real_git" "\$@" | sed '/^remerge /d'
+          GIT
+          chmod +x "$trusted/bin/git"
           rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
           # Writes the trusted ignore file, the configuration when gitleaks
           # needs one named, and each file that configuration extends.
@@ -497,8 +518,8 @@ jobs:
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
-          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff" \
+          (cd "$trusted/tree" && PATH="$trusted/bin:$PATH" "$tool/gitleaks" detect --source "$workspace" "$@" \
+            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff --text" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?
