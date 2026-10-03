@@ -162,19 +162,29 @@ fn cf_guard_workspace_denies_keep_directory_deletes() {
 /// TSK-190 AC-2: the launch text follows ADR-0075 D1 and D2. A builder runs
 /// full access until a `cf-builder` spike passes; a reviewer runs `never`
 /// with no `--sandbox` flag, so the project's `cf-guard` profile applies.
+/// TSK-213 (ADR-0077): the flags have one home, the transport rule's posture
+/// table, which cf-herdr and the orchestrator cite.
 #[test]
 fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
+    let transport =
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md";
     for relative in [
+        transport,
         "assets/base/agents/skills/cf-herdr/SKILL.md",
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ] {
         let text = std::fs::read_to_string(root().join(relative)).expect("read skill");
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        for required in [
-            "danger-full-access",
-            "(ADR-0075 D1",
-            "`--ask-for-approval never` with no `--sandbox` flag, which selects the project's `cf-guard` profile (D2)",
-        ] {
+        let required: &[&str] = if relative == transport {
+            &[
+                "`--ask-for-approval never --sandbox danger-full-access`",
+                "The Codex builder posture is ADR-0075 D1",
+                "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
+            ]
+        } else {
+            &["routing/transport.md"]
+        };
+        for required in required {
             assert!(
                 normalized.contains(required),
                 "{relative} lost launch text: {required}"

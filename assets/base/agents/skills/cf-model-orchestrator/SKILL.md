@@ -184,18 +184,17 @@ asks for just that.
 This section is the session-level routing read. Detect capabilities, not
 model identity.
 
-| Active host | Peer lane | Who designs | Default UI assignment | Fallback |
+| Active host | Peer seats | Who designs | Default UI assignment | Fallback |
 |---|---|---|---|---|
-| Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client (`cf-delegate`) | Claude primary | Claude builds and runs the implementer check; Codex reviews as independent interactive QA | The ensemble's recorded same-family fallback after preflight, then recorded solo fallback |
-| Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Claude primary, in its own native session | Same | Same |
-| Grok Build (interactive `grok` CLI) | Herdr `claude` + schema-v2; official `codex` CLI to the app-server (Herdr; tmux degraded) | Claude primary, natively; catalog Grok may execute or take named extra-family review | Same | Same |
-| Other harness, including Hermes | Hand the repository task to one sanctioned native host; coordinate directly only if both lanes and the full contract are proven | As that host | Same | Same; no nested orchestration |
+| Claude Code | Codex; Grok when named | Claude primary | Claude builds and runs the implementer check; Codex reviews as independent interactive QA | The ensemble's recorded same-family fallback after preflight, then recorded solo fallback |
+| Codex App or interactive Codex CLI | Claude; Grok when named | Claude primary, in its own native session | Same | Same |
+| Grok Build (interactive `grok` CLI) | Claude and Codex | Claude primary, natively; catalog Grok may execute or take named extra-family review | Same | Same |
+| Other harness, including Hermes | Hand the repository task to one sanctioned native host; coordinate directly only if both seats and the full contract are proven | As that host | Same | Same; no nested orchestration |
 
-Herdr tabs follow `cf-herdr`, with the project being worked as the cwd. Each
-host reaches the other lineage through its lane or the qualified native
-fallback in `cf-delegate`, never a simulated seat. Grok seat autonomy:
-`--always-approve` for production, `--permission-mode auto` for consult or
-no-edit, `--sandbox <PROFILE>` when required; never `grok -p`.
+Every peer seat, its fallbacks and its launch posture follow
+[cross-family transport](resources/routing/transport.md), never a simulated
+seat; `cf-herdr` hosts the tab with the project being worked as the cwd, and
+`cf-delegate` owns the launch, delivery and evidence.
 Before a Grok preflight or launch, also read
 [the Grok host detail](resources/grok-host.md): its guards, launch, sandbox
 profiles and peer lanes.
@@ -234,13 +233,14 @@ binding, permission or selector changed since it ran.
    and the receiving primary's default effort. Only that primary dispatches
    its own `ROLE: worker` escalation.
 3. Verify command and tool readiness:
-   - Require each vendor executable/plugin, authenticated interactive canary,
+   - Require each vendor executable, authenticated interactive canary,
      task tools, and exact selector/effort evidence needed by the chosen lane.
      A status command does not override a working authenticated TTY, and an
      unobserved user default is not selection evidence.
-   - Use `cf-delegate` for the preferred/fallback native lanes, lifecycle,
-     sibling Stop-hook preflight, exact-byte delivery, and bounded cleanup. Use
-     `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. On a
+   - Use `cf-delegate` for the seats and fallbacks of cross-family transport
+     (its qualified native fallback included), lifecycle, sibling Stop-hook
+     preflight, exact-byte delivery, and bounded cleanup, and `cf-herdr` for
+     the tab whenever a Herdr server is reachable, from any host. On a
      Codex, Grok or other non-Claude host, before every Claude worker or
      same-session reviewer launch through the delegated lifecycle, load the
      `.claude/skills/cf-delegate/resources/claude-turn-completion.md`
@@ -270,21 +270,20 @@ binding, permission or selector changed since it ran.
      preflight, and never report the fallback as the selected primary. Never
      use a headless peer command or third-party substitute, and do not
      automate login.
-4. Verify the autonomy boundary through the effective settings, not prose:
+4. Verify the autonomy boundary through the effective settings, not prose.
+   Each seat's launch flags are the posture table in cross-family transport;
+   check the boundary they produce:
    - Claude: require sandbox + `failIfUnavailable: true`, sandboxed Bash
-     autonomy, and raw-secret denies. Production uses `bypassPermissions`.
-     Consult/no-edit uses auto plus user-scope `classifyAllShell`. Only a
-     trusted installed tool may receive one classified unsandboxed retry;
-     arbitrary unsandboxed commands remain out of bounds.
-   - Codex: prefer app-server (`codex app-server daemon version` running);
-     otherwise interactive CLI. Builders: `--ask-for-approval never` and
-     `--sandbox danger-full-access` (ADR-0075 D1). Reviewers and consults:
-     `--ask-for-approval never` with no `--sandbox` flag, which selects the
-     project's `cf-guard` profile (D2). For every seat, public network and
-     live search are enabled.
+     autonomy, and raw-secret denies; a consult's auto mode also needs
+     user-scope `classifyAllShell`. Only a trusted installed tool may receive
+     one classified unsandboxed retry; arbitrary unsandboxed commands remain
+     out of bounds.
+   - Codex: a reviewer or consult runs under the project's `cf-guard`
+     profile, a builder under full access until ADR-0075 D1's spike passes.
+     For every seat, public network and live search are enabled.
      Auto-review is not human authorization; catastrophic work still stops for
      the operator.
-   - Grok, when a Grok seat is used: the autonomy flags in the seat section.
+   - Grok, when a Grok seat is used: its sandbox profile when one is required.
    - Platform: use native macOS/Linux sandboxes; on Windows, prefer WSL2 for
      Linux-equivalent tooling. Native Windows Codex must use its elevated
      sandbox and the guard must cover PowerShell/Bash. Claude Code has no
@@ -360,14 +359,11 @@ authorship determines independent review. Task branches are not final
 evidence: the primary lands reviewed heads through the batch candidate and
 its one full gate as the delivery process reference states.
 
-For a Claude host, prefer the official plugin for Codex-produced or
-Codex-reviewed units, with its qualified native fallback, as the `cf-delegate`
-plugin lane sets out: `/codex:review` or `/codex:adversarial-review` for
-read-only critiques, `/codex:rescue --model <primary-selector> --effort <primary-default>`
-for production or verification (the receiving primary owns worker escalation),
-and `/codex:transfer` for a persistent task. Each unit stays in its assigned
-worktree with its recorded executor; do not infer authorship from host or
-worktree.
+A Codex-produced or Codex-reviewed unit runs in the Codex seat that
+cross-family transport names, at the primary's selector and default effort
+(the receiving primary owns worker escalation); a persistent task resumes
+the same seat. Each unit stays in its assigned worktree with its recorded
+executor; do not infer authorship from host or worktree.
 
 ### 5. Cross-lineage review and integrated Claude judgment
 
