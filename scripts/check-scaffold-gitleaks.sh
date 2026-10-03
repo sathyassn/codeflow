@@ -17,7 +17,10 @@
 #      request adds fails it, and the same exemption on the trusted commit
 #      passes; an unreadable trusted commit fails it before it scans; links
 #      the pull request plants are never written through or followed, and
-#      no Python module or .gitattributes it commits steers the scan;
+#      no Python module or .gitattributes it commits steers the scan; a
+#      secret added in a merge resolution or in a file that replaces a link
+#      is reported, merges report nothing twice, and a git older than 2.41
+#      is refused;
 #   4. this repository's own gitleaks step is the template's, and in both
 #      workflows the secret-scan job runs only the checkout before it.
 # The step's download is served from a local archive of the gitleaks under
@@ -581,6 +584,76 @@ printf 'leak.txt -diff\n' >"$REPO/.gitattributes"
 printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
 commit "leak marked -diff"
 on_base "$BASE" pr-attributes 1 leak.txt:1
+
+# History the pull request writes cannot hide a secret from git log: one
+# added only in a merge resolution, and one in a file that replaces a link.
+merge() { # the branch to merge, then git merge options
+  branch=$1
+  shift
+  git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
+    -c commit.gpgsign=false merge -q --no-ff "$@" "$branch" >/dev/null 2>&1
+}
+new_repo evil-merge
+git -C "$REPO" checkout -q -b side
+printf 'side\n' >"$REPO/side.txt"
+commit side
+git -C "$REPO" checkout -q -
+printf 'main\n' >"$REPO/main.txt"
+commit main
+merge side --no-commit
+printf '%s\n' "$PLANTED" >"$REPO/evil.txt"
+commit "merge side"
+on_base "$BASE" pr-evil-merge 1 evil.txt:1
+new_repo type-change
+ln -s README.md "$REPO/link.txt"
+commit "a link"
+BASE=$(tip)
+rm "$REPO/link.txt"
+printf '%s\n' "$PLANTED" >"$REPO/link.txt"
+commit "the link becomes a file"
+on_base "$BASE" pr-type-change 1 link.txt:1
+
+# Reading merges reports nothing twice. Main merged a branch whose commits
+# hold a secret its .gitleaksignore exempts and one marked gitleaks:allow;
+# a pull request that merges main in reports only its own leak, once.
+new_repo merges
+FIRST=$(tip)
+git -C "$REPO" checkout -q -b side
+printf '%s\n' "$PLANTED" >"$REPO/ignored.txt"
+commit "an ignored secret"
+IGNORED=$(tip)
+printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
+commit "an inline allow"
+git -C "$REPO" checkout -q -
+printf 'main\n' >"$REPO/main.txt"
+commit main
+merge side -m "merge side"
+printf '%s:ignored.txt:generic-api-key:1\n' "$IGNORED" >"$REPO/.gitleaksignore"
+commit "ignore the merged secret"
+BASE=$(tip)
+git -C "$REPO" checkout -q -b pr "$FIRST"
+printf '%s\n' "$PLANTED" >"$REPO/own-leak.txt"
+commit "the pull request's own leak"
+merge "$BASE" -m "merge main"
+on_base "$BASE" pr-merges-main 1 own-leak.txt:1
+
+# A git that cannot read .gitattributes from the trusted commit (before
+# 2.41) is refused before gitleaks runs.
+mkdir "$TMP/git-2.40"
+cat >"$TMP/git-2.40/git" <<SH
+#!/bin/sh
+case "\$1" in version | --version) echo "git version 2.40.4"; exit 0 ;; esac
+exec "$(command -v git)" "\$@"
+SH
+chmod +x "$TMP/git-2.40/git"
+new_repo old-git
+STEP_ENV="PATH=$TMP/fake-bin:$TMP/git-2.40:$PATH"
+MESSAGE="git version 2.40.4 cannot read .gitattributes from the trusted commit; refusing to scan"
+NO_SCAN=1
+expect old-git 1
+STEP_ENV=
+MESSAGE=
+NO_SCAN=
 
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still

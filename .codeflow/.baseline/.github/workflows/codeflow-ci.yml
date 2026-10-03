@@ -200,12 +200,20 @@ jobs:
       # Nothing from the checkout runs or steers the scan. The Python
       # helpers run isolated (python3 -I), so a module the pull request
       # commits beside them is never imported. git reads .gitattributes from
-      # the trusted commit (GIT_ATTR_SOURCE, git 2.40 or later), so a
+      # the trusted commit (GIT_ATTR_SOURCE, git 2.41 or later), so a
       # pull request cannot mark its own files -diff to hide their changes.
       # No step before this one runs code from the checkout: a step that
       # did could write GITHUB_ENV or GITHUB_PATH for this one, so
       # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
       # this workflow's own env. Keep it that way when you add steps.
+      #
+      # gitleaks' default git log leaves out what a merge itself adds and
+      # any file whose type changes, so a secret added in a merge
+      # resolution, or a link replaced by a file that holds a secret, would
+      # go unread. The scan names its own log options: --remerge-diff shows
+      # only what each merge adds beyond its automatic result, so a branch's
+      # commits are not reported twice, and the diff filter keeps type
+      # changes.
       #
       # The step then drops one known false positive from the report: the
       # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
@@ -226,7 +234,7 @@ jobs:
           if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
-          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 40)) }'; then
+          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
             echo "::error::$(git version) cannot read .gitattributes from the trusted commit; refusing to scan"; exit 1
           fi
           export GIT_ATTR_SOURCE="$TRUSTED_SHA"
@@ -367,6 +375,7 @@ jobs:
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
+            --log-opts "--full-history --all --diff-filter=uxdb --remerge-diff" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?

@@ -151,10 +151,12 @@ as extra steps when your stack warrants:
   before it scans when the trusted commit is not in the checkout, and it
   downloads gitleaks under the runner's temp directory. Nothing from the
   checkout runs or steers the scan: its Python helpers run isolated, git
-  reads `.gitattributes` from the trusted commit (git 2.40 or later), and
+  reads `.gitattributes` from the trusted commit (git 2.41 or later), and
   no step before the scan runs code from the checkout, since such a step
   could set the scan's environment. Add any new step to that job after
-  the scan. It then drops one
+  the scan. The scan reads what each merge adds beyond its automatic
+  result and files whose type changes, which gitleaks' default history
+  scan leaves out. It then drops one
   known false positive from the report: the security-stage prose CodeFlow
   3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
   its baseline copy, which the `generic-api-key` rule mistakes for a key.
