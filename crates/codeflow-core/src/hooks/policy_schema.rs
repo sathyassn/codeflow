@@ -191,12 +191,15 @@ pub const SCHEMA: [KeySpec; 64] = [
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
         notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
                 of remote-tracking refs, packed-refs or Git config authority metadata. \
-                git-guard refuses a `sed`, `find` or `xargs` that can change \
-                files when its command line names an enforcement path, and a \
-                recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a \
-                registered worktree, a directory holding one, or a target it \
-                cannot resolve where worktrees live. A path built at run time is \
-                past the guard; the OS sandbox's write denies are the backstop.",
+                git-guard refuses a `sed`, `find`, `xargs` or `parallel` that \
+                can change files when its command line names an enforcement \
+                path in any spelling the file system reads as one, a recursive \
+                `rm` or a `chmod` or `chown` of a directory holding enforcement \
+                files, and a recursive `rm`, `trash`, `find -delete` or `git \
+                clean -ff` of a registered worktree, a directory holding one, or \
+                a target it cannot resolve where worktrees live. A path built at \
+                run time is past the guard; the OS sandbox's write denies are \
+                the backstop.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {

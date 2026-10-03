@@ -741,6 +741,25 @@ pub(crate) fn registered_checkout_under(
     None
 }
 
+/// Whether `target` holds an enforcement path of any checkout sharing the
+/// repository at `root`, read lexically and with symlinks resolved. A
+/// recursive change of `target` reaches that path whatever checkout base
+/// it lies in, so a linked checkout's root holds its own files (TSK-216
+/// round 3).
+pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> bool {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    let protected = protected_paths(&repo);
+    [false, true].into_iter().any(|resolve| {
+        normalized(target, resolve).is_ok_and(|target| {
+            protected.iter().any(|(path, _, _)| {
+                normalized(path, resolve).is_ok_and(|path| path.starts_with(&target))
+            })
+        })
+    })
+}
+
 /// The working tree of the checkout holding `dir`, when it is one.
 pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
     git2::Repository::discover(dir)

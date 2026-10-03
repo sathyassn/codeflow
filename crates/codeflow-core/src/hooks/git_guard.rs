@@ -444,6 +444,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
+    branches.line = command.to_string();
     let segments = expand_commands(command);
     // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
     // top-level command and `None` for one nested in a substitution or a
@@ -1250,8 +1251,9 @@ fn rm_operands(args: &[String]) -> Vec<&str> {
 /// Enforcement paths as a command line spells them. A command that can
 /// change files and names one of these anywhere in its text (a `sed`
 /// script, a `find` action, a `sh -c` string, a producer piped into
-/// `xargs`) is refused. This is the floor 3.0.0 held; the precise readings
-/// below may clear a match they prove harmless, never remove it otherwise.
+/// `xargs`) is refused. This floor is new hardening over 3.0.0's
+/// command-specific checks, which it must keep: the precise readings below
+/// may clear a match they prove harmless, never remove it otherwise.
 /// A path built at run time, which no argument spells, is past this floor;
 /// the OS sandbox's write denies are the backstop there.
 const ENFORCEMENT_TEXT: &[&str] = &[
@@ -1284,21 +1286,22 @@ const ENFORCEMENT_DIRS: &[&str] = &[
 const WORKTREE_DIRS: &[&str] = &[".claude/worktrees", ".worktrees"];
 
 /// Programs that only read the paths they are given, so running them
-/// through `find -exec` or `xargs` changes nothing.
+/// through `find -exec` or `xargs` changes nothing. None of them has an
+/// output-file or command-running mode: `sort -o`, `uniq IN OUT`, `xxd IN
+/// OUT`, `file -C` and `rg --pre` write files or run commands, so those
+/// programs are judged as writers (TSK-216 round 3).
 const READ_ONLY_PROGRAMS: &[&str] = &[
     "echo",
     "printf",
     "grep",
     "egrep",
     "fgrep",
-    "rg",
     "cat",
     "head",
     "tail",
     "wc",
     "ls",
     "stat",
-    "file",
     "test",
     "[",
     "true",
@@ -1310,10 +1313,7 @@ const READ_ONLY_PROGRAMS: &[&str] = &[
     "du",
     "diff",
     "cmp",
-    "sort",
-    "uniq",
     "od",
-    "xxd",
     "hexdump",
     "strings",
     "jq",
@@ -1356,8 +1356,29 @@ fn names_whole_dir(after: &str) -> bool {
             .is_some_and(|rest| ends_name(rest) || rest.starts_with(['*', '?', '[', '{']))
 }
 
-/// The enforcement path `text` names, when it names one.
+/// Text as the file system reads the paths in it: quotes removed, `//`
+/// and `/./` collapsed, and lower case, since a case-insensitive file
+/// system (the macOS default) reads `.CODEFLOW` as `.codeflow`.
+fn canonical_text(text: &str) -> String {
+    let mut out: String = text
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"'))
+        .collect::<String>()
+        .to_lowercase();
+    loop {
+        let next = out.replace("//", "/").replace("/./", "/");
+        if next == out {
+            return out;
+        }
+        out = next;
+    }
+}
+
+/// The enforcement path `text` names, when it names one, in any spelling
+/// [`canonical_text`] makes equal.
 fn enforcement_text(text: &str) -> Option<&'static str> {
+    let text = canonical_text(text);
+    let text = text.as_str();
     ENFORCEMENT_TEXT
         .iter()
         .copied()
@@ -1374,6 +1395,8 @@ fn enforcement_text(text: &str) -> Option<&'static str> {
 
 /// The worktree folder `text` names, as itself or as one entry of it.
 fn worktree_text(text: &str) -> Option<&'static str> {
+    let text = canonical_text(text);
+    let text = text.as_str();
     WORKTREE_DIRS.iter().copied().find(|needle| {
         path_mentions(text, needle).any(|after| {
             names_whole_dir(after)
@@ -1383,6 +1406,45 @@ fn worktree_text(text: &str) -> Option<&'static str> {
                 })
         })
     })
+}
+
+/// The most paths one glob word is expanded to before the guard stops.
+const GLOB_EXPANSION_LIMIT: usize = 4096;
+
+/// The enforcement path a command line names, as text or through a glob
+/// word that expands, from `cwd`, to one (`.codeflow/pol*`, `.*`). A glob
+/// that expands to more than the guard reads counts as naming one.
+fn line_names(line: &str, cwd: &Path) -> Option<String> {
+    if let Some(p) = enforcement_text(line) {
+        return Some(p.to_string());
+    }
+    let words = line.split(|c: char| {
+        c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
+    });
+    for word in words.map(|w| w.trim_matches(['\'', '"'])) {
+        if word.is_empty() || !word.contains(['*', '?', '[']) {
+            continue;
+        }
+        let pattern = crate::portable_path::slashed(&integrity_shell_path(word, cwd));
+        let options = glob::MatchOptions {
+            case_sensitive: false,
+            require_literal_separator: true,
+            require_literal_leading_dot: true,
+        };
+        let Ok(paths) = glob::glob_with(&pattern, options) else {
+            continue;
+        };
+        for (count, path) in paths.flatten().enumerate() {
+            if count >= GLOB_EXPANSION_LIMIT {
+                return Some(format!("{word} (too many matches to read)"));
+            }
+            let shown = crate::portable_path::slashed(&path);
+            if let Some(p) = enforcement_text(&shown).or_else(|| worktree_text(&shown)) {
+                return Some(format!("{p} (through `{word}`)"));
+            }
+        }
+    }
+    None
 }
 
 /// Whether the shell fills in part of `word` when the command runs: a
@@ -1397,10 +1459,11 @@ fn unresolved_word(word: &str) -> bool {
 fn unresolved_names_enforcement<'a>(
     args: impl IntoIterator<Item = &'a String>,
     line: &str,
-) -> Option<&'static str> {
+    cwd: &Path,
+) -> Option<String> {
     args.into_iter()
         .any(|arg| unresolved_word(arg))
-        .then(|| enforcement_text(line))
+        .then(|| line_names(line, cwd))
         .flatten()
 }
 
@@ -1544,6 +1607,30 @@ fn worktree_delete_check(
     None
 }
 
+/// `git clean` (git-clean(1)); long options take any unambiguous prefix
+/// (`--for`).
+const GIT_CLEAN_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('d', Arity::Flag),
+        ('f', Arity::Flag),
+        ('i', Arity::Flag),
+        ('n', Arity::Flag),
+        ('q', Arity::Flag),
+        ('e', Arity::Value),
+        ('x', Arity::Flag),
+        ('X', Arity::Flag),
+    ],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--interactive", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--exclude", Arity::Value),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
 /// `git clean` with force given twice removes untracked directories that
 /// are other repositories, which is what a linked worktree inside the
 /// checkout is. A dry run deletes nothing.
@@ -1554,42 +1641,14 @@ fn git_clean_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    let mut force = 0;
-    let mut dry_run = false;
-    let mut paths: Vec<&str> = Vec::new();
-    let mut options = true;
-    let mut at = 0;
-    while let Some(arg) = args.get(at) {
-        if !options {
-            paths.push(arg);
-        } else if arg == "--" {
-            options = false;
-        } else if let Some(long) = arg.strip_prefix("--") {
-            match long {
-                "force" => force += 1,
-                "dry-run" => dry_run = true,
-                "exclude" => at += 1,
-                _ => {}
-            }
-        } else if let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.is_empty()) {
-            for (offset, letter) in cluster.char_indices() {
-                match letter {
-                    'f' => force += 1,
-                    'n' => dry_run = true,
-                    'e' => {
-                        if offset + 1 == cluster.len() {
-                            at += 1;
-                        }
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        } else {
-            paths.push(arg);
-        }
-        at += 1;
-    }
+    let parsed = parse_options(args, &GIT_CLEAN_OPTIONS);
+    let force = parsed
+        .sequence
+        .iter()
+        .filter(|seen| matches!(seen, Seen::Short('f') | Seen::Long("--force", _)))
+        .count();
+    let dry_run = parsed.has_short(&['n']) || parsed.has_long("--dry-run");
+    let mut paths = parsed.operands;
     if force < 2 || dry_run {
         return None;
     }
@@ -1715,7 +1774,7 @@ fn sed_text_violation(
             format!("`sed` names the enforcement path `{p}` in `{arg}`, where its script or in-place edit can write it"),
         ));
     }
-    if let Some(p) = unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line) {
+    if let Some(p) = unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line, cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("`sed` takes a word the shell fills in, and the command line names the enforcement path `{p}`"),
@@ -1730,7 +1789,7 @@ fn sed_text_violation(
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             let why = if matches!(file, "-" | "/dev/stdin") {
-                enforcement_text(line).map(|p| {
+                line_names(line, cwd).map(|p| {
                     format!("reads its script from its input, and the command line names `{p}`")
                 })
             } else {
@@ -1743,7 +1802,7 @@ fn sed_text_violation(
                         .ok()
                         .and_then(|bytes| enforcement_text(&String::from_utf8_lossy(&bytes)))
                         .map(|p| format!("runs the script file `{file}`, which names `{p}`")),
-                    Err(_) => enforcement_text(line).map(|p| {
+                    Err(_) => line_names(line, cwd).map(|p| {
                         format!("runs the script file `{file}`, which the guard cannot read, and the command line names `{p}`")
                     }),
                 }
@@ -1872,7 +1931,8 @@ fn find_action_violation(
         if let Some(p) = rest
             .iter()
             .find_map(|a| enforcement_text(a))
-            .or_else(|| unresolved_names_enforcement(rest, line))
+            .map(str::to_string)
+            .or_else(|| unresolved_names_enforcement(rest, line, cwd))
         {
             return Some(hook_integrity_violation(
                 level,
@@ -2083,11 +2143,81 @@ fn xargs_violation(
     if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
         return Some(v);
     }
-    let named = enforcement_text(line).or_else(|| worktree_text(line))?;
+    let named = line_names(line, cwd).or_else(|| worktree_text(line).map(str::to_string))?;
     Some(hook_integrity_violation(
         level,
         format!(
             "`xargs {}` changes the paths it reads from its input, and the command line names `{named}`; name the files on the command line",
+            command.join(" ")
+        ),
+    ))
+}
+
+/// A recursive `rm`, or any `chmod`, `chown`, `chgrp` or `chflags`, whose
+/// target holds enforcement files changes them from any checkout: `chmod
+/// -R 000 .` in a linked worktree reaches its own policy and settings, and
+/// `chmod 000 .` makes them unreadable without touching them (TSK-216
+/// round 3). A non-recursive `rm` of a checkout root, such as `rm -f .`,
+/// reaches nothing below it.
+fn recursive_change_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    let recursive = match cmd {
+        "rm" => rm_recursive(args),
+        "chmod" | "chown" | "chgrp" | "chflags" => true,
+        _ => false,
+    };
+    if !recursive {
+        return None;
+    }
+    rm_operands(args)
+        .into_iter()
+        .filter(|target| !target.is_empty())
+        .find_map(|target| {
+            let paths = resolve_targets(target, cwd, line)?;
+            paths
+                .iter()
+                .any(|path| {
+                    super::edit_guard::holds_enforcement_files(path, cwd)
+                        || super::edit_guard::holds_enforcement_files(path, payload_cwd)
+                })
+                .then(|| {
+                    hook_integrity_violation(
+                        level,
+                        format!("`{cmd}` would change `{target}`, which holds enforcement files, and what lies below it"),
+                    )
+                })
+        })
+}
+
+/// GNU `parallel` runs a command over its input as `xargs` does; its
+/// command is the first word that is not an option, and it is judged as
+/// `xargs` judges its command.
+fn parallel_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    let start = args.iter().position(|arg| !arg.starts_with('-'))?;
+    let command = &args[start..];
+    if read_only_program(command) {
+        return None;
+    }
+    if let Some(v) = wrapped_violation(command, level, cwd, payload_cwd, line) {
+        return Some(v);
+    }
+    let named = line_names(line, cwd).or_else(|| worktree_text(line).map(str::to_string))?;
+    Some(hook_integrity_violation(
+        level,
+        format!(
+            "`parallel {}` changes the paths it reads from its input, and the command line names `{named}`; name the files on the command line",
             command.join(" ")
         ),
     ))
@@ -2123,23 +2253,32 @@ fn wrapper_write_violation(
         }
     }
     if cmd == "git" {
-        // `git [-C <dir>]... clean`
-        let mut dir = cwd.to_path_buf();
-        let mut at = 0;
-        while args.get(at).is_some_and(|a| a == "-C") {
-            if let Some(next) = args.get(at + 1) {
-                dir = integrity_shell_path(next, &dir);
+        // `git [global options] clean`, as a wrapped or plain command; a
+        // top-level git line is also judged through its aliases and
+        // retargets in `check_git`.
+        if let Some(("clean", rest)) = git_subcommand(args) {
+            let mut dir = cwd.to_path_buf();
+            let globals = &args[..args.len() - rest.len() - 1];
+            for pair in globals.windows(2) {
+                if pair[0] == "-C" {
+                    dir = integrity_shell_path(&pair[1], &dir);
+                }
             }
-            at += 2;
-        }
-        if args.get(at).is_some_and(|a| a == "clean") {
-            if let Some(v) = git_clean_violation(&args[at + 1..], level, &dir, payload_cwd, line) {
+            if let Some(v) = git_clean_violation(rest, level, &dir, payload_cwd, line) {
                 return Some(v);
             }
         }
     }
+    if let Some(v) = recursive_change_violation(cmd, args, level, cwd, payload_cwd, line) {
+        return Some(v);
+    }
     if cmd == "find" {
         if let Some(v) = find_action_violation(args, level, cwd, payload_cwd, line) {
+            return Some(v);
+        }
+    }
+    if cmd == "parallel" {
+        if let Some(v) = parallel_violation(args, level, cwd, payload_cwd, line) {
             return Some(v);
         }
     }
@@ -2190,10 +2329,11 @@ fn integrity_write_violation(
     };
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
-            token_integrity_path(".", cwd, payload_cwd)
+            token_integrity_path(".", cwd, payload_cwd).map(str::to_string)
         } else {
             arg_integrity_path(paths, cwd, payload_cwd)
-                .or_else(|| unresolved_names_enforcement(paths, line))
+                .map(str::to_string)
+                .or_else(|| unresolved_names_enforcement(paths, line, cwd))
         }
     }) {
         return Some(hook_integrity_violation(
@@ -2981,6 +3121,8 @@ struct BranchTracker {
     /// upstream, so a branch expression (`@{-1}`, `@{upstream}`) read from
     /// disk now may not be what git resolves when it runs.
     head_may_move: bool,
+    /// The whole command line, for words the shell fills in.
+    line: String,
 }
 
 impl BranchTracker {
@@ -2996,6 +3138,7 @@ impl BranchTracker {
             config_changed: false,
             discard_state_changed: false,
             head_may_move: false,
+            line: String::new(),
         }
     }
 
@@ -3256,6 +3399,24 @@ fn check_git(
                 unclassified = Some(Unclassified::Alias(format!(
                     "`git {sub}` may be an alias the guard cannot resolve ({why})"
                 )));
+            }
+        }
+    }
+
+    // A double-force clean reached through global options, an alias or a
+    // retarget deletes worktrees as a plain one does (TSK-216 round 3).
+    if sub == "clean" && ctx.policy.hook_integrity.is_active() {
+        if let Ok(specs) = compose_targets(args, moved) {
+            for spec in specs {
+                let dir = spec
+                    .as_ref()
+                    .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
+                if let Some(v) =
+                    git_clean_violation(rest, ctx.policy.hook_integrity, &dir, cwd, &branches.line)
+                {
+                    out.push(v);
+                    return;
+                }
             }
         }
     }
@@ -5979,8 +6140,15 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
             // and assignments up to the wrapped command.
             while idx < tokens.len() {
                 let a = tokens[idx].as_str();
-                if a == "-u" {
-                    idx += 2; // -u NAME
+                if a == "--" {
+                    idx += 1;
+                    break;
+                }
+                if matches!(
+                    a,
+                    "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
+                ) {
+                    idx += 2; // the option and its value, `-u NAME`
                 } else if a.starts_with('-')
                     || a.split_once('=')
                         .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -5997,12 +6165,23 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
 }
 
 /// `true` for the launchers that run the simple command after them: the
-/// `command`, `builtin` and `exec` builtins, `nohup`, and `time` in its
-/// program form (`/usr/bin/time`, `command time`), any path form.
+/// `command`, `builtin` and `exec` builtins, `nohup`, `time` in its
+/// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
+/// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form.
 fn is_prefix_launcher(t: &str) -> bool {
     matches!(
         basename(t),
-        "command" | "builtin" | "exec" | "nohup" | "time"
+        "command"
+            | "builtin"
+            | "exec"
+            | "nohup"
+            | "time"
+            | "nice"
+            | "timeout"
+            | "stdbuf"
+            | "ionice"
+            | "caffeinate"
+            | "xcrun"
     )
 }
 
@@ -6026,17 +6205,35 @@ fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> O
         if launcher == "command" && a.contains(['v', 'V']) {
             return None;
         }
+        // `xcrun --find tool` and `xcrun -f tool` only print a path.
+        if launcher == "xcrun" && matches!(a, "-f" | "--find") {
+            return None;
+        }
         idx += 1 + usize::from(takes_next_word(launcher, a));
+    }
+    // `timeout [options] DURATION command`.
+    if launcher == "timeout" {
+        idx += 1;
     }
     Some(idx)
 }
 
 /// `true` when the option `a` takes the next word as its value: `exec -a
-/// NAME` (a name attached as in `-aNAME` is its own value), and `time -o
-/// FILE`, `time -f FORMAT`, `time --output FILE` or `time --format FORMAT`
-/// (`--output=FILE` carries its own).
+/// NAME` (a name attached as in `-aNAME` is its own value), `time -o FILE`
+/// or `--output FILE` (`--output=FILE` carries its own), `nice -n N`,
+/// `timeout -s SIG` or `-k DURATION`, `stdbuf -o MODE`, `ionice -c CLASS`,
+/// `caffeinate -t SECONDS` and `xcrun --sdk SDK`.
 fn takes_next_word(launcher: &str, a: &str) -> bool {
-    if launcher == "time" && matches!(a, "--output" | "--format") {
+    let long_valued: &[&str] = match launcher {
+        "time" => &["--output", "--format"],
+        "timeout" => &["--signal", "--kill-after"],
+        "nice" => &["--adjustment"],
+        "stdbuf" => &["--input", "--output", "--error"],
+        "ionice" => &["--class", "--classdata", "--pid", "--pgid", "--uid"],
+        "xcrun" => &["--sdk", "--toolchain"],
+        _ => &[],
+    };
+    if long_valued.contains(&a) {
         return true;
     }
     let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
@@ -6045,6 +6242,11 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
     let valued: &[char] = match launcher {
         "exec" => &['a'],
         "time" => &['o', 'f'],
+        "nice" => &['n'],
+        "timeout" => &['s', 'k'],
+        "stdbuf" => &['i', 'o', 'e'],
+        "ionice" => &['c', 'n', 'p', 'P', 'u'],
+        "caffeinate" => &['t', 'w'],
         _ => return false,
     };
     flags.find(valued).is_some_and(|at| at + 1 == flags.len())

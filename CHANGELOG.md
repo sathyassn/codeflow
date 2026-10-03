@@ -123,18 +123,24 @@ erratum below, never an edit of the section.
 <!-- codeflow:release-impact patch -->
 - **The git guard judges what `find` and `xargs` run, and protects live
   worktrees.** `find -exec`, `-execdir` and `-delete` and `xargs` could
-  edit or delete the enforcement files. A `sed`, `find` or `xargs` that
-  can change files is now refused when its command line names an
-  enforcement path anywhere, including a `sh -c` string or a producer
-  piped into `xargs`. `find` actions are also judged on each protected
-  path they can reach, in expression order and from each match's own
-  directory for `-execdir`. A recursive `rm`, `trash`, `find -delete` or
-  `git clean -ff` of a registered worktree, of a directory holding one
-  such as `.worktrees` or `.claude/worktrees`, or of a target the guard
-  cannot resolve in a checkout that holds worktrees, is refused with
-  `git worktree remove` as the way to remove it. A path built at run
-  time, which no argument spells, is past the guard; in Claude sessions
-  the sandbox's write denies are the backstop.
+  edit or delete the enforcement files. As new hardening that keeps every
+  refusal 3.0.0 made, a `sed`, `find`, `xargs` or `parallel` that can
+  change files is now refused when its command line names an enforcement
+  path anywhere, including a `sh -c` string or a producer piped into
+  `xargs`, in any spelling the file system reads as one (`//`, `/./`,
+  another case, or a glob that matches it). Launchers such as `nice`,
+  `timeout`, `stdbuf` and `env --unset` no longer hide the command.
+  `find` actions are also judged on each protected path they can reach,
+  in expression order and from each match's own directory for
+  `-execdir`. A recursive `rm`, or a `chmod` or `chown`, of a directory
+  holding enforcement files is refused from any checkout. A recursive
+  `rm`, `trash`, `find -delete` or `git clean -ff` (through git's global
+  options, abbreviations and aliases) of a registered worktree, of a
+  directory holding one such as `.worktrees` or `.claude/worktrees`, or
+  of a target the guard cannot resolve in a checkout that holds
+  worktrees, is refused with `git worktree remove` as the way to remove
+  it. A path built at run time, which no argument spells, is past the
+  guard; in Claude sessions the sandbox's write denies are the backstop.
 
 <!-- codeflow:release-impact patch -->
 - **The git guard refuses a forced move of a protected branch.**
