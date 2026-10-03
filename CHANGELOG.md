@@ -101,8 +101,11 @@ erratum below, never an edit of the section.
   the git-guard still refuses an agent that sets the override. A push to a
   protected branch whose remote tip this clone has not fetched cannot be
   proven a fast-forward, so it is refused as a force push until you fetch.
-  The git-guard also catches an override hidden in a git alias declared
-  through a launcher such as `command git config`.
+  The git-guard also sees git behind launcher options (`command -p`,
+  `exec -a NAME`, `nohup`, `/usr/bin/time -o FILE`), including an override
+  hidden in a git alias declared that way. It skips a launcher option it
+  does not know rather than trust it, so a command that runs nothing, such
+  as `nohup --help git push`, may be refused.
 
 ## [3.0.0]
 
