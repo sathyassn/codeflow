@@ -55,18 +55,21 @@ erratum below, never an edit of the section.
 - **`codeflow doctor --check grok` checks that Grok can run the CodeFlow
   guards.** It warns, naming each file, about a CodeFlow hook command
   Grok would skip because it carries a `$`, with the step that fixes it:
-  `codeflow update` for the files its manifest manages and a hand edit
-  for any other file, such as `.claude/settings.local.json`, and it names
-  a `.new` file update left waiting. When the shipped exec-guard handler
+  `codeflow update` for the files update itself would rewrite (shipped,
+  managed and not opted out with `[scaffold] ignore`) and a hand edit for
+  any other file, such as `.claude/settings.local.json`, and it names a
+  `.new` file update left waiting. When the shipped exec-guard handler
   (its command, timeout and environment) is bound where Grok's shell tool
-  hits it, matched as Grok matches, doctor runs
-  `codeflow hook exec-guard --contract 3` with its own binary on a canary
-  dangerous command, in the payload Grok sends and in a scratch
-  directory, and warns unless it refuses with exit 2, a reason and Grok's
-  deny answer. Doctor never runs hook text, hook environment or a
-  `codeflow` found on PATH: a customised handler is reported as
+  hits it, matched as Grok matches, doctor judges a canary dangerous
+  command in the payload Grok sends with the handler
+  `codeflow hook exec-guard --contract 3` runs, in its own process and
+  against an empty scratch folder, and warns unless it refuses with exit
+  2, a reason and Grok's deny answer. Doctor executes nothing for the
+  check, so no hook text, hook environment, `codeflow` found on PATH or
+  swapped binary can answer for it: a customised handler is reported as
   unverified, and where PATH resolves `codeflow` is reported, flagged
-  when it lies inside the repository or is not doctor's own binary.
+  when it lies inside the repository or is not the binary doctor started
+  from.
 
 ### Changed
 

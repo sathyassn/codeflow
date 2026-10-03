@@ -166,13 +166,14 @@ denying hook, so a guard refusing a Grok call also writes Grok's deny
 decision with the whole refusal on stdout. `codeflow doctor --check grok`
 names a CodeFlow hook command Grok would skip. When the shipped exec-guard
 handler (command, timeout and environment) is bound where Grok's shell
-tool hits it, matched as Grok matches, doctor runs its fixed invocation,
-`codeflow hook exec-guard --contract 3`, with its own binary on a canary
-in a scratch directory and expects exit 2, a reason and Grok's deny
-answer. Doctor never runs hook text, hook environment or a `codeflow`
-found on PATH, which the repository could plant: a customised handler is
-reported unverified, and where PATH resolves `codeflow` is reported
-without being run.
+tool hits it, matched as Grok matches, doctor judges a canary with the
+handler `codeflow hook exec-guard --contract 3` runs, in its own process
+against an empty scratch folder, and expects exit 2, a reason and Grok's
+deny answer. Doctor executes nothing for the check, so no hook text, hook
+environment, `codeflow` on PATH or swapped binary, any of which the
+repository could plant, answers for it: a customised handler is reported
+unverified, and where PATH resolves `codeflow` is reported without being
+run.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 
