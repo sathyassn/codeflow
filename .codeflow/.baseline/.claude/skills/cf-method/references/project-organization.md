@@ -200,9 +200,13 @@ target; a standalone task's record is allocated on its own task branch:
 - `codeflow task new --epic EPC-NNN --into <target> "<title>"` allocates a
   task; `--standalone-reason "<why>"` replaces `--epic` for a standalone task,
   and `codeflow task new --follow-up-of TSK-NNN "<title>"` files a follow-up
-  that inherits its epic and target. A standalone task's follow-up is
-  standalone too: file it off a `plan/` branch, and `work claim` moves it to
-  its own task branch, where its record lands with its work.
+  that inherits its epic and target. An epic task's follow-up is filed on a
+  `plan/` branch and lands in the epic's batched amendment. A standalone task
+  never uses a `plan/` branch, and the command refuses one; its follow-up is
+  a standalone task too. Cut a task branch from the target, file the
+  follow-up there, then run `codeflow work claim <TSK-NNN>`, which renames
+  that branch to `task/TSK-NNN-<slug>` and pushes it (it creates no worktree).
+  The record lands with its work in that task's pull request.
 - `codeflow adr new "<title>"` allocates a decision record.
 
 The epic's one planning change is validated with `codeflow validate --docs`,
