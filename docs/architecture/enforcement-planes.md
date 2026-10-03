@@ -149,14 +149,21 @@ peer run; `security.headless_opt_in` is ignored with a warning and removed
 by `codeflow update`. The `security.dangerous_commands` floor cannot be
 lowered.
 
-Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
-binary is missing or older, printing the installer and `codeflow update`,
-so install the new binary before running `codeflow update`. A wrapper also
-exits 2 when a current binary refuses by policy, but then prints only the
-guard's own message. After a refusal it gives `git-hook capabilities` about
-two seconds to answer `hooks 3`, then kills the probe; it advises a
-reinstall only when the binary is missing, older, or the probe fails or
-does not answer in time.
+Contract-3 git shims exit 1 when the `codeflow` binary is missing or older,
+printing the installer and `codeflow update`, so install the new binary
+before running `codeflow update`. A harness wrapper is
+`codeflow hook <name> --contract 3`, then a fallback that exits 2 whenever
+the hook fails. A policy refusal prints only the guard's message; a missing
+binary also prints the installer and `codeflow update`; a binary too old to
+know `--contract` prints its own usage error, and one that knows the flag
+names the install step for a contract it does not support. The wrapper
+never calls the binary twice and carries no `$`: Grok expands `$name` and
+`${...}` in a hook command itself and skips, failing open, a hook whose
+variable is unset (issue 29). Grok shows only the first stderr line of a
+denying hook, so a guard refusing a Grok call also writes Grok's deny
+decision with the whole refusal on stdout. `codeflow doctor --check grok`
+names a CodeFlow hook command Grok would skip and runs the configured Grok
+shell guard on a canary in a scratch directory.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

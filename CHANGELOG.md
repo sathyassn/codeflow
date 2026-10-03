@@ -75,6 +75,30 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The CodeFlow guards run in Grok sessions.** Grok expands `$name` and
+  `${...}` in a hook command itself and skips the hook, letting the tool
+  call through, when a name is unset. Every CodeFlow hook command in 3.0.0
+  carried shell variables, so in a Grok session git-guard, exec-guard,
+  edit-guard and session-orient never ran, and doctor reported only folder
+  trust. After `codeflow update`, the hook commands in
+  `.grok/hooks/codeflow.json`, `.claude/settings.json` (which Grok also
+  reads) and `.codex/hooks.json` carry no `$`: each runs
+  `codeflow hook <name> --contract 3` and exits 2 whenever the hook fails,
+  naming the installer and `codeflow update` when the binary is missing. A
+  binary older than 3.0.0 still blocks, now with its own usage error in
+  place of the install line. Grok 1.0.46 also sends each payload field
+  under both spellings (`toolName` and `tool_name`), which the guards took
+  for an unreadable payload and allowed; they now read it, and a payload
+  whose two spellings disagree is still reported as unreadable. Grok shows
+  only the first line of a hook's error output as the reason it denied a
+  call, so a guard refusing a Grok call also returns Grok's deny decision
+  with the whole refusal, the rule and its sanctioned path included.
+  `codeflow doctor --check grok` now warns, naming the file, about a
+  CodeFlow hook command Grok would skip, and runs the configured Grok shell
+  guard on a canary dangerous command in the payload Grok sends, in a
+  scratch directory, warning when it does not refuse it.
+
+<!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
   `dirty=true` in `codeflow --version` although they were built from the
   tagged source: the release job writes cargo-dist's manifest into the
