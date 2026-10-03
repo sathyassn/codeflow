@@ -1829,6 +1829,17 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
         let grok: serde_json::Value =
             serde_json::from_str(&read(&root, ".grok/hooks/codeflow.json")).unwrap();
 
+        // TSK-215 (issue 29): grok reads a `$` in a hook command as its own
+        // template and skips the hook; it loads the grok file and the
+        // Claude settings, and Codex shares the guard payload.
+        for (harness, file) in [("claude", &claude), ("codex", &codex), ("grok", &grok)] {
+            for event in file["hooks"].as_object().unwrap().keys() {
+                for (_, command) in wired_hooks(file, event) {
+                    assert!(!command.contains('$'), "{flag} {harness}: {command}");
+                }
+            }
+        }
+
         for (harness, file, sources) in [
             ("claude", &claude, CLAUDE_SOURCES),
             ("codex", &codex, CODEX_SOURCES),

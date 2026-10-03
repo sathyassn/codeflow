@@ -211,6 +211,54 @@ fn dogfood_grok_hooks_share_pretooluse_and_wire_no_advisory_hook() {
     );
 }
 
+/// TSK-215 AC-1 (issue 29): Grok expands `$name` and `${...}` in a hook
+/// command itself and skips the hook when a name is unset, so a shell
+/// variable in a `CodeFlow` command turns the guard off in a Grok session.
+/// Grok loads its own hook file and, in compat mode, the Claude settings;
+/// Codex shares the Grok guard payload. No hook command in any of them, as
+/// shipped, installed in this repository or kept as its baseline, carries a
+/// `$`.
+#[test]
+fn no_hook_command_carries_a_dollar_grok_reads_as_a_template() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files: Vec<PathBuf> = [
+        "assets/base/grok/hooks.json",
+        "assets/base/codex/hooks.json",
+        ".grok/hooks/codeflow.json",
+        ".codex/hooks.json",
+        ".claude/settings.json",
+        ".codeflow/.baseline/.grok/hooks/codeflow.json",
+        ".codeflow/.baseline/.codex/hooks.json",
+        ".codeflow/.baseline/.claude/settings.json",
+    ]
+    .iter()
+    .map(|path| root.join(path))
+    .collect();
+    let mut presets: Vec<PathBuf> = std::fs::read_dir(root.join("assets/base/settings"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    presets.sort();
+    assert!(presets.len() >= 3, "{presets:?}");
+    files.extend(presets);
+    for file in files {
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let mut commands = Vec::new();
+        collect_hook_commands(&value["hooks"], &mut commands);
+        assert!(!commands.is_empty(), "{}", file.display());
+        for command in commands {
+            assert!(
+                !command.contains('$'),
+                "{}: Grok would skip this hook as an unset template: {command}",
+                file.display()
+            );
+        }
+    }
+}
+
 /// TSK-128 AC-5: Codex wires `UserPromptSubmit` to the stable advisory
 /// entry, where plain stdout becomes developer context, with no matcher
 /// (Codex ignores one on this event) and never the manual command.
@@ -275,6 +323,107 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
         .write_all(payload.to_string().as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+/// TSK-215: the shipped Grok exec-guard command, run through the shell as
+/// Grok runs it, refuses a dangerous command in the payload Grok Build
+/// 1.0.46 sends, where every field comes under both spellings (captured
+/// from a live session), and lets an ordinary command through. Grok shows
+/// only a hook's first stderr line as its deny reason, so the refusal also
+/// comes as Grok's deny decision on stdout with the rule and its sanctioned
+/// path; a Claude-shaped payload gets nothing on stdout.
+#[cfg(unix)]
+#[test]
+fn grok_wiring_refuses_in_the_payload_grok_sends() {
+    use std::io::Write as _;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let grok: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("assets/base/grok/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    let mut commands = Vec::new();
+    collect_hook_commands(&grok["hooks"]["PreToolUse"], &mut commands);
+    let hook = commands
+        .into_iter()
+        .find(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
+        .expect("exec-guard wired for grok");
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for (command, refused, grok) in [
+        ("rm -rf /", true, true),
+        ("echo hello", false, true),
+        ("rm -rf /", true, false),
+    ] {
+        let input = serde_json::json!({"command": command, "description": "probe"});
+        let payload = if grok {
+            serde_json::json!({
+                "hookEventName": "pre_tool_use",
+                "cwd": dir.path(),
+                "toolName": "run_terminal_command",
+                "toolInput": input,
+                "hook_event_name": "PreToolUse",
+                "tool_name": "run_terminal_command",
+                "tool_input": input,
+            })
+        } else {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "cwd": dir.path(),
+                "tool_name": "Bash",
+                "tool_input": input,
+            })
+        };
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", &hook])
+            .current_dir(dir.path())
+            .env("PATH", &path)
+            .env("CODEFLOW_HOME", dir.path().join(".home"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!stderr.contains("unreadable hook payload"), "{stderr}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if refused {
+            assert_eq!(out.status.code(), Some(2), "{command}: {stderr}");
+            assert!(stderr.contains("exec-guard: BLOCKED"), "{stderr}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "{command}: {stderr}");
+        }
+        if refused && grok {
+            let decision: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+            assert_eq!(decision["decision"], "deny", "{stdout}");
+            let reason = decision["reason"].as_str().unwrap();
+            assert!(
+                reason.starts_with(
+                    "codeflow exec-guard: BLOCKED — policy rule security.dangerous_commands"
+                ),
+                "{reason}"
+            );
+            assert!(reason.contains("\n  sanctioned: "), "{reason}");
+            assert!(reason.contains("\npolicy source: "), "{reason}");
+        } else {
+            assert!(stdout.is_empty(), "{command} grok={grok}: {stdout}");
+        }
+    }
 }
 
 /// TSK-141 AC-5: the Codex wiring refuses each composed deletion, passes a

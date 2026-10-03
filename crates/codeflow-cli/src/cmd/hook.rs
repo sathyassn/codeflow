@@ -287,7 +287,37 @@ fn git_guard(stdin: &str) -> i32 {
     if !report.violations.is_empty() {
         eprintln!("policy source: {}", authority.source);
     }
+    grok_deny(stdin, "git-guard", &report.violations, &authority.source);
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// Grok shows only a hook's first stderr line as the reason it denied a
+/// tool call, which here is the policy source line. For a Grok payload
+/// (its `hookEventName` field) that the guard refuses, also write Grok's
+/// deny decision on stdout carrying the whole refusal: each rule, its
+/// sanctioned path and the policy source (TSK-215). Claude and Codex
+/// payloads get nothing on stdout, as before.
+fn grok_deny(
+    stdin: &str,
+    plane: &str,
+    violations: &[codeflow_core::hooks::Violation],
+    source: &impl std::fmt::Display,
+) {
+    if !codeflow_core::hooks::any_blocking(violations) {
+        return;
+    }
+    let from_grok = serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .is_some_and(|value| value.get("hookEventName").is_some());
+    if !from_grok {
+        return;
+    }
+    let mut reason: Vec<String> = violations.iter().map(|v| v.render(plane)).collect();
+    reason.push(format!("policy source: {source}"));
+    let decision = serde_json::json!({"decision": "deny", "reason": reason.join("\n")});
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "{decision}");
+    let _ = out.flush();
 }
 
 /// The finding for a guard input it could not read. Fail open with a
@@ -352,6 +382,7 @@ fn exec_guard(stdin: &str) -> i32 {
     if !violations.is_empty() {
         eprintln!("policy source: {}", authority.source);
     }
+    grok_deny(stdin, "exec-guard", &violations, &authority.source);
     super::render_outcome("exec-guard", &root, &violations, &[], 2)
 }
 
@@ -398,6 +429,7 @@ fn edit_guard(stdin: &str) -> i32 {
             if !findings.is_empty() {
                 eprintln!("policy source: {}", authority.source);
             }
+            grok_deny(stdin, "edit-guard", &findings, &authority.source);
             super::render_outcome("edit-guard", &root, &findings, &[], 2)
         }
         Err(error) => {

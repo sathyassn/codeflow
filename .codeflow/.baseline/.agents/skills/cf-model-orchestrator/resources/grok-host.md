@@ -9,12 +9,19 @@ CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse via
 `.grok/hooks/codeflow.json`. Grok drops event output: after a compaction,
 run `codeflow orient`.
 The guard parser accepts Grok's camelCase stdin (`toolName`, `toolInput`,
-`run_terminal_command`) as well as Claude/Codex snake_case. Grok also scans
-`.claude/settings.json` when compat is on. Project hooks load only after
-`/hooks-trust` or `--trust`; `grok inspect` is the local proof of discovery
-and trust. Git hooks and CI remain the enforcement floor. This is not a Grok
-schema-v2 Stop-hook lifecycle; Claude turn completion still uses schema-v2
-when Grok hosts Claude.
+`run_terminal_command`) as well as Claude/Codex snake_case, and both at
+once as Grok 1.0.46 sends them; a refusal also returns Grok's deny
+decision on stdout, since Grok shows only the first stderr line. Grok also
+scans `.claude/settings.json` when compat is on. Project hooks load only
+after `/hooks-trust` or `--trust`; `grok inspect` is the local proof of
+discovery and trust. Grok expands `$name` and `${...}` in a hook command
+itself and skips, failing open, a hook whose variable is unset, so
+CodeFlow's hook commands carry no `$`. `codeflow doctor --check grok` names
+a CodeFlow hook command Grok would skip and runs the configured shell guard
+on a canary; a live session's hook lines are the proof that Grok ran it.
+Git hooks and CI remain the enforcement floor. This is not a Grok schema-v2
+Stop-hook lifecycle; Claude turn completion still uses schema-v2 when Grok
+hosts Claude.
 
 ## Launch
 
