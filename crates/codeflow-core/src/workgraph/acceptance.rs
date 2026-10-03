@@ -732,56 +732,71 @@ enum Presence {
     Absent,
     /// The record that carries it.
     Present(Box<RecordView>),
-    /// A record that may carry it could not be read; the reason.
+    /// The answer is unknown: a required target does not resolve here, or
+    /// a record at the task's own path does not parse; the reason.
     Unreadable(String),
 }
 
 /// The target's record of `task`, read at every reference point the verb or
-/// `codeflow ci` could judge it against, so neither an older range base nor
-/// a stale local branch nor a retargeted record makes a task the target
-/// holds look new (TSK-217). The points, in order: the range `anchor`; the
-/// tips of the declared target, local and remote-tracking; `default_target`
-/// (the pull request's base in CI); and the tips of the default work
-/// target. The first point that holds the task supplies its record;
-/// otherwise a point that cannot be read makes the answer unreadable.
+/// `codeflow ci` could judge it against, so neither an older range base, a
+/// stale local branch, an upstream on another remote, nor a retargeted
+/// record makes a task the target holds look new (TSK-217).
+///
+/// The first point that holds the task supplies the criteria to keep, so
+/// the order is deliberate: the range `anchor` first, the record this range
+/// was cut from (R-52); then the tips of the declared target, remote ones
+/// before the local branch, since a planning amendment landed there after
+/// the reopen is the criteria that bind and a local branch may be stale;
+/// then `default_target` (the pull request's base in CI, the resolved
+/// default target in the verb); then the tips of the default work target,
+/// which catch a record retargeted away from it.
+///
+/// It fails closed: a required target (the declared one, and the default
+/// work target) with no tip here makes the answer unreadable, never absent.
 fn target_record(
     repo: &Repository,
     task: &RecordView,
     anchor: Oid,
     default_target: Option<Oid>,
 ) -> Presence {
-    let mut points = vec![anchor];
-    points.extend(default_target);
-    let mut names: Vec<String> = task
+    let declared = task
         .integration_target
         .as_deref()
         .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .into_iter()
-        .collect();
-    if let Some(name) = repo
+        .filter(|name| !name.is_empty());
+    let default_name = repo
         .workdir()
         .and_then(super::work_start::default_work_target)
-    {
-        names.push(name.strip_prefix("origin/").unwrap_or(&name).to_string());
-    }
-    for name in &names {
-        for reference in super::work_start::target_reference_names(name).unwrap_or_default() {
-            if let Ok(commit) = repo
-                .find_reference(&reference)
-                .and_then(|found| found.peel_to_commit())
-            {
-                points.push(commit.id());
-            }
+        .map(|name| name.strip_prefix("origin/").unwrap_or(&name).to_string());
+    let mut points = vec![anchor];
+    if let Some(name) = declared {
+        let tips = target_tips(repo, name);
+        if tips.is_empty() {
+            return Presence::Unreadable(format!(
+                "the declared target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+            ));
         }
+        points.extend(tips);
     }
+    points.extend(default_target);
+    let Some(default_name) = default_name else {
+        return Presence::Unreadable(
+            "the default target (`main` or `master`) does not resolve here; fetch it (`git fetch origin main`)"
+                .to_string(),
+        );
+    };
+    points.extend(target_tips(repo, &default_name));
     let mut seen = std::collections::HashSet::new();
     points.retain(|point| seen.insert(*point));
     let uid = record_uid(&task.content);
+    let own_file = std::path::Path::new(&task.path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
     let mut unreadable = None;
     for point in points {
-        match presence_at(repo, point, &task.id, uid.as_deref()) {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
             Presence::Absent => {}
             Presence::Unreadable(reason) => {
                 unreadable.get_or_insert(reason);
@@ -792,72 +807,108 @@ fn target_record(
     unreadable.map_or(Presence::Absent, Presence::Unreadable)
 }
 
-/// Whether the tree at `at` holds a task record with `id` or `uid` in any
-/// supported layout. A task path whose record does not parse and names the
-/// id or uid is unreadable, never absent.
-fn presence_at(repo: &Repository, at: Oid, id: &str, uid: Option<&str>) -> Presence {
+/// Every tip of the target `name` this clone knows: the configured
+/// upstream of its local branch (on any remote), its `origin` tracking ref,
+/// and the local branch, in that order. Empty when none resolves.
+fn target_tips(repo: &Repository, name: &str) -> Vec<Oid> {
+    let mut names = Vec::new();
+    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
+        if let Ok(upstream) = upstream.as_str() {
+            names.push(upstream.to_string());
+        }
+    }
+    let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
+    candidates.reverse();
+    names.extend(candidates);
+    names
+        .iter()
+        .filter_map(|reference| {
+            repo.find_reference(reference)
+                .and_then(|found| found.peel_to_commit())
+                .ok()
+                .map(|commit| commit.id())
+        })
+        .collect()
+}
+
+/// Whether the tree at `at` holds a task record with `id` or `uid`, read
+/// only in the task directories of the supported layouts
+/// (`project-management/tasks/` and `project-management/epics/<EPC>/tasks/`).
+/// Identity is the parsed `id` and `uid` frontmatter values. A record that
+/// does not parse is this task's only when it sits at the task's own file
+/// name, and then the answer is unreadable, never absent.
+fn presence_at(
+    repo: &Repository,
+    at: Oid,
+    id: &str,
+    uid: Option<&str>,
+    own_file: &str,
+) -> Presence {
     let Ok(tree) = repo.find_commit(at).and_then(|commit| commit.tree()) else {
         return Presence::Unreadable(format!("cannot read the tree of {at}"));
     };
-    let mut found = Presence::Absent;
-    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
-        let Ok(name) = entry.name() else {
-            return git2::TreeWalkResult::Ok;
-        };
-        let path = format!("{root}{name}");
-        if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
-            return git2::TreeWalkResult::Ok;
-        }
-        let Ok(blob) = repo.find_blob(entry.id()) else {
-            found = Presence::Unreadable(format!("cannot read {path} at {at}"));
-            return git2::TreeWalkResult::Abort;
-        };
-        let content = String::from_utf8_lossy(blob.content());
-        match RecordView::parse(RecordKind::Task, &path, &content) {
-            Ok(record) => {
-                let same_uid = uid.is_some() && record_uid(&record.content).as_deref() == uid;
-                if record.id == id || same_uid {
-                    found = Presence::Present(Box::new(record));
-                    return git2::TreeWalkResult::Abort;
-                }
-            }
-            Err(_) => {
-                if path.contains(id)
-                    || content.contains(id)
-                    || uid.is_some_and(|uid| content.contains(uid))
-                {
-                    found = Presence::Unreadable(format!("{path} at {at} does not parse"));
-                    return git2::TreeWalkResult::Abort;
-                }
-            }
-        }
-        git2::TreeWalkResult::Ok
-    });
-    if walked.is_err() && matches!(found, Presence::Absent) {
-        return Presence::Unreadable(format!("cannot walk the tree of {at}"));
+    let subtree = |tree: &git2::Tree<'_>, name: &str| {
+        tree.get_name(name)
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .and_then(|entry| repo.find_tree(entry.id()).ok())
+    };
+    let Some(records) = subtree(&tree, "project-management") else {
+        return Presence::Absent;
+    };
+    let mut directories = Vec::new();
+    if let Some(tasks) = subtree(&records, "tasks") {
+        directories.push(("project-management/tasks".to_string(), tasks));
     }
-    found
+    if let Some(epics) = subtree(&records, "epics") {
+        for epic in &epics {
+            let Ok(name) = epic.name() else { continue };
+            let Some(epic_tree) = subtree(&epics, name) else {
+                continue;
+            };
+            if let Some(tasks) = subtree(&epic_tree, "tasks") {
+                directories.push((format!("project-management/epics/{name}/tasks"), tasks));
+            }
+        }
+    }
+    let mut unreadable = None;
+    for (directory, tasks) in directories {
+        for entry in &tasks {
+            let Ok(name) = entry.name() else { continue };
+            let path = format!("{directory}/{name}");
+            if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
+                continue;
+            }
+            let Ok(blob) = repo.find_blob(entry.id()) else {
+                if name == own_file {
+                    unreadable.get_or_insert(format!("cannot read {path} at {at}"));
+                }
+                continue;
+            };
+            let content = String::from_utf8_lossy(blob.content());
+            match RecordView::parse(RecordKind::Task, &path, &content) {
+                Ok(record) => {
+                    let same_uid = uid.is_some() && record_uid(&record.content).as_deref() == uid;
+                    if record.id == id || same_uid {
+                        return Presence::Present(Box::new(record));
+                    }
+                }
+                Err(_) if name == own_file => {
+                    unreadable.get_or_insert(format!("{path} at {at} does not parse"));
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    unreadable.map_or(Presence::Absent, Presence::Unreadable)
 }
 
-/// A record's frontmatter `uid`, when it has one.
+/// A record's `uid` as the frontmatter parser reads it, so every YAML
+/// form of one value (plain, single or double quoted) is the same uid.
 fn record_uid(content: &str) -> Option<String> {
-    let mut lines = content.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    lines
-        .take_while(|line| line.trim() != "---")
-        .find_map(|line| line.strip_prefix("uid:"))
-        .map(|value| {
-            value
-                .split('#')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .trim_matches('"')
-                .to_string()
-        })
-        .filter(|value| !value.is_empty())
+    let (data, _) = crate::validate::parse_frontmatter(content.as_bytes()).ok()?;
+    let uid = crate::validate::get_string_field(&data, "uid");
+    let uid = uid.trim();
+    (!uid.is_empty()).then(|| uid.to_string())
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
@@ -1501,6 +1552,11 @@ mod tests {
                 "---\nid: {id}\nuid: \"{uid}\"  # written once\nstatus: todo\n---\n\n# {id}: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n"
             )
         };
+        // Every YAML form of one value is the same uid.
+        for form in [uid.to_string(), format!("'{uid}'"), format!("\"{uid}\"")] {
+            let text = format!("---\nid: TSK-001\nuid: {form}\nstatus: todo\n---\n");
+            assert_eq!(record_uid(&text).as_deref(), Some(uid), "{form}");
+        }
         let commit = |path: &str, text: &str| {
             let full = root.join(path);
             std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -1515,23 +1571,33 @@ mod tests {
                 .unwrap()
                 .id()
         };
-        assert_eq!(record_uid(&record("TSK-001")).as_deref(), Some(uid));
         let legacy = commit(
             "project-management/epics/EPC-001/tasks/TSK-001.md",
             &record("TSK-001"),
         );
         let repo = Repository::open(root).unwrap();
+        let at = |commit, id, uid, own| presence_at(&repo, commit, id, uid, own);
         assert!(matches!(
-            presence_at(&repo, legacy, "TSK-001", None),
+            at(legacy, "TSK-001", None, "TSK-001.md"),
             Presence::Present(_)
         ));
         // The same uid under another number is the same record.
         assert!(matches!(
-            presence_at(&repo, legacy, "TSK-009", Some(uid)),
+            at(legacy, "TSK-009", Some(uid), "TSK-009.md"),
             Presence::Present(_)
         ));
         assert!(matches!(
-            presence_at(&repo, legacy, "TSK-002", None),
+            at(legacy, "TSK-002", None, "TSK-002.md"),
+            Presence::Absent
+        ));
+        // A broken record that only mentions the task is not the task; one
+        // at the task's own file name is unreadable.
+        let mentions = commit(
+            "project-management/tasks/TSK-099.md",
+            "---\nid: TSK-099\nstatus: [unclosed\n---\nSee TSK-002.\n",
+        );
+        assert!(matches!(
+            at(mentions, "TSK-002", None, "TSK-002.md"),
             Presence::Absent
         ));
         let broken = commit(
@@ -1539,7 +1605,7 @@ mod tests {
             "---\nid: TSK-002\nstatus: [unclosed\n---\n",
         );
         assert!(matches!(
-            presence_at(&repo, broken, "TSK-002", None),
+            at(broken, "TSK-002", None, "TSK-002.md"),
             Presence::Unreadable(_)
         ));
     }

@@ -2646,12 +2646,14 @@ fn standalone_one(record: &str) -> String {
 
 /// On the current branch, write TSK-001 at `path` through `shape`, complete
 /// it, reopen it with AC-3 added, review a fix and complete it again; then
-/// run the verb and `codeflow ci` from `base`. Returns both results.
+/// run the verb and `codeflow ci` from `base`, binding the record's id in
+/// the local registry first when `admit`. Returns both results.
 fn complete_reopen_complete(
     root: &Path,
     path: &str,
     shape: &dyn Fn(String) -> String,
     base: &str,
+    admit: bool,
 ) -> [(i32, String); 2] {
     let branch = git_out(root, &["branch", "--show-current"]);
     write(
@@ -2693,6 +2695,14 @@ fn complete_reopen_complete(
         &shape(task("TSK-001", "complete", REOPEN_ADDS, &closeout)),
     );
     commit(root, "docs(records): record the acceptance");
+    if admit {
+        let admitted = codeflow()
+            .args(["ids", "admit", path])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(admitted.status.success());
+    }
     [verb, ci_on(root, base, &branch, "Task: TSK-001")]
 }
 
@@ -2710,7 +2720,7 @@ fn a_moved_record_keeps_the_target_criteria_on_reopen() {
     std::fs::remove_file(root.join(&original)).unwrap();
     let moved = "project-management/epics/EPC-001/tasks/TSK-001.md";
     let shape = |record: String| standalone_one(&record);
-    for result in complete_reopen_complete(root, moved, &shape, "main") {
+    for result in complete_reopen_complete(root, moved, &shape, "main", false) {
         assert_blocks(
             &result,
             "a reopen of a moved record the target holds",
@@ -2755,7 +2765,7 @@ fn every_anchor_sees_the_target_record_on_reopen() {
             "old-base" => early.clone(),
             _ => "main".to_string(),
         };
-        let [verb, check] = complete_reopen_complete(root, &path, &shape, &base);
+        let [verb, check] = complete_reopen_complete(root, &path, &shape, &base, false);
         for (who, result) in [("verb", verb), ("ci", check)] {
             if result.0 == 0 || !result.1.contains("reopened task keeps its criteria") {
                 accepted.push(format!("{case} {who}: {}", result.1));
@@ -2828,4 +2838,112 @@ fn a_new_task_review_before_its_criteria_change_is_refused() {
             result.1
         );
     }
+}
+
+/// Each path in `results` (the verb, then CI) that accepted the changed
+/// criteria or refused them without `needle`, with its output.
+fn wrongly_accepted(case: &str, results: [(i32, String); 2], needle: &str) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for (who, result) in ["verb", "ci"].into_iter().zip(results) {
+        if result.0 == 0 || !result.1.contains(needle) {
+            wrong.push(format!("{case} {who}: {}", result.1));
+        }
+    }
+    wrong
+}
+
+/// The target's tip on a configured upstream of another remote holds the
+/// task, while the local target branch is stale: the verb reads that
+/// upstream as CI does (TSK-217).
+#[test]
+fn a_configured_upstream_on_another_remote_holds_the_task() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let early = head(root);
+    let path = record_path("TSK-001");
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
+    let planned = commit(root, "docs: plan the standalone task");
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    git(
+        root,
+        &["remote", "add", "upstream", "https://example.test/repo"],
+    );
+    git(
+        root,
+        &["update-ref", "refs/remotes/upstream/main", &planned],
+    );
+    git(root, &["config", "branch.main.remote", "upstream"]);
+    git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+    git(root, &["branch", "-f", "main", &early]);
+    let shape = |record: String| standalone_one(&record);
+    let results =
+        complete_reopen_complete(root, &path, &shape, "refs/remotes/upstream/main", false);
+    let wrong = wrongly_accepted("upstream", results, "reopened task keeps its criteria");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// A clone that lacks the default target cannot prove a retargeted task
+/// new: both paths refuse the changed criteria and name the ref to fetch.
+#[test]
+fn a_clone_without_the_default_target_fails_closed() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let early = head(root);
+    let path = record_path("TSK-001");
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
+    commit(root, "docs: plan the standalone task");
+    git(root, &["branch", "alternate", &early]);
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    git(root, &["branch", "-D", "main"]);
+    let shape = |record: String| {
+        standalone_one(&record).replace("integration_target: main", "integration_target: alternate")
+    };
+    let results = complete_reopen_complete(root, &path, &shape, "alternate", true);
+    let wrong = wrongly_accepted("limited refs", results, "does not resolve here; fetch it");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// The target's TSK-002, renumbered TSK-001 with its uid kept, is the same
+/// record in every YAML form of that uid (TSK-217).
+#[test]
+fn a_kept_uid_matches_in_every_yaml_form() {
+    let mut wrong = Vec::new();
+    for form in ["plain", "single", "double"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let old_path = record_path("TSK-002");
+        write(
+            root,
+            &old_path,
+            &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n")),
+        );
+        commit(root, "docs: plan the standalone task");
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        std::fs::remove_file(root.join(&old_path)).unwrap();
+        let shape = |record: String| {
+            let record = standalone_one(&record);
+            let quoted = match form {
+                "single" => format!("uid: '{FIXED_UID}'"),
+                "double" => format!("uid: \"{FIXED_UID}\""),
+                _ => format!("uid: {FIXED_UID}"),
+            };
+            record.replace(&format!("uid: {FIXED_UID}"), &quoted)
+        };
+        let path = record_path("TSK-001");
+        let results = complete_reopen_complete(root, &path, &shape, "main", true);
+        wrong.extend(wrongly_accepted(
+            form,
+            results,
+            "reopened task keeps its criteria",
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
