@@ -76,7 +76,7 @@ pub(super) fn run(
         .collect();
     // The working copy's gate decides the tree checks; each branch's
     // `codeflow ci` is gated by the policy at its target (see
-    // [`policy_authority`]), so a head cannot turn that check off.
+    // [`judged_by`]), so a head cannot turn that check off.
     if pushed.is_empty() {
         return;
     }
@@ -103,11 +103,16 @@ pub(super) fn run(
     let listing: OnceCell<Result<String, String>> = OnceCell::new();
     let advertised: OnceCell<Advertised> = OnceCell::new();
     let answer: OnceCell<Result<release_line::Destination, String>> = OnceCell::new();
+    let anchor: OnceCell<Result<Anchor, String>> = OnceCell::new();
+    let fetch_failed: OnceCell<String> = OnceCell::new();
     let destination = Destination {
         url,
         listing: &listing,
         advertised: &advertised,
         answer: &answer,
+        anchor: &anchor,
+        fetch_failed: &fetch_failed,
+        fork: fork(root, url),
         namespace: namespace.as_deref(),
         policy,
     };
@@ -196,7 +201,7 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
 /// that is unresolved; a push whose scope cannot be read is refused (see
 /// [`release_base`]). The range's boundary only bounds the commits: the
 /// policy that judges them, and whether and at what level the check gates
-/// the push, come from the branch's target (see [`policy_authority`]).
+/// the push, come from the branch's target (see [`judged_by`]).
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -207,27 +212,41 @@ fn run_ci_ranges(
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        let authority = policy_authority(root, r, branch, destination);
-        let policy = match &authority {
-            Ok(authority) => {
+        let judged = judged_by(root, r, branch, destination, steps);
+        let policy = match &judged {
+            Judged::Target {
+                target,
+                tip,
+                policy,
+            } => {
+                if !policy.test_gate_on_push.is_active() {
+                    report.status.push(format!(
+                        "`codeflow ci` did not run for '{branch}': the policy at {target} {} turns the push check off",
+                        short(tip)
+                    ));
+                    continue;
+                }
                 report.status.push(format!(
-                    "`codeflow ci` judges '{branch}' with the policy at {} {}, the target the hosted job reads it from",
-                    authority.target,
-                    short(&authority.tip)
+                    "`codeflow ci` judges '{branch}' with the policy at {target} {}, the branch its pull request is judged against",
+                    short(tip)
                 ));
-                authority.policy.clone()
+                (**policy).clone()
             }
-            Err(why) => {
+            Judged::Invalid { target, tip } => {
                 report.status.push(format!(
-                    "hosted parity unverified for '{branch}': {why}; `codeflow ci` judges it with the policy at its range's base, and the working copy's gate applies"
+                    "the policy at {target} {} is not valid for this codeflow; `codeflow ci` refuses '{branch}' as the hosted job would",
+                    short(tip)
                 ));
-                destination.policy.clone()
+                blocking(destination.policy)
+            }
+            Judged::Unverified(why) => {
+                report.status.push(format!(
+                    "not hosted parity for '{branch}': {why}; `codeflow ci` still judges it, with the policy at its range's base and at block level, whatever the working copy's gate says"
+                ));
+                blocking(destination.policy)
             }
         };
         let policy = &policy;
-        if !policy.test_gate_on_push.is_active() {
-            continue;
-        }
         let base = match release_base(root, r, branch, destination, report) {
             Scoped::Refused => None,
             Scoped::Release(tip) => Some(tip),
@@ -265,8 +284,8 @@ fn run_ci_ranges(
             if let Some(tip) = existing_tip(root, r) {
                 args.extend(["--baseline-from", tip]);
             }
-            if let Ok(authority) = &authority {
-                args.extend(["--policy-from", &authority.tip]);
+            if let Judged::Target { tip, .. } | Judged::Invalid { tip, .. } = &judged {
+                args.extend(["--policy-from", tip]);
             }
             // The release scope reads the policy at this destination's
             // default target (SPC-013 R-120), from the advertisement the
@@ -552,74 +571,160 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
-/// The policy authority of a pushed branch (sathyassn/codeflow#22).
-struct Authority {
-    /// The branch its pull request merges into.
-    target: String,
-    /// That branch's tip as the destination advertises it, present here.
-    tip: String,
-    /// The git policy recorded at `tip`: the working copy's when the tip
-    /// carries none yet, the built-in defaults when it is invalid (CI then
-    /// refuses the range).
-    policy: GitPolicy,
+/// What judges a pushed branch's `codeflow ci` (sathyassn/codeflow#22).
+enum Judged {
+    /// The validated policy at the tip of the branch its pull request is
+    /// judged against: it decides the rules, whether the check gates the
+    /// push and at what level.
+    Target {
+        target: String,
+        tip: String,
+        policy: Box<GitPolicy>,
+    },
+    /// The target's policy fails strict validation: `codeflow ci` refuses
+    /// the range at block level, as the hosted job does.
+    Invalid { target: String, tip: String },
+    /// No target could be established: the check still runs, at block
+    /// level, and says it is not the hosted verdict.
+    Unverified(String),
 }
 
-/// The commit whose policy judges a pushed branch, gates its `codeflow ci`
-/// and sets the level that check runs at: the tip of the branch its pull
-/// request merges into, as the destination advertises it, which is where
-/// the hosted policy job reads its policy. The target is the branch itself
-/// for an existing protected or `integration/` branch, the declared target
-/// for a branch whose task record names one, and the destination's default
-/// branch otherwise. `Err` says why no target tip could be established; the
-/// range's boundary never stands in for it, since it can be an old fork
-/// point or the pushed branch's own previous tip.
-fn policy_authority(
+/// The destination default branch's advertised tip and its policy: the
+/// anchor every other authority decision is taken from, so nothing the
+/// pushed branch or the working copy says chooses whose policy judges it.
+struct Anchor {
+    name: String,
+    tip: String,
+    policy: TargetPolicy,
+}
+
+/// A target tip's policy, read as git data and strictly validated.
+#[derive(Clone)]
+enum TargetPolicy {
+    Valid(Box<GitPolicy>),
+    /// The tip carries no policy yet (the change that adopts `CodeFlow`).
+    Missing,
+    Malformed,
+}
+
+fn target_policy(root: &Path, tip: &str) -> Result<TargetPolicy, String> {
+    let Some(text) = codeflow_core::hooks::landed_policy::policy_text_at(root, tip)? else {
+        return Ok(TargetPolicy::Missing);
+    };
+    if codeflow_core::hooks::policy_schema::validate_policy_str(&text).is_err() {
+        return Ok(TargetPolicy::Malformed);
+    }
+    Ok(
+        serde_json::from_str::<codeflow_core::hooks::policy::Policy>(&text)
+            .map_or(TargetPolicy::Malformed, |policy| {
+                TargetPolicy::Valid(Box::new(policy.git))
+            }),
+    )
+}
+
+/// The working copy's git policy with the push check at block level: the
+/// fallback cannot be lowered or turned off by the head.
+fn blocking(policy: &GitPolicy) -> GitPolicy {
+    GitPolicy {
+        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Block,
+        ..policy.clone()
+    }
+}
+
+/// Why the push is not to the upstream repository, when it is not: a
+/// configured `upstream` remote at another URL makes this a fork, whose
+/// default branch need not be the pull request's target.
+fn fork(root: &Path, url: Option<&str>) -> Option<String> {
+    let upstream = git(root, &["remote", "get-url", "upstream"])?;
+    let upstream = upstream.trim();
+    (url != Some(upstream)).then(|| {
+        format!(
+            "the push goes to {}, not the configured upstream {upstream}, so its pull request's target is not known here",
+            url.unwrap_or("an unnamed destination")
+        )
+    })
+}
+
+/// What judges a pushed branch. The anchor is the destination default
+/// branch's advertised tip, fetched once per push when this clone lacks it
+/// (the fetch is timed in the push set's steps, and a failure is not
+/// retried). Another branch is trusted as the target only when the
+/// anchor's policy protects it and the destination already has it: the
+/// pushed branch itself, then the target its task record declares. A
+/// branch the push creates, a declared target the anchor does not
+/// protect, and every hint from the working copy are ignored. A fork, an
+/// unanswered destination, a failed fetch or a default branch without a
+/// policy leave the result unverified.
+fn judged_by(
     root: &Path,
     r: &PushRef,
     branch: &str,
     destination: &Destination<'_>,
-) -> Result<Authority, String> {
-    let protected = destination.policy.branch_is_protected(branch)
-        || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
-    let (target, tip) = if let Some(old) = existing_tip(root, r).filter(|_| protected) {
-        (branch.to_string(), old.to_string())
-    } else {
-        let asked = match destination.answer(root) {
-            Ok(Ok(asked)) => asked,
-            Ok(Err(why)) => return Err(why.clone()),
-            Err(why) => return Err(format!("the destination did not answer ({why})")),
-        };
-        let declared = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
-            root,
-            branch,
-            &r.local_sha,
-        )
-        .ok()
+    steps: &mut Vec<PushStep>,
+) -> Judged {
+    if let Some(why) = &destination.fork {
+        return Judged::Unverified(why.clone());
+    }
+    let anchor = match destination.anchor(root, steps) {
+        Ok(anchor) => anchor,
+        Err(why) => return Judged::Unverified(why.clone()),
+    };
+    let anchor_policy = match &anchor.policy {
+        TargetPolicy::Valid(policy) => policy,
+        TargetPolicy::Malformed => {
+            return Judged::Invalid {
+                target: anchor.name.clone(),
+                tip: anchor.tip.clone(),
+            }
+        }
+        TargetPolicy::Missing => {
+            return Judged::Unverified(format!(
+                "the destination's default branch {} has no policy yet",
+                anchor.name
+            ))
+        }
+    };
+    let Ok(Ok(asked)) = destination.answer(root) else {
+        return Judged::Unverified("the destination did not answer".to_string());
+    };
+    let trusted = |name: &str| {
+        name != anchor.name
+            && anchor_policy.branch_is_protected(name)
+            && asked.heads.iter().any(|(head, _)| head == name)
+    };
+    let declared = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
+        root,
+        branch,
+        &r.local_sha,
+    )
+    .ok()
+    .flatten()
+    .map(|target| target.trim().to_string());
+    let target = [Some(branch.to_string()), declared]
+        .into_iter()
         .flatten()
-        .map(|target| target.trim().to_string())
-        .filter(|target| codeflow_core::workgraph::is_stable_work_target(target));
-        let target = match declared {
-            Some(target) => target,
-            None => match &asked.default {
-                Some((name, _)) => name.clone(),
-                None => return Err("the destination has no default branch yet".to_string()),
-            },
+        .find(|name| trusted(name));
+    let Some(target) = target else {
+        return Judged::Target {
+            target: anchor.name.clone(),
+            tip: anchor.tip.clone(),
+            policy: anchor_policy.clone(),
         };
-        let tip = release_line::advertised_tip_here(root, asked, &target)?;
-        (target, tip.to_string())
     };
-    let policy = match codeflow_core::hooks::landed_policy::policy_text_at(root, &tip) {
-        Ok(None) => destination.policy.clone(),
-        Ok(Some(text)) => serde_json::from_str::<codeflow_core::hooks::policy::Policy>(&text)
-            .map(|policy| policy.git)
-            .unwrap_or_default(),
-        Err(why) => return Err(why),
+    let tip = match release_line::advertised_tip_here(root, asked, &target) {
+        Ok(tip) => tip.to_string(),
+        Err(why) => return Judged::Unverified(why),
     };
-    Ok(Authority {
-        target,
-        tip,
-        policy,
-    })
+    match target_policy(root, &tip) {
+        Ok(TargetPolicy::Valid(policy)) => Judged::Target {
+            target,
+            tip,
+            policy,
+        },
+        Ok(TargetPolicy::Malformed) => Judged::Invalid { target, tip },
+        Ok(TargetPolicy::Missing) => Judged::Unverified(format!("{target} has no policy")),
+        Err(why) => Judged::Unverified(why),
+    }
 }
 
 /// What is known of the destination's history.
@@ -634,6 +739,13 @@ struct Destination<'a> {
     advertised: &'a OnceCell<Advertised>,
     /// The destination's default target and branches, from `listing`.
     answer: &'a OnceCell<Result<release_line::Destination, String>>,
+    /// The default branch's tip and policy, acquired once per push.
+    anchor: &'a OnceCell<Result<Anchor, String>>,
+    /// Why fetching the default branch's tip failed, so the release scope
+    /// does not fetch it again.
+    fetch_failed: &'a OnceCell<String>,
+    /// Why the destination is not the upstream, for a fork.
+    fork: Option<String>,
     /// The tracking namespace of a remote that fetches from `url`, for the
     /// protected-branch fallback; `None` when no tracking refs describe it.
     namespace: Option<&'a str>,
@@ -689,6 +801,44 @@ impl Destination<'_> {
         Ok(self
             .answer
             .get_or_init(|| release_line::from_advertisement(url, listed)))
+    }
+
+    /// The default branch's advertised tip, fetched when this clone lacks
+    /// it, and its policy: acquired once per push, the acquisition timed as
+    /// a push-set step.
+    fn anchor(&self, root: &Path, steps: &mut Vec<PushStep>) -> Result<&Anchor, &String> {
+        self.anchor
+            .get_or_init(|| {
+                let started = Instant::now();
+                let anchor = (|| {
+                    let asked = match self.answer(root) {
+                        Ok(Ok(asked)) => asked,
+                        Ok(Err(why)) => return Err(why.clone()),
+                        Err(why) => return Err(format!("the destination did not answer ({why})")),
+                    };
+                    let Some((name, _)) = &asked.default else {
+                        return Err("the destination has no default branch yet".to_string());
+                    };
+                    let tip = release_line::advertised_tip_here(root, asked, name).inspect_err(
+                        |why| {
+                            let _ = self.fetch_failed.set(why.clone());
+                        },
+                    )?;
+                    let tip = tip.to_string();
+                    Ok(Anchor {
+                        name: name.clone(),
+                        policy: target_policy(root, &tip)?,
+                        tip,
+                    })
+                })();
+                steps.push(PushStep {
+                    name: "target policy".to_string(),
+                    duration: started.elapsed(),
+                    configurable: false,
+                });
+                anchor
+            })
+            .as_ref()
     }
 
     /// Why the destination could not be asked, once it was tried.
@@ -772,6 +922,12 @@ fn release_base(
     };
     let tracked = durable_work_tracking_enabled(root).unwrap_or(true)
         || durable_work_tracking_enabled_at(root, &pushed.local_sha).unwrap_or(true);
+    if let (false, Some(why)) = (tracked, destination.fetch_failed.get()) {
+        return refuse(
+            format!("whether the release rules apply to '{branch}' cannot be read, so it is not pushed unjudged (SPC-013 R-120): {why}"),
+            "fix what the message names, then push again",
+        );
+    }
     let tracked = tracked
         || match release_line::default_tracks_work(root, asked) {
             Ok(on) => on,

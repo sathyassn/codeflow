@@ -4533,12 +4533,13 @@ fn gate_destination(policy: &str, tracking: bool) -> (tempfile::TempDir, tempfil
     if tracking {
         std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
         std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
-        // A tracked default target carries its policy: the release scope
-        // is read there, and an unreadable one refuses (SPC-013 R-120).
-        write_policy(local.path(), policy);
-        git(local.path(), &["add", ".codeflow"]);
-        git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
     }
+    // The default target carries the policy: the push gate and the rules
+    // are read there (sathyassn/codeflow#22), and for a tracked target the
+    // release scope too, where an unreadable one refuses (SPC-013 R-120).
+    write_policy(local.path(), policy);
+    git(local.path(), &["add", ".codeflow"]);
+    git(local.path(), &["commit", "-q", "-m", "chore: the policy"]);
     receive(bare.path(), local.path(), "main:stable");
     git(
         local.path(),

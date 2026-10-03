@@ -859,11 +859,10 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
     git_with_binary(&root, &["add", "fix.txt"]);
     git_with_binary(&root, &["commit", "-q", "-m", "fix: repair the thing"]);
 
-    let ci = |root: &Path| {
-        codeflow(
-            root,
-            &["ci", "--base", target, "--head", "HEAD", "--branch", branch],
-        )
+    let ci = |root: &Path, extra: &[&str]| {
+        let mut args = vec!["ci", "--base", target, "--head", "HEAD", "--branch", branch];
+        args.extend(extra);
+        codeflow(root, &args)
     };
     let text = |out: &Output| {
         format!(
@@ -872,7 +871,7 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
             String::from_utf8_lossy(&out.stderr)
         )
     };
-    let blocked = ci(&root);
+    let blocked = ci(&root, &[]);
     assert_eq!(blocked.status.code(), Some(1), "{}", text(&blocked));
     assert!(text(&blocked).contains("(block)"), "{}", text(&blocked));
     assert!(
@@ -905,7 +904,17 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
             "chore: report planning findings as warnings",
         ],
     );
-    let warned = ci(&root);
+    // The branch's own change does not relax the check that judges it:
+    // CI reads the policy at the target (sathyassn/codeflow#22).
+    let still = ci(&root, &[]);
+    assert_eq!(still.status.code(), Some(1), "{}", text(&still));
+    assert!(
+        text(&still).contains("level work_planning = block (configured)"),
+        "{}",
+        text(&still)
+    );
+    // Once the policy has landed on the target, CI reports at warn.
+    let warned = ci(&root, &["--policy-from", "HEAD"]);
     assert_eq!(warned.status.code(), Some(0), "{}", text(&warned));
     assert!(
         text(&warned).contains("level work_planning = warn (configured)")
@@ -913,6 +922,8 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
         "{}",
         text(&warned)
     );
+    // `work start` is a local check of the working copy, so it reports at
+    // warn at once.
     let start = codeflow(&root, &["work", "start", "TSK-404"]);
     assert_eq!(start.status.code(), Some(0), "{}", text(&start));
     assert!(

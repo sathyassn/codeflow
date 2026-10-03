@@ -284,7 +284,7 @@ pub fn run(args: &CiArgs) -> i32 {
         &root,
         configured,
         &judging.raw,
-        base_sha.as_deref(),
+        &judging.profiles,
         &args.actor,
         &branch,
         pr_body.is_some(),
@@ -1031,6 +1031,10 @@ impl Authority {
 struct Judging {
     policy: Policy,
     raw: Result<Option<serde_json::Value>, String>,
+    /// The trusted automation profiles: only those of a policy read at a
+    /// commit, never the working copy's, so a head cannot add one for
+    /// itself and a profile the authority revoked no longer applies.
+    profiles: Vec<codeflow_core::hooks::policy::AutomationProfile>,
 }
 
 /// The policy a range is judged with (sathyassn/codeflow#22): the one
@@ -1053,6 +1057,7 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         Judging {
             policy: working,
             raw: codeflow_core::hooks::adoption::raw_policy(root),
+            profiles: Vec::new(),
         }
     };
     let Some(authority) = authority else {
@@ -1101,6 +1106,7 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         );
     }
     Some(Judging {
+        profiles: policy.git.automation_profiles.clone(),
         policy,
         raw: Ok(Some(raw)),
     })
