@@ -135,16 +135,31 @@ The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
 - **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
-  The GitHub workflow runs gitleaks with your configuration exactly as
-  gitleaks finds it (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`,
-  `.gitleaks.toml`, else its default rules). It then drops one known false
-  positive from the report: the security-stage prose CodeFlow 3.0.0 seeded on
-  line 209 of `.claude/workflows/pipeline.workflow.js` and its baseline copy,
-  which the `generic-api-key` rule mistakes for a key. Only a
-  `generic-api-key` finding whose value and matched text are exactly that
-  prose, in one of those two paths, is dropped; every other finding fails
-  the job, as does a scan that logs an error or reads no commit. A wrapper that runs gitleaks itself on a repository
-  scaffolded by 3.0.0 can allow the same prose in its own configuration.
+  The GitHub workflow reads every exemption from the trusted commit: the
+  pull request's base, or the pushed commit on a push. A pull request
+  cannot exempt the leak it adds, so a new exemption takes effect once its
+  own pull request merges. The step deletes the checkout's
+  `.gitleaksignore`, `.gitleaks.toml` and `.gitleaks.json` and gives
+  gitleaks the trusted commit's copies, choosing your configuration as
+  gitleaks does (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`, a
+  `.gitleaks.json` beside `.gitleaks.toml`, `.gitleaks.toml`, else its
+  default rules). A file your configuration extends by `[extend] path`, and
+  a `GITLEAKS_CONFIG` file in the repository, come from the trusted commit
+  too; the step fails when that commit does not hold the file, and refuses
+  an absolute path into the checkout. An inline `gitleaks:allow` comment
+  counts only on a commit the trusted commit already holds. The step fails
+  before it scans when the trusted commit is not in the checkout, and it
+  downloads gitleaks under the runner's temp directory. It then drops one
+  known false positive from the report: the security-stage prose CodeFlow
+  3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
+  its baseline copy, which the `generic-api-key` rule mistakes for a key.
+  Only a `generic-api-key` finding whose value and matched text are exactly
+  that prose, in one of those two paths, is dropped; every other finding
+  fails the job, as does a scan that logs an error or reads no commit. A
+  wrapper that runs gitleaks on the change's own checkout reads the
+  change's own exemptions; read them from the target branch instead. A
+  wrapper that runs gitleaks itself on a repository scaffolded by 3.0.0 can
+  allow the same prose in its own configuration.
   With no `.gitleaks.toml` yet, create one that keeps the default rules:
 
   ```toml

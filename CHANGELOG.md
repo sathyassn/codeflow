@@ -90,6 +90,24 @@ erratum below, never an edit of the section.
   runs gitleaks itself can add the entry the CI README shows.
 
 <!-- codeflow:release-impact patch -->
+- **A pull request can no longer exempt its own leak from the secret
+  scan.** The CI template's gitleaks step read `.gitleaksignore`,
+  `.gitleaks.toml`, a `.gitleaks.json` beside it and inline
+  `gitleaks:allow` comments from the pull request's checkout, so the change
+  that added a secret could add its exemption too and pass. The step now
+  reads every exemption from the trusted commit: the pull request's base,
+  or the pushed commit on a push. A new exemption takes effect once its own
+  pull request merges, and an inline `gitleaks:allow` comment counts only
+  on a commit the trusted commit already holds. A file your configuration
+  extends by `[extend] path`, and a `GITLEAKS_CONFIG` file in the
+  repository, are read from the trusted commit as well. The step fails
+  with a message naming the fix when the trusted commit is not in the
+  checkout, when it does not hold an extended file, or when an extended
+  file is named by an absolute path into the checkout. gitleaks is now
+  downloaded and unpacked under the runner's temp directory, so a file or
+  link a pull request commits at that name is not written through.
+
+<!-- codeflow:release-impact patch -->
 - **A release refuses a binary that is not a clean build.** Before a
   release is hosted, and on every dry run, each platform archive is opened
   and its `codeflow` binary must identify as the release version at the
