@@ -269,6 +269,10 @@ fn git_guard(stdin: &str) -> i32 {
     // as git reads it where the command runs (TSK-112).
     let alias_cwd = cwd.clone();
     let alias = move |query: &git_guard::AliasQuery<'_>| git_guard::read_alias(&alias_cwd, query);
+    let branch_cwd = cwd.clone();
+    let branch_name = move |target: Option<&git_guard::Retarget<'_>>, name: &str| {
+        git_guard::read_branch_name(&branch_cwd, target, name)
+    };
     let discard_cwd = cwd.clone();
     let discard = move |query: &git_guard::DiscardQuery<'_>| {
         codeflow_core::hooks::git_discard::inspect(&discard_cwd, query.target, query.intent)
@@ -280,6 +284,7 @@ fn git_guard(stdin: &str) -> i32 {
         pr_base_lookup: Some(&lookup),
         dir_target_lookup: Some(&dir_target),
         alias_lookup: Some(&alias),
+        branch_lookup: Some(&branch_name),
         discard_lookup: Some(&discard),
         root_checkout: root_checkout.as_ref(),
     };

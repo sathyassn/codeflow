@@ -96,6 +96,49 @@ pub enum AliasAnswer {
 /// subcommand that is not a builtin is unclassifiable.
 pub type AliasLookup<'a> = Option<&'a dyn Fn(&AliasQuery<'_>) -> AliasAnswer>;
 
+/// Resolves a branch expression where the command would run (`None` for the
+/// session's working directory) to a branch name, or says why it cannot.
+pub type BranchLookup<'a> =
+    Option<&'a dyn Fn(Option<&Retarget<'_>>, &str) -> Result<String, String>>;
+
+/// Resolve a branch expression the way `git branch`, `git checkout -B` and
+/// `git switch -C` read a branch name, by running
+/// `git check-ref-format --branch` where the command would run (`target`,
+/// relative to `cwd`). It expands `@{-N}` and `<branch>@{upstream}` to the
+/// local branch they name; an expression git cannot expand is an error.
+///
+/// # Errors
+///
+/// When git cannot run or cannot expand the expression.
+pub fn read_branch_name(
+    cwd: &std::path::Path,
+    target: Option<&Retarget<'_>>,
+    name: &str,
+) -> Result<String, String> {
+    let mut cmd = crate::git::command();
+    cmd.current_dir(cwd).stdin(std::process::Stdio::null());
+    match target {
+        Some(t) if t.git_dir => {
+            cmd.arg(format!("--git-dir={}", t.path));
+        }
+        Some(t) => {
+            cmd.arg("-C").arg(t.path);
+        }
+        None => {}
+    }
+    cmd.args(["check-ref-format", "--branch", name]);
+    match cmd.output() {
+        Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout)
+            .trim_end_matches(['\n', '\r'])
+            .to_string()),
+        Ok(out) => Err(format!(
+            "`git check-ref-format --branch` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(e) => Err(format!("git could not run: {e}")),
+    }
+}
+
 /// Read `alias.<name>` for the guard by running `git config --get` where the
 /// command would run (`query.target`, relative to `cwd`), with the command's
 /// own `-c` settings. Exit 1 means the key is not set; any other failure is
@@ -356,6 +399,10 @@ pub struct GuardContext<'a> {
     pub alias_lookup: AliasLookup<'a>,
     /// Read-only local-work proof for the command's actual repository.
     pub discard_lookup: DiscardLookup<'a>,
+    /// How to resolve a branch expression (`@{-1}`, `x@{upstream}`) to the
+    /// branch git would change in the targeted repository (injected).
+    /// `None` leaves every such expression unresolved, which refuses.
+    pub branch_lookup: BranchLookup<'a>,
     /// The session's root checkout, when the command runs in one: a commit
     /// there off its root branch is judged by `git.root_checkout_commits`
     /// (TSK-165). `None` in a linked worktree.
@@ -1167,6 +1214,344 @@ fn find_mutating_roots(args: &[String]) -> Option<&[String]> {
     None
 }
 
+/// Whether an `rm` removes directories recursively (`-r`, `-R`, inside a
+/// cluster, or `--recursive`), reading options up to `--`.
+fn rm_recursive(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| {
+            arg == "--recursive"
+                || arg
+                    .strip_prefix('-')
+                    .is_some_and(|flags| !flags.starts_with('-') && flags.contains(['r', 'R']))
+        })
+}
+
+/// The operands of an `rm`: every non-option word, and every word after
+/// `--`.
+fn rm_operands(args: &[String]) -> Vec<&str> {
+    let mut operands = Vec::new();
+    let mut options = true;
+    for arg in args {
+        if options && arg == "--" {
+            options = false;
+        } else if !options || !arg.starts_with('-') || arg == "-" {
+            operands.push(arg.as_str());
+        }
+    }
+    operands
+}
+
+/// A recursive delete of a registered worktree, or of a directory holding
+/// one, removes a live checkout with its uncommitted work and enforcement
+/// files (TSK-216 review finding 1).
+fn checkout_delete_violation(level: PolicyLevel, what: &str, checkout: &Path) -> Violation {
+    Violation::new(
+        "git.hook_integrity",
+        level,
+        format!(
+            "{what} would delete the registered worktree `{}` with its work and enforcement files",
+            checkout.display()
+        ),
+        crate::remedy::WORKTREE_DELETE.remedy(),
+    )
+}
+
+/// The registered worktree a recursive `rm` would delete, when any.
+fn rm_deletes_checkout(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option<PathBuf> {
+    if !rm_recursive(args) {
+        return None;
+    }
+    rm_operands(args)
+        .into_iter()
+        .filter(|target| !target.is_empty())
+        .find_map(|target| {
+            super::edit_guard::registered_checkout_under(
+                &integrity_shell_path(target, cwd),
+                payload_cwd,
+            )
+        })
+}
+
+/// A command run for its paths by `find -exec` or `xargs`: judged as the
+/// guard judges it written on its own, and a `sh -c` script inside it as
+/// the commands of that script.
+fn wrapped_violation(
+    tokens: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    if let Some((program, args)) = strip_launchers(tokens) {
+        if is_shell(basename(program)) {
+            if let Some(script) = shell_c_argument(args) {
+                return expand_commands(script).iter().find_map(|segment| {
+                    integrity_write_violation(&shell_tokens(segment), level, cwd, payload_cwd)
+                });
+            }
+        }
+    }
+    integrity_write_violation(tokens, level, cwd, payload_cwd)
+}
+
+/// The `-name` and `-iname` patterns a path must all match to reach a
+/// `find` action, or `None` when the expression can select a path in a way
+/// the guard does not model (`-o`, `!`, `-not`, `(`, path or regex tests),
+/// so every path may reach it.
+fn find_name_filter(args: &[String]) -> Option<Vec<(String, bool)>> {
+    let mut names = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        match arg.as_str() {
+            "-o" | "-or" | "!" | "-not" | "(" | "-path" | "-ipath" | "-wholename"
+            | "-iwholename" | "-regex" | "-iregex" | "-lname" | "-ilname" => return None,
+            "-name" | "-iname" => {
+                names.push((args.get(at + 1)?.clone(), arg == "-iname"));
+                at += 1;
+            }
+            "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                while args.get(at).is_some_and(|a| a != ";" && a != "+") {
+                    at += 1;
+                }
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
+    let Some(filter) = filter else {
+        return true;
+    };
+    if path.file_name().is_some_and(|n| n == "*") {
+        return true;
+    }
+    let name = path
+        .file_name()
+        .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+    filter.iter().all(|(pattern, insensitive)| {
+        let options = glob::MatchOptions {
+            case_sensitive: !insensitive,
+            ..glob::MatchOptions::new()
+        };
+        glob::Pattern::new(pattern).map_or(true, |p| p.matches_with(&name, options))
+    })
+}
+
+/// Judge what a `find` does to the paths it visits (TSK-216 review finding
+/// 5): `-delete`, `-exec`, `-execdir`, `-ok` and `-okdir`, and the files
+/// `-fprint`, `-fprint0`, `-fprintf` and `-fls` write. Each path the find
+/// may pass to an action that holds enforcement state or a registered
+/// worktree, and that its `-name` tests let through, is put in place of
+/// `{}` and judged as a direct command would be; the command's own words
+/// are judged from the cwd and from each starting point.
+fn find_action_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    let skip = args
+        .iter()
+        .take_while(|arg| matches!(arg.as_str(), "-H" | "-L" | "-P"))
+        .count();
+    let rest = &args[skip..];
+    let end = rest
+        .iter()
+        .position(|arg| arg.starts_with('-') || matches!(arg.as_str(), "!" | "("))
+        .unwrap_or(rest.len());
+    let starts: Vec<&str> = if end == 0 {
+        vec!["."]
+    } else {
+        rest[..end].iter().map(String::as_str).collect()
+    };
+    let filter = find_name_filter(rest);
+    let candidates: Vec<PathBuf> = starts
+        .iter()
+        .flat_map(|start| {
+            super::edit_guard::find_candidates(&integrity_shell_path(start, cwd), payload_cwd)
+        })
+        .filter(|path| find_name_matches(filter.as_deref(), path))
+        .collect();
+    let mut at = end;
+    while let Some(arg) = rest.get(at) {
+        match arg.as_str() {
+            "-delete" => {
+                for candidate in &candidates {
+                    if let Some(checkout) =
+                        super::edit_guard::registered_checkout_under(candidate, payload_cwd)
+                    {
+                        return Some(checkout_delete_violation(
+                            level,
+                            "`find -delete`",
+                            &checkout,
+                        ));
+                    }
+                    let shown = crate::portable_path::slashed(candidate);
+                    if let Some(p) = token_integrity_path(&shown, cwd, payload_cwd) {
+                        return Some(hook_integrity_violation(
+                            level,
+                            format!("`find -delete` would delete the integrity path `{p}`"),
+                        ));
+                    }
+                }
+            }
+            "-fprint" | "-fprint0" | "-fprintf" | "-fls" => {
+                if let Some(p) = rest
+                    .get(at + 1)
+                    .and_then(|file| token_integrity_path(file, cwd, payload_cwd))
+                {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!("`find {arg}` writes the integrity path `{p}`"),
+                    ));
+                }
+                at += if arg == "-fprintf" { 2 } else { 1 };
+            }
+            "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                let tail = &rest[at + 1..];
+                let len = tail
+                    .iter()
+                    .position(|arg| matches!(arg.as_str(), ";" | "+"))
+                    .unwrap_or(tail.len());
+                let command = &tail[..len];
+                let literal: Vec<String> = command.iter().filter(|t| *t != "{}").cloned().collect();
+                let mut dirs = vec![cwd.to_path_buf()];
+                dirs.extend(starts.iter().map(|start| integrity_shell_path(start, cwd)));
+                for dir in &dirs {
+                    if let Some(v) = wrapped_violation(&literal, level, dir, payload_cwd) {
+                        return Some(v);
+                    }
+                }
+                if command.iter().any(|t| t.contains("{}")) {
+                    for candidate in &candidates {
+                        let shown = crate::portable_path::slashed(candidate);
+                        let substituted: Vec<String> =
+                            command.iter().map(|t| t.replace("{}", &shown)).collect();
+                        if let Some(v) = wrapped_violation(&substituted, level, cwd, payload_cwd) {
+                            return Some(v);
+                        }
+                    }
+                }
+                at += len + 1;
+            }
+            "-name" | "-iname" | "-path" | "-ipath" | "-wholename" | "-iwholename" | "-regex"
+            | "-iregex" | "-type" | "-xtype" | "-user" | "-group" | "-uid" | "-gid" | "-perm"
+            | "-size" | "-links" | "-inum" | "-mtime" | "-mmin" | "-atime" | "-amin" | "-ctime"
+            | "-cmin" | "-newer" | "-anewer" | "-cnewer" | "-newermt" | "-maxdepth"
+            | "-mindepth" | "-printf" => at += 1,
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
+/// The command an `xargs` runs and the replacement string it fills, when
+/// it names one (`-I`, `-J`, `-i`, `--replace`). GNU and BSD options.
+fn xargs_command(args: &[String]) -> Option<(&[String], Option<String>)> {
+    let mut replace = None;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if arg == "--" {
+            at += 1;
+            break;
+        }
+        if !arg.starts_with('-') || arg == "-" {
+            break;
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            if "replace".starts_with(name) && name.len() >= 3 {
+                replace = Some(value.unwrap_or("{}").to_string());
+            } else if value.is_none()
+                && [
+                    "arg-file",
+                    "delimiter",
+                    "max-args",
+                    "max-procs",
+                    "max-chars",
+                    "process-slot-var",
+                ]
+                .iter()
+                .any(|full| full.starts_with(name) && name.len() >= 3)
+            {
+                at += 1;
+            }
+            at += 1;
+            continue;
+        }
+        let cluster = &arg[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let attached = &cluster[offset + letter.len_utf8()..];
+            match letter {
+                'I' | 'J' => {
+                    replace = if attached.is_empty() {
+                        at += 1;
+                        args.get(at).cloned()
+                    } else {
+                        Some(attached.to_string())
+                    };
+                    break;
+                }
+                'i' => {
+                    replace = Some(if attached.is_empty() { "{}" } else { attached }.to_string());
+                    break;
+                }
+                'e' | 'l' => break,
+                'a' | 'd' | 'E' | 'L' | 'n' | 'P' | 's' | 'R' | 'S' => {
+                    if attached.is_empty() {
+                        at += 1;
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        at += 1;
+    }
+    let command = args.get(at..).filter(|c| !c.is_empty())?;
+    Some((command, replace))
+}
+
+/// An `xargs` takes its paths from its input, which the guard cannot see,
+/// so the command it runs is judged as if an enforcement file were among
+/// them (TSK-216 review finding 5): one that would write that path is
+/// refused, one that only reads, such as `grep`, passes.
+fn xargs_violation(
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+) -> Option<Violation> {
+    const STAND_IN: &str = ".codeflow/policy.json";
+    let (command, replace) = xargs_command(args)?;
+    let probe: Vec<String> = match &replace {
+        Some(token) => command
+            .iter()
+            .map(|t| t.replace(token.as_str(), STAND_IN))
+            .collect(),
+        None => command
+            .iter()
+            .cloned()
+            .chain([STAND_IN.to_string()])
+            .collect(),
+    };
+    wrapped_violation(&probe, level, cwd, payload_cwd).map(|_| {
+        hook_integrity_violation(
+            level,
+            format!(
+                "`xargs {}` would write the paths it reads from its input, which the guard cannot see and which can include enforcement files; name the files on the command line",
+                command.join(" ")
+            ),
+        )
+    })
+}
+
 /// Block a Bash write/remove that would disarm or falsify the enforcement
 /// plane: a redirect into, or a mutating command targeting, the hook shims
 /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
@@ -1186,6 +1571,22 @@ fn integrity_write_violation(
     }
     let (program, args) = strip_launchers(tokens)?;
     let cmd = basename(program);
+
+    if cmd == "rm" {
+        if let Some(checkout) = rm_deletes_checkout(args, cwd, payload_cwd) {
+            return Some(checkout_delete_violation(level, "`rm -r`", &checkout));
+        }
+    }
+    if cmd == "find" {
+        if let Some(v) = find_action_violation(args, level, cwd, payload_cwd) {
+            return Some(v);
+        }
+    }
+    if cmd == "xargs" {
+        if let Some(v) = xargs_violation(args, level, cwd, payload_cwd) {
+            return Some(v);
+        }
+    }
 
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
@@ -1226,6 +1627,17 @@ fn integrity_write_violation(
             return Some(hook_integrity_violation(
                 level,
                 format!("`sed -i` edits the integrity path `{p}`"),
+            ));
+        }
+    }
+    if cmd == "sed" {
+        if let Some(p) = sed_script_writes(args, cwd)
+            .iter()
+            .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!("a `sed` script `w` command or backup writes the integrity path `{p}`"),
             ));
         }
     }
@@ -2293,9 +2705,30 @@ fn check_git(
     }
     // A plain checkout only moves HEAD; one that force-creates a branch
     // resets that branch and is judged below.
-    if matches!(sub, "checkout" | "switch") && force_created_branch(sub, rest).is_none() {
+    if matches!(sub, "checkout" | "switch") && forced_branch_target(sub, rest).is_none() {
         return;
     }
+    // A branch expression is judged as the branch git resolves it to in the
+    // targeted repository; one the guard cannot resolve is refused (TSK-216).
+    let resolved_rest;
+    let rest = match resolve_forced_branch(sub, rest, args, moved, ctx) {
+        Ok(Some(resolved)) => {
+            resolved_rest = resolved;
+            resolved_rest.as_slice()
+        }
+        Ok(None) => rest,
+        Err(why) => {
+            if ctx.policy.local_ref_protection.is_active() && !ctx.integrate_token {
+                out.push(Violation::new(
+                    "git.local_ref_protection",
+                    ctx.policy.local_ref_protection,
+                    format!("`git {sub}` would force a branch the guard cannot identify: {why}; it is judged as a protected branch"),
+                    crate::remedy::PROTECTED_BRANCH.remedy(),
+                ));
+            }
+            rest
+        }
+    };
 
     let mut found: Vec<Violation> = Vec::new();
     for (branch, rules, root) in &judged.cases {
@@ -2306,6 +2739,7 @@ fn check_git(
             pr_base_lookup: ctx.pr_base_lookup,
             dir_target_lookup: ctx.dir_target_lookup,
             alias_lookup: ctx.alias_lookup,
+            branch_lookup: ctx.branch_lookup,
             discard_lookup: ctx.discard_lookup,
             root_checkout: ctx.root_checkout,
         };
@@ -3225,12 +3659,14 @@ fn judge_git_sub(
                         crate::remedy::PROTECTED_DELETE.remedy(),
                     ));
                 }
-            } else {
-                check_branch_move(rest, ctx, out);
+            } else if let Some(target) = forced_branch_target(sub, rest) {
+                if policy.branch_is_protected(target) {
+                    push_protected_move(sub, target, ctx, out);
+                }
             }
         }
         "checkout" | "switch" => {
-            if let Some(target) = force_created_branch(sub, rest) {
+            if let Some(target) = forced_branch_target(sub, rest) {
                 if policy.branch_is_protected(target) {
                     push_protected_move(sub, target, ctx, out);
                 }
@@ -3527,90 +3963,202 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
     }
 }
 
-/// Refuse a `git branch` that forces a protected branch to a new commit: a
-/// forced create (`-f`/`--force`) and a forced rename or copy onto it (`-M`,
-/// `-C`, or `-m`/`-c` with `--force`). These rewrite the ref outside the
-/// sanctioned path, as `git update-ref refs/heads/<protected>` does. A
-/// rename or copy without force fails in git when the branch exists, so it
-/// can only create the branch and stays allowed.
-fn check_branch_move(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
-    let policy = ctx.policy;
-    let parsed = parse_options(rest, &GIT_BRANCH_OPTIONS);
-    let force = parsed.has_short(&['f', 'M', 'C']) || parsed.has_long("--force");
-    if !force {
-        return;
-    }
-    let operands = &parsed.operands;
-    if parsed.has_short(&['m', 'M', 'c', 'C'])
-        || parsed.has_long("--move")
-        || parsed.has_long("--copy")
-    {
-        // `-M <new>` renames the current branch; `-M <old> <new>` names both.
-        if let Some(destination) = operands.get(1).or_else(|| operands.first()) {
-            if policy.branch_is_protected(destination) {
-                push_protected_move("branch", destination, ctx, out);
+/// The branch a forcing command sets to a new commit, as written: a `git
+/// branch` forced create (`-f`/`--force`, whatever formatting flags such as
+/// `-v` sit beside it) or forced rename or copy onto it (`-M`, `-C`, or
+/// `-m`/`-c` with `--force`), a `git checkout -B <name>`, and a `git switch
+/// -C|--force-create <name>`, long options abbreviated as git accepts them.
+/// These rewrite the ref outside the sanctioned path, as `git update-ref
+/// refs/heads/<protected>` does. A rename or copy without force fails in
+/// git when the branch exists, so it can only create the branch. The
+/// listing, upstream and description forms move no ref, and `-a`/`-r` with
+/// a name make git refuse.
+fn forced_branch_target<'a>(sub: &str, rest: &'a [String]) -> Option<&'a str> {
+    match sub {
+        "branch" => {
+            if requests_branch_delete(rest) {
+                return None;
+            }
+            let parsed = parse_options(rest, &GIT_BRANCH_OPTIONS);
+            let force = parsed.has_short(&['f', 'M', 'C']) || parsed.has_long("--force");
+            if !force {
+                return None;
+            }
+            let operands = &parsed.operands;
+            if parsed.has_short(&['m', 'M', 'c', 'C'])
+                || parsed.has_long("--move")
+                || parsed.has_long("--copy")
+            {
+                // `-M <new>` renames the current branch; `-M <old> <new>`
+                // names both.
+                return operands.get(1).or_else(|| operands.first()).copied();
+            }
+            let other_mode = parsed.has_short(&['u', 'l', 'a', 'r'])
+                || [
+                    "--set-upstream-to",
+                    "--unset-upstream",
+                    "--edit-description",
+                    "--list",
+                    "--all",
+                    "--remotes",
+                    "--show-current",
+                    "--contains",
+                    "--no-contains",
+                    "--merged",
+                    "--no-merged",
+                    "--points-at",
+                ]
+                .iter()
+                .any(|name| parsed.has_long(name));
+            if other_mode {
+                None
+            } else {
+                operands.first().copied()
             }
         }
-        return;
-    }
-    // Only the create form resets a branch; the listing, upstream and
-    // description forms move no ref.
-    let other_mode = parsed.has_short(&['u', 'l', 'a', 'r', 'v'])
-        || [
-            "--set-upstream-to",
-            "--unset-upstream",
-            "--edit-description",
-            "--list",
-            "--all",
-            "--remotes",
-            "--show-current",
-            "--contains",
-            "--no-contains",
-            "--merged",
-            "--no-merged",
-            "--points-at",
-        ]
-        .iter()
-        .any(|name| parsed.has_long(name));
-    if !other_mode {
-        if let Some(target) = operands.first().filter(|t| policy.branch_is_protected(t)) {
-            push_protected_move("branch", target, ctx, out);
-        }
+        "checkout" => parse_options(rest, &GIT_CHECKOUT_OPTIONS)
+            .values_of('B', "")
+            .last()
+            .copied(),
+        "switch" => parse_options(rest, &GIT_SWITCH_OPTIONS)
+            .values_of('C', "--force-create")
+            .last()
+            .copied(),
+        _ => None,
     }
 }
 
-/// The branch a `git checkout -B <name>` or `git switch -C|--force-create
-/// <name>` resets, attached or as the next token. The name is always the
-/// value of the forcing option itself, so other options need no arity.
-fn force_created_branch<'a>(sub: &str, rest: &'a [String]) -> Option<&'a str> {
-    let letter = if sub == "checkout" { 'B' } else { 'C' };
-    let mut tokens = rest.iter();
-    while let Some(token) = tokens.next() {
-        let token = token.as_str();
-        if token == "--" || token == END_OF_OPTIONS {
-            return None;
-        }
-        if sub == "switch" {
-            if let Some(value) = token.strip_prefix("--force-create=") {
-                return Some(value);
+/// `git switch` (git-switch(1)), for the branch `-C`/`--force-create`
+/// resets. Its long options take any unambiguous prefix (`--force-c`).
+const GIT_SWITCH_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('c', Arity::Value), ('C', Arity::Value)],
+    long: &[
+        ("--create", Arity::Value),
+        ("--force-create", Arity::Value),
+        ("--orphan", Arity::Value),
+        ("--conflict", Arity::Value),
+        ("--track", Arity::AttachedValue),
+        ("--no-track", Arity::Flag),
+        ("--recurse-submodules", Arity::AttachedValue),
+        ("--no-recurse-submodules", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--guess", Arity::Flag),
+        ("--no-guess", Arity::Flag),
+        ("--force", Arity::Flag),
+        ("--discard-changes", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--progress", Arity::Flag),
+        ("--no-progress", Arity::Flag),
+        ("--ignore-other-worktrees", Arity::Flag),
+        ("--overwrite-ignore", Arity::Flag),
+        ("--no-overwrite-ignore", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git checkout` (git-checkout(1)), for the branch `-B` resets.
+const GIT_CHECKOUT_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('b', Arity::Value), ('B', Arity::Value)],
+    long: &[
+        ("--orphan", Arity::Value),
+        ("--conflict", Arity::Value),
+        ("--pathspec-from-file", Arity::Value),
+        ("--track", Arity::AttachedValue),
+        ("--no-track", Arity::Flag),
+        ("--recurse-submodules", Arity::AttachedValue),
+        ("--no-recurse-submodules", Arity::Flag),
+        ("--detach", Arity::Flag),
+        ("--guess", Arity::Flag),
+        ("--no-guess", Arity::Flag),
+        ("--force", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--patch", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--progress", Arity::Flag),
+        ("--no-progress", Arity::Flag),
+        ("--ours", Arity::Flag),
+        ("--theirs", Arity::Flag),
+        ("--overlay", Arity::Flag),
+        ("--no-overlay", Arity::Flag),
+        ("--ignore-skip-worktree-bits", Arity::Flag),
+        ("--ignore-other-worktrees", Arity::Flag),
+        ("--overwrite-ignore", Arity::Flag),
+        ("--no-overwrite-ignore", Arity::Flag),
+        ("--pathspec-file-nul", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// Whether git expands `name` before using it as a branch name: `@{-N}`,
+/// `<branch>@{upstream}` and the other `@` forms, and `-` for the previous
+/// branch. A plain name is the branch it names, and `refs/heads/main` or
+/// `origin/main` create branches with those names, so they are not
+/// rewritten.
+fn needs_branch_resolution(name: &str) -> bool {
+    name == "-" || name.contains('@')
+}
+
+/// Resolve the branch a forcing command names, when git would expand it,
+/// in each repository the command targets. `Ok(None)` when nothing needs
+/// resolving; `Ok(Some(rest))` with the expression replaced by the branch
+/// git would change; `Err` when it cannot be resolved with certainty.
+fn resolve_forced_branch(
+    sub: &str,
+    rest: &[String],
+    args: &[String],
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(name) = forced_branch_target(sub, rest).filter(|n| needs_branch_resolution(n)) else {
+        return Ok(None);
+    };
+    let lookup = ctx
+        .branch_lookup
+        .ok_or_else(|| format!("cannot resolve the branch expression `{name}`"))?;
+    let specs = compose_targets(args, moved)?;
+    let mut resolved: Option<String> = None;
+    for spec in &specs {
+        let target = spec.as_ref().map(|s| Retarget {
+            path: &s.path,
+            git_dir: s.git_dir,
+        });
+        let branch = lookup(target.as_ref(), name)
+            .map_err(|why| format!("cannot resolve the branch expression `{name}`: {why}"))?;
+        match &resolved {
+            Some(other) if *other != branch => {
+                return Err(format!(
+                    "the branch expression `{name}` names different branches in the targeted repositories"
+                ));
             }
-            if token == "--force-create" {
-                return tokens.next().map(String::as_str);
-            }
-        }
-        let Some(cluster) = token.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
-            continue;
-        };
-        if let Some((at, _)) = cluster.char_indices().find(|(_, c)| *c == letter) {
-            let attached = &cluster[at + letter.len_utf8()..];
-            return if attached.is_empty() {
-                tokens.next().map(String::as_str)
-            } else {
-                Some(attached)
-            };
+            _ => resolved = Some(branch),
         }
     }
-    None
+    let Some(branch) = resolved else {
+        return Ok(None);
+    };
+    // Replace the expression inside the token that carries it, attached or
+    // on its own.
+    let at = name.as_ptr() as usize;
+    Ok(Some(
+        rest.iter()
+            .map(|token| {
+                let start = token.as_ptr() as usize;
+                if (start..start + token.len()).contains(&at) {
+                    let offset = at - start;
+                    format!(
+                        "{}{branch}{}",
+                        &token[..offset],
+                        &token[offset + name.len()..]
+                    )
+                } else {
+                    token.clone()
+                }
+            })
+            .collect(),
+    ))
 }
 
 fn push_protected_move(sub: &str, target: &str, ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
@@ -3919,10 +4467,11 @@ const END_OF_OPTIONS: &str = "--end-of-options";
 struct OptionSpec {
     short: &'static [(char, Arity)],
     long: &'static [(&'static str, Arity)],
-    /// The command parses with Git's parse-options: it accepts any unambiguous
-    /// prefix of a long option and `--end-of-options` as a terminator. `sed`
-    /// and the `gh` commands (pflag) do neither: for them only the written
-    /// long name counts.
+    /// The command accepts any unambiguous prefix of a long option, as Git's
+    /// parse-options and GNU `getopt_long` (GNU `sed`) do, and
+    /// `--end-of-options` as a terminator when it lists it. BSD `sed` and
+    /// the `gh` commands (pflag) do not: for them only the written long name
+    /// counts.
     git_style: bool,
 }
 
@@ -4270,9 +4819,11 @@ const GH_PR_MERGE_OPTIONS: OptionSpec = OptionSpec {
     git_style: false,
 };
 
-/// `sed`: `-e` a script, `-f` a script file, `-l` a line length; `-i` takes
-/// the GNU backup suffix only when attached (`-i.bak`), so a separate token
-/// stays an operand.
+/// GNU `sed`: `-e` a script, `-f` a script file, `-l` a line length; `-i`
+/// takes the backup suffix only when attached (`-i.bak`), so a separate
+/// token stays an operand. Its long options go through `getopt_long`, which
+/// accepts any unambiguous prefix (`--in-pl`), so every GNU long option is
+/// listed for the prefix to be judged against.
 const SED_OPTIONS: OptionSpec = OptionSpec {
     short: &[
         ('e', Arity::Value),
@@ -4285,30 +4836,55 @@ const SED_OPTIONS: OptionSpec = OptionSpec {
         ("--file", Arity::Value),
         ("--line-length", Arity::Value),
         ("--in-place", Arity::AttachedValue),
+        ("--quiet", Arity::Flag),
+        ("--silent", Arity::Flag),
+        ("--debug", Arity::Flag),
+        ("--follow-symlinks", Arity::Flag),
+        ("--posix", Arity::Flag),
+        ("--regexp-extended", Arity::Flag),
+        ("--separate", Arity::Flag),
+        ("--sandbox", Arity::Flag),
+        ("--unbuffered", Arity::Flag),
+        ("--null-data", Arity::Flag),
+        ("--zero-terminated", Arity::Flag),
+        ("--binary", Arity::Flag),
+        ("--help", Arity::Flag),
+        ("--version", Arity::Flag),
     ],
-    git_style: false,
+    git_style: true,
 };
 
-/// BSD `sed` (macOS): `-i` always takes the backup suffix, attached or as
-/// the next token, so `sed -i '' s/a/b/ file` edits `file` with no backup.
+/// BSD `sed` (macOS): `-i` and `-I` edit in place and always take the
+/// backup suffix, attached or as the next token, so `sed -i '' s/a/b/ file`
+/// edits `file` with no backup. `-l` is a flag (line-buffered output), and
+/// there are no long options.
 const BSD_SED_OPTIONS: OptionSpec = OptionSpec {
     short: &[
         ('e', Arity::Value),
         ('f', Arity::Value),
-        ('l', Arity::Value),
         ('i', Arity::Value),
+        ('I', Arity::Value),
     ],
-    long: SED_OPTIONS.long,
+    long: &[],
     git_style: false,
 };
 
-/// The files an in-place `sed` may write. The command line is read both the
-/// GNU way and the BSD way, since the guard cannot tell which `sed` runs,
-/// and the files of either reading count. The script operand, the backup
-/// suffix and the values of `-e`, `-f` and `-l` are never files.
+/// The two `sed` grammars. The guard cannot tell which `sed` runs, so a
+/// command line is read both ways and what either reading writes counts.
+const SED_GRAMMARS: [&OptionSpec; 2] = [&SED_OPTIONS, &BSD_SED_OPTIONS];
+
+/// Does this `sed` invocation edit its input in place, in either grammar?
+fn requests_in_place(args: &[String]) -> bool {
+    let gnu = parse_options(args, &SED_OPTIONS);
+    let bsd = parse_options(args, &BSD_SED_OPTIONS);
+    gnu.has_short(&['i']) || gnu.has_long("--in-place") || bsd.has_short(&['i', 'I'])
+}
+
+/// The files an in-place `sed` may write, in either grammar. The script
+/// operand, the backup suffix and the option values are never files.
 fn sed_file_operands(args: &[String]) -> Vec<&str> {
     let mut files = Vec::new();
-    for spec in [&SED_OPTIONS, &BSD_SED_OPTIONS] {
+    for spec in SED_GRAMMARS {
         let parsed = parse_options(args, spec);
         let scripted = parsed.has_short(&['e', 'f'])
             || parsed.has_long("--expression")
@@ -4321,6 +4897,76 @@ fn sed_file_operands(args: &[String]) -> Vec<&str> {
         }
     }
     files
+}
+
+/// The paths a `sed` script may write, whether or not it edits in place:
+/// the destination of each `w` and `W` command and of the `w` flag of `s`,
+/// which runs to the end of its line. Every argument is scanned, so a
+/// script in `-e`, `--expression` or the script operand is covered, and so
+/// is a readable `-f` script file. Each `w` yields the rest of its line,
+/// and that text cut at `;` and `}`, as candidates; a candidate that is not
+/// an enforcement path is harmless, so over-reading never refuses a
+/// legitimate script. The backup an in-place edit writes is a candidate
+/// too: the file name plus its suffix, or a GNU suffix with `*` replaced
+/// by the file name (`-i'dir/*'`).
+fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
+    let mut scripts: Vec<String> = args.to_vec();
+    for spec in SED_GRAMMARS {
+        let parsed = parse_options(args, spec);
+        for file in parsed.values_of('f', "--file") {
+            let path = cwd.join(file);
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if meta.len() <= 1 << 16 {
+                    if let Ok(text) = std::fs::read_to_string(&path) {
+                        scripts.push(text);
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |candidate: &str| {
+        let candidate = candidate.trim();
+        if !candidate.is_empty() && !out.iter().any(|c| c == candidate) {
+            out.push(candidate.to_string());
+        }
+    };
+    for script in &scripts {
+        for line in script.lines() {
+            for (at, _) in line.match_indices(['w', 'W']) {
+                let rest = &line[at + 1..];
+                add(rest);
+                add(rest.split(';').next().unwrap_or(rest));
+                add(rest.split('}').next().unwrap_or(rest));
+            }
+        }
+    }
+    let gnu = parse_options(args, &SED_OPTIONS);
+    let bsd = parse_options(args, &BSD_SED_OPTIONS);
+    let mut suffixes = gnu.values_of('i', "--in-place");
+    suffixes.extend(bsd.values_of('i', ""));
+    suffixes.extend(bsd.values_of('I', ""));
+    for suffix in suffixes.iter().filter(|s| !s.is_empty()) {
+        for file in sed_file_operands(args) {
+            if suffix.contains('*') {
+                let name = Path::new(file)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(file);
+                let backup = suffix.replace('*', name);
+                add(&backup);
+                if let Some(dir) = Path::new(file)
+                    .parent()
+                    .filter(|d| !d.as_os_str().is_empty())
+                {
+                    add(&crate::portable_path::slashed(&dir.join(&backup)));
+                }
+            } else {
+                add(&format!("{file}{suffix}"));
+            }
+        }
+    }
+    out
 }
 
 /// For commands where only the presence of a long flag matters and no option
@@ -4347,11 +4993,27 @@ struct ParsedOptions<'a> {
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
     operands: Vec<&'a str>,
+    /// The value each value-taking option was given, attached or from the
+    /// next token, in encounter order.
+    values: Vec<(Seen<'a>, &'a str)>,
 }
 
-impl ParsedOptions<'_> {
+impl<'a> ParsedOptions<'a> {
     fn has_short(&self, letters: &[char]) -> bool {
         self.short.iter().any(|letter| letters.contains(letter))
+    }
+
+    /// The values given to the short option `letter` or the long option
+    /// `name` (canonical), in encounter order.
+    fn values_of(&self, letter: char, name: &str) -> Vec<&'a str> {
+        self.values
+            .iter()
+            .filter(|(seen, _)| match seen {
+                Seen::Short(l) => *l == letter,
+                Seen::Long(n, _) => *n == name,
+            })
+            .map(|(_, value)| *value)
+            .collect()
     }
 
     fn has_long(&self, name: &str) -> bool {
@@ -4371,6 +5033,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         long: Vec::new(),
         sequence: Vec::new(),
         operands: Vec::new(),
+        values: Vec::new(),
     };
     let mut index = 0;
     while index < args.len() {
@@ -4398,9 +5061,12 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
             let name = canonical.unwrap_or(written);
             parsed.long.push((name, attached));
             parsed.sequence.push(Seen::Long(name, attached));
-            if attached.is_none()
-                && canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value))
-            {
+            if let Some(value) = attached {
+                parsed.values.push((Seen::Long(name, attached), value));
+            } else if canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value)) {
+                if let Some(value) = args.get(index) {
+                    parsed.values.push((Seen::Long(name, None), value.as_ref()));
+                }
                 index += 1;
             }
             continue;
@@ -4412,12 +5078,23 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         for (offset, letter) in cluster.char_indices() {
             parsed.short.push(letter);
             parsed.sequence.push(Seen::Short(letter));
+            let rest = &cluster[offset + letter.len_utf8()..];
             match spec.short_arity(letter) {
                 Arity::Flag => {}
-                Arity::AttachedValue => break,
+                Arity::AttachedValue => {
+                    if !rest.is_empty() {
+                        parsed.values.push((Seen::Short(letter), rest));
+                    }
+                    break;
+                }
                 Arity::Value => {
-                    if cluster[offset + letter.len_utf8()..].is_empty() {
+                    if rest.is_empty() {
+                        if let Some(value) = args.get(index) {
+                            parsed.values.push((Seen::Short(letter), value.as_ref()));
+                        }
                         index += 1;
+                    } else {
+                        parsed.values.push((Seen::Short(letter), rest));
                     }
                     break;
                 }
@@ -4459,12 +5136,6 @@ fn gh_merge_deletes_branch(args: &[&str]) -> bool {
             }
             _ => current,
         })
-}
-
-/// Does this `sed` invocation edit its input in place?
-fn requests_in_place(args: &[String]) -> bool {
-    let parsed = parse_options(args, &SED_OPTIONS);
-    parsed.has_short(&['i']) || parsed.has_long("--in-place")
 }
 
 fn has_no_verify(sub: &str, args: &[String]) -> bool {
@@ -4929,6 +5600,7 @@ mod registry_guard_tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
@@ -4993,6 +5665,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
@@ -5011,6 +5684,7 @@ mod tests {
             pr_base_lookup: Some(lookup),
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
@@ -5029,6 +5703,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: Some(resolver),
             alias_lookup: Some(&fixture_alias),
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         }
@@ -5186,6 +5861,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
@@ -5211,6 +5887,7 @@ mod tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: Some(&|_| Ok(None)),
             root_checkout: None,
         };
@@ -6155,6 +6832,73 @@ mod tests {
         }
     }
 
+    /// TSK-216 review findings 2 and 3, against the `sed` on this machine:
+    /// every file a form changes or creates is among the paths the guard
+    /// judges for it. Forms the local `sed` rejects are skipped, so BSD and
+    /// GNU forms run where each is native.
+    #[cfg(unix)]
+    #[test]
+    fn test_native_sed_writes_only_paths_the_guard_judges() {
+        let forms: &[&[&str]] = &[
+            &["-i", "", "s/a/b/", "f"],
+            &["-i", "", "-e", "s/a/b/", "-l", "f"],
+            &["-li", "", "s/a/b/", "f"],
+            &["-I", "", "s/a/b/", "f"],
+            &["-i", ".bak", "s/a/b/", "f"],
+            &["-n", "w out", "f"],
+            &["-e", "s/a/b/w out", "f"],
+            &["-e", "1W out", "f"],
+            &["-i", "", "-e", "w out", "f"],
+            &["-i", "s/a/b/", "f"],
+            &["-i.bak", "s/a/b/", "f"],
+            &["--in-pl", "s/a/b/", "f"],
+            &["--expression=w out", "f"],
+        ];
+        let snapshot = |dir: &Path| -> std::collections::BTreeMap<String, Vec<u8>> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|e| {
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        std::fs::read(e.path()).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let mut ran = 0;
+        for form in forms {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("f"), "a\n").unwrap();
+            let before = snapshot(dir.path());
+            let status = std::process::Command::new("sed")
+                .args(*form)
+                .current_dir(dir.path())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            if !status.success() {
+                continue;
+            }
+            ran += 1;
+            let args: Vec<String> = form.iter().map(ToString::to_string).collect();
+            let mut judged: Vec<String> = sed_script_writes(&args, dir.path());
+            if requests_in_place(&args) {
+                judged.extend(sed_file_operands(&args).into_iter().map(String::from));
+            }
+            for (name, bytes) in snapshot(dir.path()) {
+                if before.get(&name) != Some(&bytes) {
+                    assert!(
+                        judged.contains(&name),
+                        "{form:?} wrote {name}; judged {judged:?}"
+                    );
+                }
+            }
+        }
+        assert!(ran >= 6, "the local sed ran only {ran} forms");
+    }
+
     /// Read-only `sed` over an integrity path, including scripts and script
     /// files whose value carries an `i`. A whole-cluster scan would read the
     /// value as flags and block the read.
@@ -6313,9 +7057,11 @@ mod tests {
         assert_eq!(GIT_COMMIT_OPTIONS.resolve_long("--n"), None);
         assert_eq!(GIT_PUSH_OPTIONS.resolve_long("--mirr"), Some("--mirror"));
         assert_eq!(GIT_PUSH_OPTIONS.resolve_long("--forc"), None);
-        // `sed` is not parse-options: only the written name counts.
+        // GNU `sed` reads its long options with `getopt_long`, which takes
+        // any unambiguous prefix (TSK-216 review); BSD `sed` has none.
         assert_eq!(SED_OPTIONS.resolve_long("--in-place"), Some("--in-place"));
-        assert_eq!(SED_OPTIONS.resolve_long("--in-pl"), None);
+        assert_eq!(SED_OPTIONS.resolve_long("--in-pl"), Some("--in-place"));
+        assert_eq!(SED_OPTIONS.resolve_long("--s"), None);
     }
 
     /// `--stdin` is stdin mode only when it arrives as an option; as the `-m`
@@ -6541,6 +7287,16 @@ mod tests {
             "git switch -C main HEAD~3",
             "git switch --force-create main HEAD~3",
             "git switch --force-create=main",
+            // TSK-216 review: formatting flags, abbreviations, expressions.
+            "git branch -fv main HEAD~1",
+            "git branch -vf main HEAD~1",
+            "git switch --force-c main HEAD~1",
+            "git switch --force-cr=main",
+            // No lookup in this context: an expression is unresolved and
+            // judged as a protected branch.
+            "git branch -f @{-1} HEAD~1",
+            "git switch -C feat/x@{upstream} HEAD~1",
+            "git checkout -B - HEAD~1",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.local_ref_protection"), "{cmd}: {v:?}");
@@ -6555,6 +7311,10 @@ mod tests {
             "git branch -c feat/x main",
             "git branch -f -u origin/main main",
             "git branch --list -f main",
+            "git branch -f refs/heads/main HEAD~1",
+            "git branch -f origin/main HEAD~1",
+            "git branch -v",
+            "git switch --force-c feat/y HEAD~1",
             "git checkout -B feat/y main",
             "git checkout -b feat/y main",
             "git checkout main",
@@ -8484,6 +9244,7 @@ mod discard_integration_tests {
             pr_base_lookup: None,
             dir_target_lookup: None,
             alias_lookup: None,
+            branch_lookup: None,
             discard_lookup: probe,
             root_checkout: None,
         }

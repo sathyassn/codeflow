@@ -101,21 +101,34 @@ erratum below, never an edit of the section.
   home, and `codeflow update` adds them to existing settings. Two full
   gates still never run at once on one machine. The refusal now points at
   `codeflow doctor --check permissions`, which names each gate directory
-  this process cannot write. Inside the sandbox (`SANDBOX_RUNTIME` set),
-  doctor says so, probes the network over HTTPS instead of a DNS lookup
-  the sandbox cannot make, and reports the Codex sign-in as unreadable
-  there instead of asking you to run `codex login`.
+  this process cannot write. When `SANDBOX_RUNTIME` is set, doctor notes
+  it, probes the network over HTTPS instead of a DNS lookup the sandbox
+  cannot make and passes only on an HTTP 2xx or 3xx answer, and reports a
+  failed Codex sign-in probe as unconfirmed, quoting its error, unless the
+  probe says you are signed out.
 
 <!-- codeflow:release-impact patch -->
 - **An in-place `sed` on macOS is no longer read as an edit of the
   enforcement files.** In a worktree under `.claude/worktrees/`, the git
   guard refused `sed -i '' ...` on any file, and an empty operand of `rm`
   and the other write commands, as an edit of the repository's enforcement
-  files. It now reads BSD sed's separate backup suffix, judges only the
-  files `sed` writes, never treats an empty argument as a path, and judges
-  a worktree nested in the main checkout's `.claude/` by its own files.
-  Writes to the worktree's own `.claude/settings.json` or
-  `.codeflow/policy.json` are still refused.
+  files. It now reads GNU and BSD sed's own option grammars (BSD `-i` and
+  `-I` take a separate backup suffix, `-l` is a flag), never treats an
+  empty argument as a path, and judges a worktree nested in the main
+  checkout's `.claude/` by its own files. Writes to the worktree's own
+  `.claude/settings.json` or `.codeflow/policy.json` are still refused,
+  and so is a `sed` script that writes one through its `w` command, the
+  `w` flag of `s`, or an in-place backup name.
+
+<!-- codeflow:release-impact patch -->
+- **The git guard judges what `find` and `xargs` run, and protects live
+  worktrees.** `find -exec`, `-execdir` and `-delete` and `xargs` could
+  edit or delete the enforcement files without naming them. The guard now
+  judges the command `find` runs on each path it may reach, and refuses an
+  `xargs` whose command would write a path it reads from its input. A
+  recursive `rm` or `find -delete` of a registered worktree, or of a
+  directory holding one such as `.worktrees` or `.claude/worktrees`, is
+  refused with `git worktree remove` as the way to remove it.
 
 <!-- codeflow:release-impact patch -->
 - **The git guard refuses a forced move of a protected branch.**
@@ -123,7 +136,10 @@ erratum below, never an edit of the section.
   reference-transaction hook lets a rewind behind the remote through. The
   guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B` and
   `git switch -C` aimed at a protected branch under
-  `git.local_ref_protection`, as it already refused `git update-ref`.
+  `git.local_ref_protection`, as it already refused `git update-ref`. It
+  reads flag clusters such as `-fv` and abbreviations such as
+  `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
+  repository, and refuses a forced move it cannot resolve.
 
 <!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print

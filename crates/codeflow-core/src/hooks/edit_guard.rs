@@ -540,12 +540,9 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
     false
 }
 
-/// Resolve enforcement paths in every checkout sharing this repository.
-/// Native edits protect files; shell writes also protect their ancestors.
-pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return false;
-    };
+/// Every checkout sharing this repository: its own working tree, the main
+/// working tree and each registered linked worktree.
+fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(workdir) = repo.workdir() {
         roots.push(workdir.to_path_buf());
@@ -562,6 +559,16 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
             }
         }
     }
+    roots
+}
+
+/// The enforcement paths of every checkout sharing this repository, each
+/// with whether it protects a whole directory and the base its ancestors
+/// must lie in: the first component under its own checkout (`.claude`,
+/// `.codeflow`), or the common git directory. A checkout nested in another
+/// checkout's `.claude` (`.claude/worktrees/<name>`) is therefore not an
+/// ancestor of its own files by lying inside the outer `.claude`.
+fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
     // Reuse the action table's repository paths for every checkout; home
     // paths remain scoped to the caller's home in enforcement_patterns.
     let patterns: Vec<_> = actions::table()
@@ -577,13 +584,8 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
                 .map_or((relative, false), |prefix| (prefix, true))
         })
         .collect();
-    // Each protected path carries the base its ancestors must lie in: the
-    // first component under its own checkout (`.claude`, `.codeflow`), or the
-    // common git directory. A checkout nested in another checkout's `.claude`
-    // (`.claude/worktrees/<name>`) is therefore not an ancestor of its own
-    // files by lying inside the outer `.claude`.
     let mut protected = Vec::new();
-    for root in roots {
+    for root in checkout_roots(repo) {
         for (relative, directory) in &patterns {
             let base = Path::new(relative)
                 .components()
@@ -604,6 +606,16 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
             repo.commondir().to_path_buf(),
         ));
     }
+    protected
+}
+
+/// Resolve enforcement paths in every checkout sharing this repository.
+/// Native edits protect files; shell writes also protect their ancestors.
+pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestors: bool) -> bool {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return false;
+    };
+    let protected = protected_paths(&repo);
     for resolve in [false, true] {
         let Ok(target) = normalized(target, resolve) else {
             continue;
@@ -623,6 +635,98 @@ pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestor
         }
     }
     false
+}
+
+/// How many entries a protected directory is walked for before the walk
+/// gives up and stands for the whole directory.
+const CANDIDATE_WALK_LIMIT: usize = 4096;
+
+/// The paths a `find` starting at `start` may hand to its action that hold
+/// enforcement state or a registered checkout, resolved through symlinks:
+/// each enforcement path and registered checkout root under `start`, every
+/// directory between `start` and them (`start` included), `start` itself
+/// when it lies inside a protected path, and the files inside a protected
+/// directory. A protected directory too large to walk is represented by
+/// `<dir>/*`, which every check reads as inside it.
+pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
+    let Ok(repo) = git2::Repository::discover(root) else {
+        return Vec::new();
+    };
+    let Ok(start) = normalized(start, true) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut push = |path: PathBuf| {
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    };
+    let mut held: Vec<(PathBuf, bool)> = protected_paths(&repo)
+        .into_iter()
+        .map(|(path, directory, _)| (path, directory))
+        .collect();
+    held.extend(checkout_roots(&repo).into_iter().map(|path| (path, false)));
+    for (path, directory) in held {
+        let Ok(path) = normalized(&path, true) else {
+            continue;
+        };
+        if start.starts_with(&path) && (directory || start == path) {
+            push(start.clone());
+            continue;
+        }
+        if !path.starts_with(&start) {
+            continue;
+        }
+        for ancestor in path.ancestors() {
+            push(ancestor.to_path_buf());
+            if ancestor == start {
+                break;
+            }
+        }
+        if directory {
+            let mut stack = vec![path.clone()];
+            let mut seen = 0;
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    seen += 1;
+                    if seen > CANDIDATE_WALK_LIMIT {
+                        push(path.join("*"));
+                        stack.clear();
+                        break;
+                    }
+                    let entry_path = entry.path();
+                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                        stack.push(entry_path.clone());
+                    }
+                    push(entry_path);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The registered checkout of the repository at `root` that a recursive
+/// delete of `target` would remove: one equal to `target` or inside it,
+/// the main working tree included. Read lexically and with symlinks
+/// resolved, so `..` and a symlinked spelling name the same checkout.
+pub(crate) fn registered_checkout_under(target: &Path, root: &Path) -> Option<PathBuf> {
+    let repo = git2::Repository::discover(root).ok()?;
+    let checkouts = checkout_roots(&repo);
+    for resolve in [false, true] {
+        let Ok(target) = normalized(target, resolve) else {
+            continue;
+        };
+        for checkout in &checkouts {
+            if normalized(checkout, resolve).is_ok_and(|c| c.starts_with(&target)) {
+                return Some(checkout.clone());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

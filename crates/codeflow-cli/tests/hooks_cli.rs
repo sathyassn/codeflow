@@ -381,6 +381,193 @@ fn git_guard_refuses_a_forced_move_of_a_protected_branch() {
     );
 }
 
+/// A repository on `main` with committed Claude settings and policy, the
+/// fixture of the TSK-216 review cases.
+fn enforced_repo(root: &Path) {
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    init_repo(root, "main");
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::write(root.join("README.md"), "a\n").unwrap();
+    git(root, &["add", ".claude/settings.json", "README.md"]);
+    git(root, &["commit", "-m", "chore: fixture settings"]);
+    write_agent_policy(root, TARGETING_POLICY);
+}
+
+/// Every command in `refused` is refused under `rule` and every one in
+/// `allowed` passes; the failure lists every command judged otherwise.
+fn assert_guard(session: &Path, refused: &[&str], allowed: &[&str], rule: &str) {
+    let mut wrong = Vec::new();
+    for command in refused {
+        let out = guard_run(command, session);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains(rule) {
+            wrong.push(format!("should refuse: {command}"));
+        }
+    }
+    for command in allowed {
+        let out = guard_run(command, session);
+        if out.status.code() != Some(0) {
+            let err = String::from_utf8_lossy(&out.stderr);
+            wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// TSK-216 review finding 1: a recursive delete of a registered worktree,
+/// or of a directory that holds one, is refused from the main checkout and
+/// from inside a worktree, whatever the spelling; a clean or dirty worktree
+/// alike. Empty operands and `rm -f .` stay allowed.
+#[test]
+fn git_guard_refuses_recursive_deletion_of_registered_worktrees() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let claude_tree = root.join(".claude/worktrees/w");
+    let plain_tree = root.join(".worktrees/v");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&claude_tree)],
+    );
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/v", &shell_path(&plain_tree)],
+    );
+    std::fs::write(plain_tree.join("dirty.txt"), "unsaved\n").unwrap();
+    let mut refused = vec![
+        "rm -rf .claude/worktrees",
+        "rm -rf .worktrees",
+        "rm -r .worktrees/v",
+        "rm -Rf .worktrees/v/",
+        "rm --recursive --force ./.worktrees/../.worktrees",
+        "find .worktrees -delete",
+        "find .claude -name worktrees -exec rm -rf {} +",
+    ];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.join(".worktrees"), root.join("trees")).unwrap();
+        refused.push("rm -rf trees/");
+    }
+    assert_guard(
+        &root,
+        &refused,
+        &[
+            "rm -rf target",
+            "rm -f .",
+            "rm -f ''",
+            "rm -rf .worktrees/gone",
+        ],
+        "git.hook_integrity",
+    );
+    assert_guard(
+        &claude_tree,
+        &["rm -rf ..", "rm -rf ../w", "rm -rf ../../.."],
+        &["rm -f .", "rm -f ''", "rm -rf build"],
+        "git.hook_integrity",
+    );
+}
+
+/// TSK-216 review findings 2 and 3: BSD `sed` grammar (`-l` is a flag,
+/// `-I` edits in place) and the `w` command reach the enforcement files.
+#[test]
+fn git_guard_refuses_sed_writes_through_bsd_options_and_the_w_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    assert_guard(
+        &root,
+        &[
+            "sed -i '' -e 's/a/b/' -l .codeflow/policy.json",
+            "sed -li '' 's/a/b/' .codeflow/policy.json",
+            "sed -I '' 's/a/b/' .codeflow/policy.json",
+            "sed -i '' -e 'w .codeflow/policy.json' README.md",
+            "sed -n 'w .codeflow/policy.json' README.md",
+            "sed -i 's/a/b/w .claude/settings.json' README.md",
+            "sed --expression='1W .codeflow/policy.json' README.md",
+        ],
+        &[
+            "sed -i '' -e 's/a/b/' -l README.md",
+            "sed -n 'w out.txt' README.md",
+            "sed -i '' 's/w/x/' README.md",
+            "sed -n p .codeflow/policy.json",
+        ],
+        "git.hook_integrity",
+    );
+}
+
+/// TSK-216 review finding 4: a forced move of a protected branch is refused
+/// through formatting flags, abbreviated long options and branch
+/// expressions that git resolves to the protected branch; names that only
+/// look like it create other refs and stay allowed.
+#[test]
+fn git_guard_resolves_forced_moves_of_a_protected_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root, "main");
+    git(root, &["checkout", "-q", "-b", "feat/x"]);
+    git(root, &["config", "branch.feat/x.remote", "."]);
+    git(root, &["config", "branch.feat/x.merge", "refs/heads/main"]);
+    assert_guard(
+        root,
+        &[
+            "git branch -fv main HEAD",
+            "git branch -vf main HEAD",
+            "git switch --force-c main HEAD",
+            "git switch --force-cr main HEAD",
+            "git branch -f @{-1} HEAD",
+            "git checkout -B @{-1} HEAD",
+            "git branch -f feat/x@{upstream} HEAD",
+            "git switch -C feat/x@{upstream} HEAD",
+            "git checkout -B feat/x@{u} HEAD",
+        ],
+        &[
+            "git branch -f refs/heads/main HEAD",
+            "git branch -f origin/main HEAD",
+            "git branch -v",
+            "git switch --force-c feat/z HEAD",
+        ],
+        "git.local_ref_protection",
+    );
+    git(root, &["checkout", "-q", "-b", "feat/y"]);
+    git(root, &["checkout", "-q", "feat/x"]);
+    assert_guard(root, &[], &["git branch -f @{-1} HEAD"], "");
+}
+
+/// TSK-216 review finding 5: `xargs`, `find -exec`, `find -execdir` and
+/// `find -delete` cannot carry a write to the enforcement files past the
+/// guard; a wrapped command whose targets cannot be known is refused.
+#[test]
+fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "a\n").unwrap();
+    assert_guard(
+        &root,
+        &[
+            r"printf '%s\n' .codeflow/policy.json | xargs sed -i '' 's/a/b/'",
+            "git ls-files | xargs rm -f",
+            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            r"find .codeflow -name policy.json -exec sed -i '' 's/a/b/' {} \;",
+            r"find . -maxdepth 0 -exec rm -rf .codeflow \;",
+            "find . -name policy.json -delete",
+            "find . -type d -name .codeflow -exec rm -rf {} +",
+            r"find . -name settings.json -execdir rm {} \;",
+            r"find . -maxdepth 0 -exec sh -c 'rm -rf .codeflow' \;",
+        ],
+        &[
+            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
+            r"find docs -exec rm {} \;",
+            "find docs -delete",
+            "printf x | xargs echo",
+            "git ls-files | xargs grep -n a",
+            "find . -name '*.md' -print0 | xargs -0 grep -n a",
+        ],
+        "git.hook_integrity",
+    );
+}
+
 /// `path` as a bare word in a Bash command. Bash removes an unquoted
 /// backslash, so on Windows the word uses `/`, which git and Git Bash both
 /// read as the separator.

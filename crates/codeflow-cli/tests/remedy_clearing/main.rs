@@ -120,6 +120,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("BRANCH_NAME", Runs),
     ("ROOT_CHECKOUT_COMMIT", Runs),
     ("HOOK_INTEGRITY", Runs),
+    ("WORKTREE_DELETE", Runs),
     ("JUDGE_SOURCE_DRIFT", Excluded(HumanAuthority)),
     ("COMMIT_TYPE", Runs),
     ("COMMIT_LENGTH", Runs),

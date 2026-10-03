@@ -176,7 +176,11 @@ pub const SCHEMA: [KeySpec; 64] = [
         purpose: "Any local update of a protected ref that did not come from the remote.",
         notes: "The reference-transaction backstop (ADR-0007): catches \
                 fast-forward merges, reset --hard, and branch -D that classic \
-                client hooks miss.",
+                client hooks miss. In session, git-guard also refuses a forced \
+                branch move aimed at a protected branch (`git branch -f`, `-M` \
+                or `-C`, `git checkout -B`, `git switch -C`, flag clusters and \
+                abbreviations included), resolving `@{-N}` and `@{upstream}` \
+                in the target repository and refusing one it cannot resolve.",
     },
     KeySpec {
         path: "git.hook_integrity",
@@ -184,7 +188,10 @@ pub const SCHEMA: [KeySpec; 64] = [
         valid: LEVEL_VALID,
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
         notes: "Agent guards (ADR-0009). Local-edit relief never disables protection \
-                of remote-tracking refs, packed-refs or Git config authority metadata.",
+                of remote-tracking refs, packed-refs or Git config authority metadata. \
+                git-guard also judges the commands `find -exec` and `xargs` run \
+                on the paths they may receive, and refuses a recursive delete of \
+                a registered worktree or a directory holding one.",
     },
     // ---- git: root checkout ----------------------------------------------
     KeySpec {
