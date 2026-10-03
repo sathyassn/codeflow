@@ -1000,6 +1000,25 @@ mod tests {
         }
     }
 
+    /// `summary` draws exactly one blocking `git.pr_summary` finding that
+    /// says `said` and names the expected shape.
+    fn assert_refused(case: &str, summary: &str, said: &str) {
+        let found = shape(summary);
+        assert_eq!(found.len(), 1, "{case}: {found:?}");
+        assert_eq!(found[0].rule, "git.pr_summary", "{case}");
+        assert_eq!(found[0].level, PolicyLevel::Block, "{case}");
+        assert!(
+            found[0].message.contains(said),
+            "{case}: {}",
+            found[0].message
+        );
+        assert!(
+            found[0].message.contains("expected one prose paragraph"),
+            "{case}: {}",
+            found[0].message
+        );
+    }
+
     #[test]
     fn summary_shape_refuses_other_shapes() {
         for (case, summary, said) in [
@@ -1054,6 +1073,26 @@ mod tests {
                 "a code block follows the list",
             ),
             (
+                "prose inside an HTML block",
+                "Adds the check.\n\n- one\n\n<details>\n<summary>More</summary>\n\nA wall.\n</details>",
+                "follows the list",
+            ),
+            (
+                "only the Task line",
+                "Task: TSK-001",
+                "it has no visible prose lead",
+            ),
+        ] {
+            assert_refused(case, summary, said);
+        }
+    }
+
+    /// Text in a comment, a code fence or an empty cell never supplies the
+    /// lead or the list.
+    #[test]
+    fn summary_shape_ignores_hidden_details() {
+        for (case, summary, said) in [
+            (
                 "a lead hidden in a comment",
                 "<!-- Adds the check. -->\n\n- one",
                 "it opens with a list",
@@ -1088,27 +1127,8 @@ mod tests {
                 "Adds the check.\n\n| <!-- a --> | <!-- b --> |\n|---|---|\n| <!-- c --> | <!-- d --> |",
                 "no list or table follows the lead",
             ),
-            (
-                "prose inside an HTML block",
-                "Adds the check.\n\n- one\n\n<details>\n<summary>More</summary>\n\nA wall.\n</details>",
-                "follows the list",
-            ),
-            (
-                "only the Task line",
-                "Task: TSK-001",
-                "it has no visible prose lead",
-            ),
         ] {
-            let found = shape(summary);
-            assert_eq!(found.len(), 1, "{case}: {found:?}");
-            assert_eq!(found[0].rule, "git.pr_summary", "{case}");
-            assert_eq!(found[0].level, PolicyLevel::Block, "{case}");
-            assert!(found[0].message.contains(said), "{case}: {}", found[0].message);
-            assert!(
-                found[0].message.contains("expected one prose paragraph"),
-                "{case}: {}",
-                found[0].message
-            );
+            assert_refused(case, summary, said);
         }
     }
 
