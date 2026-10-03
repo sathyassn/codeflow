@@ -107,11 +107,16 @@ erratum below, never an edit of the section.
   the host may judge it differently. The policy is strictly validated,
   sets the rules, and decides whether and at what level `codeflow ci`
   gates the push (`git.test_gate_on_push`), so neither the head nor the
-  working copy can lower or turn off that check. Its commit checks run
-  over everything the pushed head adds to that tip, as the hosted job's
-  range from the target tip does, so a commit the destination already
-  holds under a tag or another branch, or one an earlier push carried
-  before the policy tightened, is still checked. A target the task record
+  working copy can lower or turn off that check. For a head that shares
+  history with that tip, the commit checks run over everything the head
+  adds to the tip, as the hosted job's range from the target tip does, so
+  a commit the destination already holds under a tag or another branch,
+  or one an earlier push carried before the policy tightened, is still
+  checked. A branch the destination already has whose history shares
+  nothing with the tip, such as a `gh-pages` deployment branch, keeps its
+  own new commits as its commit range under that policy, and the hook
+  says this is not default-target parity; a shallow clone, which cannot
+  show the histories are unrelated, keeps the tip. A target the task record
   declares bounds only the other checks: nothing local proves the pull
   request goes there, so a branch built on an integration line has the
   line's inherited commits judged by the default branch's current policy
@@ -120,9 +125,8 @@ erratum below, never an edit of the section.
   policy when the line's pull request reaches the default branch anyway.
   `codeflow ci` names both ranges when its commit checks run from another
   commit than its base, and then does not call the run the hosted verdict.
-  A policy there
-  that this codeflow cannot read or validate refuses the push, whether or
-  not its range resolves; when a newer codeflow wrote it, upgrade the
+  A policy there that this codeflow cannot read or validate refuses the
+  push, whether or not its range resolves; when a newer codeflow wrote it, upgrade the
   local one. With no candidate authority (a destination that does not
   answer, a failed fetch, or a default branch with no policy yet), the
   hook says so and, where a range resolves, still runs `codeflow ci` at

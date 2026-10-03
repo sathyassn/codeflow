@@ -201,8 +201,9 @@ fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
 /// that is unresolved; a push whose scope cannot be read is refused (see
 /// [`release_base`]). The range's boundary bounds the checks other than
 /// the commit checks; those run from the candidate authority's tip for
-/// every branch, so no history the destination holds, and no target a
-/// task record declares, hides a commit from them. The policy, and whether
+/// every branch that shares history with it, so no history the destination
+/// holds, and no target a task record declares, hides a commit from them
+/// (see [`commits_from`] for an unrelated deployment branch). The policy, and whether
 /// and at what level the check gates the push, come from that authority
 /// (see [`judged_by`]). An authority whose policy cannot be read or
 /// validated refuses every pushed branch, range or not.
@@ -286,14 +287,12 @@ fn run_ci_ranges(
             if let Some(tip) = existing_tip(root, r) {
                 args.extend(["--baseline-from", tip]);
             }
-            // The commit checks run over everything the head adds to the
-            // candidate authority's tip, as the hosted job's range from the
-            // target tip does: history the destination already holds under
-            // another name, commits an earlier push carried that the tip now
-            // forbids, and commits a declared target's line carries are not
-            // left out. A declared target bounds only the other checks.
-            if let Judged::Target { tip, .. } = &judged {
-                args.extend(["--policy-from", tip, "--commits-from", tip]);
+            // The commit checks run from the candidate authority's tip (see
+            // [`commits_from`]); a declared target bounds only the others.
+            let from;
+            if let Judged::Target { target, tip, .. } = &judged {
+                from = commits_from(root, r, branch, target, tip, &base, report);
+                args.extend(["--policy-from", tip, "--commits-from", &from]);
             }
             // The release scope reads the policy at this destination's
             // default target (SPC-013 R-120), from the advertisement the
@@ -309,6 +308,72 @@ fn run_ci_ranges(
             run_check_with(exe, root, &args, input, policy, report, steps);
         }
     }
+}
+
+/// Where a pushed branch's commit checks start, under the candidate
+/// authority `target` at `tip`. Whenever the head shares history with the
+/// tip, everything it adds to the tip, as the hosted job's range from the
+/// target tip: history the destination already holds under another name,
+/// commits an earlier push carried that the tip now forbids, and commits
+/// a declared target's line carries are not left out, and no commit is
+/// filtered by first parent or ancestry path. A branch the destination
+/// already has whose history shares nothing with the tip, such as a
+/// deployment branch, and that this push fast-forwards, keeps its own new
+/// commits from its old tip, under the same policy, and the hook says this
+/// is not default-target parity: its whole history was never a pull request
+/// into the default branch. A shallow clone or an unreadable history proves
+/// nothing about relatedness, so it keeps the tip and says so.
+fn commits_from(
+    root: &Path,
+    r: &PushRef,
+    branch: &str,
+    target: &str,
+    tip: &str,
+    base: &str,
+    report: &mut StageReport,
+) -> String {
+    let keep = tip.to_string();
+    if base == tip {
+        return keep;
+    }
+    let related = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", tip, &r.local_sha])
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .output();
+    let unknown = |why: &str, report: &mut StageReport| {
+        report.status.push(format!(
+            "note: whether '{branch}' shares history with {target} {} cannot be read ({why}), so its commit checks run from that tip",
+            short(tip)
+        ));
+        keep.clone()
+    };
+    let out = match related {
+        Ok(out) => out,
+        Err(error) => return unknown(&error.to_string(), report),
+    };
+    match out.status.code() {
+        Some(0) => return keep,
+        Some(1) => {}
+        _ => return unknown(String::from_utf8_lossy(&out.stderr).trim(), report),
+    }
+    let shallow = git(root, &["rev-parse", "--is-shallow-repository"]);
+    if shallow.as_deref().map(str::trim) != Some("false") {
+        return unknown("this clone is shallow", report);
+    }
+    let Some(old) = existing_tip(root, r) else {
+        return keep;
+    };
+    if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none() {
+        return keep;
+    }
+    report.status.push(format!(
+        "note: '{branch}' shares no history with {target} {}, so its commit checks run over its own new commits from {}, under that policy; this is not default-target parity",
+        short(tip),
+        short(old)
+    ));
+    old.to_string()
 }
 
 /// The base of a pushed branch's `codeflow ci` range: a release branch's

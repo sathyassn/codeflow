@@ -1458,3 +1458,112 @@ fn a_declared_line_does_not_hide_its_commits_from_the_default_s_policy() {
     let out = push(&root, &["origin", "HEAD"]);
     refused_at(&dest, &out, "task/TSK-001-work", &head_sha(&root));
 }
+
+/// The empty tree's id, written here.
+fn empty_tree(root: &Path) -> String {
+    let made = command("git", root)
+        .arg("mktree")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", text(&made));
+    text(&made).trim().to_string()
+}
+
+/// `git commit-tree` of `tree` with `parents` and `message`: a commit no
+/// local hook judges, as a deployment tool or another clone makes it.
+fn commit_tree(root: &Path, tree: &str, parents: &[&str], message: &str) -> String {
+    let mut args = vec!["commit-tree", tree];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    args.extend(["-m", message]);
+    let made = run("git", root, &args);
+    assert!(made.status.success(), "{}", text(&made));
+    text(&made).trim().to_string()
+}
+
+/// A destination whose default branch's policy takes `entries` with branch
+/// naming off, and a `gh-pages` deployment branch there whose history
+/// shares nothing with it, made by a tool whose first commit is not
+/// conventional. Returns the destination and the deployment branch's tip.
+fn deployment(root: &Path, entries: &[(&str, serde_json::Value)]) -> (PathBuf, String) {
+    let dest = with_destination(root);
+    let mut entries = entries.to_vec();
+    entries.push(("branch_naming", "off".into()));
+    land_on_default(root, &dest, |root| set_policy(root, &entries));
+    let target = default_branch(&dest);
+    git(
+        root,
+        &["switch", "-q", "-C", "feat/x", &format!("origin/{target}")],
+    );
+    let tree = empty_tree(root);
+    let old = commit_tree(root, &tree, &[], "Deployed old pages");
+    git(root, &["branch", "gh-pages", &old]);
+    git(
+        &dest,
+        &["fetch", "-q", root.to_str().unwrap(), "gh-pages:gh-pages"],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+    (dest, old)
+}
+
+/// An existing deployment branch that shares no history with the default
+/// branch keeps its own new commits as its commit range, under the default
+/// branch's policy, and says this is not default-target parity: a
+/// conventional deployment commit lands, and with commit formats off a
+/// tool's own message lands too (review round six).
+#[test]
+fn an_unrelated_deployment_branch_checks_only_its_own_new_commits() {
+    for (entries, message) in [
+        (vec![], "docs: deploy the site"),
+        (vec![("commit_format", "off".into())], "Deploy the site"),
+    ] {
+        let dir = scaffolded("--standard");
+        let root = project(&dir);
+        let (dest, old) = deployment(&root, &entries);
+        let tree = empty_tree(&root);
+        let new = commit_tree(&root, &tree, &[&old], message);
+        git(&root, &["branch", "-f", "gh-pages", &new]);
+        let out = push(&root, &["origin", "gh-pages"]);
+        let there = text(&run("git", &dest, &["rev-parse", "gh-pages"]));
+        assert_eq!(there.trim(), new, "{message}: {out}");
+        assert!(out.contains("this is not default-target parity"), "{out}");
+    }
+}
+
+/// The deployment branch's own new commits are still judged by the
+/// default branch's policy.
+#[test]
+fn an_unrelated_deployment_branch_s_new_commit_is_still_judged() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let (dest, old) = deployment(&root, &[]);
+    let tree = empty_tree(&root);
+    let new = commit_tree(&root, &tree, &[&old], "Deploy the site");
+    git(&root, &["branch", "-f", "gh-pages", &new]);
+    let out = push(&root, &["origin", "gh-pages"]);
+    assert!(out.contains("git.commit_format"), "{out}");
+    assert!(!out.contains("Deployed old pages"), "{out}");
+    not_landed(&dest, &out, "gh-pages", &new);
+}
+
+/// History that shares nothing with the default branch, joined into a
+/// branch that does, is checked from the default tip in full: its
+/// inherited commit is judged (review round six).
+#[test]
+fn an_unrelated_history_joined_into_a_related_branch_is_checked_in_full() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let (dest, old) = deployment(&root, &[]);
+    let head = head_sha(&root);
+    let tree = text(&run("git", &root, &["rev-parse", "HEAD^{tree}"]));
+    let joined = commit_tree(&root, tree.trim(), &[&head, &old], "feat: join the pages");
+    let out = push(
+        &root,
+        &["origin", &format!("{joined}:refs/heads/feat/joined")],
+    );
+    assert!(out.contains("Deployed old pages"), "{out}");
+    assert!(!out.contains("not default-target parity"), "{out}");
+    not_landed(&dest, &out, "feat/joined", &joined);
+}
