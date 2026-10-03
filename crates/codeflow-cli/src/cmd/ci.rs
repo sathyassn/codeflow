@@ -214,14 +214,15 @@ pub fn run(args: &CiArgs) -> i32 {
     }
     // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
     // moot here: the pre-first-commit window cannot occur in CI, which always
-    // has history — CI is the authoritative, always-armed perimeter.
-    let (policy, _armed) = Policy::load_effective(&root);
-    let configured = &policy.git;
+    // has history — CI is the authoritative, always-armed perimeter. The
+    // working copy's policy only finds the range; the range is judged with
+    // the policy at its base (see `judging_policy`).
+    let (working, _armed) = Policy::load_effective(&root);
 
     // --- resolve the range ------------------------------------------------
     let detected = detect_range(
         |k| std::env::var(k).ok().filter(|v| !v.is_empty()),
-        &configured.protected_branches,
+        &working.git.protected_branches,
     );
     let base_spec = args
         .base
@@ -254,12 +255,17 @@ pub fn run(args: &CiArgs) -> i32 {
         }
     };
 
-    print_source_banner(&root);
+    let base_sha = resolve_base(&root, &base_candidates);
+    let Some(judging) = judging_policy(&root, base_sha.as_deref(), working) else {
+        return 2;
+    };
+    let configured = &judging.policy.git;
     let mut tagged: Vec<TaggedViolation> = Vec::new();
     let adoption = adopter::resolve(
         &root,
         configured,
-        resolve_base(&root, &base_candidates).as_deref(),
+        &judging.raw,
+        base_sha.as_deref(),
         &args.actor,
         &branch,
         pr_body.is_some(),
@@ -429,7 +435,7 @@ pub fn run(args: &CiArgs) -> i32 {
 
     settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
-        run_under(&root, running, &mut tagged);
+        run_under(running, &judging.raw, &mut tagged);
     }
     if let Some(out) = &args.blocking_rules_out {
         write_blocking_rules(out, &tagged);
@@ -487,10 +493,13 @@ fn settle_watched_paths(tagged: &mut Vec<TaggedViolation>, body: Option<&str>) {
 
 /// Lower each finding to its effective level under the running plane's
 /// rule, and say so on the finding (R-80).
-fn run_under(root: &Path, running: PolicyLevel, tagged: &mut [TaggedViolation]) {
-    let raw = codeflow_core::hooks::adoption::raw_policy(root);
+fn run_under(
+    running: PolicyLevel,
+    raw: &Result<Option<serde_json::Value>, String>,
+    tagged: &mut [TaggedViolation],
+) {
     for t in tagged {
-        let level = t.violation.level_under(running, &raw);
+        let level = t.violation.level_under(running, raw);
         if level != t.violation.level {
             t.violation.message = format!(
                 "{} (printed at {level}: the running plane's rule is {running}; CI applies {})",
@@ -756,13 +765,19 @@ fn evaluate_commit_range(
     git: &codeflow_core::hooks::policy::GitPolicy,
 ) -> CommitRangeEvaluation {
     let Some(base_sha) = resolve_base(root, base_candidates) else {
-        let finding = codeflow_core::remedy::Finding::new(
-            format!(
-                "could not resolve a base ref (tried: {}); commit checks skipped",
-                base_candidates.join(", ")
+        let tried = base_candidates.join(", ");
+        let finding = match base_refusal(root, base_candidates) {
+            Some(cause) => codeflow_core::remedy::Finding::new(
+                format!(
+                    "could not resolve a base ref (tried: {tried}): git refused it: {cause}; commit checks skipped"
+                ),
+                codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
             ),
-            codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
-        );
+            None => codeflow_core::remedy::Finding::new(
+                format!("could not resolve a base ref (tried: {tried}); commit checks skipped"),
+                codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
+            ),
+        };
         eprintln!("{}", finding.line("codeflow ci", "warning"));
         return CommitRangeEvaluation {
             base_sha: None,
@@ -921,14 +936,7 @@ fn evaluate_work_start(
             .flatten()
             .or_else(|| declared_work_target(root, &task_id));
         let target = match resolve_work_target_checked(root, declared.as_deref()) {
-            Ok(resolved) => {
-                let resolved =
-                    resolved.map_or_else(|| ("main".to_string(), None), |r| (r.target, r.note));
-                if let Some(note) = resolved.1 {
-                    eprintln!("{}", note.line("codeflow ci", "note"));
-                }
-                resolved.0
-            }
+            Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
             Err(error) => {
                 tagged.push(TaggedViolation {
                     sha: None,
@@ -967,6 +975,77 @@ fn evaluate_work_start(
             ),
         });
     }
+}
+
+/// The policy a run judges with, and its raw form for the level origins.
+struct Judging {
+    policy: Policy,
+    raw: Result<Option<serde_json::Value>, String>,
+}
+
+/// The policy a range is judged with (sathyassn/codeflow#22): the one
+/// recorded at the resolved base, read as git data, which is what the hosted
+/// job reads from its base checkout, so a head that loosens its own policy
+/// gets the hosted verdict before the push. Without a resolved base, or when
+/// the base carries no policy yet (the adoption change itself), the working
+/// copy's. `None` (after naming each error) when the base's policy is
+/// unreadable or invalid, which verifies nothing.
+fn judging_policy(root: &Path, base: Option<&str>, working: Policy) -> Option<Judging> {
+    let from_working = |working: Policy| {
+        print_source_banner(root);
+        Judging {
+            policy: working,
+            raw: codeflow_core::hooks::adoption::raw_policy(root),
+        }
+    };
+    let Some(base) = base else {
+        return Some(from_working(working));
+    };
+    let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, base) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Some(from_working(working)),
+        Err(error) => {
+            eprintln!(
+                "codeflow ci: error: cannot read .codeflow/policy.json at base {}: {error} — nothing was verified",
+                short(base)
+            );
+            return None;
+        }
+    };
+    if let Err(errors) = policy_schema::validate_policy_str(&text) {
+        eprintln!(
+            "codeflow ci: the range is judged with the policy at base {}, which is invalid:",
+            short(base)
+        );
+        report_invalid_policy(&errors);
+        return None;
+    }
+    // The validator's strict deserialize already accepted the text.
+    let parsed = serde_json::from_str::<Policy>(&text)
+        .and_then(|policy| serde_json::from_str(&text).map(|raw| (policy, raw)));
+    let (policy, raw) = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            eprintln!(
+                "codeflow ci: error: .codeflow/policy.json at base {} cannot be read: {error} — nothing was verified",
+                short(base)
+            );
+            return None;
+        }
+    };
+    println!(
+        "codeflow ci: verifying against .codeflow/policy.json at base {}, the target side the hosted job reads",
+        short(base)
+    );
+    if serde_json::to_value(&policy).ok() != serde_json::to_value(Policy::load(root)).ok() {
+        println!(
+            "codeflow ci: the working copy's .codeflow/policy.json differs from the base's; its rules judge commits once it lands on the target"
+        );
+    }
+    Some(Judging {
+        policy,
+        raw: Ok(Some(raw)),
+    })
 }
 
 /// Report the ruleset actually enforced: the loader falls back to the
@@ -1564,6 +1643,25 @@ fn resolve_pr_body(args: &CiArgs) -> Result<Option<String>, String> {
 /// Resolve the first base candidate that names a real commit, returning its sha.
 fn resolve_base(root: &Path, candidates: &[String]) -> Option<String> {
     candidates.iter().find_map(|c| rev_parse(root, c))
+}
+
+/// Git's own refusal of a base candidate, when it stopped on one rather than
+/// finding no such commit: `--quiet` keeps a missing rev silent, so any
+/// message is git's cause, such as a replace ref it cannot follow or a
+/// `GIT_REPLACE_REF_BASE` git 2.55 refuses.
+fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
+    candidates.iter().find_map(|candidate| {
+        let out = codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--verify", "--quiet"])
+            .arg(format!("{candidate}^{{commit}}"))
+            .output()
+            .ok()?;
+        let said = String::from_utf8_lossy(&out.stderr);
+        let first = said.lines().map(str::trim).find(|line| !line.is_empty())?;
+        (!out.status.success()).then(|| first.to_string())
+    })
 }
 
 /// `git rev-parse --verify --quiet <rev>^{commit}` — returns the resolved sha,

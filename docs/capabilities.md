@@ -309,7 +309,7 @@ populated ones.
 | Pre-push case | Behaviour |
 |---|---|
 | The push set | `quick` names the targets with a `quick` mode; a manual run aliases it to `essential`, the lighter mode, when no target defines it |
-| Every push | runs the push set plus `codeflow validate --docs` and `codeflow ci` on the pushed range, blocking by default under `test_gate_on_push`; it blocks on what it can see, and the test suite belongs to the full gate |
+| Every push | runs the push set plus `codeflow validate --docs` and `codeflow ci` on the pushed range, blocking by default under `test_gate_on_push`; `codeflow ci` judges the range with the `.codeflow/policy.json` recorded at its base, as the hosted policy job does, so a branch that loosens its own policy is refused before the push; it blocks on what it can see, and the test suite belongs to the full gate |
 | Existing protected or `integration/` branch, fast-forward | the range starts at its advertised tip |
 | Branch with a declared target | the merge base with that target's advertised tip, reading the target from the task record at the pushed commit; the hook names that target |
 | Line rewrite, undeclared branch, unavailable target | the advertised-history fallback; an advertised target missing locally is noted |

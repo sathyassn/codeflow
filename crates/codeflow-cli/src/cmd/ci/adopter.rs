@@ -78,14 +78,14 @@ pub(super) fn trusted_actor(
 pub(super) fn resolve(
     root: &Path,
     git: &GitPolicy,
+    raw: &Result<Option<serde_json::Value>, String>,
     base_sha: Option<&str>,
     actor: &str,
     branch: &str,
     has_body: bool,
 ) -> Adoption {
-    let raw = adoption::raw_policy(root);
     let mut effective = git.clone();
-    let pr_sections = adoption::pr_sections_effective(&raw, git);
+    let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
     effective.pr_required_sections = adoption::mapped_sections(git, &git.pr_required_sections);
     effective.pr_code_sections = adoption::mapped_sections(git, &git.pr_code_sections);
@@ -116,7 +116,7 @@ pub(super) fn resolve(
 
     let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(root).unwrap_or(false);
     print_levels(
-        &raw,
+        raw,
         git,
         &effective,
         pr_sections,

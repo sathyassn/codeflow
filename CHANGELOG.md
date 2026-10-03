@@ -75,6 +75,27 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Local `codeflow ci` and the pre-push hook give the hosted verdict.**
+  They judged commit, branch and PR-body standards with the branch's own
+  `.codeflow/policy.json`, while the hosted policy job reads the policy of
+  the base it checks out. A branch that loosened its own rules, such as
+  more commit-body bullets, passed locally and failed after the push. When
+  a base resolves, `codeflow ci` now reads the policy recorded at that base
+  as git data, says so in its banner, and notes when the working copy's
+  differs; a base with no policy yet, as in the change that adopts
+  CodeFlow, still uses the working copy's. A branch that changes the
+  policy now lands that change before commits that rely on it. The
+  commit-msg hook still reads the working copy, so such a commit is made
+  and then refused at push, before it leaves the clone.
+  When a local target branch is behind its upstream, `codeflow work start`
+  and `codeflow ci` no longer print a note asking you to fast-forward it:
+  they already anchor on the upstream, `work start` names it, and the
+  guards refuse the fast-forward steps the note printed. When git itself
+  refuses the base, for example a `GIT_REPLACE_REF_BASE` without a trailing
+  slash on git 2.55 or later, `codeflow ci` now prints git's message in
+  place of the advice to fetch.
+
+<!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print
   `dirty=true` in `codeflow --version` although they were built from the
   tagged source: the release job writes cargo-dist's manifest into the

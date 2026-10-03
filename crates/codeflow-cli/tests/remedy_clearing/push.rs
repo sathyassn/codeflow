@@ -705,3 +705,36 @@ fn clears_secret_scan_incomplete() {
         String::from_utf8(run("git", &root, &["ls-tree", "HEAD", "app.txt"]).stdout).unwrap();
     assert!(tree.contains(sha), "{tree}");
 }
+
+// ---------------------------------------------------------------------------
+// The destination's policy judges the push (sathyassn/codeflow#22).
+// ---------------------------------------------------------------------------
+
+/// A branch that loosens its own commit-body rules commits under them, but
+/// its push is judged by the policy the destination holds, as the hosted
+/// job judges the pull request from its base checkout.
+#[test]
+fn a_push_is_judged_by_the_policy_the_destination_holds() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let dest = with_destination(&root);
+    write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["commit_body_max_bullets"] = 10.into();
+    policy["git"]["commit_body_bullet_max_len"] = 100.into();
+    write(
+        &root,
+        ".codeflow/policy.json",
+        &serde_json::to_string_pretty(&policy).unwrap(),
+    );
+    commit_all(&root, "chore: loosen the commit body rules");
+    write(&root, "y.txt", "y\n");
+    let said = commit_all(&root, "feat: add y\n\n- one\n- two\n- three\n- four\n");
+    let subject = text(&run("git", &root, &["log", "-1", "--format=%s"]));
+    assert_eq!(subject.trim(), "feat: add y", "{said}");
+    let out = pushed(&root);
+    assert!(out.contains("git.commit_body"), "{out}");
+    let landed = text(&run("git", &dest, &["branch", "--list", "feat/x"]));
+    assert!(landed.trim().is_empty(), "the push went through:\n{out}");
+}
