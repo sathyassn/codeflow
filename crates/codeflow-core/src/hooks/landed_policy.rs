@@ -178,23 +178,37 @@ fn finish(
     }
 }
 
-fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>), String> {
+/// The `.codeflow/policy.json` text recorded at `rev`, read as git data
+/// without touching the working copy; `None` when that tree has no policy.
+/// `codeflow ci` judges a range with it, as the hosted job does from its
+/// base checkout.
+///
+/// # Errors
+/// The repository or `rev` cannot be read, or the file is not UTF-8.
+pub fn policy_text_at(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    read_at(&repo, rev, ".codeflow/policy.json")
+}
+
+fn read_at(repo: &Repository, reference: &str, path: &str) -> Result<Option<String>, String> {
     let tree = repo
         .revparse_single(reference)
         .and_then(|o| o.peel_to_tree())
         .map_err(|e| format!("cannot read policy source {reference}: {e}"))?;
-    let read = |path: &str| -> Result<Option<String>, String> {
-        match tree.get_path(Path::new(path)) {
-            Ok(entry) => {
-                let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
-                String::from_utf8(blob.content().to_vec())
-                    .map(Some)
-                    .map_err(|e| e.to_string())
-            }
-            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
-            Err(e) => Err(e.to_string()),
+    match tree.get_path(Path::new(path)) {
+        Ok(entry) => {
+            let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+            String::from_utf8(blob.content().to_vec())
+                .map(Some)
+                .map_err(|e| e.to_string())
         }
-    };
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>), String> {
+    let read = |path: &str| read_at(repo, reference, path);
     let policy = read(".codeflow/policy.json")?
         .map_or_else(|| Ok(Policy::default()), |s| serde_json::from_str(&s))
         .map_err(|e| format!("invalid policy at {reference}: {e}"))?;

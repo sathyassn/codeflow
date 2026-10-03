@@ -1193,3 +1193,95 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
         assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     }
 }
+
+/// `codeflow ci` as a same-repository Dependabot event, with the range from
+/// `main~1` and the policy from `main` (sathyassn/codeflow#22): the profiles
+/// come from the policy that judges, never from the range base.
+fn ci_dependabot_judged_by_main(dir: &Path) -> Output {
+    let event = dir.join(".git/codeflow-test-event.json");
+    std::fs::write(
+        &event,
+        serde_json::json!({
+            "pull_request": {
+                "head": { "repo": { "full_name": "acme/app" } },
+                "base": { "repo": { "full_name": "acme/app" } },
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    codeflow_cmd(dir)
+        .env("GITHUB_ACTIONS", "true")
+        .env("GITHUB_EVENT_NAME", "pull_request_target")
+        .env("GITHUB_EVENT_PATH", &event)
+        .env("GITHUB_ACTOR", "dependabot[bot]")
+        .args([
+            "ci",
+            "--base",
+            "main~1",
+            "--policy-from",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            DEPENDABOT_BRANCH,
+            "--actor",
+            "dependabot[bot]",
+            "--pr-body",
+            DEPENDABOT_BODY,
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("binary runs")
+}
+
+/// Replace `main`'s policy with `policy` in a new commit, leaving the bot
+/// branch checked out.
+fn change_main_policy(dir: &Path, policy: &str) {
+    git(dir, &["checkout", "-q", "main"]);
+    std::fs::write(dir.join(".codeflow").join("policy.json"), policy).unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: change the profiles"]);
+    git(dir, &["checkout", "-q", DEPENDABOT_BRANCH]);
+}
+
+#[test]
+fn a_profile_the_judging_policy_revoked_no_longer_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    bot_repo(
+        dir.path(),
+        &policy_with_profiles(false),
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_COMMIT,
+    );
+    change_main_policy(
+        dir.path(),
+        &serde_json::to_string_pretty(&shipped_policy()).unwrap(),
+    );
+    let out = ci_dependabot_judged_by_main(dir.path());
+    let all = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    assert!(
+        !all.contains("automation profile 'dependabot' applies"),
+        "{all}"
+    );
+}
+
+#[test]
+fn a_profile_the_judging_policy_added_applies() {
+    let dir = tempfile::tempdir().unwrap();
+    bot_repo(
+        dir.path(),
+        &serde_json::to_string_pretty(&shipped_policy()).unwrap(),
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_COMMIT,
+    );
+    change_main_policy(dir.path(), &policy_with_profiles(false));
+    let out = ci_dependabot_judged_by_main(dir.path());
+    let all = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    assert!(
+        all.contains("automation profile 'dependabot' applies"),
+        "{all}"
+    );
+}
