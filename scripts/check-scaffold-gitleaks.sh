@@ -1,28 +1,49 @@
 #!/bin/sh
 # What adopters get from the scaffold passes their secret scan (TSK-206,
-# sathyassn/codeflow#13). With the pinned gitleaks:
+# sathyassn/codeflow#13), and a pull request cannot pass it by exempting
+# its own leak (TSK-210, sathyassn/codeflow#20). With the pinned gitleaks:
 #   1. the shipped scaffold sources under assets/ hold nothing gitleaks'
 #      default rules report; given a codeflow binary as the second
 #      argument, fresh `codeflow init` output at each tier is scanned too;
-#   2. the adopter CI template's own gitleaks step, run with bash -e as
+#   2. the adopter CI template's own gitleaks step, run whole with bash -e as
 #      GitHub runs it, drops only the 3.0.0 pipeline prose in its two
 #      managed paths and still fails on a credential on that same line, the
 #      same prose anywhere else, and every finding an adopter's own
 #      configuration makes, wherever gitleaks reads that configuration from;
-#      a scan that does not complete fails the step.
+#      a scan that does not complete fails the step;
+#   3. that step reads every exemption from the trusted commit: an ignore
+#      entry, an allowlist, a .gitleaks.json beside .gitleaks.toml, an
+#      inline gitleaks:allow comment or an edited extended file that a pull
+#      request adds fails it, and the same exemption on the trusted commit
+#      passes; an unreadable trusted commit fails it before it scans; links
+#      the pull request plants are never written through or followed;
+#   4. this repository's own gitleaks step is the template's.
+# The step's download is served from a local archive of the gitleaks under
+# test, so no network is needed; its pinned checksum is the Linux release's
+# and is not checked here.
 # Usage: check-scaffold-gitleaks.sh [gitleaks] [codeflow]
+# CODEFLOW_CI_TEMPLATE names another template to run, for example the one
+# from before TSK-210 to show the cases it fails; every case still runs and
+# each failure is listed at the end.
 set -eu
 # The finding lists below are word-split on purpose.
 # shellcheck disable=SC2086
 
 GITLEAKS=${1:-gitleaks}
 CODEFLOW=${2:-}
-absolute() { case $1 in /*) printf '%s' "$1" ;; */*) printf '%s/%s' "$(pwd)" "$1" ;; *) printf '%s' "$1" ;; esac; }
+absolute() { case $1 in /*) printf '%s' "$1" ;; */*) printf '%s/%s' "$(pwd)" "$1" ;; *) command -v "$1" ;; esac; }
 GITLEAKS=$(absolute "$GITLEAKS")
 [ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-TMP=$(mktemp -d)
+TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-ci.yml}
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-gitleaks.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+FAILURES="$TMP/failures"
+: >"$FAILURES"
+failed() { # case name, then what went wrong
+  printf '%s: %s\n' "$1" "$2" >>"$FAILURES"
+  printf 'template secret scan, %s: %s\n' "$1" "$2" >&2
+}
 
 printf '[extend]\nuseDefault = true\n' >"$TMP/default.toml"
 no_findings() { # label, then the directory to scan with the default rules
@@ -49,34 +70,85 @@ if [ -n "$CODEFLOW" ]; then
   done
 fi
 
-# The template step after its download lines, with the downloaded binary
-# replaced by the one under test.
-python3 - "$ROOT/assets/base/ci/codeflow-ci.yml" "$TMP/step.sh" <<'PY'
+# The template's gitleaks step, whole. With the shipped template, it must
+# read the trusted commit through env, never interpolate it into the
+# script, and match this repository's own step.
+python3 - "$TEMPLATE" "$ROOT/.github/workflows/codeflow-ci.yml" "$TMP/step.sh" \
+  "${CODEFLOW_CI_TEMPLATE:+other}" <<'PY' >>"$FAILURES"
 import sys
 
-lines = open(sys.argv[1], encoding="utf-8").read().split("\n")
-start = lines.index("      - name: gitleaks")
-assert lines[start + 1] == "        run: |", lines[start + 1]
-body = []
-for line in lines[start + 2:]:
-    if line.strip() and not line.startswith(" " * 10):
-        break
-    body.append(line[10:])
-script = "\n".join(body)
-marker = 'tar -xzf "$archive" gitleaks\n'
-assert marker in script, script
-script = script.split(marker, 1)[1]
+template, own, out, other = sys.argv[1:]
+
+
+def step(path):
+    lines = open(path, encoding="utf-8").read().split("\n")
+    start = lines.index("      - name: gitleaks")
+    body = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith(" " * 8):
+            break
+        body.append(line)
+    while body and not body[-1].strip():
+        body.pop()
+    run = body.index("        run: |")
+    return body[:run], "\n".join(line[10:] for line in body[run + 1:]) + "\n"
+
+
+env, script = step(template)
 if '"$report"' not in script:
     raise SystemExit("the template's gitleaks step reads no report, so the "
                      "3.0.0 pipeline line fails every adopter's secret scan")
-assert script.count("./gitleaks detect") == 1, script
-open(sys.argv[2], "w", encoding="utf-8").write(script.replace("./gitleaks detect", '"$GITLEAKS" detect'))
+open(out, "w", encoding="utf-8").write(script)
+if not other:
+    trusted = "          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
+    if env != ["        env:", trusted]:
+        print(f"step: the trusted commit is not passed as env {trusted.strip()!r}: {env}")
+    if "${{" in script:
+        print("step: the script interpolates an expression instead of reading env")
+    if step(own) != (env, script):
+        print("own workflow: .github/workflows/codeflow-ci.yml's gitleaks step differs from the template's")
 PY
+if [ -s "$FAILURES" ]; then
+  cat "$FAILURES" >&2
+fi
+
+# The step downloads the release archive and checks it; here the download is
+# the gitleaks under test, packed the same way.
+mkdir "$TMP/archive" "$TMP/fake-bin"
+cp "$GITLEAKS" "$TMP/archive/gitleaks"
+tar -czf "$TMP/gitleaks.tar.gz" -C "$TMP/archive" gitleaks
+cat >"$TMP/fake-bin/curl" <<SH
+#!/bin/sh
+while [ \$# -gt 0 ]; do
+  case \$1 in -o) out=\$2; shift ;; esac
+  shift
+done
+cp "$TMP/gitleaks.tar.gz" "\$out"
+SH
+cat >"$TMP/fake-bin/sha256sum" <<'SH'
+#!/bin/sh
+cat >/dev/null
+echo "gitleaks archive: OK"
+SH
+chmod +x "$TMP/fake-bin/curl" "$TMP/fake-bin/sha256sum"
+FAKE_PATH="$TMP/fake-bin:$PATH"
 
 PROSE=$(printf 'Cover secret/PII exposure, authz gaps, %s%s, general vuln classes' \
   'vulnerable/' 'malicious deps')
 KEY=$(printf '%s%s' '9fK2pQ7xLm4R' 't8Wz1Vb6Nc3H')
 PLANTED="api_key = \"$KEY\""
+init_repo() { # a fresh repository at $REPO that never commits a download
+  mkdir -p "$REPO"
+  git -C "$REPO" init -q
+  printf '/gitleaks\n/gitleaks_*.tar.gz\n' >>"$REPO/.git/info/exclude"
+}
+commit() {
+  git -C "$REPO" add -A
+  git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
+    -c commit.gpgsign=false commit -q -m "$1"
+}
+tip() { git -C "$REPO" rev-parse HEAD; }
+
 REPO="$TMP/adopter"
 for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
   mkdir -p "$REPO/$path"
@@ -86,34 +158,37 @@ for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
     >"$REPO/$path/pipeline.workflow.js"
 done
 printf '%s\n' "$PROSE" >"$REPO/notes.md"
-git -C "$REPO" init -q
-commit() {
-  git -C "$REPO" add -A
-  git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
-    -c commit.gpgsign=false commit -q -m "$1"
-}
+init_repo
 commit scaffold
 
 # One case: a name, the exit status the step must end with, then the
-# "file:line" findings it must name, exactly. Extra environment is passed
-# through STEP_ENV.
+# "file:line" findings it must name, exactly. The step runs in $REPO with a
+# runner temp directory of its own. The trusted commit is $TRUSTED when set
+# (a pull request's base), else the tip (a push). Extra environment is
+# passed through STEP_ENV; MESSAGE is text the output must hold; NO_SCAN
+# says gitleaks must not have run; after_step checks the checkout before
+# it is restored.
+after_step() { :; }
 expect() {
   name=$1
   status=$2
   shift 2
+  runner="$TMP/runner-$name"
+  mkdir "$runner"
   set +e
-  (cd "$REPO" && env RUNNER_TEMP="$TMP" GITLEAKS="$GITLEAKS" ${STEP_ENV:-} \
-    bash -e "$TMP/step.sh") >"$TMP/$name.out" 2>&1
+  (cd "$REPO" && env PATH="$FAKE_PATH" RUNNER_TEMP="$runner" \
+    TRUSTED_SHA="${TRUSTED-$(tip)}" ${STEP_ENV:-} bash -e "$TMP/step.sh") \
+    >"$TMP/$name.out" 2>&1
   rc=$?
   set -e
-  python3 - "$TMP/$name.out" "$name" "$status" "$rc" "$KEY" "$@" <<'PY'
+  if ! problem=$(python3 - "$TMP/$name.out" "$status" "$rc" "$KEY" "$@" 2>&1 <<'PY'
 import re
 import sys
 from urllib.parse import unquote
 
 out = open(sys.argv[1], encoding="utf-8").read()
-name, status, rc, key = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
-expected = sorted(sys.argv[6:])
+status, rc, key = int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+expected = sorted(sys.argv[5:])
 found = sorted(f"{unquote(f)}:{l}" for f, l in re.findall(r"^::error file=([^,\n]+),line=(\d+)::", out, re.M))
 problems = []
 if (rc == 0) != (status == 0):
@@ -123,8 +198,25 @@ if found != expected:
 if key in out:
     problems.append("the log shows a credential's value")
 if problems:
-    raise SystemExit(f"template secret scan, {name}: " + "; ".join(problems) + "\n" + out)
+    raise SystemExit("; ".join(problems))
 PY
+  ); then
+    failed "$name" "$problem"
+  fi
+  if [ -n "${MESSAGE:-}" ] && ! grep -qF -- "$MESSAGE" "$TMP/$name.out"; then
+    failed "$name" "the output does not say \"$MESSAGE\""
+  fi
+  if [ -n "${NO_SCAN:-}" ] && [ -e "$runner/gitleaks.log" ]; then
+    failed "$name" "gitleaks ran"
+  fi
+  if ! problem=$(after_step 2>&1); then
+    failed "$name" "$problem"
+  fi
+  if grep -q "^$name: " "$FAILURES"; then
+    sed 's/^/    /' "$TMP/$name.out" >&2
+  fi
+  # The step deletes the exemption files from the checkout; put them back.
+  git -C "$REPO" checkout -q -- .
 }
 PIPELINES=".claude/workflows/pipeline.workflow.js:3 .codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3"
 
@@ -140,7 +232,7 @@ for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
   mkdir -p "$REPO/$path"
   printf '// seeded by CodeFlow 3.0.0\n%s\n' "$PROSE" >"$REPO/$path/pipeline.workflow.js"
 done
-git -C "$REPO" init -q
+init_repo
 commit "prose only"
 expect prose-only 0
 # A longer credential that starts with the prose yields the same extracted
@@ -153,7 +245,7 @@ NL='
 mkdir -p "$REPO/.claude/workflows"
 printf '// x\n%s\n' "$LONGER" >"$REPO/.claude/workflows/pipeline.workflow.js"
 printf '// x\n%s\n' "$PROSE" >"$REPO/.claude/workflows/pipeline.workflow.js$NL"
-git -C "$REPO" init -q
+init_repo
 commit "near misses"
 expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
   ".claude/workflows/pipeline.workflow.js$NL:2"
@@ -176,7 +268,7 @@ SH
 chmod +x "$TMP/failing-git/git"
 # It runs on the clean prose-only history, which otherwise passes.
 REPO="$TMP/prose-only"
-STEP_ENV="PATH=$TMP/failing-git:$PATH"
+STEP_ENV="PATH=$TMP/fake-bin:$TMP/failing-git:$PATH"
 expect git-exit 1
 STEP_ENV=
 
@@ -187,13 +279,10 @@ ABORTED="hello command aborted harmless text"
 REPO="$TMP/aborted-words"
 mkdir -p "$REPO"
 printf 'blob = "%s"\n' "$(printf '%s' "$ABORTED" | base64)" >"$REPO/encoded.txt"
-git -C "$REPO" init -q
+init_repo
 commit "aborted words"
 in_debug_log() {
-  grep -q "$ABORTED" "$TMP/gitleaks.log" || {
-    echo "template secret scan, $1: the words never reached the debug log" >&2
-    exit 1
-  }
+  grep -q "$ABORTED" "$TMP/runner-$1/gitleaks.log" || failed "$1" "the words never reached the debug log"
 }
 expect aborted-in-content 0
 in_debug_log aborted-in-content
@@ -259,6 +348,154 @@ printf '[extend\n' >"$REPO/.gitleaks.toml"
 commit "broken config"
 expect broken-config 1
 
+# Exemptions come from the trusted commit (TSK-210). Each history starts
+# with a clean commit; a case named pr-* is a pull request on the commit
+# before it, and the trusted-* case after it is a later pull request once
+# the first has merged.
+new_repo() {
+  REPO="$TMP/$1"
+  init_repo
+  printf 'clean\n' >"$REPO/README.md"
+  commit base
+  BASE=$(tip)
+}
+on_base() { # the trusted commit, then the case
+  TRUSTED=$1
+  shift
+  expect "$@"
+  unset TRUSTED
+}
+later_fixture() { # a later pull request: one more leak at the allowed path
+  BASE=$(tip)
+  mkdir -p "$REPO/fixtures"
+  printf '%s\n' "$PLANTED" >"$REPO/fixtures/later.txt"
+  commit "later fixture"
+}
+ALLOW_FIXTURES="[extend]
+useDefault = true
+
+[[allowlists]]
+description = \"fixtures\"
+paths = ['''^fixtures/''']"
+
+# A .gitleaksignore entry for the pull request's own leak.
+new_repo ignore-file
+printf '%s\n' "$PLANTED" >"$REPO/leak.txt"
+commit leak
+printf '%s:leak.txt:generic-api-key:1\n' "$(tip)" >"$REPO/.gitleaksignore"
+commit "ignore the leak"
+on_base "$BASE" pr-ignore-file 1 leak.txt:1
+BASE=$(tip)
+printf 'more\n' >>"$REPO/README.md"
+commit later
+on_base "$BASE" trusted-ignore-file 0
+
+# A .gitleaks.toml allowlist for it.
+new_repo allowlist
+mkdir "$REPO/fixtures"
+printf '%s\n' "$PLANTED" >"$REPO/fixtures/leak.txt"
+printf '%s\n' "$ALLOW_FIXTURES" >"$REPO/.gitleaks.toml"
+commit "leak with an allowlist"
+on_base "$BASE" pr-allowlist 1 fixtures/leak.txt:1
+later_fixture
+on_base "$BASE" trusted-allowlist 0
+
+# A .gitleaks.json beside .gitleaks.toml: gitleaks reads it first, as TOML.
+new_repo json-beside
+printf '[extend]\nuseDefault = true\n' >"$REPO/.gitleaks.toml"
+commit config
+BASE=$(tip)
+mkdir "$REPO/fixtures"
+printf '%s\n' "$PLANTED" >"$REPO/fixtures/leak.txt"
+printf '%s\n' "$ALLOW_FIXTURES" >"$REPO/.gitleaks.json"
+commit "leak with a json allowlist"
+on_base "$BASE" pr-json-beside 1 fixtures/leak.txt:1
+later_fixture
+on_base "$BASE" trusted-json-beside 0
+
+# An inline gitleaks:allow comment.
+new_repo inline
+printf '%s # gitleaks:allow\n' "$PLANTED" >"$REPO/inline.txt"
+commit "inline allow"
+on_base "$BASE" pr-inline 1 inline.txt:1
+BASE=$(tip)
+printf 'more\n' >>"$REPO/README.md"
+commit later
+on_base "$BASE" trusted-inline 0
+
+# An [extend] path is read from the trusted commit, never the checkout: a
+# pull request that widens the extended file fails, and once merged it
+# holds. GITLEAKS_CONFIG names a file in the repository the same way.
+new_repo extended
+mkdir "$REPO/ci"
+printf '[extend]\nuseDefault = true\n' >"$REPO/ci/base.toml"
+printf '[extend]\npath = "ci/base.toml"\n' >"$REPO/.gitleaks.toml"
+commit config
+BASE=$(tip)
+mkdir "$REPO/fixtures"
+printf '%s\n' "$PLANTED" >"$REPO/fixtures/leak.txt"
+printf '%s\n' "$ALLOW_FIXTURES" >"$REPO/ci/base.toml"
+commit "leak with a wider extended file"
+on_base "$BASE" pr-extended 1 fixtures/leak.txt:1
+STEP_ENV="GITLEAKS_CONFIG=ci/base.toml"
+on_base "$BASE" pr-named-config 1 fixtures/leak.txt:1
+STEP_ENV=
+later_fixture
+on_base "$BASE" trusted-extended 0
+# A file the trusted commit does not hold fails the step, and an absolute
+# path into the checkout is refused.
+printf '[extend]\npath = "ci/absent.toml"\n' >"$REPO/.gitleaks.toml"
+commit "extend a missing file"
+MESSAGE="which trusted commit"
+expect extend-missing 1
+printf '[extend]\npath = "%s/ci/base.toml"\n' "$(cd "$REPO" && pwd -P)" >"$REPO/.gitleaks.toml"
+commit "extend by absolute path"
+MESSAGE="a file in the checkout"
+expect extend-absolute 1
+MESSAGE=
+
+# Without a readable trusted commit the step fails before gitleaks runs.
+new_repo no-base
+MESSAGE="refusing to scan"
+NO_SCAN=1
+on_base 0123456789abcdef0123456789abcdef01234567 absent-base 1
+on_base "" empty-base 1
+on_base origin/main ref-name-base 1
+MESSAGE=
+NO_SCAN=
+
+# Links the pull request commits at the names the step reads or writes are
+# neither followed nor written through, and nothing lands in the checkout.
+new_repo links
+mkdir "$TMP/link-targets"
+printf 'link target\n' >"$TMP/link-targets/ignore"
+printf '%s\n' "$ALLOW_FIXTURES" >"$TMP/link-targets/config.toml"
+printf 'link target\n' >"$TMP/link-targets/archive"
+printf 'link target\n' >"$TMP/link-targets/binary"
+(cd "$TMP/link-targets" && cksum ignore config.toml archive binary) >"$TMP/link-targets.before"
+ln -s "$TMP/link-targets/ignore" "$REPO/.gitleaksignore"
+ln -s "$TMP/link-targets/config.toml" "$REPO/.gitleaks.toml"
+ln -s "$TMP/link-targets/archive" "$REPO/gitleaks_8.30.1_linux_x64.tar.gz"
+ln -s "$TMP/link-targets/binary" "$REPO/gitleaks"
+mkdir "$REPO/fixtures"
+printf '%s\n' "$PLANTED" >"$REPO/fixtures/leak.txt"
+git -C "$REPO" add -f gitleaks gitleaks_8.30.1_linux_x64.tar.gz
+commit "plant links"
+after_step() {
+  (cd "$TMP/link-targets" && cksum ignore config.toml archive binary) |
+    cmp -s - "$TMP/link-targets.before" || { echo "a link target was written"; return 1; }
+  for link in .gitleaksignore .gitleaks.toml; do
+    if [ -e "$REPO/$link" ] || [ -L "$REPO/$link" ]; then
+      echo "$link is still in the checkout"
+      return 1
+    fi
+  done
+  added=$(git -C "$REPO" status --porcelain --ignored --untracked-files=all | grep -v '^ D ' || true)
+  [ -z "$added" ] || { echo "the step wrote into the checkout: $added"; return 1; }
+}
+on_base "$BASE" pr-links 1 fixtures/leak.txt:1
+after_step() { :; }
+
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still
 # reports the credential on the same line.
@@ -279,7 +516,7 @@ if recipe is None:
 lines = recipe.group(1).split("\n")
 open(sys.argv[2], "w", encoding="utf-8").write("\n".join(line[2:] for line in lines) + "\n")
 PY
-git -C "$REPO" init -q
+init_repo
 commit recipe
 "$GITLEAKS" detect --source "$REPO" --no-banner --redact --report-format json \
   --report-path "$TMP/recipe.json" --exit-code 0 >/dev/null 2>&1
@@ -293,4 +530,9 @@ if found != expected:
     raise SystemExit(f"the CI README's gitleaks recipe: expected {expected}, got {found}")
 PY
 
+if [ -s "$FAILURES" ]; then
+  printf '\nscaffold secret scan failed:\n' >&2
+  sed 's/^/  /' "$FAILURES" >&2
+  exit 1
+fi
 printf '%s\n' "scaffold secret scan passed"
