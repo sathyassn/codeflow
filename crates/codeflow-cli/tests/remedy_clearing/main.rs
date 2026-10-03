@@ -1946,21 +1946,24 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
     );
 }
 
-/// PR 35 review round 3, finding 2: doctor offers `codeflow update` only
-/// where update would rewrite the file, by update's own rules. An
-/// ownership update rejects, a fabricated record for a file update does
-/// not ship, and a file `[scaffold] ignore` opts out all get the hand
-/// edit instead.
+/// PR 35 review rounds 3 and 4, finding 2 and 3: doctor offers `codeflow
+/// update` only where update's own steps rewrite the file or propose a
+/// merge beside it. An ownership update rejects, a fabricated record for a
+/// file update does not ship, a file `[scaffold] ignore` opts out, a hook
+/// file update skips as a symlink, and an edit update keeps all get the
+/// hand edit instead, with the reason update leaves the file.
 #[test]
 fn the_grok_update_remedy_follows_what_update_repairs() {
     let stale = grok_hooks_3_0_0();
-    let hand_edit = |root: &Path, path: &str| {
+    let mut failures = Vec::new();
+    let mut hand_edit = |case: &str, root: &Path, path: &str, why: &str| {
         let said = doctor(root, "grok");
-        assert!(
-            said.contains(&format!("`codeflow update` does not manage {path}")),
-            "{said}"
-        );
-        assert!(!said.contains("run `codeflow update`"), "{said}");
+        if !said.contains(&format!("`codeflow update` does not rewrite {path}"))
+            || said.contains("run `codeflow update`")
+            || !said.contains(why)
+        {
+            failures.push(format!("{case}: {said}"));
+        }
     };
     let manifest = |root: &Path| -> serde_json::Value {
         serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap()
@@ -1973,7 +1976,7 @@ fn the_grok_update_remedy_follows_what_update_repairs() {
     let mut record = manifest(&root);
     record["files"][".grok/hooks/codeflow.json"]["ownership"] = "managed-nonsense".into();
     write(&root, ".codeflow/manifest.json", &record.to_string());
-    hand_edit(&root, ".grok/hooks/codeflow.json");
+    hand_edit("rejected ownership", &root, ".grok/hooks/codeflow.json", "");
 
     // A managed record for a file update does not ship.
     let dir = scaffolded("--minimal");
@@ -1983,7 +1986,7 @@ fn the_grok_update_remedy_follows_what_update_repairs() {
     record["files"][".grok/hooks/custom.json"] =
         record["files"][".grok/hooks/codeflow.json"].clone();
     write(&root, ".codeflow/manifest.json", &record.to_string());
-    hand_edit(&root, ".grok/hooks/custom.json");
+    hand_edit("fabricated record", &root, ".grok/hooks/custom.json", "");
 
     // A shipped file the project opted out of.
     let dir = scaffolded("--minimal");
@@ -1995,7 +1998,68 @@ fn the_grok_update_remedy_follows_what_update_repairs() {
         ".codeflow/project.toml",
         &format!("{project_toml}\n[scaffold]\nignore = [\".grok/hooks/codeflow.json\"]\n"),
     );
-    hand_edit(&root, ".grok/hooks/codeflow.json");
+    hand_edit(
+        "ignored",
+        &root,
+        ".grok/hooks/codeflow.json",
+        "`codeflow update` skips .grok/hooks/codeflow.json: ignored via [scaffold] ignore",
+    );
+
+    // PR 35 review round 4, finding 3: update skips a hook file that is a
+    // symlink, or sits beneath one, and writes nothing for it.
+    #[cfg(unix)]
+    for link in [".grok/hooks/codeflow.json", ".grok/hooks"] {
+        let dir = scaffolded("--minimal");
+        let root = project(&dir);
+        std::fs::remove_dir_all(root.join(".grok/hooks")).unwrap();
+        write(&root, "shared/hooks/codeflow.json", &stale);
+        if link == ".grok/hooks" {
+            std::os::unix::fs::symlink(root.join("shared/hooks"), root.join(link)).unwrap();
+        } else {
+            std::fs::create_dir_all(root.join(".grok/hooks")).unwrap();
+            std::os::unix::fs::symlink(root.join("shared/hooks/codeflow.json"), root.join(link))
+                .unwrap();
+        }
+        codeflow(&root, &["update"]);
+        assert_eq!(read(&root, "shared/hooks/codeflow.json"), stale, "{link}");
+        assert!(
+            !root.join("shared/hooks/codeflow.json.new").exists(),
+            "{link}"
+        );
+        hand_edit(
+            &format!("symlink at {link}"),
+            &root,
+            ".grok/hooks/codeflow.json",
+            &format!("`codeflow update` skips .grok/hooks/codeflow.json: {link} is a symlink"),
+        );
+    }
+
+    // PR 35 review round 4, finding 3: the adopter restores the old
+    // wrapper after an install of the current version. The shipped file
+    // equals the baseline, so update keeps the edit and writes no `.new`:
+    // offering update again would loop.
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    write(&root, ".grok/hooks/codeflow.json", &stale);
+    codeflow(&root, &["update"]);
+    assert_eq!(read(&root, ".grok/hooks/codeflow.json"), stale);
+    assert!(!root.join(".grok/hooks/codeflow.json.new").exists());
+    hand_edit(
+        "kept modification",
+        &root,
+        ".grok/hooks/codeflow.json",
+        "`codeflow update` leaves your edit to .grok/hooks/codeflow.json as it is and writes no `.new`, since the shipped version has not changed since it was last installed, and .codeflow/.baseline/.grok/hooks/codeflow.json holds that shipped version",
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // The edit the finding names clears it: the baseline is the shipped
+    // version.
+    let shipped = read(&root, ".codeflow/.baseline/.grok/hooks/codeflow.json");
+    write(&root, ".grok/hooks/codeflow.json", &shipped);
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shipped shell guard grok runs refused"),
+        "{after}"
+    );
 }
 
 /// PR 35 review finding 5: a stale `CodeFlow` hook in

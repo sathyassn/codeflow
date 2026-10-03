@@ -15,24 +15,16 @@ use crate::settings::is_codeflow_command;
 
 /// The tool call the canary sends: a `PreToolUse` payload in the shape Grok
 /// Build 1.0.46 sends (every field under both spellings, captured from a
-/// live session) for a shell command that the non-relaxable
-/// dangerous-command floor refuses under any policy. The guard only reads
-/// it; nothing runs the command.
+/// live session), with no `cwd`, for a shell command the non-relaxable
+/// catastrophic-command floor refuses by its pattern alone, before any
+/// path, directory or environment is read. The guard only reads it;
+/// nothing runs the command.
 pub(super) const CANARY_PAYLOAD: &str = concat!(
     r#"{"hookEventName":"pre_tool_use","toolName":"run_terminal_command","#,
-    r#""toolInput":{"command":"rm -rf /","description":"codeflow doctor canary"},"#,
+    r#""toolInput":{"command":"dd if=/dev/zero of=/dev/sda","description":"codeflow doctor canary"},"#,
     r#""hook_event_name":"PreToolUse","tool_name":"run_terminal_command","#,
-    r#""tool_input":{"command":"rm -rf /","description":"codeflow doctor canary"}}"#
+    r#""tool_input":{"command":"dd if=/dev/zero of=/dev/sda","description":"codeflow doctor canary"}}"#
 );
-
-/// The canary payload with `cwd` set to `scratch`, so the guard judges it
-/// against an empty folder and records nothing in the project.
-pub(super) fn canary_payload(scratch: &Path) -> String {
-    let mut payload: Value =
-        serde_json::from_str(CANARY_PAYLOAD).expect("the canary payload is JSON");
-    payload["cwd"] = Value::from(scratch.to_string_lossy().into_owned());
-    payload.to_string()
-}
 
 /// Where a `PATH` value resolves `codeflow`: the first entry holding an
 /// executable `codeflow`, canonical (symlinks resolved). A relative entry
@@ -401,15 +393,24 @@ mod tests {
         assert_eq!(path_codeflow(&path(&[&plain]), &root), None);
     }
 
+    /// PR 35 review round 4, finding 1: the floor refuses the canary
+    /// command by its substring pattern, the first check it makes, so the
+    /// decision reads no path, directory or environment.
     #[test]
-    fn the_canary_payload_judges_in_the_scratch_folder() {
-        let scratch = Path::new("/tmp/codeflow-grok-canary-x");
-        let text = canary_payload(scratch);
-        let payload = crate::hooks::git_guard::HookPayload::parse(&text).unwrap();
-        assert_eq!(payload.cwd.as_deref(), Some(scratch));
-        assert_eq!(payload.shell_command(), Some("rm -rf /"));
-        let value: Value = serde_json::from_str(&text).unwrap();
-        assert!(value.get("hookEventName").is_some());
+    fn the_canary_command_is_refused_by_its_pattern_alone() {
+        let payload = crate::hooks::git_guard::HookPayload::parse(CANARY_PAYLOAD).unwrap();
+        assert_eq!(payload.cwd, None);
+        let command = payload.shell_command().unwrap();
+        let violations = crate::hooks::exec_guard::evaluate_floor(command);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].rule, "security.dangerous_commands");
+        assert!(
+            violations[0]
+                .message
+                .contains("Destructive operation detected (pattern `dd if=/dev/zero`)"),
+            "{}",
+            violations[0].message
+        );
     }
 
     /// Grok's matcher semantics (`xai-grok-hooks` `matcher.rs`): empty or
@@ -556,7 +557,7 @@ mod tests {
         assert_eq!(value["toolName"], value["tool_name"]);
         assert_eq!(value["toolInput"], value["tool_input"]);
         let payload = crate::hooks::git_guard::HookPayload::parse(CANARY_PAYLOAD).unwrap();
-        assert_eq!(payload.shell_command(), Some("rm -rf /"));
+        assert_eq!(payload.shell_command(), Some("dd if=/dev/zero of=/dev/sda"));
     }
 
     #[test]

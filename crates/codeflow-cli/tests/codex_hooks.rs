@@ -325,13 +325,6 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
     child.wait_with_output().unwrap()
 }
 
-/// TSK-215: the shipped Grok exec-guard command, run through the shell as
-/// Grok runs it, refuses a dangerous command in the payload Grok Build
-/// 1.0.46 sends, where every field comes under both spellings (captured
-/// from a live session), and lets an ordinary command through. Grok shows
-/// only a hook's first stderr line as its deny reason, so the refusal also
-/// comes as Grok's deny decision on stdout with the rule and its sanctioned
-/// path; a Claude-shaped payload gets nothing on stdout.
 /// PR 35 review round 2, finding 1: doctor's Grok canary never runs a
 /// `codeflow` that PATH finds in the repository. A planted `bin/codeflow`
 /// ahead of the real one would write a marker outside the scratch
@@ -489,6 +482,123 @@ fn the_grok_canary_runs_nothing_a_swapped_launch_path_could_answer() {
     }
 }
 
+/// Every file under `dir`, with its bytes, so a test can show that a run
+/// changed nothing there.
+#[cfg(unix)]
+fn tree(dir: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_dir() {
+                files.insert(path.clone(), Vec::new());
+                pending.push(path);
+            } else if kind.is_symlink() {
+                let target = std::fs::read_link(&path).unwrap();
+                files.insert(path, target.into_os_string().into_encoded_bytes());
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// PR 35 review round 4, finding 1: the Grok canary reads no repository.
+/// Doctor's temporary folder sits inside a repository, directly or through
+/// a symlink: first a plain one, then one with two remotes and no
+/// `origin`. Each time the canary refuses with Grok's deny answer, and
+/// nothing in that repository changes, a refusal ledger included.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_reads_and_writes_no_repository_around_tmpdir() {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut failures = Vec::new();
+    for form in ["direct", "symlink"] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+        std::fs::copy(
+            root.join("assets/base/grok/hooks.json"),
+            project.join(".grok/hooks/codeflow.json"),
+        )
+        .unwrap();
+        let parent = dir.path().join("parent");
+        std::fs::create_dir_all(parent.join("tmp")).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&parent)
+                .args(args)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "git {args:?}: {status:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        let tmpdir = if form == "symlink" {
+            let link = dir.path().join("tmp-link");
+            std::os::unix::fs::symlink(parent.join("tmp"), &link).unwrap();
+            link
+        } else {
+            parent.join("tmp")
+        };
+        for remotes in ["no remotes", "two remotes, no origin"] {
+            if remotes != "no remotes" {
+                git(&["remote", "add", "upstream", "https://example.invalid/a.git"]);
+                git(&["remote", "add", "fork", "https://example.invalid/b.git"]);
+            }
+            let before = tree(&parent);
+            let out = std::process::Command::new(&exe)
+                .args(["doctor", "--check", "grok"])
+                .current_dir(&project)
+                .env("TMPDIR", &tmpdir)
+                .env("GROK_HOME", dir.path().join("grok-home"))
+                .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+                .env_remove("GROK_FOLDER_TRUST")
+                .output()
+                .unwrap();
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let refused = said.contains("canary: the shipped shell guard grok runs refused");
+            let after = tree(&parent);
+            let changed: Vec<_> = after
+                .iter()
+                .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
+                .map(|(path, _)| path.display().to_string())
+                .chain(
+                    before
+                        .keys()
+                        .filter(|path| !after.contains_key(*path))
+                        .map(|path| path.display().to_string()),
+                )
+                .collect();
+            if !refused || !changed.is_empty() {
+                let first = said.lines().next().unwrap_or_default().to_string();
+                failures.push(format!(
+                    "{form} TMPDIR, {remotes}: refused {refused}; changed {changed:?}; {first}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// TSK-215: the shipped Grok exec-guard command, run through the shell as
+/// Grok runs it, refuses a dangerous command in the payload Grok Build
+/// 1.0.46 sends, where every field comes under both spellings (captured
+/// from a live session), and lets an ordinary command through. Grok shows
+/// only a hook's first stderr line as its deny reason, so the refusal also
+/// comes as Grok's deny decision on stdout with the rule and its sanctioned
+/// path; a Claude-shaped payload gets nothing on stdout.
 #[cfg(unix)]
 #[test]
 fn grok_wiring_refuses_in_the_payload_grok_sends() {

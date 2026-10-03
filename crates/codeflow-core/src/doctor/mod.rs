@@ -87,13 +87,15 @@ type ExecCommandFn = fn(&str, &[&str]) -> Result<String, String>;
 /// Callback to execute a command with UTF-8 stdin.
 type ExecCommandStdinFn = fn(&str, &[&str], &str) -> Result<String, String>;
 
-/// Callback that judges a hook payload with the exec-guard handler in this
-/// process, as `codeflow hook exec-guard --contract 3` would.
+/// Callback that judges a hook payload in this process with the exec-guard
+/// handler `codeflow hook exec-guard --contract 3` runs, under the
+/// catastrophic-command floor alone and with nothing else read or recorded.
 type GuardCanaryFn = fn(&str) -> CapturedRun;
 
-/// Callback that says whether `codeflow update` rewrites a file (relative
-/// to the project root) by update's own rules.
-type UpdateRepairsFn = fn(&Path, &str) -> bool;
+/// Callback that says what `codeflow update` would do with a file (relative
+/// to the project root), by update's own steps; `None` when update does not
+/// manage it.
+type UpdatePlanFn = fn(&Path, &str) -> Option<crate::scaffold::update::Decision>;
 
 /// How a run ended: its exit code (`None` when a signal ended it) and what
 /// it printed.
@@ -118,17 +120,20 @@ pub struct Options {
     pub exec_command: Option<ExecCommandFn>,
     /// Runs a command with text on stdin and returns its output.
     pub exec_command_stdin: Option<ExecCommandStdinFn>,
-    /// The exec-guard handler, judged in this process: the grok guard
-    /// canary. The CLI supplies the handler `codeflow hook exec-guard`
-    /// runs. `None` runs no canary. Doctor never executes a binary to prove
-    /// a refusal, since a path can be swapped between finding the binary
-    /// and running it.
+    /// The exec-guard handler, judged in this process under the
+    /// catastrophic-command floor with fixed inputs: the grok guard canary.
+    /// The CLI supplies the handler `codeflow hook exec-guard` runs, with no
+    /// policy, repository, working directory or environment read and no
+    /// refusal recorded. `None` runs no canary. Doctor never executes a
+    /// binary to prove a refusal, since a path can be swapped between
+    /// finding the binary and running it.
     pub guard_canary: Option<GuardCanaryFn>,
-    /// Whether `codeflow update` rewrites a hook file, by update's own
-    /// rules (the shipped manifest, the installed record, `[scaffold]
-    /// ignore`); the CLI supplies it from its embedded assets. `None` says
-    /// no file is repaired, so each gets the hand edit.
-    pub update_repairs: Option<UpdateRepairsFn>,
+    /// What `codeflow update` would do with a hook file, by update's own
+    /// steps (the shipped manifest, the installed record and baseline,
+    /// `[scaffold] ignore`, symlinks); the CLI supplies it from its
+    /// embedded assets. `None` says no file is repaired, so each gets the
+    /// hand edit.
+    pub update_plan: Option<UpdatePlanFn>,
     /// The path the running doctor was started from, only to report
     /// whether PATH resolves `codeflow` elsewhere; never executed.
     pub codeflow_exe: Option<PathBuf>,
@@ -1064,7 +1069,7 @@ fn check_grok(opts: &Options) -> CheckResult {
         match grok_canary(opts, root) {
             GrokCanary::Refused => (
                 status,
-                format!("{message}; canary: the shipped shell guard grok runs refused a dangerous command (exit 2 with a deny answer, judged in process by this doctor's own exec-guard; nothing was executed){note}"),
+                format!("{message}; canary: the shipped shell guard grok runs refused a dangerous command (exit 2 with a deny answer, judged in process by this doctor's exec-guard handler under the catastrophic-command floor, reading no policy, repository or environment; nothing was executed){note}"),
             ),
             GrokCanary::NotRun(why) => (status, format!("{message}; guard canary not run ({why}){note}")),
             GrokCanary::Customised(files) => (
@@ -1082,13 +1087,33 @@ fn check_grok(opts: &Options) -> CheckResult {
         }
     } else {
         let files = templated.join(", ");
-        // `codeflow update` repairs only the files its own rules rewrite;
-        // any other file is the adopter's to fix by hand.
-        let (managed, unmanaged): (Vec<&str>, Vec<&str>) =
-            templated.iter().map(String::as_str).partition(|path| {
-                opts.update_repairs
-                    .is_some_and(|repairs| repairs(root, path))
-            });
+        // `codeflow update` repairs a file only where its own steps rewrite
+        // it or propose a merge beside it; any other file is the adopter's
+        // to fix by hand, and the finding says why update leaves it.
+        let mut managed: Vec<&str> = Vec::new();
+        let mut unmanaged: Vec<&str> = Vec::new();
+        let mut left = String::new();
+        for path in &templated {
+            use crate::scaffold::update::Decision;
+            match opts.update_plan.and_then(|plan| plan(root, path)) {
+                Some(Decision::Rewrite | Decision::ConflictProposal) => managed.push(path),
+                Some(Decision::KeptUserModification) => {
+                    let baseline = format!(".codeflow/.baseline/{path}");
+                    let shipped = if root.join(&baseline).is_file() {
+                        format!(", and {baseline} holds that shipped version")
+                    } else {
+                        String::new()
+                    };
+                    left = format!("{left}; `codeflow update` leaves your edit to {path} as it is and writes no `.new`, since the shipped version has not changed since it was last installed{shipped}");
+                    unmanaged.push(path);
+                }
+                Some(Decision::Skipped(reason)) => {
+                    left = format!("{left}; `codeflow update` skips {path}: {reason}");
+                    unmanaged.push(path);
+                }
+                Some(Decision::Current) | None => unmanaged.push(path),
+            }
+        }
         let pending: Vec<String> = managed
             .iter()
             .map(|path| format!("{path}.new"))
@@ -1109,7 +1134,7 @@ fn check_grok(opts: &Options) -> CheckResult {
         };
         (
             Status::Warn(remedy),
-            format!(".grok/hooks present, {presence}: grok skips the CodeFlow hook commands in {files}, since each carries a `$` grok reads as an unset environment variable, so those CodeFlow hooks do not run in a grok session{pending} (git hooks and CI enforce regardless)"),
+            format!(".grok/hooks present, {presence}: grok skips the CodeFlow hook commands in {files}, since each carries a `$` grok reads as an unset environment variable, so those CodeFlow hooks do not run in a grok session{pending}{left} (git hooks and CI enforce regardless)"),
         )
     };
     CheckResult {
@@ -1119,10 +1144,6 @@ fn check_grok(opts: &Options) -> CheckResult {
         duration: start.elapsed(),
     }
 }
-
-/// How long the guard canary may run: the timeout the shipped hooks give
-/// grok.
-const GROK_CANARY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The outcome of checking the shell guard grok would run.
 enum GrokCanary {
@@ -1141,13 +1162,15 @@ enum GrokCanary {
 
 /// Check the exec-guard grok runs before a shell tool call without running
 /// anything the repository controls. When a shipped exec-guard handler is
-/// bound where the shell tool hits it, doctor judges a canary payload the
-/// dangerous-command floor refuses under any policy with the same handler
-/// `codeflow hook exec-guard --contract 3` runs, in this process, with an
-/// empty scratch directory as the payload's working directory. No binary
-/// is executed, so no file swapped in on disk can answer for it. It counts
-/// as refused only on grok's blocking contract: exit 2, a reason on stderr
-/// and a JSON deny answer on stdout. It does not start grok.
+/// bound where the shell tool hits it, doctor judges a fixed canary payload
+/// with the handler `codeflow hook exec-guard --contract 3` runs, in this
+/// process and under the catastrophic-command floor alone, which no policy
+/// relaxes. No policy file, repository, working directory or environment is
+/// read and no refusal is recorded, so the judgement is a function of the
+/// fixed payload and runs to completion with no thread or timeout. No
+/// binary is executed, so no file swapped in on disk can answer for it. It
+/// counts as refused only on grok's blocking contract: exit 2, a reason on
+/// stderr and a JSON deny answer on stdout. It does not start grok.
 fn grok_canary(opts: &Options, root: &Path) -> GrokCanary {
     match grok_hooks::shell_guard(root) {
         grok_hooks::ShellGuard::Missing => return GrokCanary::NoGuard,
@@ -1159,23 +1182,7 @@ fn grok_canary(opts: &Options, root: &Path) -> GrokCanary {
     let Some(canary) = opts.guard_canary else {
         return GrokCanary::NotRun("this doctor carries no exec-guard to judge it with".into());
     };
-    let scratch = std::env::temp_dir().join(format!("codeflow-grok-canary-{}", ulid::Ulid::new()));
-    if let Err(error) = std::fs::create_dir(&scratch) {
-        return GrokCanary::NotRun(format!("scratch directory: {error}"));
-    }
-    let payload = grok_hooks::canary_payload(&scratch);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(canary(&payload));
-    });
-    let result = receiver
-        .recv_timeout(GROK_CANARY_TIMEOUT)
-        .map_err(|_| probe_timeout_message(GROK_CANARY_TIMEOUT));
-    let _ = std::fs::remove_dir_all(&scratch);
-    let run = match result {
-        Ok(run) => run,
-        Err(error) => return GrokCanary::NotRefused(error),
-    };
+    let run = canary(grok_hooks::CANARY_PAYLOAD);
     let reason = run
         .stderr
         .lines()
@@ -3724,7 +3731,10 @@ mod tests {
         // contract, and an update that repairs the shipped grok hook file,
         // unless a test says otherwise.
         opts.guard_canary = Some(|_| canary_refused());
-        opts.update_repairs = Some(|_, path| path == ".grok/hooks/codeflow.json");
+        opts.update_plan = Some(|_, path| {
+            (path == ".grok/hooks/codeflow.json")
+                .then_some(crate::scaffold::update::Decision::Rewrite)
+        });
         (dir, opts, home)
     }
 
@@ -3741,11 +3751,11 @@ mod tests {
         }
     }
 
-    /// TSK-215 AC-3: with the shipped guard bound, doctor judges the
+    /// TSK-215 AC-3: with the shipped guard bound, doctor judges the fixed
     /// canary payload with the exec-guard in process (PR 35 review round 3,
-    /// finding 1), its working directory an empty scratch folder; it never
-    /// executes a binary or looks `codeflow` up to run it, and a refusal is
-    /// reported beside the trust reading.
+    /// finding 1), the payload carrying no working directory (round 4,
+    /// finding 1); it never executes a binary or looks `codeflow` up to run
+    /// it, and a refusal is reported beside the trust reading.
     #[test]
     fn a_grok_guard_that_refuses_the_canary_is_reported() {
         let (_dir, mut opts, _) = grok_project(Some(TRUSTED));
@@ -3759,11 +3769,7 @@ mod tests {
         opts.exec_command = Some(|cmd, _| panic!("the canary executes nothing: {cmd}"));
         opts.exec_command_stdin = Some(|cmd, _, _| panic!("the canary executes nothing: {cmd}"));
         opts.guard_canary = Some(|payload| {
-            let parsed = crate::hooks::git_guard::HookPayload::parse(payload).unwrap();
-            assert_eq!(parsed.shell_command(), Some("rm -rf /"));
-            let cwd = parsed.cwd.unwrap();
-            assert!(cwd.is_dir(), "{}", cwd.display());
-            assert_eq!(std::fs::read_dir(&cwd).unwrap().count(), 0);
+            assert_eq!(payload, grok_hooks::CANARY_PAYLOAD);
             canary_refused()
         });
         let r = check_grok(&opts);
@@ -3884,7 +3890,7 @@ mod tests {
             panic!("{:?} {}", r.status, r.message);
         };
         assert!(
-            remedy.contains("`codeflow update` does not manage .grok/hooks/custom.json"),
+            remedy.contains("`codeflow update` does not rewrite .grok/hooks/custom.json"),
             "{remedy}"
         );
         assert!(!remedy.contains("run `codeflow update`"), "{remedy}");
@@ -3897,13 +3903,13 @@ mod tests {
         };
         assert!(remedy.contains("run `codeflow update`"), "{remedy}");
 
-        opts.update_repairs = None;
+        opts.update_plan = None;
         let r = check_grok(&opts);
         let Status::Warn(remedy) = &r.status else {
             panic!("{:?} {}", r.status, r.message);
         };
         assert!(
-            remedy.contains("`codeflow update` does not manage .grok/hooks/codeflow.json"),
+            remedy.contains("`codeflow update` does not rewrite .grok/hooks/codeflow.json"),
             "{remedy}"
         );
     }

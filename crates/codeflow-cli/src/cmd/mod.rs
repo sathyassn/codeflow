@@ -65,7 +65,7 @@ pub fn render_outcome(
     render_outcome_to(
         &mut std::io::stderr(),
         plane,
-        root,
+        Some(root),
         violations,
         notes,
         block_code,
@@ -73,12 +73,13 @@ pub fn render_outcome(
 }
 
 /// [`render_outcome`] into `err` in place of stderr: the doctor's in-process
-/// guard canary reads the same lines a harness would (TSK-215).
+/// guard canary reads the same lines a harness would (TSK-215). With no
+/// `root` the refusal is not recorded in any ledger.
 #[must_use]
 pub fn render_outcome_to(
     err: &mut dyn std::io::Write,
     plane: &str,
-    root: &Path,
+    root: Option<&Path>,
     violations: &[Violation],
     notes: &[codeflow_core::remedy::Finding],
     block_code: i32,
@@ -100,7 +101,7 @@ pub fn render_stage(
     render_findings(
         &mut std::io::stderr(),
         plane,
-        root,
+        Some(root),
         &report.relayed,
         &report.violations,
         &report.notes,
@@ -113,7 +114,7 @@ pub fn render_stage(
 fn render_findings(
     err: &mut dyn std::io::Write,
     plane: &str,
-    root: &Path,
+    root: Option<&Path>,
     relayed: &[String],
     violations: &[Violation],
     notes: &[codeflow_core::remedy::Finding],
@@ -130,7 +131,9 @@ fn render_findings(
         let _ = writeln!(err, "{}", v.render(plane));
     }
     let stopped = any_blocking(violations);
-    record_refusal(root, plane, violations, refused_by, stopped);
+    if let Some(root) = root {
+        record_refusal(root, plane, violations, refused_by, stopped);
+    }
     // The closing line says whether the operation was stopped (R-80).
     if !relayed.is_empty() || !violations.is_empty() || !notes.is_empty() {
         let operation = operation_of(plane);
