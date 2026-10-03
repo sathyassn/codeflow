@@ -20,6 +20,10 @@
       "ownership": "managed",
       "pristine_sha256": "0ee00ddd28dd3ced03a8edea64d9f6d2d025fb851e4b9875c22acae2d35f9cb3"
     },
+    "osv-scanner.toml": {
+      "ownership": "managed",
+      "pristine_sha256": "ceb4afa97fcea183b6b7b250ce2d93e155bc7d8ee482c028a834d7320b809082"
+    },
     "package-lock.json": {
       "ownership": "managed",
       "pristine_sha256": "84f256eec55e0ea43ef58c932bd565d1106864a14c454fa982939b0434681277"

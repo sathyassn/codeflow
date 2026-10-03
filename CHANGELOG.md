@@ -60,6 +60,15 @@ erratum below, never an edit of the section.
   checkout before it builds, and the build counted that untracked file.
   The file is now ignored, so a release build reports `dirty=false`.
 
+<!-- codeflow:release-impact patch -->
+- **A docs portal no longer fails its dependency audit on an unreachable
+  advisory.** GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which Astro
+  uses only to time its build-time cache of remote images, has no fixed
+  version yet. The portal starter now ships an `osv-scanner.toml` that
+  ignores it, with its reason, until 2026-11-30. The CI template's audit
+  step also now names that file correctly: osv-scanner reads
+  `osv-scanner.toml` beside the lockfile, never `.osv-scanner.toml`.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
