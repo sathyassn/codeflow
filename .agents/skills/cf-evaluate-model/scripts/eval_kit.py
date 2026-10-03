@@ -41,6 +41,10 @@ except ImportError:  # POSIX
     msvcrt = None
 # What msvcrt.locking raises while another process holds the lock.
 LOCK_BUSY = getattr(errno, "EDEADLOCK", errno.EDEADLK)
+# The byte msvcrt.locking takes on Windows, where a byte-range lock is
+# mandatory: far past the marker's content, so reading the marker through
+# another handle is never refused, and within the 32-bit offset it accepts.
+LOCK_OFFSET = 1 << 30
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -3968,8 +3972,8 @@ def registration_lock(run_root: Path):
     registers and settles a trial under it, and grading takes its inventory
     and reads the registrations under it, so a trial finishing in parallel is
     never half seen. POSIX takes it with flock and Windows with
-    msvcrt.locking on the marker's first byte; a platform with neither is
-    refused, never left to race."""
+    msvcrt.locking on one byte past the marker's content (LOCK_OFFSET); a
+    platform with neither is refused, never left to race."""
 
     if fcntl is None and msvcrt is None:
         raise EvalError("this platform has no file lock, so trials cannot be materialized or graded safely")
@@ -3978,7 +3982,7 @@ def registration_lock(run_root: Path):
             fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
         else:
             while True:
-                marker.seek(0)
+                os.lseek(marker.fileno(), LOCK_OFFSET, os.SEEK_SET)
                 try:
                     msvcrt.locking(marker.fileno(), msvcrt.LK_LOCK, 1)
                     break
@@ -3993,7 +3997,7 @@ def registration_lock(run_root: Path):
             if fcntl is not None:
                 fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
             else:
-                marker.seek(0)
+                os.lseek(marker.fileno(), LOCK_OFFSET, os.SEEK_SET)
                 msvcrt.locking(marker.fileno(), msvcrt.LK_UNLCK, 1)
 
 

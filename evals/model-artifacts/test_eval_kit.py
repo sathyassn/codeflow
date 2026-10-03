@@ -4173,8 +4173,10 @@ print(json.dumps(seen, sort_keys=True))
 
     def test_the_registration_lock_is_chosen_per_platform(self) -> None:
         # POSIX locks the marker with flock, Windows with msvcrt.locking on
-        # its first byte, retrying while another process holds it; with
-        # neither, materializing and grading are refused rather than raced.
+        # one byte far past its content, retrying while another process holds
+        # it, so reading the marker under the lock is never refused there;
+        # with neither, materializing and grading are refused rather than
+        # raced.
         # Each side is faked, so either host checks both.
         calls: list[tuple] = []
 
@@ -4202,8 +4204,11 @@ print(json.dumps(seen, sort_keys=True))
             return list(calls)
 
         self.assertEqual([("flock", "LOCK_EX"), ("held",), ("flock", "LOCK_UN")], held(FakeFcntl(), FakeMsvcrt()))
+        at = eval_kit.LOCK_OFFSET
+        self.assertGreater(at, (self.run_root / eval_kit.RUN_MARKER).stat().st_size)
+        self.assertLess(at, 1 << 31)
         self.assertEqual(
-            [("locking", "LK_LOCK", 1, 0), ("locking", "LK_LOCK", 1, 0), ("held",), ("locking", "LK_UNLCK", 1, 0)],
+            [("locking", "LK_LOCK", 1, at), ("locking", "LK_LOCK", 1, at), ("held",), ("locking", "LK_UNLCK", 1, at)],
             held(None, FakeMsvcrt()),
         )
         with self.assertRaisesRegex(eval_kit.EvalError, "no file lock"):
