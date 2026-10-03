@@ -1203,6 +1203,51 @@ Criteria
         assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
     }
 
+    /// Review round 3 (PR 44): an inline HTML comment never changes the
+    /// result. Each case is judged with and without a comment, and both
+    /// must match the expected result; a real `<output>` or `<path>` token
+    /// outside a comment still empties the entry.
+    #[test]
+    fn an_inline_comment_never_changes_the_deliverables_result() {
+        let section = |text: &str| task_body("Some description", Some(text));
+        let description = |text: &str| task_body(text, None);
+        let pairs: [(&str, &str, bool, bool); 7] = [
+            (
+                "- guide: `docs/guide.md`",
+                "- guide: `docs/guide.md` <!-- TODO: <path> -->",
+                false,
+                true,
+            ),
+            (
+                "- the guide",
+                "- the guide <!-- a\n  multi-line note -->",
+                false,
+                true,
+            ),
+            ("- TODO", "- TODO <!-- decision -> pending -->", true, true),
+            ("- [ ]", "- [ ] <!-- x > y -->", true, true),
+            ("- <path>", "- <path> <!-- note -->", true, true),
+            (
+                "- the <output>",
+                "- the <output> <!-- the guide -->",
+                true,
+                true,
+            ),
+            (
+                "Some description",
+                "Some description <!-- edits docs/guide.md -->",
+                true,
+                false,
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (plain, commented, warns, in_section) in pairs {
+            let body: &dyn Fn(&str) -> String = if in_section { &section } else { &description };
+            wrong.extend(wrong_cases(&[plain, commented], warns, body));
+        }
+        assert!(wrong.is_empty(), "wrong cases:\n{}", wrong.join("\n"));
+    }
+
     /// Review round 1 (PR 44): an empty list or checklist item, a
     /// placeholder or the template's own entry form fills nothing; a
     /// substantive entry, provisional or not, does.

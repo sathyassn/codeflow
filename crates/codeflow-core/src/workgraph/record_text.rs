@@ -388,13 +388,17 @@ const PLACEHOLDERS: &[&str] = &[
 
 /// Whether a Deliverables section has one substantive entry: a list item,
 /// paragraph or fenced block, never a heading, with words other than
-/// placeholders.
+/// placeholders. An inline HTML comment, delimited by `<!--` and `-->`
+/// and possibly spanning lines, never reaches the entry, so it never
+/// changes the result; other inline HTML is dropped too, except the
+/// template's `<output>` and `<path>` tokens, which empty their entry.
 fn has_entry(markdown: &str) -> bool {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, TextMergeStream};
 
     let mut entry = String::new();
     let mut filled = false;
     let mut in_heading = false;
+    let mut in_comment = false;
     for event in TextMergeStream::new(Parser::new_ext(markdown, Options::empty())) {
         match event {
             Event::Start(Tag::Heading { .. }) => {
@@ -404,7 +408,17 @@ fn has_entry(markdown: &str) -> bool {
             }
             Event::End(TagEnd::Heading(_)) => in_heading = false,
             _ if in_heading => {}
-            Event::Text(text) | Event::Code(text) | Event::InlineHtml(text) => {
+            Event::InlineHtml(html) => {
+                if in_comment {
+                    in_comment = !html.contains("-->");
+                } else if let Some(rest) = html.strip_prefix("<!--") {
+                    in_comment = !rest.contains("-->");
+                } else if is_template_token(&html) {
+                    entry.push_str(&html);
+                    entry.push(' ');
+                }
+            }
+            Event::Text(text) | Event::Code(text) => {
                 entry.push_str(&text);
                 entry.push(' ');
             }
@@ -423,24 +437,20 @@ fn has_entry(markdown: &str) -> bool {
     filled || is_entry(&entry)
 }
 
-/// Whether one entry is substantive. The template's `<output>` and `<path>`
-/// tokens are looked for first, before any markup is stripped.
+/// Whether inline HTML is one of the template's placeholder tokens.
+fn is_template_token(html: &str) -> bool {
+    let html = html.trim().to_lowercase();
+    html == "<output>" || html == "<path>"
+}
+
+/// Whether one entry is substantive: an entry holding the template's
+/// `<output>` or `<path>` token is not, whatever else it says.
 fn is_entry(text: &str) -> bool {
     let lower = text.to_lowercase();
     if lower.contains("<output>") || lower.contains("<path>") {
         return false;
     }
-    let mut visible = String::new();
-    let mut in_tag = false;
-    for c in text.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' if in_tag => in_tag = false,
-            _ if !in_tag => visible.push(c),
-            _ => {}
-        }
-    }
-    let visible = visible.trim_start();
+    let visible = text.trim_start();
     let visible = ["[ ]", "[x]", "[X]"]
         .iter()
         .find_map(|checkbox| visible.strip_prefix(checkbox))
