@@ -1,0 +1,11 @@
+id = "TSK-213"
+uid = "56a06daa-e561-44fe-9047-9f719b0549ed"
+kind = "TSK"
+title = "one rule for how one model family calls another"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T06:50:05Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
