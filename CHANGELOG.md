@@ -188,7 +188,9 @@ erratum below, never an edit of the section.
   "a reopened task keeps its criteria as the anchored target has them",
   though the target holds no criteria to keep. Such a task now completes
   with its new criteria. A task the target already records still keeps
-  its criteria across a reopen.
+  its criteria across a reopen, also when the branch moves its record to
+  another layout or retargets it, and whether the target is read from a
+  stale local branch or an older comparison base.
 
 ## [3.0.0]
 
