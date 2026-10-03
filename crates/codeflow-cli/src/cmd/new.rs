@@ -120,8 +120,12 @@ pub enum TaskCommand {
         /// Existing local or remote-tracking non-task branch this task will integrate into.
         #[arg(long = "into", value_name = "BRANCH")]
         integration_target: Option<String>,
-        /// File a follow-up of this task: records `follow_up_of`, inherits its
-        /// epic and target, and must run on a plan/ branch of that target.
+        /// File a follow-up of this task: records `follow_up_of` and inherits
+        /// its target. An epic task's follow-up inherits the epic and is filed
+        /// on a plan/ branch. A standalone task never uses a plan/ branch and
+        /// the command refuses one: its follow-up is a standalone task, filed
+        /// on a task branch cut from the target, with its record filled in and
+        /// committed, then claimed with `work claim`.
         #[arg(
             long,
             value_name = "TSK-NNN",
@@ -431,7 +435,9 @@ fn resume_task(id: &str) -> i32 {
     }
 }
 
-/// `task new --follow-up-of`: one command, one planning pull request.
+/// `task new --follow-up-of`: one command, then one pull request: the
+/// epic's batched amendment, or the follow-up's own task pull request when
+/// its source is standalone.
 /// Where durable work is tracked, its id is issued from the registry like
 /// any other task (SPC-013 R-12).
 fn run_follow_up(source: &str, title: &str) -> i32 {

@@ -63,9 +63,14 @@ impl History {
         let listing = OnceCell::new();
         let advertised = OnceCell::new();
         let answer = OnceCell::new();
+        let anchor = OnceCell::new();
+        let fetch_failed = OnceCell::new();
         let destination = Destination {
             listing: &listing,
             answer: &answer,
+            anchor: &anchor,
+            fetch_failed: &fetch_failed,
+            fork: None,
             url: self.remote.path().to_str(),
             advertised: &advertised,
             namespace: None,
@@ -402,9 +407,14 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
     let listing = OnceCell::new();
     let advertised = OnceCell::new();
     let answer = OnceCell::new();
+    let anchor = OnceCell::new();
+    let fetch_failed = OnceCell::new();
     let destination = Destination {
         listing: &listing,
         answer: &answer,
+        anchor: &anchor,
+        fetch_failed: &fetch_failed,
+        fork: None,
         url: h.remote.path().to_str(),
         advertised: &advertised,
         namespace: None,

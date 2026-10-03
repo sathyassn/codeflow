@@ -243,6 +243,10 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// An epic's own acceptance block that does not bind to its review or
+    /// whose waiver is no planning amendment the review saw (R-33, R-60).
+    EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
+        "correct the epic's own acceptance block and have the review cover it: the block names the reviewed commit, after which only the epic's status and Closeout change, and each waiver names a planning-only commit that amends that criterion and that the reviewed commit contains; for an epic still open, write the corrected block to a file and run `codeflow epic status <id> complete --acceptance <file>`; for an epic this change already completes, replace the fenced `yaml` acceptance block in the Closeout of {path} with the corrected one in this pull request and rerun `codeflow ci`, since a complete epic is never reopened ({note})";
     /// A completion bound to its reviewed commit: evidence, not a refusal.
     ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
         "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
@@ -271,9 +275,6 @@ catalog! {
     /// A deprecated policy key.
     POLICY_DEPRECATED = Step::Codeflow("codeflow update"),
         "`codeflow update` removes it, or delete {key} from .codeflow/policy.json";
-    /// A local target branch behind its upstream.
-    TARGET_BEHIND_UPSTREAM = Step::Git("git fetch"),
-        "fast-forward '{local}' with `git fetch . {upstream}:{local}` (or `git merge --ff-only {upstream}` while on it)";
 
     // Protected branches and the sanctioned landing path.
 
@@ -395,6 +396,9 @@ catalog! {
     /// A range whose base ref does not resolve.
     CI_BASE_UNRESOLVED = Step::Codeflow("codeflow ci"),
         "fetch the base branch (`git fetch`), or name the range: `codeflow ci --base <ref> --head <ref>`";
+    /// A base git itself refuses to resolve, naming git's own cause.
+    CI_BASE_REFUSED = Step::Codeflow("codeflow ci"),
+        "fix the cause git names, such as a replace ref it cannot follow or a `GIT_REPLACE_REF_BASE` without a trailing slash, which git 2.55 and later refuse; then rerun `codeflow ci --base <ref> --head <ref>`";
     /// A range git could not diff or list.
     CI_RANGE_UNREADABLE = Step::Git("git fetch"),
         "fetch the whole range (`git fetch --unshallow`, or a CI checkout with fetch-depth 0), then rerun `codeflow ci`";

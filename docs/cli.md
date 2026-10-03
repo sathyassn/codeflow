@@ -100,7 +100,7 @@ behave.
 | | `-e, --epic <EPC-NNN>` | Parent epic id. Mutually exclusive with --standalone-reason. |
 | | `--standalone-reason <REASON>` | Why this durable task does not belong to an epic; may run on its task branch. |
 | | `--into <BRANCH>` | Existing local or remote-tracking non-task branch this task will integrate into. |
-| | `--follow-up-of <TSK-NNN>` | File a follow-up of this task: records `follow_up_of`, inherits its epic and target, and must run on a plan/ branch of that target. |
+| | `--follow-up-of <TSK-NNN>` | File a follow-up of this task: records `follow_up_of` and inherits its target. An epic task's follow-up inherits the epic and is filed on a plan/ branch. A standalone task never uses a plan/ branch and the command refuses one: its follow-up is a standalone task, filed on a task branch cut from the target, with its record filled in and committed, then claimed with `work claim`. |
 | | `--resume <TSK-NNN>` | Write the record of a reservation whose write was interrupted. |
 | | `[TITLE]` | Task title. |
 | `codeflow task status <ID> <STATUS>` | | Change a task's status through the transition rules |

@@ -449,6 +449,30 @@ fn pattern_at(repo: &Repository, tip: Oid, default: &str) -> Result<Option<Strin
     }
 }
 
+/// The tip the destination advertises for `branch`, made available here:
+/// fetched into the object store when this clone lacks it, no ref moved.
+///
+/// # Errors
+///
+/// Returns why the tip is not here: the destination does not advertise
+/// `branch`, or its tip is missing and cannot be fetched.
+pub fn advertised_tip_here(
+    repo_root: &Path,
+    destination: &Destination,
+    branch: &str,
+) -> Result<Oid, String> {
+    let tip = destination
+        .heads
+        .iter()
+        .chain(destination.default.iter())
+        .find(|(name, _)| name == branch)
+        .map(|(_, tip)| *tip)
+        .ok_or_else(|| format!("the destination advertises no branch '{branch}'"))?;
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    ensure_objects(repo_root, &repo, destination, &[(branch, tip)])?;
+    Ok(tip)
+}
+
 /// Make sure every `(branch, tip)` commit is here, fetching the missing
 /// ones from the destination into the object store.
 fn ensure_objects(
@@ -1542,6 +1566,12 @@ fn judge(
             .into_values()
             .flat_map(|held| held.findings),
     );
+    // An epic closed on its line or on the release line binds where its
+    // own block was introduced, as on any line (R-33, R-60).
+    let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
+    findings.extend(super::acceptance::epic_completions_in_range(
+        &repo, &at_anchor, &graph, head_oid, true,
+    ));
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
     record_sources.retain(|path, _| !direct_records.contains(path));
@@ -2010,6 +2040,19 @@ fn recorded_first_parent(odb: &git2::Odb<'_>, commit: Oid) -> Result<Option<Oid>
         }
     }
     Ok(None)
+}
+
+/// The history overlay of the repository at `repo_root`: a non-empty
+/// graft file or a replace ref, as the release judge finds it. The push
+/// set treats a clone with one as unable to prove two histories unrelated.
+///
+/// # Errors
+///
+/// Returns a message when the repository, a graft file or the refs cannot
+/// be read.
+pub fn history_overlay_at(repo_root: &Path) -> Result<Option<String>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    history_overlay(&repo)
 }
 
 /// A local overlay that makes git or libgit2 read commits' parents or
