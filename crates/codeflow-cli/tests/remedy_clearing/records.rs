@@ -543,8 +543,10 @@ fn epic_yaml(reviewed: &str, ac1: &str) -> String {
 /// its record path.
 fn plan_epic(root: &Path, title: &str) -> String {
     let out = codeflow(root, &["epic", "new", title]);
+    // The printed path is native: Windows separates it with `\`.
     let path = out
         .split_whitespace()
+        .map(|word| word.replace('\\', "/"))
         .find(|word| word.contains("project-management/epics/"))
         .unwrap_or_else(|| panic!("no epic path in:\n{out}"));
     let rel = path[path.find("project-management/").unwrap()..].to_string();
