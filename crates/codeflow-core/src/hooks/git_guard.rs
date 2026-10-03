@@ -256,12 +256,14 @@ fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
 /// Parsed `PreToolUse` hook payload (the fields the guard reads).
 ///
 /// Claude and Codex send `snake_case` (`tool_name`, `tool_input`). Grok Build
-/// sends `camelCase` (`toolName`, `toolInput`) with shell tool `run_terminal_command`.
+/// sends `camelCase` (`toolName`, `toolInput`) with shell tool
+/// `run_terminal_command`, and since 1.0.46 each field under both spellings;
+/// [`HookPayload::parse`] folds the spellings into one.
 #[derive(Debug, Deserialize)]
 pub struct HookPayload {
-    #[serde(default, alias = "toolName")]
+    #[serde(default)]
     pub tool_name: String,
-    #[serde(default, alias = "toolInput")]
+    #[serde(default)]
     pub tool_input: ToolInput,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
@@ -300,13 +302,31 @@ impl HookPayload {
     /// [`PayloadError::Malformed`] when the input is not a JSON object or a
     /// field the guard reads has the wrong type; the message names the field.
     pub fn parse(json: &str) -> Result<Self, PayloadError> {
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(json).map_err(|e| PayloadError::Malformed(e.to_string()))?;
-        if !value.is_object() {
+        let Some(object) = value.as_object_mut() else {
             return Err(PayloadError::Malformed(format!(
                 "a JSON {} where an object belongs",
                 json_kind(&value)
             )));
+        };
+        // One field under two spellings: equal values are one field; values
+        // that disagree name two calls, and reading either one could judge a
+        // command other than the one the harness runs.
+        for (snake, camel) in [("tool_name", "toolName"), ("tool_input", "toolInput")] {
+            if let Some(camel_value) = object.remove(camel) {
+                match object.get(snake) {
+                    Some(snake_value) if *snake_value != camel_value => {
+                        return Err(PayloadError::Malformed(format!(
+                            "fields `{snake}` and `{camel}` disagree"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        object.insert(snake.to_string(), camel_value);
+                    }
+                }
+            }
         }
         if let Some((field, expected, found)) = wrong_field_type(&value) {
             return Err(PayloadError::Malformed(format!(
@@ -7737,6 +7757,39 @@ mod tests {
         let p = HookPayload::parse(json).unwrap();
         assert_eq!(p.shell_command(), Some("git status"));
         assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    /// TSK-215: Grok Build 1.0.46 sends each field under both spellings
+    /// (captured from a live session). Equal duplicates are one field; the
+    /// guard reads the command instead of dropping the payload as unreadable
+    /// and allowing it.
+    #[test]
+    fn test_payload_parse_grok_with_both_spellings() {
+        let json = r#"{
+            "hookEventName": "pre_tool_use",
+            "cwd": "/repo",
+            "toolName": "run_terminal_command",
+            "toolInput": {"command": "git commit -m x", "description": "d"},
+            "hook_event_name": "PreToolUse",
+            "tool_name": "run_terminal_command",
+            "tool_input": {"command": "git commit -m x", "description": "d"}
+        }"#;
+        let p = HookPayload::parse(json).unwrap();
+        assert_eq!(p.shell_command(), Some("git commit -m x"));
+        assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/repo")));
+    }
+
+    /// Spellings that disagree name two different calls; reading either one
+    /// could judge a command other than the one the harness runs.
+    #[test]
+    fn test_payload_conflicting_spellings_are_malformed() {
+        for json in [
+            r#"{"toolName":"run_terminal_command","tool_name":"Write","tool_input":{"command":"git commit"}}"#,
+            r#"{"tool_name":"Bash","toolInput":{"command":"git commit"},"tool_input":{"command":"git status"}}"#,
+        ] {
+            let err = HookPayload::parse(json).unwrap_err();
+            assert!(err.to_string().contains("disagree"), "{json}: {err}");
+        }
     }
 
     #[test]

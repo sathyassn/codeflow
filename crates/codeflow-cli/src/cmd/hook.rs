@@ -20,7 +20,7 @@
 //! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
 //!   tmux; legacy result mode preserves its existing terminal signal contract.
 
-use std::io::{Read, Write as _};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
@@ -292,7 +292,43 @@ fn git_guard(stdin: &str) -> i32 {
     if !report.violations.is_empty() {
         eprintln!("policy source: {}", authority.source);
     }
+    grok_deny(
+        &mut std::io::stdout(),
+        stdin,
+        "git-guard",
+        &report.violations,
+        &authority.source,
+    );
     super::render_outcome("git-guard", &root, &report.violations, &report.notes, 2)
+}
+
+/// Grok shows only a hook's first stderr line as the reason it denied a
+/// tool call, which here is the policy source line. For a Grok payload
+/// (its `hookEventName` field) that the guard refuses, also write Grok's
+/// deny decision on stdout carrying the whole refusal: each rule, its
+/// sanctioned path and the policy source (TSK-215). Claude and Codex
+/// payloads get nothing on stdout, as before.
+fn grok_deny(
+    out: &mut dyn Write,
+    stdin: &str,
+    plane: &str,
+    violations: &[codeflow_core::hooks::Violation],
+    source: &dyn std::fmt::Display,
+) {
+    if !codeflow_core::hooks::any_blocking(violations) {
+        return;
+    }
+    let from_grok = serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .is_some_and(|value| value.get("hookEventName").is_some());
+    if !from_grok {
+        return;
+    }
+    let mut reason: Vec<String> = violations.iter().map(|v| v.render(plane)).collect();
+    reason.push(format!("policy source: {source}"));
+    let decision = serde_json::json!({"decision": "deny", "reason": reason.join("\n")});
+    let _ = writeln!(out, "{decision}");
+    let _ = out.flush();
 }
 
 /// The finding for a guard input it could not read. Fail open with a
@@ -317,17 +353,76 @@ const HARNESS_HOOK_FILES: &str = "`.claude/settings.json`, `.codex/hooks.json` o
 /// construction (serde ignores extra harness fields and accepts Grok camelCase
 /// aliases), so this one handler serves Claude, Codex, and Grok Build.
 fn exec_guard(stdin: &str) -> i32 {
+    exec_guard_to(stdin, &mut std::io::stdout(), &mut std::io::stderr())
+}
+
+/// What `codeflow hook exec-guard --contract 3` answers a payload under the
+/// catastrophic-command floor alone, which no policy relaxes: the doctor's
+/// grok guard canary (TSK-215). It runs the handler's own payload parsing,
+/// Grok deny answer and refusal lines in this process, with its stdout and
+/// stderr captured. Its inputs are fixed: it reads no policy file,
+/// repository, working directory or environment and records no refusal,
+/// so nothing around the doctor can change its answer. Nothing is spawned
+/// or re-executed, so no executable swapped in on disk can answer for it.
+#[must_use]
+pub fn exec_guard_canary(stdin: &str) -> codeflow_core::doctor::CapturedRun {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = match shell_call(stdin, &mut err) {
+        Some((_, command)) => {
+            let violations = exec_guard::evaluate_floor(&command);
+            exec_guard_answer(&mut out, &mut err, stdin, &violations, &FLOOR_SOURCE, None)
+        }
+        _ => 0,
+    };
+    codeflow_core::doctor::CapturedRun {
+        code: Some(code),
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
+    }
+}
+
+/// The policy source the canary names: the floor, with no policy read.
+const FLOOR_SOURCE: &str = "the catastrophic-command floor, which no policy relaxes";
+
+/// The payload and its shell command, or `None` when the payload does not
+/// read (a warning, allowing) or is not a supported shell tool call.
+fn shell_call(stdin: &str, err: &mut dyn Write) -> Option<(git_guard::HookPayload, String)> {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
             let finding = payload_finding("exec-guard", &e);
-            eprintln!("{}", finding.line("codeflow exec-guard", "warning"));
-            return 0;
+            let _ = writeln!(err, "{}", finding.line("codeflow exec-guard", "warning"));
+            return None;
         }
     };
-    let Some(command) = payload.shell_command() else {
-        return 0; // not a supported shell tool call
+    let command = payload.shell_command()?.to_string();
+    Some((payload, command))
+}
+
+/// The exec-guard answer to `violations`: the policy source and Grok's deny
+/// decision when it refuses, then the refusal lines, recorded in the
+/// repository at `root` when there is one. Returns the exit code.
+fn exec_guard_answer(
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    stdin: &str,
+    violations: &[codeflow_core::hooks::Violation],
+    source: &dyn std::fmt::Display,
+    root: Option<&std::path::Path>,
+) -> i32 {
+    if !violations.is_empty() {
+        let _ = writeln!(err, "policy source: {source}");
+    }
+    grok_deny(out, stdin, "exec-guard", violations, source);
+    super::render_outcome_to(err, "exec-guard", root, violations, &[], 2)
+}
+
+fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let Some((payload, command)) = shell_call(stdin, err) else {
+        return 0; // unreadable, or not a supported shell tool call
     };
+    let command = command.as_str();
 
     let cwd = payload
         .cwd
@@ -342,7 +437,7 @@ fn exec_guard(stdin: &str) -> i32 {
             if codeflow_core::hooks::ref_authority::recovery_fetch(command, &cwd) {
                 return 0;
             }
-            eprintln!("codeflow hook: {error}");
+            let _ = writeln!(err, "codeflow hook: {error}");
             return 2;
         }
     };
@@ -354,10 +449,7 @@ fn exec_guard(stdin: &str) -> i32 {
         &cwd,
         &root,
     );
-    if !violations.is_empty() {
-        eprintln!("policy source: {}", authority.source);
-    }
-    super::render_outcome("exec-guard", &root, &violations, &[], 2)
+    exec_guard_answer(out, err, stdin, &violations, &authority.source, Some(&root))
 }
 
 fn edit_guard(stdin: &str) -> i32 {
@@ -403,6 +495,13 @@ fn edit_guard(stdin: &str) -> i32 {
             if !findings.is_empty() {
                 eprintln!("policy source: {}", authority.source);
             }
+            grok_deny(
+                &mut std::io::stdout(),
+                stdin,
+                "edit-guard",
+                &findings,
+                &authority.source,
+            );
             super::render_outcome("edit-guard", &root, &findings, &[], 2)
         }
         Err(error) => {
