@@ -206,8 +206,10 @@ jobs:
       #   warn  — reported, not failed (the shipped default);
       #   off   — skipped (only when both keys are off).
       # Record a justified suppression for an accepted or unreachable advisory in
-      # an .osv-scanner.toml allowlist (auto-discovered), so a transitive advisory
-      # in unchanged code cannot block an unrelated PR.
+      # an osv-scanner.toml in the same directory as the lockfile it covers
+      # (with no --config, as here, osv-scanner reads no other name and no
+      # parent directory), so a transitive advisory in unchanged code cannot
+      # block an unrelated PR.
       - name: dependency audit (osv-scanner)
         run: |
           set -u
@@ -237,7 +239,7 @@ jobs:
           elif printf '%s' "$out" | grep -qiE 'no package sources found|no packages found|no lockfiles'; then
             echo "No scannable manifests found — nothing to audit."
           elif [ "$level" = "block" ]; then
-            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in .osv-scanner.toml."
+            echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile."
             exit 1
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
