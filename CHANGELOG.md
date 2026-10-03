@@ -164,8 +164,11 @@ erratum below, never an edit of the section.
   symbolic links and registered worktrees, so `alias/pol*` with `alias`
   linked to `.codeflow` is refused. Patterns are read so they match at
   least every name the shell would: a plain set such as `[ab]` keeps its
-  members, any other bracket expression, POSIX classes included, matches
-  any one character, and only a `[` that never closes is literal. A `cd` or `pushd` operand other than a
+  members, any other bracket expression, POSIX classes and escapes
+  included, makes that part of the path match every name, a backslash
+  outside brackets makes the next character literal, and only a `[` with
+  no `]` after it is literal; a randomized test checks this against
+  Bash. A `cd` or `pushd` operand other than a
   plain literal path, such as `~1`, `cd -` or a pattern, counts as an
   unknown directory, and a redirection counts as a read only when it is
   `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and

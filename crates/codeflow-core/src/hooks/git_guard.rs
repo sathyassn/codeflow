@@ -1278,17 +1278,31 @@ enum GlobStop {
 }
 
 /// One file-name component of a shell pattern, read so that it matches at
-/// least every name the shell would (TSK-216 rounds 13 and 14): the guard's
-/// patterns only ever over-approximate. A run of `*` is one `*`. A bracket
-/// expression is parsed the POSIX way ([`bracket_end`]). A plain set of
-/// ASCII letters, digits, `.` and `_` keeps its members, which is exactly
-/// what the shell matches; every other expression (a negation, range,
-/// class, equivalence class, collating symbol or escape) becomes "any one
-/// character". Only a `[` with no valid closing `]`, and a stray `]`, are
-/// literal characters. The pattern always compiles, so no text becomes a
+/// least every name the shell would (TSK-216 rounds 13 to 15): the guard's
+/// patterns only ever over-approximate.
+///
+/// - A run of `*` is one `*`, and `?` is any one character.
+/// - Outside a bracket expression, a backslash makes the next character
+///   literal, as the shell reads it; a trailing backslash is literal.
+/// - A bracket expression whose members are only ASCII letters, digits,
+///   `.` and `_` keeps its members, which is exactly what the shell
+///   matches (`.[ab]*`), when no backslash follows its `[` and no other
+///   `]` follows its close. The command reader removes escapes before
+///   this reader sees a word, so `[p\\]]` arrives as `[p]]`; a later `]`
+///   may be where the shell closes the expression.
+/// - Any other `[` with a `]` somewhere after it makes the whole component
+///   match every name (`*`): a negation, range, class, equivalence class,
+///   collating symbol, nested `[`, backslash, or a close that a class or
+///   escape could move ([`bracket_end`]). That can only refuse more, and
+///   only for unusual patterns.
+/// - A `[` with no `]` after it, and a stray `]`, are literal characters,
+///   so colour output such as `e[32mhello` stays literal.
+///
+/// The pattern always compiles, so no text becomes an accidental
 /// match-everything glob.
 fn shell_pattern(text: &str) -> glob::Pattern {
     let chars: Vec<char> = text.chars().collect();
+    let every_name = || glob::Pattern::new("*").unwrap_or_default();
     let mut out = String::new();
     let mut i = 0;
     while i < chars.len() {
@@ -1299,41 +1313,54 @@ fn shell_pattern(text: &str) -> glob::Pattern {
                 }
                 out.push('*');
             }
-            '[' => match bracket_end(&chars, i) {
-                Some(end) => {
+            '\\' => match chars.get(i + 1) {
+                Some(next) => {
+                    out.push_str(&glob::Pattern::escape(&next.to_string()));
+                    i += 1;
+                }
+                None => out.push_str(&glob::Pattern::escape("\\")),
+            },
+            '[' => {
+                if !chars[i + 1..].contains(&']') {
+                    out.push_str("[[]");
+                    i += 1;
+                    continue;
+                }
+                let end = bracket_end(&chars, i, false);
+                let plain = end.filter(|&end| {
                     let members = &chars[i + 1..end];
-                    let plain = !members.is_empty()
+                    bracket_end(&chars, i, true) == Some(end)
+                        && !chars[i..].contains(&'\\')
+                        && !chars[end + 1..].contains(&']')
+                        && !members.is_empty()
                         && members
                             .iter()
-                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_'));
-                    if plain {
-                        out.push('[');
-                        out.extend(members);
-                        out.push(']');
-                    } else {
-                        out.push('?');
-                    }
-                    i = end;
-                }
-                None => out.push_str("[[]"),
-            },
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_'))
+                });
+                let Some(end) = plain else {
+                    return every_name();
+                };
+                out.push('[');
+                out.extend(&chars[i + 1..end]);
+                out.push(']');
+                i = end;
+            }
             ']' => out.push_str("[]]"),
             c => out.push(c),
         }
         i += 1;
     }
-    glob::Pattern::new(&out)
-        .or_else(|_| glob::Pattern::new(&glob::Pattern::escape(text)))
-        .unwrap_or_default()
+    glob::Pattern::new(&out).unwrap_or_else(|_| every_name())
 }
 
 /// Where the bracket expression opened at `chars[start]` (a `[`) closes,
 /// read the POSIX way: after an optional `!` or `^`, a `]` in first
 /// position is a member; `[:name:]`, `[=x=]` and `[.x.]` are whole units,
 /// so the `]` inside one never closes the expression; the expression
-/// closes at the first `]` after that. `None` when it never closes, and
-/// the `[` is then a literal character.
-fn bracket_end(chars: &[char], start: usize) -> Option<usize> {
+/// closes at the first `]` after that. With `escapes`, a backslash also
+/// makes the next character a plain member, as Bash reads it; without,
+/// it is a member itself, as POSIX reads it. `None` when it never closes.
+fn bracket_end(chars: &[char], start: usize, escapes: bool) -> Option<usize> {
     let mut at = start + 1;
     if matches!(chars.get(at), Some('!' | '^')) {
         at += 1;
@@ -1344,6 +1371,7 @@ fn bracket_end(chars: &[char], start: usize) -> Option<usize> {
     while at < chars.len() {
         match chars[at] {
             ']' => return Some(at),
+            '\\' if escapes => at += 2,
             '[' if matches!(chars.get(at + 1), Some(':' | '=' | '.')) => {
                 let kind = chars[at + 1];
                 let close = (at + 2..chars.len().saturating_sub(1))
@@ -9166,6 +9194,8 @@ mod tests {
         "[^p]olicy.json",
         "[![:alpha:]]olicy.json",
         "[pq]olicy.json",
+        "[p\\]]olicy.json",
+        "[pa\\[:alpha:]olicy.json",
         "[ab]olicy.json",
         "[a-q]olicy.json",
         "[p._]olicy.json",
@@ -9210,10 +9240,10 @@ mod tests {
     ];
 
     /// The guard's reading of a shell pattern always compiles and only
-    /// over-approximates: a bracket expression, closed the POSIX way past
-    /// its classes, keeps a plain member set and otherwise matches any one
-    /// character, and only a `[` that never closes is literal (TSK-216
-    /// rounds 13 and 14).
+    /// over-approximates: a plain member set keeps its members, any other
+    /// bracket expression makes the whole component match every name, a
+    /// backslash outside brackets makes the next character literal, and
+    /// only a `[` that never closes is literal (TSK-216 rounds 13 to 15).
     #[test]
     fn test_shell_pattern_reads_brackets_as_the_shell_does() {
         for (pattern, name, matches) in [
@@ -9238,7 +9268,18 @@ mod tests {
             ("x[", "x[", true),
             ("x[", "xa", false),
             ("x]", "x]", true),
-            ("[[:alpha:]_]olicy.json", "policy.jsonx", false),
+            ("[[:alpha:]_]olicy.json", "policy.jsonx", true),
+            ("[p\\]]olicy.json", "policy.json", true),
+            ("[p]]olicy.json", "policy.json", true),
+            ("[pa[:alpha:]olicy.json", "policy.json", true),
+            ("[ab][cd]", "policy.json", true),
+            ("[ab]\\n", "settings.json", true),
+            ("polic\\y.json", "policy.json", true),
+            ("polic\\y.json", "polic\\y.json", false),
+            ("pol\\*", "pol*", true),
+            ("pol\\*", "policy.json", false),
+            ("\\]", "]", true),
+            ("x\\", "x\\", true),
         ] {
             assert_eq!(
                 shell_pattern(pattern).matches(name),
@@ -9246,6 +9287,35 @@ mod tests {
                 "{pattern} {name}"
             );
         }
+    }
+
+    /// Bash's verdict on each `(pattern, name)` pair, from
+    /// `[[ name == pattern ]]`; `None` when the platform has no Bash.
+    fn bash_pattern_verdicts(pairs: &[(&str, &str)]) -> Option<Vec<bool>> {
+        let input = pairs
+            .iter()
+            .map(|(p, n)| [*p, "\t", *n, "\n"].concat())
+            .collect::<String>();
+        let script = "while IFS=$'\\t' read -r p n; do if [[ $n == $p ]]; then echo 1; else echo 0; fi; done";
+        let mut child = std::process::Command::new("bash")
+            .args(["-c", script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let mut stdin = child.stdin.take().unwrap();
+        let writer = std::thread::spawn(move || {
+            use std::io::Write as _;
+            stdin.write_all(input.as_bytes()).unwrap();
+        });
+        let out = child.wait_with_output().unwrap();
+        writer.join().unwrap();
+        let verdicts: Vec<bool> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l == "1")
+            .collect();
+        assert_eq!(verdicts.len(), pairs.len(), "bash answered every pair");
+        Some(verdicts)
     }
 
     /// Against the platform's Bash, where there is one: every name Bash's
@@ -9256,31 +9326,10 @@ mod tests {
             .iter()
             .flat_map(|p| SHELL_NAMES.iter().map(move |n| (*p, *n)))
             .collect();
-        let input = pairs
-            .iter()
-            .map(|(p, n)| [*p, "\t", *n, "\n"].concat())
-            .collect::<String>();
-        let script = "while IFS=$'\\t' read -r p n; do if [[ $n == $p ]]; then echo 1; else echo 0; fi; done";
-        let Ok(mut child) = std::process::Command::new("bash")
-            .args(["-c", script])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-        else {
+        let Some(verdicts) = bash_pattern_verdicts(&pairs) else {
             eprintln!("bash is not available; skipped");
             return;
         };
-        {
-            use std::io::Write as _;
-            let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(input.as_bytes()).unwrap();
-        }
-        let out = child.wait_with_output().unwrap();
-        let verdicts: Vec<bool> = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .map(|l| l == "1")
-            .collect();
-        assert_eq!(verdicts.len(), pairs.len(), "bash answered every pair");
         let mut bash_matched = Vec::new();
         for ((pattern, name), bash) in pairs.iter().zip(verdicts) {
             if bash {
@@ -9297,12 +9346,106 @@ mod tests {
             "[[:alpha:]_]olicy.json",
             "[[:alpha:][:digit:]]olicy.json",
             "[[:alpha:]]olicy.json",
+            "[p\\]]olicy.json",
+            "[pa\\[:alpha:]olicy.json",
         ] {
             assert!(
                 bash_matched.contains(&(pattern, "policy.json")),
                 "bash should match policy.json with {pattern}: {bash_matched:?}"
             );
         }
+    }
+
+    /// Random patterns over the characters that matter to bracket
+    /// expressions, escapes and wildcards, against the platform's Bash
+    /// (TSK-216 round 15): every pair Bash's `[[ name == pattern ]]`
+    /// matches, the guard's reading matches too. The seed is fixed, so a
+    /// failure names a pattern that reproduces.
+    #[test]
+    fn test_random_shell_patterns_never_match_less_than_bash() {
+        const PIECES: &[&str] = &[
+            "p",
+            "o",
+            "l",
+            "i",
+            "c",
+            "y",
+            ".",
+            "j",
+            "s",
+            "n",
+            "_",
+            "a",
+            "b",
+            "[",
+            "]",
+            "\\",
+            "!",
+            "^",
+            "-",
+            ":",
+            "*",
+            "?",
+            "x",
+            "[:alpha:]",
+            "[:digit:]",
+            "[[:alpha:]",
+            "olicy",
+            ".json",
+        ];
+        const NAMES: &[&str] = &[
+            "policy.json",
+            ".codeflow",
+            "hooks",
+            "x",
+            "]",
+            "[",
+            "\\",
+            "p",
+            "olicy.json",
+            "]olicy.json",
+            "-olicy.json",
+            "!",
+            "^",
+            ":",
+            "settings.json",
+            ".git",
+        ];
+        let mut state: u64 = 0x2016_0215_7a3c_9e11;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut patterns = Vec::new();
+        for _ in 0..3000 {
+            let len = 1 + next() % 8;
+            let pattern: String = (0..len)
+                .map(|_| PIECES[usize::try_from(next() % PIECES.len() as u64).unwrap()])
+                .collect();
+            patterns.push(pattern);
+        }
+        let pairs: Vec<(&str, &str)> = patterns
+            .iter()
+            .flat_map(|p| NAMES.iter().map(move |n| (p.as_str(), *n)))
+            .collect();
+        let Some(verdicts) = bash_pattern_verdicts(&pairs) else {
+            eprintln!("bash is not available; skipped");
+            return;
+        };
+        let missed: Vec<String> = pairs
+            .iter()
+            .zip(verdicts)
+            .filter(|((pattern, name), bash)| *bash && !shell_pattern(pattern).matches(name))
+            .map(|((pattern, name), _)| format!("{pattern} matches {name}"))
+            .collect();
+        assert!(
+            missed.is_empty(),
+            "bash matched {} pairs the guard does not: {:?}",
+            missed.len(),
+            &missed[..missed.len().min(20)]
+        );
     }
 
     /// A glob over more entries than the guard reads stops, and is then
