@@ -1380,13 +1380,55 @@ fn token_integrity_path_literal(
 }
 
 /// Whether a word holds pattern syntax some shell reads at run time: Bash's
-/// `*`, `?` and `[`, and the forms the guard reads conservatively, since a
-/// harness may run zsh or turn on extended patterns: `(` (extglob groups,
-/// zsh alternation and glob qualifiers), `^` and `#` (zsh extended globs)
-/// and a `~` after the first character (a zsh exclusion).
+/// `*`, `?` and `[`, and the forms the guard reads conservatively
+/// ([`conservative_glob`]).
 fn has_glob(word: &str) -> bool {
+    word.contains(['*', '?', '[']) || conservative_glob(word)
+}
+
+/// Whether a word holds pattern syntax the guard reads conservatively,
+/// since a harness may run zsh or turn on extended patterns (TSK-216 round
+/// 17): `(` or `)` (extglob groups, zsh groups, alternation and glob
+/// qualifiers, which can admit names that start with `.` and apply to
+/// every component, as `*/policy.json(D)` does), `^` and `#` (zsh extended
+/// globs), a `~` after the first character (a zsh exclusion), a zsh
+/// numeric range `<n-m>` (zsh reads any other `<` or `>` as a redirection,
+/// which ends the word), and `**` (any depth). Such a word matches every
+/// path below its longest literal directory prefix, at every depth,
+/// names that start with `.` included ([`expand_glob`]).
+fn conservative_glob(word: &str) -> bool {
     word.char_indices()
-        .any(|(at, c)| matches!(c, '*' | '?' | '[' | '(' | '^' | '#') || (c == '~' && at > 0))
+        .any(|(at, c)| matches!(c, '(' | ')' | '^' | '#') || (c == '~' && at > 0))
+        || word.contains("**")
+        || numeric_range(word)
+}
+
+/// Whether a word holds a zsh numeric range glob: `<`, optional digits,
+/// `-`, optional digits, `>` (`<->`, `<1-9>`).
+fn numeric_range(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    (0..chars.len()).any(|at| numeric_range_len(&chars[at..]).is_some())
+}
+
+/// The length of the zsh numeric range glob `chars` starts with, when it
+/// starts with one. zsh reads it as part of the word, never as a
+/// redirection (TSK-216 round 17).
+fn numeric_range_len(chars: &[char]) -> Option<usize> {
+    if chars.first() != Some(&'<') {
+        return None;
+    }
+    let digits = |from: usize| {
+        chars[from..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .count()
+    };
+    let dash = 1 + digits(1);
+    if chars.get(dash) != Some(&'-') {
+        return None;
+    }
+    let close = dash + 1 + digits(dash + 1);
+    (chars.get(close) == Some(&'>')).then_some(close + 1)
 }
 
 /// The most words one brace expansion yields before the guard stops
@@ -1752,21 +1794,79 @@ fn bracket_end(chars: &[char], start: usize, escapes: bool) -> Option<usize> {
 
 /// Expand a shell glob over the file system, as the shell would before the
 /// command runs. A component with pattern syntax ([`has_glob`]) is read by
-/// [`shell_pattern`], and `**` is zero or more directories; a
-/// name starting with `.` matches only a component that starts with `.`;
-/// matching ignores case. A name that is not UTF-8 cannot be matched as
-/// text, so it counts as a match of any wildcard component: the result
-/// over-approximates and never panics (TSK-216 round 4). Paths are joined
-/// as written, so a symbolic link in them is resolved by the caller's
-/// file-system-aware check.
+/// [`shell_pattern`], and a name starting with `.` matches only a component
+/// that starts with `.`; matching ignores case. A word the guard reads
+/// conservatively ([`conservative_glob`]) matches every path below its
+/// longest literal directory prefix ([`glob_prefix`]), at every depth,
+/// names that start with `.` and the entries of linked directories
+/// included, and each wild component then matches every name, so a `..`
+/// after one is followed too (TSK-216 round 17). A name that is not UTF-8
+/// cannot be matched as text, so it counts as a match of any wildcard
+/// component: the result over-approximates and never panics (TSK-216 round
+/// 4). Paths are joined as written, so a symbolic link in them is resolved
+/// by the caller's file-system-aware check.
 fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
+    let mut read = 0;
+    if !conservative_glob(&pattern.to_string_lossy()) {
+        return expand_components(pattern, false, &mut read);
+    }
+    let prefix = glob_prefix(pattern);
+    let mut found = every_path_below(&prefix, &mut read)?;
+    let after_wild = pattern.components().skip(prefix.components().count());
+    if after_wild
+        .into_iter()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        found.extend(expand_components(pattern, true, &mut read)?);
+    }
+    Ok(found)
+}
+
+/// Every path at or below `dir`, at every depth: names that start with `.`
+/// are included and linked directories are entered, each real directory
+/// once.
+fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobStop> {
+    let mut found = vec![dir.to_path_buf()];
+    let mut pending = vec![dir.to_path_buf()];
+    let mut entered = std::collections::HashSet::new();
+    while let Some(dir) = pending.pop() {
+        if let Ok(real) = std::fs::canonicalize(&dir) {
+            if !entered.insert(real) {
+                continue;
+            }
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            *read += 1;
+            if *read > GLOB_ENTRY_LIMIT {
+                return Err(GlobStop::TooManyEntries);
+            }
+            let path = dir.join(entry.file_name());
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
+    Ok(found)
+}
+
+/// [`expand_glob`] one component at a time. `**` is zero or more
+/// directories. With `every_name`, each wild component matches every
+/// name, names that start with `.` included.
+fn expand_components(
+    pattern: &Path,
+    every_name: bool,
+    read: &mut usize,
+) -> Result<Vec<PathBuf>, GlobStop> {
     let options = glob::MatchOptions {
         case_sensitive: false,
         require_literal_separator: true,
         require_literal_leading_dot: false,
     };
     let mut current: Vec<PathBuf> = vec![PathBuf::new()];
-    let mut read = 0;
     for component in pattern.components() {
         let text = component.as_os_str().to_string_lossy();
         let wild = matches!(component, std::path::Component::Normal(_)) && has_glob(&text);
@@ -1786,12 +1886,12 @@ fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
                     continue;
                 };
                 for entry in entries.flatten() {
-                    read += 1;
-                    if read > GLOB_ENTRY_LIMIT {
+                    *read += 1;
+                    if *read > GLOB_ENTRY_LIMIT {
                         return Err(GlobStop::TooManyEntries);
                     }
                     let name = entry.file_name();
-                    if name.to_str().is_some_and(|n| n.starts_with('.')) {
+                    if !every_name && name.to_str().is_some_and(|n| n.starts_with('.')) {
                         continue;
                     }
                     let path = dir.join(&name);
@@ -1805,26 +1905,26 @@ fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
             continue;
         }
         let matcher = shell_pattern(&text);
-        // A zsh glob qualifier such as `(D)` can include names that start
-        // with `.`, so a component with `(` reads them too.
-        let dotted = text.starts_with('.') || text.contains('(');
+        let dotted = every_name || text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
             for entry in entries.flatten() {
-                read += 1;
-                if read > GLOB_ENTRY_LIMIT {
+                *read += 1;
+                if *read > GLOB_ENTRY_LIMIT {
                     return Err(GlobStop::TooManyEntries);
                 }
                 let name = entry.file_name();
-                let keep = match name.to_str() {
-                    Some(text) => {
-                        (dotted || !text.starts_with('.')) && matcher.matches_with(text, options)
-                    }
-                    None => true,
-                };
+                let keep = every_name
+                    || match name.to_str() {
+                        Some(text) => {
+                            (dotted || !text.starts_with('.'))
+                                && matcher.matches_with(text, options)
+                        }
+                        None => true,
+                    };
                 if keep {
                     next.push(dir.join(&name));
                 }
@@ -1911,6 +2011,12 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
     if value.is_empty() || value.starts_with(['/', '~']) {
         return None;
     }
+    // A word read conservatively matches every path below its literal
+    // prefix, and from an unknown directory that may be any path
+    // (TSK-216 round 17).
+    if conservative_glob(value) {
+        return Some(EVERY_PATH_PATTERN);
+    }
     let parts: Vec<&str> = value.split('/').collect();
     let after_parent = parts
         .iter()
@@ -1931,7 +2037,7 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
     };
     let component_matches = |pattern: &str, name: &str| {
         if has_glob(pattern) {
-            (pattern.starts_with('.') || pattern.contains('(') || !name.starts_with('.'))
+            (pattern.starts_with('.') || !name.starts_with('.'))
                 && shell_pattern(pattern).matches_with(name, options)
         } else {
             pattern.eq_ignore_ascii_case(name)
@@ -1961,6 +2067,11 @@ fn word_could_name_spelled(value: &str) -> Option<&'static str> {
             })
         })
 }
+
+/// What a word read conservatively ([`conservative_glob`]) could name
+/// from a directory the guard cannot determine.
+const EVERY_PATH_PATTERN: &str =
+    "repository enforcement files (a pattern the guard reads as every path)";
 
 /// The most directories [`run_dirs`] lists before it gives up and reports
 /// the directory as unknown.
@@ -2412,10 +2523,14 @@ fn redirect_targets(segment: &str) -> Vec<String> {
             '<' | '>' if !single && !double && chars.get(i) != Some(&'(') => {
                 let (writes, after) = redirect_operator(&chars, i - 1);
                 let (target, end) = redirect_word(&chars, after);
+                // zsh reads a numeric range (`<1-9>`) as part of the
+                // target word, and Bash as two more redirections, so the
+                // text after the operator is read again for Bash's
+                // reading too (TSK-216 round 17).
+                i = if numeric_range(&target) { after } else { end };
                 if writes(&target) {
                     targets.push(target);
                 }
-                i = end;
             }
             _ => {}
         }
@@ -2466,6 +2581,9 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
     }
     let mut word = String::new();
     let (mut single, mut double) = (false, false);
+    // Parentheses attached to the word are part of it (`out(D)`, TSK-216
+    // round 17).
+    let mut parens = 0usize;
     while let Some(&c) = chars.get(i) {
         match c {
             '\'' if !double => single = !single,
@@ -2475,6 +2593,19 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
                 if let Some(&escaped) = chars.get(i) {
                     word.push(escaped);
                 }
+            }
+            '(' if !single && !double && !word.is_empty() => {
+                parens += 1;
+                word.push(c);
+            }
+            ')' if !single && !double && parens > 0 => {
+                parens -= 1;
+                word.push(c);
+            }
+            '<' if !single && !double && numeric_range_len(&chars[i..]).is_some() => {
+                let len = numeric_range_len(&chars[i..]).unwrap_or(1);
+                word.extend(&chars[i..i + len]);
+                i += len - 1;
             }
             c if !single
                 && !double
@@ -3965,7 +4096,8 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
 /// Split a command into simple-command segments, recursing into `$(…)` and
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
-/// boundaries.
+/// boundaries. Parentheses attached to a word with no blank before them
+/// ([`attached_paren`]: `word(D)`, `@(a)`) are part of that word.
 ///
 /// Text the shell does not execute is not a segment: a comment (an unquoted
 /// `#` that starts a word) and a heredoc body read as data. A body is data
@@ -3997,6 +4129,11 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     let mut bracket_arithmetic = 0usize;
     // Open `( … )` subshells and `{ … }` groups.
     let mut groups = 0usize;
+    // Open parentheses attached to a word with no blank before them: a
+    // zsh glob qualifier or group, or an extglob group (`word(D)`,
+    // `@(a)`), which is part of the word, never a subshell (TSK-216
+    // round 17).
+    let mut word_parens = 0usize;
     // Heredocs opened on the current line; their bodies follow its newline.
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut line = Line::default();
@@ -4056,7 +4193,11 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                     i += 1;
                 }
             }
-            '#' if arithmetic == 0 && bracket_arithmetic == 0 && starts_word(&chars, i) => {
+            '#' if arithmetic == 0
+                && bracket_arithmetic == 0
+                && word_parens == 0
+                && starts_word(&chars, i) =>
+            {
                 // A comment runs to the end of the line; the newline itself
                 // still ends the segment and starts any heredoc bodies.
                 while i < chars.len() && chars[i] != '\n' {
@@ -4064,6 +4205,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 }
             }
             '\n' => {
+                word_parens = 0;
                 // A line ending in `|` continues its pipeline past the
                 // heredoc bodies, so their readers are not all known yet.
                 let continues = ends_with_pipe(&chars, i);
@@ -4104,6 +4246,16 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 cur.push(c);
                 i += 1;
             }
+            '(' if attached_paren(&cur) => {
+                word_parens += 1;
+                cur.push(c);
+                i += 1;
+            }
+            ')' if word_parens > 0 => {
+                word_parens -= 1;
+                cur.push(c);
+                i += 1;
+            }
             // A group or process substitution in command position belongs to
             // the pipeline it sits in (`cat <<EOF | { bash; }`, `>(sh)`).
             '(' => {
@@ -4121,6 +4273,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 i += 1;
             }
             ';' => {
+                word_parens = 0;
                 line.end_segment(out, &mut cur, false);
                 i += 1;
             }
@@ -4165,6 +4318,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 i += 1;
             }
             '&' => {
+                word_parens = 0;
                 line.end_segment(out, &mut cur, false);
                 i += if chars.get(i + 1) == Some(&'&') { 2 } else { 1 };
             }
@@ -4174,6 +4328,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 i += 1;
             }
             '|' => {
+                word_parens = 0;
                 let or = chars.get(i + 1) == Some(&'|');
                 line.end_segment(out, &mut cur, !or);
                 i += if or { 2 } else { 1 };
@@ -4341,6 +4496,23 @@ fn substitution_output_runs(prefix: &str) -> bool {
 /// `true` when the character at `i` begins a shell word, where an unquoted
 /// `#` opens a comment. After a closing `)` or a backtick it continues the
 /// word instead (`$(x)#y`), so neither counts.
+/// Whether a `(` that follows `cur` is attached to the word `cur` ends
+/// with, as in `word(D)` or `@(a)`: zsh reads it as a glob qualifier or
+/// group, and Bash as an extglob group or a syntax error, so no shell runs
+/// it as a subshell. A `(` after a blank, an operator, a redirection
+/// (`<(` and `>(` substitute a process) or a word that is only `=` (zsh's
+/// `=(cmd)`) is not attached (TSK-216 round 17).
+fn attached_paren(cur: &str) -> bool {
+    let Some(last) = cur.chars().last() else {
+        return false;
+    };
+    if last.is_whitespace() || matches!(last, '<' | '>' | '|' | '&' | ';') {
+        return false;
+    }
+    let word = cur.rsplit(char::is_whitespace).next().unwrap_or(cur);
+    word != "="
+}
+
 pub(super) fn starts_word(chars: &[char], i: usize) -> bool {
     i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(')
 }
@@ -7594,6 +7766,10 @@ pub(crate) fn command_argv(segment: &str) -> Vec<String> {
 /// fd number, then `>`, `>>`, `>|`, `>&`, `<`, `<<`, `<<-`, `<<<`, `<>` or
 /// `<&`; or a leading `&>`/`&>>`. `None` when the word is not a redirection.
 fn redirect_operator_len(word: &str) -> Option<usize> {
+    let chars: Vec<char> = word.chars().take(64).collect();
+    if numeric_range_len(&chars).is_some() {
+        return None;
+    }
     if let Some(rest) = word.strip_prefix("&>") {
         return Some(if rest.starts_with('>') { 3 } else { 2 });
     }
@@ -9978,8 +10154,10 @@ mod tests {
         "a",
     ];
 
-    /// A repository holding enforcement files, `alias -> .codeflow` and a
-    /// few plain files, for comparing the guard with Bash's expansion.
+    /// A repository holding enforcement files, `alias -> .codeflow`, a
+    /// hidden link to it as the only link under `build` and a numeric one
+    /// under `out` (for zsh's qualifiers and ranges), and a few plain
+    /// files, for comparing the guard with a shell's expansion.
     #[cfg(unix)]
     fn expansion_fixture() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -9993,6 +10171,9 @@ mod tests {
             std::fs::write(root.join(file), "").unwrap();
         }
         std::os::unix::fs::symlink(".codeflow", root.join("alias")).unwrap();
+        std::os::unix::fs::symlink("../alias", root.join("build/.review-hidden")).unwrap();
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        std::os::unix::fs::symlink("../alias", root.join("out/7")).unwrap();
         (dir, root)
     }
 
@@ -10002,9 +10183,36 @@ mod tests {
     #[cfg(unix)]
     fn bash_expansions(root: &Path, words: &[String]) -> Option<Vec<Vec<String>>> {
         let script = "cd \"$1\" || exit 1; while IFS= read -r w; do eval \"printf '%s\\\\n' $w\" 2>/dev/null; printf '\\036\\n'; done";
-        let mut child = std::process::Command::new("bash")
-            .args(["-c", script, "bash"])
-            .arg(root)
+        let mut command = std::process::Command::new("bash");
+        command.args(["-c", script, "bash"]).arg(root);
+        shell_expansions(command, words)
+    }
+
+    /// What zsh with no startup files expands each word to from `root`:
+    /// `print -rl -- WORD` per word, as `zsh -f -c 'cd FIXTURE && print -rl
+    /// -- WORD'` prints it, in one process with each word in its own
+    /// subshell. With `extended`, `extendedglob` is set, so `^`, `#` and
+    /// `~` are patterns too. `None` when the platform has no zsh.
+    #[cfg(unix)]
+    fn zsh_expansions(root: &Path, words: &[String], extended: bool) -> Option<Vec<Vec<String>>> {
+        let script = "cd \"$1\" || exit 1; while IFS= read -r w; do ( eval \"print -rl -- $w\" ) 2>/dev/null; print -r -- $'\\036'; done";
+        let mut command = std::process::Command::new("zsh");
+        command.arg("-f");
+        if extended {
+            command.args(["-o", "extendedglob"]);
+        }
+        command.args(["-c", script, "zsh"]).arg(root);
+        shell_expansions(command, words)
+    }
+
+    /// Feed `words` to a shell loop that prints each expansion and then a
+    /// record separator (`\x1e`), and read one record per word.
+    #[cfg(unix)]
+    fn shell_expansions(
+        mut command: std::process::Command,
+        words: &[String],
+    ) -> Option<Vec<Vec<String>>> {
+        let mut child = command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -10023,8 +10231,76 @@ mod tests {
             .split("\u{1e}\n")
             .map(|record| record.lines().map(str::to_string).collect())
             .collect();
-        assert_eq!(records.len(), words.len() + 1, "bash answered every word");
+        assert_eq!(
+            records.len(),
+            words.len() + 1,
+            "the shell answered every word"
+        );
         Some(records)
+    }
+
+    /// Random words from a fixed seed: a start from `starts`, then one to
+    /// four of `pieces`.
+    #[cfg(unix)]
+    fn random_words(seed: u64, count: usize, starts: &[&str], pieces: &[&str]) -> Vec<String> {
+        let mut state = seed;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state).unwrap()
+        };
+        (0..count)
+            .map(|_| {
+                let start = starts[next() % starts.len()];
+                let len = 1 + next() % 4;
+                let body: String = (0..len).map(|_| pieces[next() % pieces.len()]).collect();
+                [start, body.as_str()].concat()
+            })
+            .collect()
+    }
+
+    /// The words whose expansion reaches an enforcement file (a path
+    /// strictly inside `.codeflow`, links resolved), and every command the
+    /// guard allows although one of them writes or removes what the word
+    /// expands to: `rm WORD`, `printf x > WORD` and a producer feeding
+    /// `xargs rm`.
+    #[cfg(unix)]
+    fn guard_misses(
+        root: &Path,
+        words: &[String],
+        records: &[Vec<String>],
+    ) -> (usize, Vec<String>) {
+        let policy = default_policy();
+        let refused = |command: &str| {
+            evaluate_report_at(command, &ctx(&policy, "task/x"), root)
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity")
+        };
+        let inside = root.join(".codeflow");
+        let mut reaching = 0;
+        let mut missed = Vec::new();
+        for (word, record) in words.iter().zip(records) {
+            let reaches = record.iter().any(|path| {
+                std::fs::canonicalize(root.join(path))
+                    .is_ok_and(|real| real.starts_with(&inside) && real != inside)
+            });
+            if !reaches {
+                continue;
+            }
+            reaching += 1;
+            for command in [
+                format!("rm {word}"),
+                format!("printf x > {word}"),
+                format!("printf '%s\\0' {word} | xargs -0 rm"),
+            ] {
+                if !refused(&command) {
+                    missed.push(command);
+                }
+            }
+        }
+        (reaching, missed)
     }
 
     /// Whole command words, generated from a fixed seed, through the guard's
@@ -10040,56 +10316,13 @@ mod tests {
     #[test]
     fn test_random_words_are_refused_whenever_bash_reaches_an_enforcement_file() {
         let (_dir, root) = expansion_fixture();
-        let mut state: u64 = 0x2016_1600_5eed_0001;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let pick = |n: u64| usize::try_from(n).unwrap();
-        let words: Vec<String> = (0..3000)
-            .map(|_| {
-                let start = ["alias/", ".codeflow/", "", "~+/alias/"][pick(next() % 4)];
-                let len = 1 + next() % 4;
-                let body: String = (0..len)
-                    .map(|_| EXPANSION_PIECES[pick(next() % EXPANSION_PIECES.len() as u64)])
-                    .collect();
-                [start, body.as_str()].concat()
-            })
-            .collect();
+        let starts = ["alias/", ".codeflow/", "", "~+/alias/"];
+        let words = random_words(0x2016_1600_5eed_0001, 3000, &starts, EXPANSION_PIECES);
         let Some(records) = bash_expansions(&root, &words) else {
             eprintln!("bash is not available; skipped");
             return;
         };
-        let policy = default_policy();
-        let refused = |command: &str| {
-            evaluate_report_at(command, &ctx(&policy, "task/x"), &root)
-                .violations
-                .iter()
-                .any(|v| v.rule == "git.hook_integrity")
-        };
-        let mut reaching = 0;
-        let mut missed = Vec::new();
-        for (word, record) in words.iter().zip(&records) {
-            let reaches = record.iter().any(|path| {
-                std::fs::canonicalize(root.join(path)).is_ok_and(|real| {
-                    real.starts_with(root.join(".codeflow")) && real != root.join(".codeflow")
-                })
-            });
-            if !reaches {
-                continue;
-            }
-            reaching += 1;
-            for command in [
-                format!("rm {word}"),
-                format!("printf '%s\\0' {word} | xargs -0 rm"),
-            ] {
-                if !refused(&command) {
-                    missed.push(command);
-                }
-            }
-        }
+        let (reaching, missed) = guard_misses(&root, &words, &records);
         assert!(
             reaching >= 50,
             "the words reach enforcement files often enough: {reaching}"
@@ -10097,6 +10330,92 @@ mod tests {
         assert!(
             missed.is_empty(),
             "bash reaches an enforcement file and the guard allows {} commands: {:?}",
+            missed.len(),
+            &missed[..missed.len().min(20)]
+        );
+    }
+
+    /// The pieces the zsh words add to [`EXPANSION_PIECES`]: glob
+    /// qualifiers, groups and alternation, numeric ranges and the
+    /// extended-glob operators. A `|` appears only inside a group, so no
+    /// word becomes a pipeline that runs something.
+    #[cfg(unix)]
+    const ZSH_PIECES: &[&str] = &[
+        "(D)",
+        "(.)",
+        "(/)",
+        "(N)",
+        "(-.)",
+        "(@)",
+        "(#q)",
+        "(",
+        ")",
+        "(p|x)",
+        "(*/)#",
+        "^",
+        "#",
+        "##",
+        "~",
+        "~x",
+        "<1-9>",
+        "<->",
+        "*/",
+        ".review-hidden",
+        "7",
+        "out/",
+    ];
+
+    /// The guard against zsh's real expansion, the way the Bash test above
+    /// compares it with Bash (TSK-216 round 17): words from a fixed seed,
+    /// built from the same safe alphabet plus zsh's glob qualifiers
+    /// (`(D)` admits names that start with `.` in every component), groups,
+    /// numeric ranges and extended-glob operators, are printed by `zsh -f`,
+    /// once as zsh starts and once with `extendedglob`. Whenever an
+    /// expansion resolves to an enforcement file, the guard must refuse the
+    /// word as a direct target, a redirect target and a producer for
+    /// `xargs rm`. Skipped only without zsh.
+    #[cfg(unix)]
+    #[test]
+    fn test_random_words_are_refused_whenever_zsh_reaches_an_enforcement_file() {
+        let (_dir, root) = expansion_fixture();
+        let pieces: Vec<&str> = EXPANSION_PIECES.iter().chain(ZSH_PIECES).copied().collect();
+        let starts = [
+            "alias/",
+            ".codeflow/",
+            "",
+            "build/",
+            "build/*/",
+            "out/",
+            "~+/alias/",
+        ];
+        // The reviewer's round 17 words lead the random ones.
+        let mut words: Vec<String> = [
+            "build/*/policy.json(D)",
+            "build/*(D)/policy.json",
+            "out/<1-9>/policy.json",
+            "out/(*/)#policy.json",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        words.extend(random_words(0x2017_1700_5eed_0001, 3000, &starts, &pieces));
+        let mut reaching = 0;
+        let mut missed = Vec::new();
+        for extended in [false, true] {
+            let Some(records) = zsh_expansions(&root, &words, extended) else {
+                eprintln!("zsh is not available; skipped");
+                return;
+            };
+            let (reached, found) = guard_misses(&root, &words, &records);
+            reaching += reached;
+            missed.extend(found);
+        }
+        assert!(
+            reaching >= 50,
+            "the words reach enforcement files often enough: {reaching}"
+        );
+        assert!(
+            missed.is_empty(),
+            "zsh reaches an enforcement file and the guard allows {} commands: {:?}",
             missed.len(),
             &missed[..missed.len().min(20)]
         );

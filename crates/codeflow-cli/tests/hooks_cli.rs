@@ -977,6 +977,38 @@ fn git_guard_refuses_the_reviewers_commands() {
     );
 }
 
+/// Round seventeen of the PR 36 review: a zsh glob qualifier such as `(D)`
+/// admits names that start with `.` in every component, so with only a
+/// hidden link under `build` leading to the policy folder, the reviewer's
+/// three commands reach the policy file and are refused. Ordinary globs
+/// over `build`, which Bash and zsh read without hidden names, still pass.
+#[cfg(unix)]
+#[test]
+fn git_guard_reads_a_zsh_qualifier_as_part_of_its_word() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::write(root.join("build/a.o"), "").unwrap();
+    std::os::unix::fs::symlink(".codeflow", root.join("alias")).unwrap();
+    std::os::unix::fs::symlink("../alias", root.join("build/.review-hidden")).unwrap();
+    assert_guard(
+        &root,
+        &[
+            "rm build/*/policy.json(D)",
+            "printf x > build/*/policy.json(D)",
+            r"printf '%s\0' build/*/policy.json(D) | xargs -0 rm",
+        ],
+        &[
+            "rm build/*.o",
+            "rm -rf build/*",
+            "ls build/*(D)",
+            "f() { rm -f build/a.o; }; f",
+        ],
+        "git.hook_integrity",
+    );
+}
+
 /// Round three, finding 5: in a linked worktree under `.claude/worktrees`,
 /// a recursive change of its root reaches its own enforcement files and is
 /// refused, while a harmless operation on the same root operand passes.

@@ -170,14 +170,19 @@ erratum below, never an edit of the section.
   no `]` after it is literal; a randomized test checks this against
   Bash. Brace expansion is read before patterns, under every reading a
   quote or escape allows, up to 64 words, and a larger one is refused;
-  `**` is zero or more directories, as zsh reads it; zsh and extglob
-  pattern syntax (`(`, `^`, `#`, `~`) matches every name; a word with a
+  a word with syntax the guard reads conservatively (`(` or `)`, zsh glob
+  qualifiers such as `(D)` included, `^`, `#`, a `~` after the first
+  character, a zsh range `<n-m>` or `**`) matches every path below its
+  longest literal directory, at every depth, names that start with `.`
+  included, and parentheses attached to a word are part of it, never a
+  subshell; a word with a
   part filled in at run time is read by the names after that part, and a
   value assigned on the same line counts; `~+` is the current directory
   and other tilde prefixes are read by name; a line that turns on
   `dotglob`, `GLOBIGNORE` or zsh `globdots` refuses a writing command
-  with a pattern. A second randomized test runs whole command words
-  through the guard and compares them with Bash's real expansion. A `cd` or `pushd` operand other than a
+  with a pattern. Two more randomized tests run whole command words
+  through the guard as direct targets, redirect targets and `xargs`
+  input, and compare them with the real expansion of Bash and of zsh. A `cd` or `pushd` operand other than a
   plain literal path, such as `~1`, `cd -` or a pattern, counts as an
   unknown directory, and a redirection counts as a read only when it is
   `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and
