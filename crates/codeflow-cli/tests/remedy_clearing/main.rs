@@ -2315,6 +2315,11 @@ fn clears_doctor_tool_missing() {
                 "{printed}"
             );
             // Doctor looks the CLI up on PATH; a stand-in is what it can see.
+            // On Windows the npm install is a `claude.cmd`, found through
+            // PATHEXT.
+            #[cfg(windows)]
+            let claude = bin.path().join("claude.cmd");
+            #[cfg(not(windows))]
             let claude = bin.path().join("claude");
             std::fs::write(&claude, "#!/bin/sh\nexit 0\n").unwrap();
             #[cfg(unix)]
@@ -2326,6 +2331,9 @@ fn clears_doctor_tool_missing() {
     );
 }
 
+// Cross-vendor delegation runs peers in tmux, which native Windows lacks;
+// `codeflow delegate init` refuses there and points at WSL2.
+#[cfg(unix)]
 #[test]
 fn clears_doctor_delegates() {
     // TSK-147 round 3 F5: the gaps this machine closes are proven here;

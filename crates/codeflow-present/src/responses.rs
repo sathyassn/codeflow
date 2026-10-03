@@ -819,7 +819,9 @@ fn current_form<'a>(
 /// written and whose cut back fails too, leaving the line in the file;
 /// ledger syncs before a replay that fail a given number of times; and
 /// lowered ledger bounds.
+// The service tests that inject write and sync faults run on Unix only.
 #[cfg(test)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) mod fault {
     use std::cell::Cell;
 

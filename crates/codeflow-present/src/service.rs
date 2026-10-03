@@ -1454,7 +1454,9 @@ impl OwnerLifeline {
         ready > 0 && event.fflags & libc::NOTE_EXIT != 0
     }
 
+    // The Linux and macOS versions read the owner's process handle.
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[allow(clippy::unused_self)]
     fn exit_reported(&self) -> bool {
         false
     }

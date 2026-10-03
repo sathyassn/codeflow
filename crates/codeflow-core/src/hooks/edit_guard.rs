@@ -375,12 +375,9 @@ fn covers(path: &str, pattern: &str) -> bool {
 }
 
 fn path_text(path: &Path) -> Result<String, EditError> {
-    let text = path
-        .to_str()
+    path.to_str()
         .ok_or_else(|| EditError("non-UTF-8 enforcement path".into()))?;
-    #[cfg(windows)]
-    let text = text.replace('\\', "/");
-    Ok(text.to_string())
+    Ok(crate::portable_path::slashed(path))
 }
 
 // APFS realpath retains the caller's case. Recover the directory entry's
@@ -411,7 +408,17 @@ pub(crate) fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+// Windows names one entry by its long name, an 8.3 short name (`RUNNER~1`)
+// and any letter case; a harness cwd and git's paths often differ in that
+// way. The canonical path names it once, in the plain drive form git writes.
+#[cfg(windows)]
+pub(crate) fn normalize_case(path: &mut PathBuf, _metadata: &std::fs::Metadata) {
+    if let Ok(real) = crate::portable_path::canonicalize(path) {
+        *path = real;
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(crate) fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata) {}
 
 // Resolve one component at a time. Lexically deleting `alias/..` before
@@ -434,7 +441,7 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
                 if resolve {
                     match std::fs::symlink_metadata(&result) {
                         Ok(metadata) if metadata.file_type().is_symlink() => {
-                            result = result.canonicalize().map_err(|e| {
+                            result = crate::portable_path::canonicalize(&result).map_err(|e| {
                                 EditError(format!("cannot resolve {}: {e}", result.display()))
                             })?;
                         }
@@ -723,13 +730,17 @@ mod tests {
     #[test]
     fn documented_hook_fixtures_protect_paths_and_allow_ordinary_edits() {
         let fixture = Fixture::new();
+        // The root goes into JSON strings: a Windows path's backslashes are
+        // escaped there.
+        let root = serde_json::to_string(fixture.root.to_str().unwrap()).unwrap();
+        let root = root.trim_matches('"');
         for data in [
             include_str!("../../tests/fixtures/edit-hooks/codex-apply-patch.json"),
             include_str!("../../tests/fixtures/edit-hooks/grok-write.json"),
             include_str!("../../tests/fixtures/edit-hooks/grok-search-replace.json"),
         ] {
             let protected = data
-                .replace("/fixture/project", fixture.root.to_str().unwrap())
+                .replace("/fixture/project", root)
                 .replace("hello.txt", ".codex/config.toml")
                 .replace("notes.txt", ".codeflow/policy.json");
             let request = parse_payload(&protected).unwrap().unwrap();

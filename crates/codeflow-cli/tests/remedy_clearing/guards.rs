@@ -335,8 +335,12 @@ fn clears_guard_unresolved() {
         "GUARD_UNRESOLVED",
     );
     let step = printed_command(&printed, "GUARD_UNRESOLVED", None);
+    // A bare word in a Bash command: on Windows with `/`, which Bash keeps.
     let literal = step
-        .replace("/path/to/repo", root.to_str().unwrap())
+        .replace(
+            "/path/to/repo",
+            &codeflow_core::portable_path::slashed(root),
+        )
         .replace('…', "status");
     assert_passes(root, "git-guard", &literal);
     run_printed(root, &literal, &[], &[]);
@@ -360,6 +364,10 @@ fn clears_guard_alias() {
     git(root, &["sync", "-q"]);
 }
 
+// The interactive lane the remedy names starts with `codeflow delegate
+// init`, which native Windows refuses by design (use WSL2), so the clearing
+// step exists only on Unix.
+#[cfg(unix)]
 #[test]
 fn clears_headless_peer_run() {
     let dir = ci_repo(DEFAULTS);
@@ -612,9 +620,18 @@ fn clears_hook_stdin_unread() {
     let dest = with_destination(&root);
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     commit_all(&root, "chore: add a quick target");
-    // A caller that hands the hook a stdin it cannot read: a directory.
+    // A caller that hands the hook a stdin it cannot read: a directory, or
+    // on Windows, which opens no directory as a file, a write-only handle.
     let finding = "could not read hook stdin";
+    #[cfg(not(windows))]
     let unreadable = std::fs::File::open(&root).unwrap();
+    #[cfg(windows)]
+    let unreadable = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(root.parent().unwrap().join("stdin-write-only"))
+        .unwrap();
     let before = text(
         &command(exe().to_str().unwrap(), &root)
             .args(["git-hook", "pre-push", "origin", dest.to_str().unwrap()])

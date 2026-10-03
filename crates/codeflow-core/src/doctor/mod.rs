@@ -799,15 +799,14 @@ fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usiz
         Err(e) => return Err(format!("codex config.toml: {e}")),
     };
     let states = codex_hook_states(&config);
-    let paths: BTreeSet<String> = [
-        hooks_json.display().to_string(),
-        hooks_json.canonicalize().map_or_else(
-            |_| hooks_json.display().to_string(),
-            |p| p.display().to_string(),
-        ),
-    ]
-    .into_iter()
-    .collect();
+    // The keys name the file as Codex resolved it; on Windows that may be
+    // the plain or the verbatim (`\\?\C:\`) canonical form.
+    let canonical = hooks_json.canonicalize().ok();
+    let paths: BTreeSet<String> = std::iter::once(hooks_json.to_path_buf())
+        .chain(canonical.clone())
+        .chain(canonical.map(crate::portable_path::without_verbatim))
+        .map(|path| path.display().to_string())
+        .collect();
     let (mut running, mut total) = (0, 0);
     for event in CODEX_EVENTS {
         let Some(groups) = file.hooks.get(event) else {
@@ -1101,7 +1100,7 @@ fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> Result<bool, String
 }
 
 fn canonical_or_owned(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    crate::portable_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// A key Grok never lets decide: relative, a filesystem root or the home
@@ -1175,7 +1174,7 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
             "a grok worktree, whose trust key grok reads from its worktrees.db".into(),
         );
     }
-    let home = user_home().canonicalize().ok();
+    let home = crate::portable_path::canonicalize(&user_home()).ok();
     let home = home.as_deref();
     let workspace = |path: &Path| {
         grok_workspace_key(path.ancestors().find(|p| p.exists()).unwrap_or(path), home)
@@ -2686,7 +2685,7 @@ fn instruction_chains(
     let mut total = inherited;
     if let Some((name, bytes)) = instruction_file(&dir) {
         total += bytes;
-        chains.push((relative.join(name).to_string_lossy().into_owned(), total));
+        chains.push((crate::portable_path::slashed(&relative.join(name)), total));
     }
     if depth >= INSTRUCTION_WALK_DEPTH {
         return;
@@ -3281,6 +3280,16 @@ mod tests {
         ),
     ];
 
+    /// `path`'s canonical form, as a harness records it in a trust key (the
+    /// plain drive form on Windows), escaped for a TOML basic string.
+    fn toml_path(path: &Path) -> String {
+        crate::portable_path::canonicalize(path)
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+    }
+
     /// A project with `hooks` as its `.codex/hooks.json`, and a harness home
     /// whose Codex config trusts `trusted` handler keys at their hashes.
     fn codex_project(hooks: &str, trusted: &[(&str, &str)]) -> (tempfile::TempDir, Options) {
@@ -3291,13 +3300,12 @@ mod tests {
         std::fs::write(project.join(".codex/hooks.json"), hooks).unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(home.join(".codex")).unwrap();
-        let hooks_path = project.join(".codex/hooks.json").canonicalize().unwrap();
+        let hooks_path = toml_path(&project.join(".codex/hooks.json"));
         let mut config = String::new();
         for (key, hash) in trusted {
             let _ = writeln!(
                 config,
-                "[hooks.state.\"{}:{key}\"]\ntrusted_hash = \"{hash}\"\n",
-                hooks_path.display()
+                "[hooks.state.\"{hooks_path}:{key}\"]\ntrusted_hash = \"{hash}\"\n"
             );
         }
         std::fs::write(home.join(".codex/config.toml"), config).unwrap();
@@ -3383,11 +3391,11 @@ mod tests {
 
     fn rewrite_codex_config(opts: &Options, config: &str) {
         let project = Path::new(&opts.project_dir);
-        let hooks = project.join(".codex/hooks.json").canonicalize().unwrap();
+        let hooks = toml_path(&project.join(".codex/hooks.json"));
         let home = opts.harness_home.clone().unwrap();
         std::fs::write(
             home.join(".codex/config.toml"),
-            config.replace("<path>", &hooks.display().to_string()),
+            config.replace("<path>", &hooks),
         )
         .unwrap();
     }
@@ -3464,9 +3472,9 @@ mod tests {
         std::fs::write(project.join(".grok/hooks/codeflow.json"), "{}").unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(home.join(".grok")).unwrap();
-        let root = project.canonicalize().unwrap();
+        let root = toml_path(&project);
         if let Some(store) = store {
-            let text = store.replace("<root>", &root.display().to_string());
+            let text = store.replace("<root>", &root);
             std::fs::write(home.join(".grok/trusted_folders.toml"), text).unwrap();
         }
         let mut opts = test_opts();
@@ -3714,10 +3722,7 @@ mod tests {
         let grant = |folder: &Path| {
             std::fs::write(
                 home.join(".grok/trusted_folders.toml"),
-                format!(
-                    "[folders.\"{}\"]\ntrusted = true\n",
-                    folder.canonicalize().unwrap().display()
-                ),
+                format!("[folders.\"{}\"]\ntrusted = true\n", toml_path(folder)),
             )
             .unwrap();
         };
@@ -3739,10 +3744,7 @@ mod tests {
         std::fs::write(managed.join(".grok/hooks/codeflow.json"), "{}").unwrap();
         std::fs::write(
             home.join(".grok/trusted_folders.toml"),
-            format!(
-                "[folders.\"{}\"]\ntrusted = true\n",
-                managed.canonicalize().unwrap().display()
-            ),
+            format!("[folders.\"{}\"]\ntrusted = true\n", toml_path(&managed)),
         )
         .unwrap();
         opts.project_dir = managed.to_string_lossy().into_owned();

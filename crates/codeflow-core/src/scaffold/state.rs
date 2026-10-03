@@ -1191,7 +1191,8 @@ mod tests {
             release_rules: None,
         };
         let error = state.store(dir.path()).unwrap_err().to_string();
-        assert!(error.contains(PROJECT_TOML), "{error}");
+        // The error names the file by its native path.
+        assert!(error.contains("project.toml"), "{error}");
         assert!(ProjectState::path(dir.path()).is_dir());
     }
 

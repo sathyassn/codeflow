@@ -21,6 +21,10 @@ impl Repo {
         repo.git(&["config", "user.email", "test@example.com"]);
         repo.git(&["config", "user.name", "Test"]);
         repo.git(&["config", "commit.gpgsign", "false"]);
+        // The fixtures edit checked-out text by its LF lines; a Windows
+        // git defaults to CRLF checkouts (`a_crlf_checkout_is_not_a_spec_change`
+        // covers those).
+        repo.git(&["config", "core.autocrlf", "false"]);
         repo
     }
 
@@ -920,6 +924,11 @@ fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
 #[test]
 fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
     for epic in ["EPC-001-履歴", "EPC-001 \"q\"", "EPC-001\tt", "EPC-001\nn"] {
+        // Windows file names cannot hold a quote, tab or newline; the
+        // non-ASCII name still makes git quote the path there.
+        if cfg!(windows) && epic.contains(['"', '\t', '\n']) {
+            continue;
+        }
         let path = format!("project-management/epics/{epic}/tasks/TSK-001.md");
         let repo = Repo::new();
         repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
@@ -944,6 +953,39 @@ fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
         let verdict = repo.judge(&reopened);
         assert!(frozen_spec(&verdict, "SPC-001"), "{epic:?}: {verdict:?}");
     }
+}
+
+/// TSK-197: a checkout that rewrote a shipped spec's line endings (git's
+/// `core.autocrlf` on Windows) changed no text, so the freeze does not fire;
+/// a changed word in that CRLF text still does.
+#[test]
+fn a_crlf_checkout_is_not_a_spec_change() {
+    const SPEC: &str = "project-management/specs/SPC-001.md";
+    let repo = Repo::new();
+    repo.write(SPEC, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+    let shipped = repo.commit("consumer complete");
+    let crlf = repo.read(SPEC).replace('\n', "\r\n");
+    repo.write(SPEC, &crlf);
+    let verdict = repo.judge(&shipped);
+    assert!(
+        !verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("SPC-001 was implemented, so its text is frozen")),
+        "{:?}",
+        verdict.errors
+    );
+    repo.write(SPEC, &crlf.replace("\r\nB.\r\n", "\r\nB, now 999.\r\n"));
+    let verdict = repo.judge(&shipped);
+    assert!(
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("SPC-001 was implemented, so its text is frozen")),
+        "{:?}",
+        verdict.errors
+    );
 }
 
 /// TSK-169: an approved spec is amended in place until it is implemented;

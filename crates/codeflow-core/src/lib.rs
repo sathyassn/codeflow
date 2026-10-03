@@ -19,6 +19,7 @@ pub mod ledger;
 pub mod model_catalog;
 pub mod model_qualification;
 pub mod models;
+pub mod portable_path;
 pub mod reading;
 pub mod recall;
 pub mod registry;

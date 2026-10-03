@@ -246,6 +246,9 @@ pub fn unwritten(ledger_dir: &Path, error: LedgerError) -> LedgerUnwritten {
             Repair::RemoveFile,
         ),
         ErrorKind::IsADirectory => (path, Repair::RemoveDirectory),
+        // Windows refuses to open a directory as a file with "access
+        // denied" rather than naming it a directory.
+        ErrorKind::PermissionDenied if path.is_dir() => (path, Repair::RemoveDirectory),
         _ => (existing(&path), Repair::MakeWritable),
     };
     LedgerUnwritten {

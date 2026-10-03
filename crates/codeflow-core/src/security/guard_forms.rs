@@ -127,6 +127,15 @@ pub const COMPOSED_PAIRS: &[(&str, &str)] = &[
     ("rm -rf --no-preserve-root /", "rm -rf /"),
 ];
 
+/// Deletions below a `/`-rooted path: allowed on Unix, where the path
+/// resolves, and refused on native Windows, where it names no fixed place
+/// and a junction can redirect it, so its target cannot be established.
+pub const ROOTED_DELETIONS: &[&str] = &[
+    "rm -r /tmp/scratch",
+    "rm -rf /Users/alice/project/target",
+    "cd /Users/alice/project && rm -rf build",
+];
+
 /// Deletions that stay inside the project: allowed, alone and nested
 /// (TSK-141 AC-2).
 pub const PROJECT_DELETIONS: &[&str] = &[
@@ -141,7 +150,6 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "cd build && rm -rf *",
     "cd ~/code/app && rm -rf target",
     "rm -rf ~/code/app/target",
-    "rm -rf /Users/alice/project/target",
     "ls ./build | xargs rm -rf",
     "ls ~/code/app/build | xargs rm -rf",
     "find ./dist -print0 | xargs -0 rm -rf",
@@ -149,7 +157,6 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "cd /; ls",
     "find / -name '*.log'",
     "echo / | xargs ls",
-    "rm -r /tmp/scratch",
     // Round 1 review: quoting, scope and plain narrowing stay precise.
     "D=/; rm -rf '$D'",
     "(cd /; pwd); rm -rf *",

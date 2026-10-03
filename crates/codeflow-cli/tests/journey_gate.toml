@@ -18,8 +18,11 @@ control = [
 ]
 fault = ["codeflow-core --test id_registry a_tip_that_keeps_moving_stops_after_the_bounded_retries"]
 
+# The lost reply is simulated with POSIX `kill $PPID` from a host hook,
+# which a Git for Windows hook cannot aim at its native parent.
 [[journey]]
 text = "lost acknowledgement read back by `uid`"
+platform = "unix"
 control = ["codeflow-core --test id_registry a_lost_acknowledgement_is_reserved_only_when_read_back_binds_our_uid"]
 fault = ["codeflow-core --test id_registry a_lost_acknowledgement_is_reserved_only_when_read_back_binds_our_uid"]
 

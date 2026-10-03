@@ -582,6 +582,11 @@ fn the_whole_range_is_classified_whatever_its_shape() {
         ("src/\u{3c0}.rs", "product_paths"),
         (".claude/a\tb.md", "managed_instructions"),
     ] {
+        // Windows file names cannot hold a tab; `π` still makes git quote
+        // the path there.
+        if cfg!(windows) && path.contains('\t') {
+            continue;
+        }
         branch_with(root, "fix/quoted", &[(path, "x\n")]);
         assert_blocks(
             &ci(root, "fix/quoted", &body("Task: none: quoted")),

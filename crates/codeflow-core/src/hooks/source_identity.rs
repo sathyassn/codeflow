@@ -6,6 +6,7 @@ pub const INPUT_ROOTS: &[&str] = &[
     "crates/codeflow-core/src/hooks",
     "crates/codeflow-core/src/security",
     "crates/codeflow-core/src/remedy.rs",
+    "crates/codeflow-core/src/portable_path.rs",
     "assets/base/policy.json",
     "assets/base/git-hooks",
 ];

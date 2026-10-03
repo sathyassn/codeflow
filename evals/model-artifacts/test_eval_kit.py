@@ -3688,6 +3688,49 @@ class ResultScoringTests(unittest.TestCase):
 
 
 class CleanupSafetyTests(unittest.TestCase):
+    @staticmethod
+    def windows_unlink(refuse_links: bool = False):
+        """`os.unlink` as Windows behaves: a read-only file cannot be
+        deleted until that bit is cleared."""
+        real_unlink = os.unlink
+
+        def unlink(path, *args, dir_fd=None, **kwargs):
+            mode = os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode
+            if (refuse_links and stat.S_ISLNK(mode)) or not mode & stat.S_IWRITE:
+                raise PermissionError(13, "Access is denied", path)
+            return real_unlink(path, *args, dir_fd=dir_fd, **kwargs)
+
+        return unlink
+
+    def test_a_tree_with_read_only_git_objects_is_removed(self) -> None:
+        # Git writes its object files read-only; on Windows a fixture reset
+        # or a run cleanup failed with "Access is denied" on them.
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "repository/.git"
+            objects = tree / "objects/01"
+            objects.mkdir(parents=True)
+            blob = objects / "7813b6d4a0362ec732b337a35fa7396f2fb4dc"
+            blob.write_bytes(b"object")
+            blob.chmod(0o444)
+            with patch("os.unlink", self.windows_unlink()):
+                eval_kit.remove_tree(tree)
+            self.assertFalse(tree.exists())
+
+    @unittest.skipUnless(hasattr(os, "symlink") and os.name == "posix", "needs POSIX symlinks")
+    def test_a_link_is_never_followed_to_clear_its_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            outside = Path(temp) / "outside.txt"
+            outside.write_text("keep", encoding="utf-8")
+            outside.chmod(0o444)
+            tree = Path(temp) / "tree"
+            tree.mkdir()
+            (tree / "link").symlink_to(outside)
+            with patch("os.unlink", self.windows_unlink(refuse_links=True)):
+                with self.assertRaises(PermissionError):
+                    eval_kit.remove_tree(tree)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o444)
+            outside.chmod(0o644)
+
     def test_grader_material_and_route_are_scrubbed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -4130,8 +4173,10 @@ print(json.dumps(seen, sort_keys=True))
 
     def test_the_registration_lock_is_chosen_per_platform(self) -> None:
         # POSIX locks the marker with flock, Windows with msvcrt.locking on
-        # its first byte, retrying while another process holds it; with
-        # neither, materializing and grading are refused rather than raced.
+        # one byte far past its content, retrying while another process holds
+        # it, so reading the marker under the lock is never refused there;
+        # with neither, materializing and grading are refused rather than
+        # raced.
         # Each side is faked, so either host checks both.
         calls: list[tuple] = []
 
@@ -4159,8 +4204,11 @@ print(json.dumps(seen, sort_keys=True))
             return list(calls)
 
         self.assertEqual([("flock", "LOCK_EX"), ("held",), ("flock", "LOCK_UN")], held(FakeFcntl(), FakeMsvcrt()))
+        at = eval_kit.LOCK_OFFSET
+        self.assertGreater(at, (self.run_root / eval_kit.RUN_MARKER).stat().st_size)
+        self.assertLess(at, 1 << 31)
         self.assertEqual(
-            [("locking", "LK_LOCK", 1, 0), ("locking", "LK_LOCK", 1, 0), ("held",), ("locking", "LK_UNLCK", 1, 0)],
+            [("locking", "LK_LOCK", 1, at), ("locking", "LK_LOCK", 1, at), ("held",), ("locking", "LK_UNLCK", 1, at)],
             held(None, FakeMsvcrt()),
         )
         with self.assertRaisesRegex(eval_kit.EvalError, "no file lock"):
@@ -4898,6 +4946,71 @@ print(json.dumps(seen, sort_keys=True))
                     eval_kit.evaluator_key()
         finally:
             os.chmod(folder, 0o700)
+
+    def test_a_windows_key_is_made_and_kept_owner_only(self) -> None:
+        # Windows has no mode bits: the kit sets each access list to the user
+        # alone and refuses one it cannot prove private. The security API is
+        # faked here; retention_pack reads the real lists on Windows.
+        user = "S-1-5-21-1-2-3-1001"
+        lists: dict[str, tuple[str, set[str]]] = {}
+        made: list[str] = []
+
+        def make_private(path: Path, account: str) -> None:
+            made.append(path.name)
+            lists[str(path)] = (account, {account})
+
+        with patch.object(eval_kit.sys, "platform", "win32"), \
+                patch.object(eval_kit, "windows_user", return_value=user), \
+                patch.object(eval_kit, "windows_make_private", side_effect=make_private), \
+                patch.object(eval_kit, "windows_access", side_effect=lambda path: lists[str(path)]):
+            key = eval_kit.evaluator_key(create=True)
+            path = eval_kit.evaluator_key_path()
+            self.assertEqual(["eval", "judgement.key"], made)
+            self.assertEqual(key, eval_kit.evaluator_key())
+            for target in (path.parent, path):
+                for label, entry, refusal in (
+                    ("system and administrators", (user, {user, "S-1-5-18", "S-1-5-32-544"}), None),
+                    ("owned by administrators", ("S-1-5-32-544", {user}), None),
+                    ("everyone", (user, {user, "S-1-1-0"}), r"open to other accounts \(S-1-1-0\)"),
+                    ("another owner", ("S-1-5-21-9", {user}), "owned by another account"),
+                ):
+                    with self.subTest(target=target.name, label=label):
+                        saved = lists[str(target)]
+                        lists[str(target)] = entry
+                        try:
+                            if refusal is None:
+                                self.assertEqual(key, eval_kit.evaluator_key())
+                            else:
+                                with self.assertRaisesRegex(eval_kit.EvalError, refusal):
+                                    eval_kit.evaluator_key()
+                        finally:
+                            lists[str(target)] = saved
+            with patch.object(eval_kit, "windows_access", side_effect=eval_kit.EvalError("cannot read the access list")):
+                with self.assertRaisesRegex(eval_kit.EvalError, "cannot read the access list"):
+                    eval_kit.evaluator_key()
+            path.write_text("not hex\n", encoding="utf-8")
+            with self.assertRaisesRegex(eval_kit.EvalError, "not 32 bytes"):
+                eval_kit.evaluator_key()
+            # A grant the kit cannot remove, such as another account's
+            # explicit or inheritable entry, refuses the key before any of it
+            # is written, and leaves no key file behind.
+            for exposed in ("eval", "judgement.key"):
+                with self.subTest(exposed=exposed):
+                    path.unlink(missing_ok=True)
+                    written: list[str] = []
+
+                    def leaves_a_grant(target: Path, account: str) -> None:
+                        make_private(target, account)
+                        if target.name == exposed:
+                            written.append(target.read_text(encoding="utf-8") if target.is_file() else "")
+                            lists[str(target)] = (account, {account, "S-1-1-0"})
+
+                    with patch.object(eval_kit, "windows_make_private", side_effect=leaves_a_grant):
+                        with self.assertRaisesRegex(eval_kit.EvalError, r"open to other accounts \(S-1-1-0\)"):
+                            eval_kit.evaluator_key(create=True)
+                    self.assertFalse(path.exists())
+                    self.assertEqual([""], written)
+                    lists.clear()
 
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():

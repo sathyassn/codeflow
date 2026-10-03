@@ -307,6 +307,13 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
     assert!(stderr.contains("codeflow integrate"), "{stderr}");
 }
 
+/// `path` as a bare word in a Bash command. Bash removes an unquoted
+/// backslash, so on Windows the word uses `/`, which git and Git Bash both
+/// read as the separator.
+fn shell_path(path: &Path) -> String {
+    codeflow_core::portable_path::slashed(path)
+}
+
 /// Run `codeflow hook git-guard` on a Claude Code `PreToolUse` payload whose
 /// session cwd is `session`.
 fn guard_run(command: &str, session: &Path) -> Output {
@@ -331,18 +338,19 @@ fn git_guard_judges_the_repository_a_command_targets() {
     }
     write_agent_policy(&session, TARGETING_POLICY);
     write_agent_policy(&scratch, TARGETING_POLICY);
-    let s = scratch.to_string_lossy();
-    let b = bare.to_string_lossy();
-    let sg = session.join(".git");
-    let sg = sg.to_string_lossy();
+    let s = shell_path(&scratch);
+    let b = shell_path(&bare);
+    let sg = shell_path(&session.join(".git"));
 
     for allowed in [
         format!("git -C {s} commit -m 'feat: x'"),
         format!("R={s}; git -C \"$R\" commit -m 'feat: x'"),
         format!(
             "cd {} && git -C scratch commit -m 'feat: x'",
-            tmp.path().display()
+            shell_path(tmp.path())
         ),
+        // A double-quoted native path keeps its separators (TSK-197).
+        format!("git -C \"{}\" commit -m 'feat: x'", scratch.display()),
     ] {
         let out = guard_run(&allowed, &session);
         assert_eq!(
@@ -400,11 +408,9 @@ fn git_guard_blocks_targets_it_cannot_prove() {
     let literal = session.join("$R");
     std::fs::create_dir_all(&literal).unwrap();
     init_repo(&literal, "main");
-    let f = feature.to_string_lossy();
-    let pg = protected.join(".git");
-    let pg = pg.to_string_lossy();
-    let absent = tmp.path().join("absent/out");
-    let absent = absent.to_string_lossy();
+    let f = shell_path(&feature);
+    let pg = shell_path(&protected.join(".git"));
+    let absent = shell_path(&tmp.path().join("absent/out"));
 
     for (case, command) in [
         (
@@ -451,7 +457,7 @@ fn git_guard_blocks_targets_it_cannot_prove() {
 
     // Round 3 (R3-1): a substitution before the subcommand hides it. The
     // first three run from a protected session, the last from a feature one.
-    let p = protected.to_string_lossy();
+    let p = shell_path(&protected);
     for (command, from) in [
         (
             "git $(printf '') commit --allow-empty -m 'fix: p'".to_string(),
@@ -757,7 +763,7 @@ fn git_guard_round_5_boundaries() {
                 ],
             );
         }
-        let command = command.replace("ROOT", &dir.to_string_lossy());
+        let command = command.replace("ROOT", &shell_path(&dir));
         let out = guard_run(&command, &dir);
         assert_eq!(
             out.status.code(),
@@ -965,15 +971,26 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
     std::os::unix::fs::symlink("/etc", &link).unwrap();
     let guard = |command: &str| exec_guard_with_tmpdir(dir.path(), &tmpdir, command);
 
-    let mut allowed = vec![
-        format!("rm -rf {own}/work"),
-        format!("rm -rf \"{own}/quoted dir\""),
-        format!("rm -rf {own}/sub/*"),
-        format!("rm -rf {base}/sibling"),
+    // Below the Unix temp roots. On native Windows these spellings name no
+    // fixed place (Git Bash maps them below its install root, and a junction
+    // can redirect them), so the guard refuses them as unresolved temp paths.
+    let unix_temp = [
         "rm -rf /private/var/folders/ab/cd123/T/scratch".to_string(),
         "rm -rf /private/tmp/claude-501/work".to_string(),
         "rm -rf /var/tmp/cache && ls".to_string(),
     ];
+    let mut allowed = Vec::new();
+    // `$TMPDIR` below a Unix temp root; on native Windows the temp folder
+    // lies below none, so these spellings name no exempt place there.
+    if cfg!(unix) {
+        allowed.extend(unix_temp.iter().cloned());
+        allowed.extend([
+            format!("rm -rf {own}/work"),
+            format!("rm -rf \"{own}/quoted dir\""),
+            format!("rm -rf {own}/sub/*"),
+            format!("rm -rf {base}/sibling"),
+        ]);
+    }
     if cfg!(target_os = "macos") {
         allowed.push("rm -rf /var/folders/xy/zz9/T/build".to_string());
     }
@@ -997,11 +1014,6 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
         "rm -rf /private/tmp".to_string(),
         "rm -rf /var/tmp".to_string(),
         "rm -rf /private/var/folders/ab/cd123/T".to_string(),
-        // The configured `$TMPDIR` itself, nested below `/private/tmp` or
-        // the per-user root.
-        format!("rm -rf {own}"),
-        format!("rm -rf {own}/"),
-        format!("rm -rf {own}/*"),
         // Lexical escapes.
         "rm -rf /private/tmp/claude-501/../../etc".to_string(),
         "rm -rf //private//tmp/../etc/hosts".to_string(),
@@ -1011,6 +1023,13 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
         "rm -rf /private/var/folders/ab/id/T-not/cache".to_string(),
     ];
     if cfg!(unix) {
+        // The configured `$TMPDIR` itself, nested below `/private/tmp` or
+        // the per-user root.
+        blocked.extend([
+            format!("rm -rf {own}"),
+            format!("rm -rf {own}/"),
+            format!("rm -rf {own}/*"),
+        ]);
         // A link below temp space leading to `/etc`, however spelled.
         blocked.extend([
             format!("rm -rf {link}/hosts"),
@@ -1018,6 +1037,8 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
             format!("rm -rf {link}/*"),
             format!("rm -rf {link}/../var/db"),
         ]);
+    } else {
+        blocked.extend(unix_temp.iter().cloned());
     }
     for command in &blocked {
         let out = guard(command);
@@ -4927,6 +4948,7 @@ fn path_stub(dir: &Path, refuse: bool) -> std::path::PathBuf {
 }
 
 /// PATH with `first` ahead of the built binary's directory.
+#[cfg(unix)]
 fn path_with(first: &[&Path]) -> std::ffi::OsString {
     let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
     std::env::join_paths(
@@ -4942,6 +4964,7 @@ fn path_with(first: &[&Path]) -> std::ffi::OsString {
 }
 
 /// Run `binary` with PATH set to `path` and the test's isolation.
+#[cfg(unix)]
 fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
     let mut cmd = Command::new(binary);
     cmd.env("CODEFLOW_HOME", isolated_home())
@@ -4964,6 +4987,7 @@ fn codeflow_at(binary: &Path, dir: &Path, path: &std::ffi::OsStr, args: &[&str])
 }
 
 /// Git with PATH set to `path`, outside any codeflow command.
+#[cfg(unix)]
 fn git_at(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
     Command::new("git")
         .args(args)
@@ -4984,6 +5008,7 @@ fn git_at(dir: &Path, path: &std::ffi::OsStr, args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn both(out: &Output) -> String {
     format!(
         "{}{}",
@@ -4992,6 +5017,7 @@ fn both(out: &Output) -> String {
     )
 }
 
+#[cfg(unix)]
 const REGISTRY_LINE: &str = "integration/EPC-001-dispatch";
 
 /// A full-tier project on a line pushed to a bare remote, its registry

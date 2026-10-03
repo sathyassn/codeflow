@@ -1440,6 +1440,13 @@ fn context_problems(
     problems
 }
 
+/// Whether two record texts say the same thing. Line endings do not count:
+/// a Windows checkout with `core.autocrlf` writes CRLF where the commit
+/// holds LF, and that changes no word of a contract.
+fn same_text(a: &str, b: &str) -> bool {
+    a == b || a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
+}
+
 /// Whether `spec` is implemented in `graph`: written `implemented` by a
 /// legacy record, or derived from its consumers (R-51).
 fn implemented_in(spec: &RecordView, graph: &Graph) -> bool {
@@ -1462,7 +1469,7 @@ fn frozen_spec_problems(
     let Some(before) = before.filter(|record| record.kind == RecordKind::Spec) else {
         return Vec::new();
     };
-    if before.body == after.body {
+    if same_text(&before.body, &after.body) {
         return Vec::new();
     }
     let at_base = before.status == "implemented"
@@ -1638,7 +1645,9 @@ fn shipped_specs(
         let Some(old) = before.get(&record.id, RecordKind::Spec) else {
             continue;
         };
-        if record.kind != RecordKind::Spec || old.body == record.body || implemented_in(old, before)
+        if record.kind != RecordKind::Spec
+            || same_text(&old.body, &record.body)
+            || implemented_in(old, before)
         {
             continue;
         }
