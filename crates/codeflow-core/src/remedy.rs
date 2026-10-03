@@ -502,6 +502,10 @@ catalog! {
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
+    /// Grok hook commands that grok skips, or a grok shell guard that does
+    /// not refuse the doctor canary.
+    DOCTOR_GROK_HOOKS = Step::Codeflow("codeflow update"),
+        "install the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then run `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`; `codeflow doctor --check grok` then reruns the guard canary";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";

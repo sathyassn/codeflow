@@ -25,6 +25,9 @@ fn opts(project: &Path, home: &Path) -> Options {
         harness_home: Some(home.to_path_buf()),
         look_path: Some(|_| Ok("synthetic-harness".into())),
         env_var: Some(|_| None),
+        // The grok guard canary (TSK-215) answers as a refusing guard; this
+        // file probes trust, not the guard.
+        exec_command_stdin: Some(|_, _, _| Err("codeflow exec-guard: BLOCKED".into())),
         ..Options::default()
     }
 }
@@ -85,7 +88,11 @@ fn codex_case(base: &Path, label: &str) -> (PathBuf, PathBuf) {
 fn grok_case(project: &Path, home: &Path) {
     fs::create_dir_all(project.join(".grok/hooks")).unwrap();
     fs::create_dir_all(home.join(".grok")).unwrap();
-    fs::write(project.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+    fs::write(
+        project.join(".grok/hooks/codeflow.json"),
+        include_str!("../../../assets/base/grok/hooks.json"),
+    )
+    .unwrap();
     for name in ["config.toml", "managed_config.toml", "trusted_folders.toml"] {
         let _ = fs::remove_file(home.join(".grok").join(name));
     }

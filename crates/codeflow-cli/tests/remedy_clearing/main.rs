@@ -178,6 +178,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
+    ("DOCTOR_GROK_HOOKS", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -1826,6 +1827,39 @@ fn clears_doctor_hooks_path() {
             let step = printed_command(printed, "DOCTOR_HOOKS_PATH", None);
             run_printed(&root, &step, &[], &[]);
         },
+    );
+}
+
+/// TSK-215 (issue 29): a `CodeFlow` hook command with a `$`, as 3.0.0
+/// shipped it, in a file grok reads is named; `codeflow update` rewrites the
+/// `CodeFlow` hook entries, and the guard canary then runs the real binary and
+/// sees it refuse.
+#[test]
+fn clears_doctor_grok_hooks() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] =
+        "codeflow hook git-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then exit 2; fi".into();
+    write(
+        &root,
+        ".claude/settings.json",
+        &serde_json::to_string_pretty(&settings).unwrap(),
+    );
+    prove(
+        "DOCTOR_GROK_HOOKS",
+        "grok skips the CodeFlow hook commands in .claude/settings.json",
+        || doctor(&root, "grok"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_GROK_HOOKS", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shell guard grok runs refused a dangerous command"),
+        "{after}"
     );
 }
 
