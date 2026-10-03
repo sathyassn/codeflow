@@ -458,89 +458,148 @@ impl Block {
     }
 }
 
-/// The visible top-level blocks of a Summary, in order. Left out, because
-/// a reader sees no prose in them: an HTML block of only comments, a
-/// paragraph, list or table with no visible text outside code and quotes,
-/// and a paragraph that is only the `Task:` line, a field the PR template
-/// puts above the Summary. Tables are parsed as hosts render them.
-fn summary_blocks(text: &str) -> Vec<Block> {
+/// The Markdown options GitHub renders a pull request body with: tables,
+/// footnotes, strikethrough, task lists and alert quotes.
+fn github_options() -> Options {
+    Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_GFM
+}
+
+/// One top-level block of the Summary while the walk is inside it.
+struct OpenBlock {
+    /// `None` for a footnote definition, which is not a block of the shape.
+    kind: Option<Block>,
+    /// The visible text: `Text` and `Code` outside images, code blocks,
+    /// quotes, HTML and footnote definitions; breaks end a line.
+    text: String,
+    /// The raw HTML of an HTML block.
+    html: String,
+    /// How deep the walk is inside content a reader does not see as prose.
+    hidden: usize,
+}
+
+/// The visible top-level blocks of the Summary whose content spans
+/// `range` of `body`, in order, read from one parse of the whole body with
+/// GitHub's options. Reference definitions anywhere in the body resolve, so
+/// a reference image or an empty reference link shows no text wherever it
+/// is defined; reference and footnote definitions are never blocks. Left
+/// out, because a reader sees no prose in them: an HTML block of only
+/// comments or tags, a paragraph, list or table with no visible text, and a
+/// paragraph that is only the `Task:` line, a field the PR template puts
+/// above the Summary.
+fn summary_blocks(body: &str, range: std::ops::Range<usize>) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut depth = 0usize;
-    let mut open: Option<(Block, usize)> = None;
-    for (event, span) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
+    let mut open: Option<OpenBlock> = None;
+    for (event, span) in Parser::new_ext(body, github_options()).into_offset_iter() {
+        let at_top = depth == 0 && range.contains(&span.start);
         match event {
             Event::Start(tag) => {
-                if depth == 0 {
-                    open = Some((block_kind(&tag), span.start));
+                if at_top {
+                    open = Some(OpenBlock {
+                        kind: block_kind(&tag),
+                        text: String::new(),
+                        html: String::new(),
+                        hidden: 0,
+                    });
+                }
+                if let Some(block) = open.as_mut() {
+                    if hides_text(&tag) {
+                        block.hidden += 1;
+                    }
                 }
                 depth += 1;
             }
-            Event::End(_) => {
+            Event::End(tag) => {
                 depth = depth.saturating_sub(1);
+                if let Some(block) = open.as_mut() {
+                    if ends_hidden(tag) {
+                        block.hidden = block.hidden.saturating_sub(1);
+                    }
+                }
                 if depth == 0 {
-                    if let Some((kind, start)) = open.take() {
-                        if visible_block(kind, &text[start..span.end]) {
+                    if let Some(block) = open.take() {
+                        if let Some(kind) = block.kind.filter(|kind| visible_block(*kind, &block)) {
                             blocks.push(kind);
                         }
                     }
                 }
             }
-            Event::Rule if depth == 0 => blocks.push(Block::Rule),
+            Event::Rule if at_top => blocks.push(Block::Rule),
+            Event::Html(value) => {
+                if let Some(block) = open.as_mut() {
+                    block.html.push_str(&value);
+                }
+            }
+            Event::Text(value) | Event::Code(value) => {
+                if let Some(block) = open.as_mut().filter(|block| block.hidden == 0) {
+                    block.text.push_str(&value);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(block) = open.as_mut().filter(|block| block.hidden == 0) {
+                    block.text.push('\n');
+                }
+            }
             _ => {}
         }
     }
     blocks
 }
 
-fn block_kind(tag: &Tag<'_>) -> Block {
-    match tag {
+/// The shape kind of a top-level tag; `None` for a footnote definition.
+fn block_kind(tag: &Tag<'_>) -> Option<Block> {
+    Some(match tag {
         Tag::Paragraph => Block::Paragraph,
         Tag::List(_) => Block::List,
         Tag::Table(_) => Block::Table,
         Tag::Heading { .. } => Block::Heading,
         Tag::CodeBlock(_) => Block::Code,
         Tag::BlockQuote(_) => Block::Quote,
+        Tag::FootnoteDefinition(_) => return None,
         _ => Block::Html,
-    }
+    })
 }
 
-fn visible_block(kind: Block, source: &str) -> bool {
+/// Content whose text a reader does not see as prose: an image's
+/// description (an `alt` attribute), code, a quote, raw HTML and a footnote
+/// definition, which renders at the end of the page.
+fn hides_text(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Image { .. }
+            | Tag::CodeBlock(_)
+            | Tag::BlockQuote(_)
+            | Tag::HtmlBlock
+            | Tag::FootnoteDefinition(_)
+    )
+}
+
+fn ends_hidden(tag: TagEnd) -> bool {
+    matches!(
+        tag,
+        TagEnd::Image
+            | TagEnd::CodeBlock
+            | TagEnd::BlockQuote(_)
+            | TagEnd::HtmlBlock
+            | TagEnd::FootnoteDefinition
+    )
+}
+
+fn visible_block(kind: Block, block: &OpenBlock) -> bool {
+    let text = block.text.trim();
     match kind {
         Block::Paragraph => {
-            let text = summary_text(source);
-            let text = text.trim();
             let task_line = text.starts_with("Task:") && !text.contains('\n');
             !text.is_empty() && !task_line
         }
-        Block::List | Block::Table => !summary_text(source).trim().is_empty(),
-        Block::Html => !strip_markup(source).trim().is_empty(),
+        Block::List | Block::Table => !text.is_empty(),
+        Block::Html => !strip_markup(&block.html).trim().is_empty(),
         Block::Heading | Block::Code | Block::Quote | Block::Rule => true,
     }
-}
-
-/// The text a reader sees in a Summary block, for the shape check only.
-/// It is parsed with tables on, as the shape walk is, so pipes and
-/// separator hyphens are structure, never text. Code blocks, quotes and
-/// image descriptions are left out: an image's description renders as an
-/// `alt` attribute, not as prose, and an HTML comment is never text.
-/// Breaks end a line, so a lone `Task:` line stays recognizable.
-fn summary_text(source: &str) -> String {
-    let mut text = String::new();
-    let mut hidden = 0usize;
-    for event in Parser::new_ext(source, Options::ENABLE_TABLES) {
-        match event {
-            Event::Start(Tag::CodeBlock(_) | Tag::BlockQuote(_) | Tag::Image { .. }) => {
-                hidden += 1;
-            }
-            Event::End(TagEnd::CodeBlock | TagEnd::BlockQuote(_) | TagEnd::Image) => {
-                hidden = hidden.saturating_sub(1);
-            }
-            Event::Text(value) | Event::Code(value) if hidden == 0 => text.push_str(&value),
-            Event::SoftBreak | Event::HardBreak if hidden == 0 => text.push('\n'),
-            _ => {}
-        }
-    }
-    text
 }
 
 /// The text of an HTML block a reader sees: without its comments, where an
@@ -658,7 +717,7 @@ pub(super) fn summary_shape(git: &GitPolicy, body: &str) -> Vec<Violation> {
     if !has_content(section.content()) {
         return Vec::new();
     }
-    let blocks = summary_blocks(section.content());
+    let blocks = summary_blocks(body, section.start..section.end);
     let Some(problem) = summary_problem(&blocks) else {
         return Vec::new();
     };
@@ -1103,6 +1162,87 @@ mod tests {
             ),
         ] {
             assert_refused(case, summary, said);
+        }
+    }
+
+    /// Footnotes and reference definitions resolve across the whole body, as
+    /// GitHub renders it: a definition is never a block of the shape, and a
+    /// reference image or empty reference link shows no prose, wherever its
+    /// definition sits.
+    #[test]
+    fn summary_shape_reads_footnotes_and_references_as_rendered() {
+        const DEF: &str = "[ref]: https://example.com/p.png";
+        let body = |summary: &str, inside: bool| {
+            if inside {
+                format!("Task: TSK-001\n\n## Summary\n\n{summary}\n\n{DEF}\n\n## Changes\n\n- one change\n")
+            } else {
+                format!("Task: TSK-001\n\n## Summary\n\n{summary}\n\n## Changes\n\n- one change\n\n{DEF}\n")
+            }
+        };
+        let notes = "This fixes startup[^a] and shutdown[^b].\n\n- Handles both cases.\n\n[^a]: Startup details belong here.\n\n[^b]: Shutdown details belong here.";
+        assert!(
+            summary_shape(&GitPolicy::default(), &with_summary(notes)).is_empty(),
+            "footnotes inside the Summary"
+        );
+        let elsewhere = "Task: TSK-001\n\n## Summary\n\nThis fixes startup[^a].\n\n- Handles it.\n\n## Changes\n\n- one change\n\n[^a]: Startup details.\n";
+        assert!(
+            summary_shape(&GitPolicy::default(), elsewhere).is_empty(),
+            "a footnote defined in another section"
+        );
+        let unreferenced = shape("[^a]: This definition is never referenced.\n\n- one");
+        assert_eq!(unreferenced.len(), 1, "{unreferenced:?}");
+        assert!(
+            unreferenced[0].message.contains("it opens with a list"),
+            "{}",
+            unreferenced[0].message
+        );
+        for (case, summary, said) in [
+            (
+                "a reference image lead",
+                "![Description][ref]\n\n- one",
+                "it opens with a list",
+            ),
+            (
+                "an empty reference link lead",
+                "[][ref]\n\n- one",
+                "it opens with a list",
+            ),
+            (
+                "a reference-image table",
+                "Adds the check.\n\n| ![a][ref] |  |\n|---|---|\n|  |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "an empty-reference-link list",
+                "Adds the check.\n\n- [][ref]\n- [][ref]",
+                "no list or table follows the lead",
+            ),
+        ] {
+            for inside in [true, false] {
+                let found = summary_shape(&GitPolicy::default(), &body(summary, inside));
+                assert_eq!(
+                    found.len(),
+                    1,
+                    "{case} (definition inside: {inside}): {found:?}"
+                );
+                assert!(
+                    found[0].message.contains(said),
+                    "{case}: {}",
+                    found[0].message
+                );
+            }
+        }
+        // A reference link with text and a reference image beside prose
+        // still read as prose.
+        for inside in [true, false] {
+            let text = body(
+                "See [the guide][ref] ![d][ref] for the steps.\n\n- one [step][ref]",
+                inside,
+            );
+            assert!(
+                summary_shape(&GitPolicy::default(), &text).is_empty(),
+                "{inside}"
+            );
         }
     }
 
