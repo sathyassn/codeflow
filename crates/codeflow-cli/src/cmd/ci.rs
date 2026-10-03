@@ -628,12 +628,23 @@ fn work_checks<'a>(
             )
         }
         // A pull request whose host did not supply the body is still judged
-        // on its line; a plain push is not classified (TSK-104).
-        None if pr_context && !release_range => {
-            classification::bodyless_line_check(root, branch, range_parts.as_ref(), tagged, ran);
+        // on its line; a plain push is not classified (TSK-104). Either
+        // way, a branch that carries its task is held to the journey rule,
+        // which needs only the record and the range, so the pre-push hook
+        // reaches the verdict the pull request check gives (TSK-223).
+        None => {
+            if pr_context && !release_range {
+                classification::bodyless_line_check(
+                    root,
+                    branch,
+                    range_parts.as_ref(),
+                    tagged,
+                    ran,
+                );
+            }
+            classification::branch_journey(root, git, branch, range_parts.as_ref(), tagged, ran);
             None
         }
-        None => None,
     };
     acceptance::dispatch(
         root,

@@ -264,6 +264,45 @@ pub(super) fn bodyless_line_check(
     integration_line_eligible(root, branch, range, tagged);
 }
 
+/// A range judged without a pull request body, such as the pre-push run,
+/// whose branch carries its task (`task/TSK-NNN-…`): the journey rule
+/// (R-53) needs only that task's record at the head and the paths the
+/// range changes, so it runs here as it does for a tracked pull request,
+/// and a push reaches the verdict its pull request will (TSK-223). Other
+/// classification rules wait for the body.
+pub(super) fn branch_journey(
+    root: &Path,
+    git: &GitPolicy,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    let Some(range) = range else {
+        return;
+    };
+    let Some(task_id) = task_id_from_branch(root, branch) else {
+        return;
+    };
+    if !matches!(tracking_on(root, Some(range)), Ok(true)) {
+        return;
+    }
+    ran.push("journey");
+    match range_changes(root, range.base, range.head) {
+        Ok(changes) => {
+            let files: Vec<String> = changes.into_iter().map(|(_, path)| path).collect();
+            journey(root, git, &task_id, range.head, &files, tagged);
+        }
+        // The same finding the pull request check gives for that failure.
+        Err(error) => push(
+            tagged,
+            RULE,
+            format!("cannot list the paths the range changes: {error}"),
+            "pass --base and --head so CI can read the range",
+        ),
+    }
+}
+
 /// Where durable tracking is off: whether the body names exactly one unit
 /// that matches the branch, or the range is on the root branch the target's
 /// policy names, which carries no `Task:` line.
