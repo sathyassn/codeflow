@@ -211,6 +211,54 @@ fn dogfood_grok_hooks_share_pretooluse_and_wire_no_advisory_hook() {
     );
 }
 
+/// TSK-215 AC-1 (issue 29): Grok expands `$name` and `${...}` in a hook
+/// command itself and skips the hook when a name is unset, so a shell
+/// variable in a `CodeFlow` command turns the guard off in a Grok session.
+/// Grok loads its own hook file and, in compat mode, the Claude settings;
+/// Codex shares the Grok guard payload. No hook command in any of them, as
+/// shipped, installed in this repository or kept as its baseline, carries a
+/// `$`.
+#[test]
+fn no_hook_command_carries_a_dollar_grok_reads_as_a_template() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files: Vec<PathBuf> = [
+        "assets/base/grok/hooks.json",
+        "assets/base/codex/hooks.json",
+        ".grok/hooks/codeflow.json",
+        ".codex/hooks.json",
+        ".claude/settings.json",
+        ".codeflow/.baseline/.grok/hooks/codeflow.json",
+        ".codeflow/.baseline/.codex/hooks.json",
+        ".codeflow/.baseline/.claude/settings.json",
+    ]
+    .iter()
+    .map(|path| root.join(path))
+    .collect();
+    let mut presets: Vec<PathBuf> = std::fs::read_dir(root.join("assets/base/settings"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    presets.sort();
+    assert!(presets.len() >= 3, "{presets:?}");
+    files.extend(presets);
+    for file in files {
+        let text = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let mut commands = Vec::new();
+        collect_hook_commands(&value["hooks"], &mut commands);
+        assert!(!commands.is_empty(), "{}", file.display());
+        for command in commands {
+            assert!(
+                !command.contains('$'),
+                "{}: Grok would skip this hook as an unset template: {command}",
+                file.display()
+            );
+        }
+    }
+}
+
 /// TSK-128 AC-5: Codex wires `UserPromptSubmit` to the stable advisory
 /// entry, where plain stdout becomes developer context, with no matcher
 /// (Codex ignores one on this event) and never the manual command.
@@ -275,6 +323,374 @@ fn run_codex_exec_guard(root: &std::path::Path, command: &str) -> std::process::
         .write_all(payload.to_string().as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+/// PR 35 review round 2, finding 1: doctor's Grok canary never runs a
+/// `codeflow` that PATH finds in the repository. A planted `bin/codeflow`
+/// ahead of the real one would write a marker outside the scratch
+/// directory and fake a refusal; doctor runs itself instead, leaves no
+/// marker, and names where PATH resolves `codeflow` as unverified.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_never_runs_a_codeflow_planted_on_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+    std::fs::create_dir_all(project.join("bin")).unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::copy(
+        root.join("assets/base/grok/hooks.json"),
+        project.join(".grok/hooks/codeflow.json"),
+    )
+    .unwrap();
+    let marker = dir.path().join("marker");
+    let planted = project.join("bin/codeflow");
+    std::fs::write(
+        &planted,
+        format!(
+            "#!/bin/sh\ntouch '{}'\necho 'codeflow exec-guard: BLOCKED' >&2\necho '{{\"decision\":\"deny\",\"reason\":\"planted\"}}'\nexit 2\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        [project.join("bin"), exe.parent().unwrap().to_path_buf()]
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let out = std::process::Command::new(&exe)
+        .args(["doctor", "--check", "grok"])
+        .current_dir(&project)
+        .env("PATH", path)
+        .env("GROK_HOME", dir.path().join("grok-home"))
+        .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+        .env_remove("GROK_FOLDER_TRUST")
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!marker.exists(), "doctor ran the planted codeflow:\n{said}");
+    assert!(
+        said.contains("canary: the shipped shell guard grok runs refused"),
+        "{said}"
+    );
+    let canonical = std::fs::canonicalize(&planted).unwrap();
+    assert!(
+        said.contains(&format!(
+            "PATH resolves codeflow to {}, inside this repository",
+            canonical.display()
+        )),
+        "{said}"
+    );
+}
+
+/// PR 35 review round 3, finding 1: doctor never re-executes a binary to
+/// prove the Grok guard refuses, so swapping the path doctor was launched
+/// from cannot answer for it. Doctor starts from a symlink, or from a copy
+/// in a folder the repository controls; a FIFO trust store pauses it after
+/// start-up while the path is replaced with a script that writes a marker
+/// and fakes a refusal. No marker appears, and the refusal comes from the
+/// guard judged in process.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_runs_nothing_a_swapped_launch_path_could_answer() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for form in ["symlink", "copy"] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+        std::fs::create_dir_all(project.join("bin")).unwrap();
+        std::fs::copy(
+            root.join("assets/base/grok/hooks.json"),
+            project.join(".grok/hooks/codeflow.json"),
+        )
+        .unwrap();
+        let launch = project.join("bin/codeflow");
+        if form == "symlink" {
+            std::os::unix::fs::symlink(&exe, &launch).unwrap();
+        } else {
+            std::fs::copy(&exe, &launch).unwrap();
+            std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let marker = dir.path().join("marker");
+        let fake = dir.path().join("fake-codeflow");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'codeflow exec-guard: BLOCKED' >&2\necho '{{\"decision\":\"deny\",\"reason\":\"fake\"}}'\nexit 2\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let grok_home = dir.path().join("grok-home");
+        std::fs::create_dir_all(&grok_home).unwrap();
+        let fifo = grok_home.join("trusted_folders.toml");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+
+        let child = std::process::Command::new(&launch)
+            .args(["doctor", "--check", "grok"])
+            .current_dir(&project)
+            .env("GROK_HOME", &grok_home)
+            .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+            .env_remove("GROK_FOLDER_TRUST")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Opening the FIFO for writing waits until doctor reads its trust
+        // store, after start-up; the launch path is swapped only then.
+        let (swap, launch_path) = (fake.clone(), launch.clone());
+        let writer = std::thread::spawn(move || {
+            let mut pipe = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+            std::fs::remove_file(&launch_path).unwrap();
+            std::os::unix::fs::symlink(&swap, &launch_path).unwrap();
+            pipe.write_all(b"").unwrap();
+        });
+        let out = child.wait_with_output().unwrap();
+        writer.join().unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !marker.exists(),
+            "{form}: doctor ran the swapped launch path:\n{said}"
+        );
+        assert!(
+            said.contains("canary: the shipped shell guard grok runs refused")
+                && said.contains("judged in process"),
+            "{form}: {said}"
+        );
+    }
+}
+
+/// Every file under `dir`, with its bytes, so a test can show that a run
+/// changed nothing there.
+#[cfg(unix)]
+fn tree(dir: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_dir() {
+                files.insert(path.clone(), Vec::new());
+                pending.push(path);
+            } else if kind.is_symlink() {
+                let target = std::fs::read_link(&path).unwrap();
+                files.insert(path, target.into_os_string().into_encoded_bytes());
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                files.insert(path, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// PR 35 review round 4, finding 1: the Grok canary reads no repository.
+/// Doctor's temporary folder sits inside a repository, directly or through
+/// a symlink: first a plain one, then one with two remotes and no
+/// `origin`. Each time the canary refuses with Grok's deny answer, and
+/// nothing in that repository changes, a refusal ledger included.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_reads_and_writes_no_repository_around_tmpdir() {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut failures = Vec::new();
+    for form in ["direct", "symlink"] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+        std::fs::copy(
+            root.join("assets/base/grok/hooks.json"),
+            project.join(".grok/hooks/codeflow.json"),
+        )
+        .unwrap();
+        let parent = dir.path().join("parent");
+        std::fs::create_dir_all(parent.join("tmp")).unwrap();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&parent)
+                .args(args)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "git {args:?}: {status:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        let tmpdir = if form == "symlink" {
+            let link = dir.path().join("tmp-link");
+            std::os::unix::fs::symlink(parent.join("tmp"), &link).unwrap();
+            link
+        } else {
+            parent.join("tmp")
+        };
+        for remotes in ["no remotes", "two remotes, no origin"] {
+            if remotes != "no remotes" {
+                git(&["remote", "add", "upstream", "https://example.invalid/a.git"]);
+                git(&["remote", "add", "fork", "https://example.invalid/b.git"]);
+            }
+            let before = tree(&parent);
+            let out = std::process::Command::new(&exe)
+                .args(["doctor", "--check", "grok"])
+                .current_dir(&project)
+                .env("TMPDIR", &tmpdir)
+                .env("GROK_HOME", dir.path().join("grok-home"))
+                .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+                .env_remove("GROK_FOLDER_TRUST")
+                .output()
+                .unwrap();
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let refused = said.contains("canary: the shipped shell guard grok runs refused");
+            let after = tree(&parent);
+            let changed: Vec<_> = after
+                .iter()
+                .filter(|(path, bytes)| before.get(*path) != Some(*bytes))
+                .map(|(path, _)| path.display().to_string())
+                .chain(
+                    before
+                        .keys()
+                        .filter(|path| !after.contains_key(*path))
+                        .map(|path| path.display().to_string()),
+                )
+                .collect();
+            if !refused || !changed.is_empty() {
+                let first = said.lines().next().unwrap_or_default().to_string();
+                failures.push(format!(
+                    "{form} TMPDIR, {remotes}: refused {refused}; changed {changed:?}; {first}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// TSK-215: the shipped Grok exec-guard command, run through the shell as
+/// Grok runs it, refuses a dangerous command in the payload Grok Build
+/// 1.0.46 sends, where every field comes under both spellings (captured
+/// from a live session), and lets an ordinary command through. Grok shows
+/// only a hook's first stderr line as its deny reason, so the refusal also
+/// comes as Grok's deny decision on stdout with the rule and its sanctioned
+/// path; a Claude-shaped payload gets nothing on stdout.
+#[cfg(unix)]
+#[test]
+fn grok_wiring_refuses_in_the_payload_grok_sends() {
+    use std::io::Write as _;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let grok: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("assets/base/grok/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    let mut commands = Vec::new();
+    collect_hook_commands(&grok["hooks"]["PreToolUse"], &mut commands);
+    let hook = commands
+        .into_iter()
+        .find(|c| c.starts_with("codeflow hook exec-guard --contract 3"))
+        .expect("exec-guard wired for grok");
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(
+        exe.parent()
+            .map(std::path::Path::to_path_buf)
+            .into_iter()
+            .chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for (command, refused, grok) in [
+        ("rm -rf /", true, true),
+        ("echo hello", false, true),
+        ("rm -rf /", true, false),
+    ] {
+        let input = serde_json::json!({"command": command, "description": "probe"});
+        let payload = if grok {
+            serde_json::json!({
+                "hookEventName": "pre_tool_use",
+                "cwd": dir.path(),
+                "toolName": "run_terminal_command",
+                "toolInput": input,
+                "hook_event_name": "PreToolUse",
+                "tool_name": "run_terminal_command",
+                "tool_input": input,
+            })
+        } else {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "cwd": dir.path(),
+                "tool_name": "Bash",
+                "tool_input": input,
+            })
+        };
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", &hook])
+            .current_dir(dir.path())
+            .env("PATH", &path)
+            .env("CODEFLOW_HOME", dir.path().join(".home"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!stderr.contains("unreadable hook payload"), "{stderr}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if refused {
+            assert_eq!(out.status.code(), Some(2), "{command}: {stderr}");
+            assert!(stderr.contains("exec-guard: BLOCKED"), "{stderr}");
+        } else {
+            assert_eq!(out.status.code(), Some(0), "{command}: {stderr}");
+        }
+        if refused && grok {
+            let decision: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+            assert_eq!(decision["decision"], "deny", "{stdout}");
+            let reason = decision["reason"].as_str().unwrap();
+            assert!(
+                reason.starts_with(
+                    "codeflow exec-guard: BLOCKED — policy rule security.dangerous_commands"
+                ),
+                "{reason}"
+            );
+            assert!(reason.contains("\n  sanctioned: "), "{reason}");
+            assert!(reason.contains("\npolicy source: "), "{reason}");
+        } else {
+            assert!(stdout.is_empty(), "{command} grok={grok}: {stdout}");
+        }
+    }
 }
 
 /// TSK-141 AC-5: the Codex wiring refuses each composed deletion, passes a

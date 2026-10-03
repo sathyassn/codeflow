@@ -801,6 +801,18 @@ def reject_extra_hook_sources(root: Path, plugins: list[dict]) -> None:
     # One disk manifest can be both cached and explicitly configured.
     plugins[:] = list({plugin["path"]: plugin for plugin in plugins}.values())
 
+
+# A contract-3 hook wrapper: the hook call, then a fallback that exits 2 on
+# any failure. No `$` anywhere: Grok reads `$name` as its own template and
+# skips the hook (TSK-215).
+CONTRACT_3_WRAPPER = re.compile(r"codeflow hook [a-z][a-z-]* --contract 3 \|\| \{ [^$]* exit 2; \}")
+
+
+def contract_3_wrapper(command: str) -> bool:
+    """True when `command` is a contract-3 wrapper as CodeFlow ships them."""
+    return CONTRACT_3_WRAPPER.fullmatch(command) is not None
+
+
 def codex_hook_preflight(environment: dict[str, str], repository: Path,
                          evidence: dict | None = None) -> dict:
     """Inspect only non-secret settings; never grant trust or change config."""
@@ -828,7 +840,7 @@ def codex_hook_preflight(environment: dict[str, str], repository: Path,
         for groups in expected["hooks"].values():
             for group in groups:
                 for hook in group["hooks"]:
-                    if not re.match(r"^codeflow hook [a-z][a-z-]* --contract 3;", hook["command"]):
+                    if not contract_3_wrapper(hook["command"]):
                         raise Refused("shipped hooks must use contract-3 wrappers", CODEX_HOOK_TRUST_FLAG)
         result["checks"][stage] = "passed"
         return result

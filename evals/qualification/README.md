@@ -109,7 +109,8 @@ bypass launch, the runner checks:
   disk; unresolved sources refuse without fetching them.
 - The fixture's `.codex/hooks.json` matches the complete shipped definition
   in `assets/base/codex/hooks.json`, including matchers, handlers and the
-  `codeflow hook <name> --contract 3` wrappers. Missing, extra or changed
+  `codeflow hook <name> --contract 3 || { ...; exit 2; }` wrappers, which
+  carry no `$`. Missing, extra or changed
   definitions refuse. Fixture TOML hooks refuse; fixture plugin sources
   receive the same inspection. Symlinked hook/config sources refuse.
 
