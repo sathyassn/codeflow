@@ -1,0 +1,11 @@
+id = "TSK-220"
+uid = "12145852-a70e-4935-9058-739267ecd98e"
+kind = "TSK"
+title = "Merging the moved target into a reviewed task keeps its acceptance"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T14:38:30Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
