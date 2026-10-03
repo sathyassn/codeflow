@@ -88,8 +88,10 @@ erratum below, never an edit of the section.
   not, with its anti-hijack rules unchanged. The seats' launch flags are
   stated once, so an edit handoff to Claude now launches in the production
   posture instead of auto mode, and a new seat's first-run prompts are
-  named: the caller answers folder trust for the task's own folder, the
-  operator answers hook trust, and a self-update offer is skipped. A long
+  named: the caller answers folder trust for the task's own folder, and
+  hook trust only when every hook file is byte-identical to the pull
+  request's target tip, otherwise the operator answers it; a self-update
+  offer is skipped. A long
   Codex reply and its observed model and effort are read from the seat's
   session record. Review and consult briefs ask for one holistic pass over
   the whole unit and its blast radius, earlier findings being checks within

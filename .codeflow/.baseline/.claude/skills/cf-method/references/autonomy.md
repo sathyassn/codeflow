@@ -98,7 +98,10 @@ operator. Decide by authorization and path identity: compare the resolved
 path with the task's worktree or with the sample path your harness recorded.
 A folder that another run created, or a path that only resembles
 yours, is foreign. A prompt to trust hook definitions, such as Codex's review
-of a project's hooks, is not a folder trust prompt: it goes to the operator.
+of a project's hooks, is not a folder trust prompt: answer it only when every
+hook file the seat loads is byte-identical to the one at the pull request's
+target tip, and otherwise it goes to the operator (ADR-0075, amendment of
+2026-10-03; the orchestrator's transport rule, "First-run prompts").
 
 ## Settled dissent
 

@@ -26,8 +26,10 @@ A cross-family review or consult in Herdr runs this way, and only this way:
    skill).
 2. Launched in its CLI's autonomous permission mode, the consult and review
    row of the transport posture table, so it never stalls on an approval.
-3. First-run prompts handled as the skill's "First-run prompts" section
-   says, for the task's own folder only.
+3. First-run prompts handled as the transport rule's "First-run prompts"
+   section says: folder trust for the task's own folder only; hook trust
+   only when each hook file matches `git show <target-tip>:<path>` byte for
+   byte, otherwise the operator is told the seat is waiting in this tab.
 4. The brief follows the review brief contract in the orchestrator's
    `resources/quality/findings.md`: one holistic pass over the whole unit at
    one head, its blast radius included. It is delivered with `deliver.py`.

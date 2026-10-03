@@ -955,7 +955,9 @@ fn cross_family_transport_is_stated_once_and_cited_everywhere() {
             "| Grok | `--always-approve` | `--permission-mode auto` |",
             "The Codex builder posture is ADR-0075 D1",
             "The caller answers folder trust only for the task's own folder",
-            "Hook trust is the operator's (ADR-0075)",
+            "It answers hook trust (ADR-0075, amendment of 2026-10-03) only",
+            "is byte-identical to the one at the pull\nrequest's target tip",
+            "The\ncaller never trusts a changed hook and never picks \"continue without\ntrusting\".",
             "Skip a self-update offer.",
         ],
     );

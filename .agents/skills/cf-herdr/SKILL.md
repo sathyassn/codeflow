@@ -125,8 +125,8 @@ A new seat can stop at folder trust, then project hook trust (Grok:
 `/hooks-trust` or `--trust`), or a self-update offer; delivery exits 5
 until they are answered. Folder trust:
 Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).
-Hook trust: check the shown hooks match the base branch's, report the seat
-as waiting; the operator answers. Skip a self-update offer. The transport
+Hook trust: only for hooks byte-identical to the target tip's; else tell
+the operator the seat waits. Skip a self-update offer. The transport
 rule's "First-run prompts" section is the authority.
 
 ## Deliver a prompt

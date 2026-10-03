@@ -460,3 +460,29 @@ from TSK-164 AC-1, AC-4 and AC-7. TSK-189 owns the policy-source,
 fail-closed, integration and hook-trust text in AC-2, AC-3 and AC-6. TSK-190
 owns the Codex launch-profile changes. No dropped mechanism is a
 prerequisite to those tasks.
+
+## Amendment, 2026-10-03: agents trust unchanged hooks
+
+The operator decided on 2026-10-03 (TSK-213) that when a Codex or Grok seat
+asks whether to trust the project's hooks, the calling agent may answer
+"trust" only when every hook definition that seat would load is
+byte-identical to the one at the pull request's base, the target tip. If any
+hook differs, the operator answers the prompt in the seat's Herdr tab. The
+agent never trusts a changed hook and never picks "continue without
+trusting" to get past the prompt.
+
+This replaces the consequence "Hook trust is the operator's: agents never
+review or trust hook definitions" and decision 8's Codex hook trust entry
+for unchanged hooks. Changed hooks stay the operator's, as before.
+
+Why: the earlier rule kept an agent from deciding which guards run. A hook
+byte-identical to the target tip is already reviewed and landed, so trusting
+it adds no unreviewed code and leaves the guards as reviewed. A changed hook
+is unreviewed code the seat would run, so it stays with the operator.
+
+The agent checks the match by comparing each hook file the harness loads
+(Codex `.codex/hooks.json`, each file under `.grok/hooks/`) with
+`git show <target-tip>:<path>` after a fetch; a file missing at the tip
+counts as changed. The rule's home is
+`cf-model-orchestrator/resources/routing/transport.md`, "First-run prompts"
+(ADR-0077), with `cf-method/references/autonomy.md`, "Trust prompts".

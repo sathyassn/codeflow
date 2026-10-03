@@ -65,6 +65,12 @@ required. A consult or review edits nothing whatever its mode. Never
 A new seat can stop at a folder trust prompt, a project hook trust prompt or
 a self-update offer before its first turn. The caller answers folder trust
 only for the task's own folder (`cf-method/references/autonomy.md`, "Trust
-prompts"). Hook trust is the operator's (ADR-0075): the caller checks that
-the hooks the seat shows match the base branch's hooks, reports the seat as
-waiting, and does not brief it until its hooks run. Skip a self-update offer.
+prompts"). It answers hook trust (ADR-0075, amendment of 2026-10-03) only
+when every hook file the seat would load (Codex's hooks file in `.codex/`,
+each file under `.grok/hooks/`) is byte-identical to the one at the pull
+request's target tip: after a fetch, `git show <target-tip>:<path> | cmp -
+<path>` passes for each, and a file missing at the tip differs. If any file
+differs, the caller tells the operator the seat is waiting, the operator
+answers in the seat's Herdr tab, and the seat gets no brief until then. The
+caller never trusts a changed hook and never picks "continue without
+trusting". Skip a self-update offer.

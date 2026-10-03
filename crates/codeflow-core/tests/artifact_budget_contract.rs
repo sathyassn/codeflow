@@ -1262,8 +1262,8 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             ("trust prompt identity", "Decide by authorization and path identity"),
             (
-                "hook trust is the operator's",
-                "A prompt to trust hook definitions, such as Codex's review of a project's hooks, is not a folder trust prompt: it goes to the operator.",
+                "hook trust only for unchanged hooks",
+                "A prompt to trust hook definitions, such as Codex's review of a project's hooks, is not a folder trust prompt: answer it only when every hook file the seat loads is byte-identical to the one at the pull request's target tip, and otherwise it goes to the operator",
             ),
             (
                 "refused families stay the operator's",
