@@ -98,12 +98,9 @@ operator. Decide by authorization and path identity: compare the resolved
 path with the task's worktree or with the sample path your harness recorded.
 A folder that another run created, or a path that only resembles
 yours, is foreign. A prompt to trust hook definitions, such as Codex's review
-of a project's hooks, is not a folder trust prompt. Answer it only in the
-narrow case the orchestrator's transport rule defines ("First-run prompts";
-ADR-0075, amendment of 2026-10-03): a Codex seat whose project hooks file is
-unchanged from the fetched target tip and runs only CodeFlow's shipped
-`codeflow hook` commands. Every other hook prompt, and every Grok project
-trust prompt, goes to the operator.
+of a project's hooks, is not a folder trust prompt: it goes to the operator,
+and so does every Grok project trust prompt (ADR-0075, amendment of
+2026-10-03; the orchestrator's transport rule, "First-run prompts").
 
 ## Settled dissent
 

@@ -88,13 +88,11 @@ erratum below, never an edit of the section.
   not, with its anti-hijack rules unchanged. The seats' launch flags are
   stated once, so an edit handoff to Claude now launches in the production
   posture instead of auto mode, and a new seat's first-run prompts are
-  named: the caller answers folder trust for the task's own folder; it
-  answers hook trust only for a Codex seat whose project hooks file is
-  unchanged from the fetched target tip and runs only CodeFlow's shipped
-  `codeflow hook` commands, and the operator answers every other hook
-  prompt and every Grok trust prompt; a self-update offer is skipped. A
-  Grok builder seat is marked not qualified until ADR-0075 D3's sandboxed
-  route is proven. A long
+  named: the caller answers folder trust for the task's own folder, the
+  operator answers every hook trust prompt (Grok's included), and a
+  self-update offer is skipped. A Grok builder seat is marked not qualified
+  until ADR-0075 D3's sandboxed route is proven, so building goes to a
+  Claude or Codex seat. A long
   Codex reply and its observed model and effort are read from the seat's
   session record. Review and consult briefs ask for one holistic pass over
   the whole unit and its blast radius, earlier findings being checks within

@@ -76,11 +76,12 @@ it, and never `--dangerously-bypass-hook-trust`.
 A new seat can stop at a folder trust prompt, a hook trust prompt or a
 self-update offer before its first turn. The caller answers folder trust
 only for the task's own folder (`cf-method/references/autonomy.md`, "Trust
-prompts"), and skips a self-update offer. At a hook trust prompt, the caller
-answers "trust" only in the narrow Codex case that [hook trust](hook-trust.md)
-defines (ADR-0075, amendment of 2026-10-03). Every other hook trust prompt,
-every Grok project trust prompt included, goes to the operator: the caller
-tells the operator the seat is waiting in its own surface, its Herdr tab or,
-under the fallback, its tmux pane, and briefs it only after the operator
-answers. The caller never trusts a changed or extra hook and never picks
+prompts"), and skips a self-update offer. Hook trust is the operator's
+(ADR-0075, amendment of 2026-10-03): the caller never answers a hook trust
+prompt, a Grok project trust prompt included. It tells the operator the seat
+is waiting in its own surface, its Herdr tab or, under the fallback, its tmux
+pane, and briefs it only after the operator answers. With that report it may
+say, as information that grants nothing, whether each project hook file
+matches the fetched target tip (`git show <tip>:<path> | cmp - <path>`) and
+CodeFlow's managed copy under `.codeflow/.baseline/`. It never picks
 "continue without trusting".

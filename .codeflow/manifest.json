@@ -389,13 +389,13 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "d0655c2b20bba759a1b5f9340af49c7b4a38d0f0f3603f636107d838b094476b",
+      "sha256": "7a4cd70e91762793dd422b6bb754b6b8fbff9faeab17760f6f83582aeb6ccfb8",
       "exec": false
     },
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "2774cb903070eb68de3d34fc6e5dcf6210eb28b32ee3deb8ec931b86c65d257e",
+      "sha256": "135e910bf5029b9d19598f938549cb00a155233cd260a4de36389e786bd75dbf",
       "exec": false
     },
     ".agents/skills/cf-herdr/scripts/deliver.py": {
@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "e14d7f761759f7a191028a97dddaccfb6b889e6c96165eb460e2d78e91c0747c",
+      "sha256": "09690f4fdc3dd66c1df685fa9291e9c39977a7109d4697dd0c23faed7d5d4f74",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -620,12 +620,6 @@
       "sha256": "040c930b3054ddeff52a6214f623a44d07ffc80554de3a0ba39f4c9635876d7a",
       "exec": false
     },
-    ".agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md": {
-      "src": "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md",
-      "ownership": "managed",
-      "sha256": "0eb0941c8551d7656cc535a6756d8a2ae139f2fe8875b5b23d42711b2e3766a2",
-      "exec": false
-    },
     ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
       "ownership": "managed",
@@ -635,7 +629,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "d6a7f7b2414fc719bc124d5b89dbd9fa974e10d633f681a5bc2cd1b144162ca7",
+      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1223,13 +1217,13 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "d0655c2b20bba759a1b5f9340af49c7b4a38d0f0f3603f636107d838b094476b",
+      "sha256": "7a4cd70e91762793dd422b6bb754b6b8fbff9faeab17760f6f83582aeb6ccfb8",
       "exec": false
     },
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "2774cb903070eb68de3d34fc6e5dcf6210eb28b32ee3deb8ec931b86c65d257e",
+      "sha256": "135e910bf5029b9d19598f938549cb00a155233cd260a4de36389e786bd75dbf",
       "exec": false
     },
     ".claude/skills/cf-herdr/scripts/deliver.py": {
@@ -1247,7 +1241,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "e14d7f761759f7a191028a97dddaccfb6b889e6c96165eb460e2d78e91c0747c",
+      "sha256": "09690f4fdc3dd66c1df685fa9291e9c39977a7109d4697dd0c23faed7d5d4f74",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
@@ -1454,12 +1448,6 @@
       "sha256": "040c930b3054ddeff52a6214f623a44d07ffc80554de3a0ba39f4c9635876d7a",
       "exec": false
     },
-    ".claude/skills/cf-model-orchestrator/resources/routing/hook-trust.md": {
-      "src": "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md",
-      "ownership": "managed",
-      "sha256": "0eb0941c8551d7656cc535a6756d8a2ae139f2fe8875b5b23d42711b2e3766a2",
-      "exec": false
-    },
     ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
       "ownership": "managed",
@@ -1469,7 +1457,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "d6a7f7b2414fc719bc124d5b89dbd9fa974e10d633f681a5bc2cd1b144162ca7",
+      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {

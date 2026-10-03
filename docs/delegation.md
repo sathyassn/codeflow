@@ -113,11 +113,12 @@ not.
    `herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> --pane <pane-id> -- <native-args>`.
 5. A new peer can first ask to trust the folder or the project's hooks.
    The agent answers folder trust for the task's own folder only and skips
-   any update offer. It answers hook trust only in the narrow Codex case of
-   [ADR-0075's 2026-10-03 amendment](decisions/ADR-0075-agent-sessions-refuse-instead-of-prompting-under.md):
-   an unchanged hooks file that runs only CodeFlow's shipped commands. Any
-   other hook prompt, and every Grok trust prompt, waits for you in the
-   seat's Herdr tab, or its tmux pane under the fallback.
+   any update offer. Hook trust stays yours
+   ([ADR-0075's 2026-10-03 amendment](decisions/ADR-0075-agent-sessions-refuse-instead-of-prompting-under.md)):
+   every hook prompt, and every Grok trust prompt, waits for you in the
+   seat's Herdr tab, or its tmux pane under the fallback. The agent may tell
+   you whether the hook files match the target and the managed copy; that
+   is information, not a grant.
 6. It delivers the prompt with the `cf-herdr` delivery script, which sends
    the exact file and confirms the turn started. For a Claude peer it arms
    the prompt first and then waits with

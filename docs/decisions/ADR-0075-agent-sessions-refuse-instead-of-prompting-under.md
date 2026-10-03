@@ -461,54 +461,43 @@ fail-closed, integration and hook-trust text in AC-2, AC-3 and AC-6. TSK-190
 owns the Codex launch-profile changes. No dropped mechanism is a
 prerequisite to those tasks.
 
-## Amendment, 2026-10-03: agents trust unchanged CodeFlow hooks in Codex
+## Amendment, 2026-10-03: hook trust stays the operator's
 
-The operator decided on 2026-10-03 (TSK-213) that when a seat asks whether
-to trust the project's hooks, the calling agent may answer "trust" only when
-every hook definition the seat would load is byte-identical to the one at
-the pull request's base, the target tip; otherwise the operator answers in
-the seat's own surface, and the agent never trusts a changed hook or picks
-"continue without trusting".
+The operator decided on 2026-10-03 (TSK-213) to let the calling agent answer
+a seat's hook trust prompt when every hook the seat would load is unchanged
+from the pull request's target tip. Two independent review rounds of PR 37
+showed that this cannot be done safely today:
 
-Review of that rule (PR 37, round 1) showed that identical definitions do
-not mean identical executed code: an unchanged hook running `sh ./check.sh`
-passed the byte comparison while the script it runs had changed. It also
-showed that Codex loads hooks from inline config, user, global and plugin
-sources as well as the project file, and that Grok reads other harnesses'
-hook files and its project trust grants MCP and LSP servers along with
-hooks. This amendment therefore narrows the operator's decision, on that
-review evidence, to the case where the decision's premise holds. The agent
-answers "trust" only when all of these hold:
+1. **Execution identity is not established.** Identical hook definitions do
+   not mean identical executed code. An unchanged hook can run a changed
+   repository script, and even CodeFlow's shipped `codeflow hook ...` form
+   depends on how the seat's shell and `PATH` resolve `codeflow` and the
+   tools its missing-binary probe calls: a wrapper, symlink, alias, login
+   shell initialization or an earlier repository directory on `PATH` can
+   run repository code. A check of file text in the caller's shell does not
+   establish what the seat executes.
+2. **The prompt does not show what it grants.** Codex 0.159.1's startup
+   hook prompt shows a hook count, a warning and three choices, and no
+   source paths; "trust all and continue" trusts every pending hook in the
+   inventory, including inline, user, global and plugin hooks. Grok's
+   project trust also grants MCP and LSP servers. The agent cannot observe
+   the scope of what it would trust.
 
-1. The seat is Codex, whose prompt grants hooks only.
-2. The prompt lists only the project's Codex hooks file.
-3. That file is a regular file, not a symlink, and is byte-identical to the
-   file at the immutable SHA of the successfully fetched target tip. A
-   failed fetch or an unresolved target means no trust.
-4. The file is also byte-identical to CodeFlow's managed copy, so every
-   hook command is, as a whole string, a form CodeFlow ships:
-   `codeflow hook <name> --contract <N>` followed by CodeFlow's shared
-   missing-binary probe. These run only the installed `codeflow` binary,
-   resolved outside the repository, and system tools; no repository script,
-   interpreter or relative path.
-
-Everything else goes to the operator: Grok's combined grant, any changed or
-extra hook, any hook from another source, and any hook that runs repository
-code. This replaces the consequence "Hook trust is the operator's: agents
-never review or trust hook definitions" and decision 8's Codex hook-trust
-entry only for that one case.
-
-Why: the earlier rule kept an agent from deciding which guards run. When the
-four conditions hold, the hooks the seat would trust are CodeFlow's own
-guard commands as reviewed and landed on the target, and they run no code
-from the repository, so trusting them leaves the reviewed guards in place.
-The check does not review hook behaviour, and it makes no claim about hooks
-outside that case.
+Hook trust therefore stays the operator's, as decision 8 and the
+consequence "Hook trust is the operator's: agents never review or trust hook
+definitions" state. The agent never answers a hook trust prompt and never
+picks "continue without trusting" to get past it. When it reports a seat
+waiting at that prompt, it may tell the operator whether each project hook
+file matches the fetched target tip and CodeFlow's managed copy under
+`.codeflow/.baseline/`. That check is information for the operator, never a
+grant. The exception can return only after a qualified procedure that
+establishes the trusted inventory and the seat's execution identity, proven
+by a live canary on the harness version in use.
 
 This also settles D3's agent-launched `--trust`: a Grok seat never launches
 with `--trust` from an agent, since Grok's project trust is the operator's.
 D3's builder route (`--always-approve --sandbox cf-guard-worktree`) stays
 unqualified until the items listed under "Still to establish" are proven,
-so no Grok seat builds until then. The procedure lives in
-`cf-model-orchestrator/resources/routing/hook-trust.md`, reached from the
-transport rule's "First-run prompts" (ADR-0077).
+so no Grok seat builds until then. The rule is stated in the transport
+rule's "First-run prompts" (`cf-model-orchestrator/resources/routing/transport.md`,
+ADR-0077).

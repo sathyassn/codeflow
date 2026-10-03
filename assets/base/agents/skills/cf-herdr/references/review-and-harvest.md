@@ -30,10 +30,10 @@ A cross-family review or consult in Herdr runs this way, and only this way:
    reported to the operator as a blocked seat, with its text; the caller
    never answers a consequential approval for the seat.
 3. First-run prompts handled as the transport rule's "First-run prompts"
-   section says: folder trust for the task's own folder only; hook trust
-   only in its narrow Codex case (a Codex hooks file unchanged from the
-   fetched target tip and running only shipped `codeflow hook` commands),
-   otherwise the operator is told the seat is waiting in this tab.
+   section says: folder trust for the task's own folder only; a hook trust
+   prompt is never answered by the caller, and the operator is told the
+   seat is waiting in this tab, with the hook-file match check as
+   information only.
 4. The brief follows the review brief contract in the orchestrator's
    `resources/quality/findings.md`: one holistic pass over the whole unit at
    one head, its blast radius included. It is delivered with `deliver.py`.

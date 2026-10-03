@@ -444,12 +444,6 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "only when a new seat raises a folder trust prompt",
     ),
     conditional(
-        "cf-model-orchestrator/resources/routing/transport.md",
-        "cf-model-orchestrator/resources/routing/hook-trust.md",
-        "At a hook trust prompt",
-        "only when a new seat raises a hook trust prompt",
-    ),
-    conditional(
         "cf-delegate/resources/lane-plugin.md",
         OVERRIDES,
         "With project model overrides",

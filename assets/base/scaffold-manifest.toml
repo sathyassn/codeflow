@@ -603,12 +603,6 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md"
-dest = ".claude/skills/cf-model-orchestrator/resources/routing/hook-trust.md"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md"
 ownership = "managed"
@@ -1386,12 +1380,6 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
-src = "agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md"
-dest = ".agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
