@@ -149,14 +149,34 @@ peer run; `security.headless_opt_in` is ignored with a warning and removed
 by `codeflow update`. The `security.dangerous_commands` floor cannot be
 lowered.
 
-Contract-3 git shims exit 1 and harness wrappers exit 2 when the `codeflow`
-binary is missing or older, printing the installer and `codeflow update`,
-so install the new binary before running `codeflow update`. A wrapper also
-exits 2 when a current binary refuses by policy, but then prints only the
-guard's own message. After a refusal it gives `git-hook capabilities` about
-two seconds to answer `hooks 3`, then kills the probe; it advises a
-reinstall only when the binary is missing, older, or the probe fails or
-does not answer in time.
+Contract-3 git shims exit 1 when the `codeflow` binary is missing or older,
+printing the installer and `codeflow update`, so install the new binary
+before running `codeflow update`. A harness wrapper is
+`codeflow hook <name> --contract 3`, then a fallback that exits 2 whenever
+the hook fails and always ends with a line saying it blocked, since Codex
+treats exit 2 with an empty stderr as a failed hook and lets the call
+through. A policy refusal prints the guard's message first; a missing
+binary also prints the installer and `codeflow update`; a binary too old to
+know `--contract` prints its own usage error, and one that knows the flag
+names the install step for a contract it does not support. The wrapper
+never calls the binary twice and carries no `$`: Grok expands `$name` and
+`${...}` in a hook command itself and skips, failing open, a hook whose
+variable is unset (issue 29). Grok shows only the first stderr line of a
+denying hook, so a guard refusing a Grok call also writes Grok's deny
+decision with the whole refusal on stdout. `codeflow doctor --check grok`
+names a CodeFlow hook command Grok would skip. When the shipped exec-guard
+handler (command, timeout and environment) is bound where Grok's shell
+tool hits it, matched as Grok matches, doctor judges a fixed canary with
+the handler `codeflow hook exec-guard --contract 3` runs, in its own
+process under the catastrophic-command floor alone, reading no policy,
+repository, working directory or environment and recording no refusal,
+and expects exit 2, a reason and Grok's deny answer. Doctor executes
+nothing for the check, so no hook text, hook environment, `codeflow` on
+PATH or swapped binary, any of which the repository could plant, answers
+for it: a customised handler is reported unverified, and where PATH
+resolves `codeflow` is reported without being run. The canary does not
+exercise a shell, the command-line parsing, the `codeflow` on PATH or
+Grok's own hook call; a live session's hook lines prove those.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

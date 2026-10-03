@@ -252,55 +252,53 @@ fn ac3_shims_fail_closed_and_harness_contract_is_wired() {
             std::fs::remove_file(fake).unwrap();
         }
     }
-    wrappers_advise_reinstall_only_for_a_stale_binary(&repo, &assets, &bin);
+    wrappers_advise_reinstall_only_for_a_missing_binary(&repo, &assets, &bin);
 }
 
-/// The fake `codeflow` for a wrapper case: `capabilities` runs `probe`, the
-/// hook prints `refusal` and exits 2. It records its pid so a test can prove
-/// a stalled probe was killed.
-fn fake_codeflow(bin: &Path, probe: &str, refusal: &str) {
+/// The fake `codeflow` for a wrapper case: the hook prints `stderr`
+/// (nothing when it is empty) and exits `code`; a negative `code` makes it
+/// kill itself with that signal. `git-hook capabilities` leaves a mark and
+/// then stalls, so a wrapper that calls the binary a second time is seen
+/// and would hang.
+fn fake_codeflow(bin: &Path, stderr: &str, code: i32) {
     use std::os::unix::fs::PermissionsExt;
     let fake = bin.join("codeflow");
-    let pid = bin.join("probe.pid");
+    let say = if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("echo \"{stderr}\" >&2\n")
+    };
+    let end = if code < 0 {
+        format!("kill -{} $$\n", -code)
+    } else {
+        format!("exit {code}\n")
+    };
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo $$ > '{}'; {probe}; fi\necho \"{refusal}\" >&2\nexit 2\n",
-            pid.display()
+            "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then : > '{}'; exec /bin/sleep 30; fi\n{say}{end}",
+            bin.join("probed").display()
         ),
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// AC-3: every harness wrapper blocks with exit 2 for a missing binary, an
-/// older one, a current one refusing by policy and one whose capability
-/// probe stalls before or after answering, or stalls after printing lines
-/// shaped like the wrapper's own pid and completion records; only the
-/// current binary that answers in time goes without reinstall advice. The
-/// probe is bounded, so a stall still returns exit 2 well inside the
-/// harness's 10-second timeout,
-/// kills the probe and removes its temporary file.
-fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path, bin: &Path) {
-    for tool in ["mktemp", "sleep", "rm", "rmdir"] {
-        let source = ["/usr/bin", "/bin"]
-            .iter()
-            .map(|dir| Path::new(dir).join(tool))
-            .find(|path| path.exists())
-            .unwrap();
-        std::os::unix::fs::symlink(source, bin.join(tool)).unwrap();
-    }
+/// AC-3, and TSK-215 AC-2 (issue 29): every harness wrapper is
+/// `codeflow hook <name> --contract 3` followed by one shared fallback with
+/// no `$`, which Grok would read as its own template and skip. It exits 0
+/// when the binary allows and 2 whenever the hook fails: a policy refusal
+/// prints the guard's message first, a missing binary names the installer
+/// and `codeflow update`, a binary older than contract 3 keeps its own
+/// usage error, and any other failure still blocks. Every failure ends with
+/// one closing line, so a binary that fails silently, or is killed, still
+/// leaves the nonempty reason Codex needs before it blocks on exit 2
+/// (TSK-215 round 1). The wrapper never calls the binary a second time, so
+/// the fallback adds no wait of its own (the hook call itself can still
+/// stall until the harness timeout), and it writes no temporary file.
+fn wrappers_advise_reinstall_only_for_a_missing_binary(repo: &Repo, assets: &Path, bin: &Path) {
     let tmp = repo.root().join("wrapper-tmp");
     std::fs::create_dir(&tmp).unwrap();
-    let stall = "exec /bin/sleep 30";
-    let answer_then_stall = "echo 'hooks 3'; exec /bin/sleep 30";
-    // Output the probe controls must never be taken for the wrapper's
-    // completion marker or the pid it kills.
-    let marker_like = [
-        "echo 'rc diagnostic'; exec /bin/sleep 30",
-        "echo 'hooks 3'; echo 'rc 0'; exec /bin/sleep 30",
-        "echo 'pid 1'; echo 1; echo 'hooks 3'; exec /bin/sleep 30",
-    ];
     let mut shared_tail: Option<String> = None;
     for path in [
         "codex/hooks.json",
@@ -309,67 +307,57 @@ fn wrappers_advise_reinstall_only_for_a_stale_binary(repo: &Repo, assets: &Path,
         "settings/acceptEdits.json",
         "settings/bypass-sandboxed.json",
     ] {
-        let path = assets.join(path);
-        if !path.exists() {
-            continue;
-        }
-        let text = std::fs::read_to_string(path).unwrap();
+        let text = std::fs::read_to_string(assets.join(path)).unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         let mut hooks = Vec::new();
         commands(&value, &mut hooks);
-        assert!(!hooks.is_empty());
+        assert!(!hooks.is_empty(), "{path}");
         for command in &hooks {
-            assert!(command.contains("--contract 3"), "{command}");
-            // Every handler in every file shares one probe, so the stalls
-            // run once, on the first handler.
-            let tail = command.split_once(';').unwrap().1.to_string();
-            let first = shared_tail.is_none();
-            assert_eq!(
-                shared_tail.get_or_insert_with(|| tail.clone()),
-                &tail,
-                "{command}"
+            assert!(!command.contains('$'), "{path}: {command}");
+            let (head, tail) = command.split_once(" || ").unwrap();
+            assert!(
+                head.starts_with("codeflow hook ") && head.ends_with(" --contract 3"),
+                "{path}: {command}"
             );
-            let mut cases = vec![
-                (None, true),
+            assert_eq!(
+                shared_tail.get_or_insert_with(|| tail.to_string()),
+                tail,
+                "{path}: {command}"
+            );
+            for (binary, expected, advised) in [
+                (None, 2, true),
+                (Some(("", 0)), 0, false),
+                (Some(("codeflow git-guard: BLOCKED", 2)), 2, false),
                 (
-                    Some((
-                        "echo 'hooks 2'; exit 0",
-                        "error: unexpected argument '--contract'",
-                    )),
-                    true,
-                ),
-                (
-                    Some(("echo 'hooks 3'; exit 0", "codeflow git-guard: BLOCKED")),
+                    Some(("error: unexpected argument '--contract' found", 2)),
+                    2,
                     false,
                 ),
-            ];
-            if first {
-                cases.push((Some((stall, "ORIGINAL-REFUSAL")), true));
-                cases.push((Some((answer_then_stall, "ORIGINAL-REFUSAL")), true));
-                for probe in marker_like {
-                    cases.push((Some((probe, "ORIGINAL-REFUSAL")), true));
-                }
-            }
-            for (binary, advised) in cases {
-                wrapper_case(repo, bin, &tmp, command, binary, advised);
+                (Some(("codeflow hook: internal error", 1)), 2, false),
+                (Some(("codeflow: cannot execute", 126)), 2, false),
+                (Some(("", 1)), 2, false),
+                (Some(("", -9)), 2, false),
+            ] {
+                wrapper_case(repo, bin, &tmp, command, binary, expected, advised);
             }
         }
     }
 }
 
-/// One wrapper run against a fake binary (`None` for a missing one): exit 2
-/// within the bound, advice exactly when `advised`, the refusal text kept,
-/// the temporary directory removed and a stalled probe killed.
+/// One wrapper run against a fake binary (`None` for a missing one): the
+/// expected exit code within the bound, advice exactly when `advised`, the
+/// binary's own text kept, no temporary file and no second call.
 fn wrapper_case(
     repo: &Repo,
     bin: &Path,
     tmp: &Path,
     command: &str,
-    binary: Option<(&str, &str)>,
+    binary: Option<(&str, i32)>,
+    expected: i32,
     advised: bool,
 ) {
-    if let Some((probe, refusal)) = binary {
-        fake_codeflow(bin, probe, refusal);
+    if let Some((stderr, code)) = binary {
+        fake_codeflow(bin, stderr, code);
     }
     let started = std::time::Instant::now();
     let out = repo
@@ -384,8 +372,17 @@ fn wrapper_case(
         elapsed < std::time::Duration::from_secs(5),
         "{binary:?}: {elapsed:?}"
     );
-    assert_eq!(out.status.code(), Some(2), "{command}: {out:?}");
+    assert_eq!(out.status.code(), Some(expected), "{command}: {out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The harness decision, not just the exit code: Codex blocks on exit 2
+    // only when stderr carries a nonempty reason; Claude and Grok block on
+    // exit 2.
+    if expected == 2 {
+        assert!(
+            !stderr.trim().is_empty(),
+            "{binary:?} {command}: exit 2 with no reason"
+        );
+    }
     assert_eq!(
         stderr.contains("codeflow-cli-installer.sh"),
         advised,
@@ -395,20 +392,15 @@ fn wrapper_case(
     assert_eq!(
         std::fs::read_dir(tmp).unwrap().count(),
         0,
-        "probe file left"
+        "wrapper wrote a temporary file"
     );
-    if let Some((probe, refusal)) = binary {
-        assert!(stderr.contains(refusal), "{stderr}");
-        let pid = std::fs::read_to_string(bin.join("probe.pid")).unwrap();
-        if probe.contains("sleep") {
-            let alive = std::process::Command::new("/bin/kill")
-                .args(["-0", pid.trim()])
-                .output()
-                .unwrap();
-            assert!(!alive.status.success(), "stalled probe {pid} still runs");
-        }
+    if let Some((text, _)) = binary {
+        assert!(stderr.contains(text), "{stderr}");
+        assert!(
+            !bin.join("probed").exists(),
+            "{command}: the wrapper called the binary a second time"
+        );
         std::fs::remove_file(bin.join("codeflow")).unwrap();
-        std::fs::remove_file(bin.join("probe.pid")).unwrap();
     }
 }
 

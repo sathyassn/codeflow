@@ -95,6 +95,197 @@ pub fn update(
     Ok(report)
 }
 
+/// What [`update`] does with one shipped file, by its own rules. Doctor
+/// reads it to offer `codeflow update` only where update repairs a file
+/// (TSK-215).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// The file already is what update would leave.
+    Current,
+    /// Update writes the file: it installs or replaces it, merges it
+    /// cleanly, or merges its managed entries or block. Holds the text it
+    /// writes, which keeps any edit of the project's that the merge keeps.
+    Rewrite(String),
+    /// Update leaves the file as it is and writes `<dest>.new` beside it,
+    /// holding the shipped version or a 3-way merge to resolve; holds that
+    /// proposal.
+    ConflictProposal(String),
+    /// Update leaves a file that differs from the shipped version as it is
+    /// and writes no `.new`: the shipped version has not changed since the
+    /// recorded baseline, so the project's edit stands.
+    KeptUserModification,
+    /// Update skips the path, for this reason.
+    Skipped(String),
+}
+
+/// What [`update`] without `--force` would do with the file at `dest`
+/// (relative to `root`), decided by the same steps it takes and writing
+/// nothing. `None` when update does not manage the file: the project
+/// state, `[scaffold]` config or installed manifest does not read, or no
+/// shipped entry for `dest` applies to the project's tier and permission
+/// preset with managed ownership, whole or by region. A record in the
+/// installed manifest alone never counts.
+#[must_use]
+pub fn decide(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    dest: &str,
+    binary_version: &str,
+) -> Option<Decision> {
+    let state = ProjectState::load(root).ok()?;
+    let ignore = ScaffoldConfig::load(root).ok()?;
+    let manifest = ScaffoldManifest::load(source).ok()?;
+    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version).ok()?;
+    let entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.dest == dest && entry.applies(state.tier, &state.permission_preset))
+        .filter(|entry| {
+            matches!(
+                entry.ownership,
+                Ownership::Managed | Ownership::ManagedRegion
+            )
+        })?;
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
+    if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref()).ok()? {
+        return Some(Decision::Skipped(note));
+    }
+    if let Err(ScaffoldError::UnsafeSymlink { path }) = guard_beneath_root(root, Path::new(dest)) {
+        let link = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        return Some(Decision::Skipped(format!(
+            "{link} is a symlink, and update never writes through one"
+        )));
+    }
+    let ctx = update_context(root, &state, binary_version);
+    let mut scratch = Report::new(String::new());
+    let rendered = render_entry(source, entry, &ctx, &mut scratch).ok()??;
+    let dest_path = root.join(dest);
+    let current = if dest_path.exists() {
+        Some(std::fs::read_to_string(&dest_path).ok()?)
+    } else {
+        None
+    };
+    if entry.ownership == Ownership::Managed {
+        let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
+        let base = Baseline::read(root, dest);
+        let step = managed_step(
+            current.as_deref(),
+            &rendered,
+            recorded,
+            base.as_deref(),
+            false,
+        );
+        return Some(match step {
+            ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
+                Decision::Rewrite(rendered)
+            }
+            ManagedStep::Merge(merged) => Decision::Rewrite(merged),
+            ManagedStep::Adopt => Decision::Current,
+            ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
+            ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
+            ManagedStep::Kept => Decision::KeptUserModification,
+        });
+    }
+    let format = entry.region.unwrap_or(RegionFormat::Markdown);
+    let next = match (format, &current) {
+        (RegionFormat::Json, None) => rendered.clone(),
+        (RegionFormat::Json, Some(current)) => {
+            let previous = Baseline::read(root, dest);
+            merge_json_region(
+                entry,
+                current,
+                previous.as_deref(),
+                &rendered,
+                &mut Vec::new(),
+            )
+            .ok()?
+        }
+        (format @ (RegionFormat::Markdown | RegionFormat::Hash), current) => {
+            let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
+            let extracted = region::extract_block(&rendered, format);
+            let block = extracted
+                .clone()
+                .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
+            match current {
+                Some(current) => region::upsert_block(current, &block, format).0,
+                None if extracted.is_some() => rendered.clone(),
+                None => format!("{block}\n"),
+            }
+        }
+    };
+    Some(match current {
+        Some(current) if next == current && current == rendered => Decision::Current,
+        Some(current) if next == current => Decision::KeptUserModification,
+        _ => Decision::Rewrite(next),
+    })
+}
+
+/// Why update skips `entry` before reading it (`[scaffold] ignore`, the
+/// brownfield starter decision, a kept PR template), as its report says;
+/// `None` when update goes on to the file.
+fn skip_note(
+    root: &Path,
+    entry: &ManifestEntry,
+    ignore: &ScaffoldConfig,
+    kept_template: Option<&pr_template::KeptTemplate>,
+) -> Result<Option<String>, ScaffoldError> {
+    if ignore.is_ignored(&entry.dest) {
+        // Opted out via `[scaffold] ignore`: never rewrite it, and never
+        // resurrect it if the user deleted it. Its manifest record and
+        // baseline are left untouched so removing the glob later restores
+        // normal management.
+        return Ok(Some(
+            "ignored via [scaffold] ignore in project.toml".to_string(),
+        ));
+    }
+    if should_skip_initial_stack_adr(root, &entry.dest)? {
+        return Ok(Some(
+            "brownfield repository already has ADRs; starter stack decision not added".to_string(),
+        ));
+    }
+    if let Some(kept) = kept_template.filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE) {
+        // A kept brownfield template is the project's (SPC-013 R-84):
+        // never merged into, never shadowed by a sidecar or a second
+        // template.
+        return Ok(Some(format!(
+            "the project's PR template {} is kept; see git.pr_section_mapping",
+            kept.path
+        )));
+    }
+    Ok(None)
+}
+
+/// The template context update renders shipped files with.
+fn update_context(
+    root: &Path,
+    state: &ProjectState,
+    binary_version: &str,
+) -> super::template::TemplateContext {
+    let project = root
+        .canonicalize()
+        .ok()
+        .as_deref()
+        .unwrap_or(root)
+        .file_name()
+        .map_or_else(
+            || "project".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        );
+    build_context(
+        &project,
+        &state.product_one_liner,
+        &state.areas,
+        &state.stack,
+        state.tier,
+        binary_version,
+    )
+}
+
 #[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
 fn update_writes(
     source: &dyn super::AssetSource,
@@ -106,24 +297,7 @@ fn update_writes(
     let manifest = ScaffoldManifest::load(source)?;
     let mut installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
 
-    let project = root
-        .canonicalize()
-        .ok()
-        .as_deref()
-        .unwrap_or(root)
-        .file_name()
-        .map_or_else(
-            || "project".to_string(),
-            |n| n.to_string_lossy().to_string(),
-        );
-    let ctx = build_context(
-        &project,
-        &state.product_one_liner,
-        &state.areas,
-        &state.stack,
-        state.tier,
-        &opts.binary_version,
-    );
+    let ctx = update_context(root, &state, &opts.binary_version);
 
     let mut report = Report::new(format!(
         "codeflow update (scaffold {} -> {}, {} tier)",
@@ -137,44 +311,8 @@ fn update_writes(
         if !entry.applies(state.tier, &state.permission_preset) {
             continue;
         }
-        if ignore.is_ignored(&entry.dest) {
-            // Opted out via `[scaffold] ignore`: never rewrite it, and never
-            // resurrect it if the user deleted it. Its manifest record and
-            // baseline are left untouched so removing the glob later restores
-            // normal management.
-            report.file_with_notes(
-                &entry.dest,
-                Action::Skipped,
-                vec!["ignored via [scaffold] ignore in project.toml".to_string()],
-            );
-            continue;
-        }
-        if should_skip_initial_stack_adr(root, &entry.dest)? {
-            report.file_with_notes(
-                &entry.dest,
-                Action::Skipped,
-                vec![
-                    "brownfield repository already has ADRs; starter stack decision not added"
-                        .to_string(),
-                ],
-            );
-            continue;
-        }
-        if let Some(kept) = kept_template
-            .as_ref()
-            .filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE)
-        {
-            // A kept brownfield template is the project's (SPC-013 R-84):
-            // never merged into, never shadowed by a sidecar or a second
-            // template.
-            report.file_with_notes(
-                &entry.dest,
-                Action::Skipped,
-                vec![format!(
-                    "the project's PR template {} is kept; see git.pr_section_mapping",
-                    kept.path
-                )],
-            );
+        if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref())? {
+            report.file_with_notes(&entry.dest, Action::Skipped, vec![note]);
             continue;
         }
         update_entry(
@@ -449,6 +587,84 @@ fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
     let _ = write!(diffs, "=== {dest}\n{patch}\n");
 }
 
+/// Update's step for a whole managed file, from the file on disk (`None`
+/// when absent), the shipped rendering, the installed record's hash, the
+/// baseline and `--force`. [`update_entry`] applies it; [`decide`] reports
+/// it.
+enum ManagedStep {
+    /// Absent: install it.
+    Add,
+    /// Already the shipped version: adopt it.
+    Adopt,
+    /// Unmodified since it was installed: replace it.
+    Replace,
+    /// Modified, replaced under `--force`.
+    Force,
+    /// Modified, with no baseline to merge against: propose the shipped
+    /// version in `.new`.
+    NoBaseline,
+    /// Modified, and the shipped version equals the baseline: keep it.
+    Kept,
+    /// Modified, and the 3-way merge applies cleanly: write the merge.
+    Merge(String),
+    /// Modified, and the 3-way merge conflicts: propose it in `.new`.
+    Conflict(String),
+}
+
+fn managed_step(
+    current: Option<&str>,
+    rendered: &str,
+    recorded: Option<&str>,
+    base: Option<&str>,
+    force: bool,
+) -> ManagedStep {
+    let Some(current) = current else {
+        return ManagedStep::Add;
+    };
+    if current == rendered {
+        return ManagedStep::Adopt;
+    }
+    if recorded == Some(hash::sha256_hex(current.as_bytes()).as_str()) {
+        return ManagedStep::Replace;
+    }
+    if force {
+        return ManagedStep::Force;
+    }
+    let Some(base) = base else {
+        return ManagedStep::NoBaseline;
+    };
+    if rendered == base {
+        return ManagedStep::Kept;
+    }
+    match diffy::merge(base, current, rendered) {
+        Ok(merged) => ManagedStep::Merge(merged),
+        Err(conflicted) => ManagedStep::Conflict(conflicted),
+    }
+}
+
+/// Update's merge of a JSON settings file by its managed hook entries:
+/// against the recorded baseline or, with none, the settings an earlier
+/// release shipped.
+fn merge_json_region(
+    entry: &ManifestEntry,
+    current: &str,
+    previous: Option<&str>,
+    rendered: &str,
+    lines: &mut Vec<String>,
+) -> Result<String, ScaffoldError> {
+    let prior = previous
+        .is_none()
+        .then(|| prior_release::settings(&entry.src))
+        .flatten();
+    if let Some(prior) = prior {
+        let merged = merge_settings_from_prior_release(current, prior, rendered, lines)?;
+        lines.insert(0, prior_release_note());
+        Ok(merged)
+    } else {
+        merge_settings_from_baseline(current, previous, rendered, lines)
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn update_entry(
     source: &dyn super::AssetSource,
@@ -476,106 +692,112 @@ fn update_entry(
 
     match entry.ownership {
         Ownership::Managed => {
-            if !dest_path.exists() {
-                // New manifest entry (or deleted file): install it.
-                write_dest(root, entry, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-                Baseline::write(root, &entry.dest, &rendered)?;
-                report.file(&entry.dest, Action::Added);
-                return Ok(());
-            }
-            let current = std::fs::read_to_string(&dest_path)
-                .map_err(|e| ScaffoldError::io(&dest_path, e))?;
-            if current == rendered {
-                // Already at the new version (however it got there): adopt.
-                record(installed, entry, hash::sha256_hex(current.as_bytes()));
-                Baseline::write(root, &entry.dest, &rendered)?;
-                report.file(&entry.dest, Action::Unchanged);
-                return Ok(());
-            }
-            let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
-            let unmodified =
-                recorded.as_deref() == Some(hash::sha256_hex(current.as_bytes()).as_str());
-
-            if unmodified {
-                write_dest(root, entry, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-                Baseline::write(root, &entry.dest, &rendered)?;
-                push_diff(diffs, &entry.dest, &current, &rendered);
-                report.file(&entry.dest, Action::Changed);
-                return Ok(());
-            }
-            if opts.force {
-                write_dest(root, entry, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-                Baseline::write(root, &entry.dest, &rendered)?;
-                push_diff(diffs, &entry.dest, &current, &rendered);
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Forced,
-                    vec!["user modifications overwritten (--force)".to_string()],
-                );
-                return Ok(());
-            }
-            // User-modified: 3-way merge against the baseline.
-            let Some(base) = Baseline::read(root, &entry.dest) else {
-                let new_path = format!("{}.new", entry.dest);
-                write_beneath_root(root, &new_path, rendered.as_bytes())?;
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Conflicted,
-                    vec![format!(
-                        "no baseline available for 3-way merge; new version written to {new_path}"
-                    )],
-                );
-                return Ok(());
+            let current = if dest_path.exists() {
+                Some(
+                    std::fs::read_to_string(&dest_path)
+                        .map_err(|e| ScaffoldError::io(&dest_path, e))?,
+                )
+            } else {
+                None
             };
-            if rendered == base {
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::KeptUserModified,
-                    vec!["no upstream change; your modifications stand".to_string()],
-                );
-                return Ok(());
-            }
-            let merge = diffy::merge(&base, &current, &rendered);
-            if let Ok(merged) = merge {
-                write_dest(root, entry, &merged)?;
-                // Record the pristine shipped hash (not the merged file's), so the
-                // manifest invariant `recorded == hash(baseline)` holds: the merged
-                // file carries user edits, so the next update must classify it
-                // "user-modified" and re-merge, never treat it as pristine and
-                // overwrite. Recording hash(merged) here silently wiped the merge
-                // on the following update.
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
-                Baseline::write(root, &entry.dest, &rendered)?;
-                push_diff(diffs, &entry.dest, &current, &merged);
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Merged,
-                    vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
-                );
-            } else if let Err(conflicted) = merge {
-                // The proposal is the 3-way merge with conflict markers, not
-                // the bare shipped file: every change of yours that does not
-                // overlap an upstream change (a job you added to a workflow,
-                // a section you appended) is kept in it, and only the
-                // overlapping hunks wait for you.
-                let new_path = format!("{}.new", entry.dest);
-                write_beneath_root(root, &new_path, conflicted.as_bytes())?;
-                let mut notes = vec![format!(
-                    "your modifications conflict with the new shipped version; file untouched. \
-                     {new_path} holds the 3-way merge: your changes are kept and each \
-                     overlapping hunk carries conflict markers to resolve before you replace the file"
-                )];
-                if entry.src == "ci/codeflow-ci.yml" {
-                    notes.push(
-                        "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
-                         pull_request_target; drop the commit-lint job from this file when you resolve"
-                            .to_string(),
+            let old = current.as_deref().unwrap_or_default();
+            let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
+            let base = Baseline::read(root, &entry.dest);
+            match managed_step(
+                current.as_deref(),
+                &rendered,
+                recorded.as_deref(),
+                base.as_deref(),
+                opts.force,
+            ) {
+                ManagedStep::Add => {
+                    // New manifest entry (or deleted file): install it.
+                    write_dest(root, entry, &rendered)?;
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    report.file(&entry.dest, Action::Added);
+                }
+                ManagedStep::Adopt => {
+                    // Already at the new version (however it got there): adopt.
+                    record(installed, entry, hash::sha256_hex(old.as_bytes()));
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    report.file(&entry.dest, Action::Unchanged);
+                }
+                ManagedStep::Replace => {
+                    write_dest(root, entry, &rendered)?;
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    push_diff(diffs, &entry.dest, old, &rendered);
+                    report.file(&entry.dest, Action::Changed);
+                }
+                ManagedStep::Force => {
+                    write_dest(root, entry, &rendered)?;
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    push_diff(diffs, &entry.dest, old, &rendered);
+                    report.file_with_notes(
+                        &entry.dest,
+                        Action::Forced,
+                        vec!["user modifications overwritten (--force)".to_string()],
                     );
                 }
-                report.file_with_notes(&entry.dest, Action::Conflicted, notes);
+                ManagedStep::NoBaseline => {
+                    let new_path = format!("{}.new", entry.dest);
+                    write_beneath_root(root, &new_path, rendered.as_bytes())?;
+                    report.file_with_notes(
+                        &entry.dest,
+                        Action::Conflicted,
+                        vec![format!(
+                            "no baseline available for 3-way merge; new version written to {new_path}"
+                        )],
+                    );
+                }
+                ManagedStep::Kept => {
+                    report.file_with_notes(
+                        &entry.dest,
+                        Action::KeptUserModified,
+                        vec!["no upstream change; your modifications stand".to_string()],
+                    );
+                }
+                ManagedStep::Merge(merged) => {
+                    write_dest(root, entry, &merged)?;
+                    // Record the pristine shipped hash (not the merged file's), so the
+                    // manifest invariant `recorded == hash(baseline)` holds: the merged
+                    // file carries user edits, so the next update must classify it
+                    // "user-modified" and re-merge, never treat it as pristine and
+                    // overwrite. Recording hash(merged) here silently wiped the merge
+                    // on the following update.
+                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    Baseline::write(root, &entry.dest, &rendered)?;
+                    push_diff(diffs, &entry.dest, old, &merged);
+                    report.file_with_notes(
+                        &entry.dest,
+                        Action::Merged,
+                        vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
+                    );
+                }
+                ManagedStep::Conflict(conflicted) => {
+                    // The proposal is the 3-way merge with conflict markers, not
+                    // the bare shipped file: every change of yours that does not
+                    // overlap an upstream change (a job you added to a workflow,
+                    // a section you appended) is kept in it, and only the
+                    // overlapping hunks wait for you.
+                    let new_path = format!("{}.new", entry.dest);
+                    write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                    let mut notes = vec![format!(
+                        "your modifications conflict with the new shipped version; file untouched. \
+                         {new_path} holds the 3-way merge: your changes are kept and each \
+                         overlapping hunk carries conflict markers to resolve before you replace the file"
+                    )];
+                    if entry.src == "ci/codeflow-ci.yml" {
+                        notes.push(
+                            "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
+                             pull_request_target; drop the commit-lint job from this file when you resolve"
+                                .to_string(),
+                        );
+                    }
+                    report.file_with_notes(&entry.dest, Action::Conflicted, notes);
+                }
             }
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
@@ -591,23 +813,8 @@ fn update_entry(
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
                 let previous = Baseline::read(root, &entry.dest);
                 let mut lines = vec![];
-                let prior = previous
-                    .is_none()
-                    .then(|| prior_release::settings(&entry.src))
-                    .flatten();
-                let merged = if let Some(prior) = prior {
-                    let merged =
-                        merge_settings_from_prior_release(&current, prior, &rendered, &mut lines)?;
-                    lines.insert(0, prior_release_note());
-                    merged
-                } else {
-                    merge_settings_from_baseline(
-                        &current,
-                        previous.as_deref(),
-                        &rendered,
-                        &mut lines,
-                    )?
-                };
+                let merged =
+                    merge_json_region(entry, &current, previous.as_deref(), &rendered, &mut lines)?;
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {

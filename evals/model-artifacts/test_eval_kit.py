@@ -6401,6 +6401,28 @@ class ProcessRepairTests(unittest.TestCase):
             with self.assertRaisesRegex(runner.Refused, "symlink"):
                 runner.codex_hook_preflight(env, repo)
 
+    def test_contract_3_wrapper_matches_the_shipped_hooks_only(self):
+        # TSK-215: the shipped wrappers carry no `$`; the 3.0.0 form with a
+        # shell probe, a bare hook call and a `$` anywhere are not wrappers.
+        runner = self.runner()
+        shipped = json.loads((ROOT / "assets/base/codex/hooks.json").read_text())
+        commands = [hook["command"] for groups in shipped["hooks"].values()
+                    for group in groups for hook in group["hooks"]]
+        self.assertTrue(commands)
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(runner.contract_3_wrapper(command))
+        first = commands[0]
+        head = first.split(" || ", 1)[0]
+        for command in [
+            head,
+            head + "; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then exit 2; fi",
+            first.replace("exit 2; }", "echo $HOME; exit 2; }"),
+            first + "; echo injected",
+        ]:
+            with self.subTest(command=command):
+                self.assertFalse(runner.contract_3_wrapper(command))
+
     def test_codex_cached_plugins_are_inspected_and_recorded(self):
         runner = self.runner()
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):

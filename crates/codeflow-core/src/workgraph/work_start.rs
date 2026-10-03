@@ -1906,28 +1906,6 @@ fn records_from_tree_matching(
     #[cfg(test)]
     TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
-    visit_tree_records(repo, tree, include, |path, _, record| {
-        if records.insert(record.id.clone(), record).is_some() {
-            Err(format!("{path}: duplicate work id"))
-        } else {
-            Ok(())
-        }
-    })?;
-    Ok(records)
-}
-
-/// Every work record in `tree` that `include` admits, read and parsed as
-/// [`records_from_tree`] reads it: the same paths, file-name rules, size
-/// bound and parser, so a caller that needs a record's text agrees with the
-/// reader on what is a record and whose it is. `visit` gets each record's
-/// path, text and parsed record; an `Err` from it, or any record that
-/// cannot be read or parsed, stops the walk with that error.
-pub(crate) fn visit_tree_records(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    include: impl Fn(&str, RecordKind) -> bool,
-    mut visit: impl FnMut(&str, &str, Record) -> Result<(), String>,
-) -> Result<(), WorkStartError> {
     let mut failure = None;
     let odb = repo
         .odb()
@@ -1974,16 +1952,17 @@ pub(crate) fn visit_tree_records(
             failure = Some(format!("{path}: record is not UTF-8"));
             return TreeWalkResult::Abort;
         };
-        match parse_record(content, kind).map_err(|error| format!("{path}: {error}")) {
-            Ok(record) => match visit(&path, content, record) {
-                Ok(()) => TreeWalkResult::Ok,
-                Err(error) => {
-                    failure = Some(error);
+        match parse_record(content, kind) {
+            Ok(record) => {
+                if records.insert(record.id.clone(), record).is_some() {
+                    failure = Some(format!("{path}: duplicate work id"));
                     TreeWalkResult::Abort
+                } else {
+                    TreeWalkResult::Ok
                 }
-            },
+            }
             Err(error) => {
-                failure = Some(error);
+                failure = Some(format!("{path}: {error}"));
                 TreeWalkResult::Abort
             }
         }
@@ -1992,7 +1971,7 @@ pub(crate) fn visit_tree_records(
         return Err(WorkStartError::InvalidGraph(error));
     }
     walk_result.map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    Ok(())
+    Ok(records)
 }
 
 pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
@@ -2048,7 +2027,7 @@ pub(crate) fn target_reference<'repo>(
         .find_map(|name| repo.find_reference(&name).ok()?.peel_to_commit().ok())
 }
 
-fn target_reference_names(target: &str) -> Option<Vec<String>> {
+pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
     if target.is_empty() || target.trim() != target || logical_target(target) == "HEAD" {
         return None;
     }
