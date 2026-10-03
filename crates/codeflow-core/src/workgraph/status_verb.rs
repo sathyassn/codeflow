@@ -173,7 +173,29 @@ pub fn set_status(
         return Err(vocabulary_error());
     }
     let mut warnings = verdict.warnings;
-    if kind == RecordKind::Task && change.target == "complete" {
+    if change.target == "complete" {
+        bind_completion_of(repo_root, kind, &graph, &after, &mut warnings)?;
+    }
+    replace_if_unchanged(&path, digest.as_slice(), &proposed)?;
+    Ok(VerbOutcome {
+        path,
+        from: record.status.clone(),
+        to: change.target.clone(),
+        warnings,
+    })
+}
+
+/// Bind a completion (R-60): a task's block to its reviewed commit, after
+/// its reopened criteria stay frozen, and an epic's own block (R-33), each
+/// with its own remedy.
+fn bind_completion_of(
+    repo_root: &Path,
+    kind: RecordKind,
+    graph: &Graph,
+    after: &RecordView,
+    warnings: &mut Vec<crate::remedy::Finding>,
+) -> Result<(), VerbError> {
+    if kind == RecordKind::Task {
         let repo = git2::Repository::discover(repo_root)
             .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
         let target =
@@ -195,26 +217,42 @@ pub fn set_status(
                 frozen.into_iter().map(|f| f.message).collect(),
             ));
         }
-        let findings = binding(repo_root, &graph.with(after.clone()), &after);
-        gate_binding(repo_root, findings, &mut warnings)?;
+        let findings = binding(repo_root, &graph.with(after.clone()), after);
+        let remedy =
+            crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
+        gate_binding(
+            repo_root,
+            findings,
+            super::acceptance::SCOPE_NOTE,
+            &remedy,
+            warnings,
+        )?;
     }
-    if kind == RecordKind::Epic && change.target == "complete" {
-        gate_binding(repo_root, epic_binding(repo_root, &after), &mut warnings)?;
+    if kind == RecordKind::Epic {
+        // An epic is never reopened: its route corrects the block.
+        let remedy = crate::remedy::EPIC_ACCEPTANCE_BINDING.with(&[
+            ("path", after.path.as_str()),
+            ("note", super::acceptance::SCOPE_NOTE),
+        ]);
+        let tail = format!("clear it: {}", &*remedy);
+        gate_binding(
+            repo_root,
+            epic_binding(repo_root, after),
+            &tail,
+            &remedy,
+            warnings,
+        )?;
     }
-    replace_if_unchanged(&path, digest.as_slice(), &proposed)?;
-    Ok(VerbOutcome {
-        path,
-        from: record.status.clone(),
-        to: change.target.clone(),
-        warnings,
-    })
+    Ok(())
 }
 
-/// Refuse binding findings where `git.work_records` blocks, and carry them
-/// as warnings where it warns.
+/// Refuse binding findings, closed by `tail`, where `git.work_records`
+/// blocks, and carry them with `remedy` as warnings where it warns.
 fn gate_binding(
     repo_root: &Path,
     findings: Vec<String>,
+    tail: &str,
+    remedy: &crate::remedy::Remedy,
     warnings: &mut Vec<crate::remedy::Finding>,
 ) -> Result<(), VerbError> {
     if findings.is_empty() {
@@ -223,10 +261,9 @@ fn gate_binding(
     let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
     if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
         let mut refused = findings;
-        refused.push(super::acceptance::SCOPE_NOTE.to_string());
+        refused.push(tail.to_string());
         return Err(VerbError::Refused(refused));
     }
-    let remedy = crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
     warnings.extend(
         findings
             .into_iter()

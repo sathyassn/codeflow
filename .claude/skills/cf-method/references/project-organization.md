@@ -300,7 +300,11 @@ cancelled tasks serve, like one no task serves, is verified in the epic's own
 acceptance block with its evidence. That block binds as a task's does: it
 names the reviewed commit, after which only the epic's status and Closeout
 change, and a waiver names the planning amendment of that criterion that
-the reviewed commit contains. `cancelled` and `archived` are its other
+the reviewed commit contains. When it does not bind, correct the block and
+have it reviewed: an open epic reruns `codeflow epic status EPC-NNN complete
+--acceptance <file>`, and an epic the pull request already completes gets
+the corrected block in its Closeout in that pull request, since an epic is
+never reopened. `cancelled` and `archived` are its other
 terminal acts. A
 multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body

@@ -186,7 +186,12 @@ erratum below, never an edit of the section.
   changed after it, and a waiver must name a planning-only commit that
   amends that criterion and that the reviewed commit contains. An epic
   close that names a fabricated or stale review, or a waiver that is no
-  such amendment, is now refused.
+  such amendment, is now refused, and the refusal prints the epic's
+  repair: correct the block and have it reviewed, then rerun `codeflow
+  epic status <EPC> complete --acceptance <file>` for an open epic, or,
+  for an epic the pull request already completes, replace the block in
+  its Closeout by hand in that pull request; an epic is never reopened.
+  The cf-method project-organization reference states the same route.
 
 ## [3.0.0]
 

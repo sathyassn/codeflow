@@ -47,6 +47,9 @@ pub struct Finding {
     pub message: String,
     /// Informational evidence, never a refusal.
     pub note: bool,
+    /// The record path of the epic whose own acceptance block this finding
+    /// binds, so its remedy is the epic's, never a task's.
+    pub epic_record: Option<String>,
 }
 
 pub(super) fn finding(rule: &'static str, message: String) -> Finding {
@@ -54,6 +57,7 @@ pub(super) fn finding(rule: &'static str, message: String) -> Finding {
         rule,
         message,
         note: false,
+        epic_record: None,
     }
 }
 
@@ -340,7 +344,10 @@ pub fn bind_epic_completion(
     };
     let mut findings = Vec::new();
     let mut bind = |message: String| {
-        findings.push(finding(BINDING_RULE, format!("{}: {message}", epic.id)));
+        findings.push(Finding {
+            epic_record: Some(epic.path.clone()),
+            ..finding(BINDING_RULE, format!("{}: {message}", epic.id))
+        });
     };
     let reviewed = commit_of(repo, &block.reviewed);
     match reviewed {
@@ -1067,6 +1074,7 @@ pub fn frozen_criteria(
             }
             if !delta.is_empty() {
                 found.push(Finding {
+                    epic_record: None,
                     rule: FROZEN_RULE,
                     message: format!("{} criteria delta: {}", record.id, delta.join("; ")),
                     note: true,
@@ -1249,6 +1257,7 @@ pub fn completions_in_range(
             };
             if amendable {
                 findings.push(Finding {
+                    epic_record: None,
                     rule: BINDING_RULE,
                     message: format!("{} completion bound at {origin}", task.id),
                     note: true,
