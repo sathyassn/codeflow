@@ -231,8 +231,14 @@ jobs:
           npm run deps:install --prefix docs-portal
           node --test docs-portal/tests/adapter.test.mjs docs-portal/tests/composition.test.mjs docs-portal/tests/figure-grammar.test.mjs
 
+      # The docs-portal target ends by validating the portal with codeflow,
+      # so the cmd.exe check needs a built binary.
+      - name: Build codeflow for the portal target
+        run: cargo build --locked -p codeflow-cli
+
       - name: Windows Node target through cmd.exe
-        run: python scripts/test_gate_parity.py
+        shell: bash
+        run: CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_parity.py
 
   # Consume this raw run's exact results from every partition. Unix-only
   # journeys and the own read-benchmark target are disclosed as skipped on
