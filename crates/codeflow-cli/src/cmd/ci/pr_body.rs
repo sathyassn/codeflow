@@ -507,25 +507,40 @@ fn block_kind(tag: &Tag<'_>) -> Block {
 fn visible_block(kind: Block, source: &str) -> bool {
     match kind {
         Block::Paragraph => {
-            let text = rendered_text(source, false, false);
+            let text = summary_text(source);
             let text = text.trim();
             let task_line = text.starts_with("Task:") && !text.contains('\n');
             !text.is_empty() && !task_line
         }
-        Block::List => !rendered_text(source, false, false).trim().is_empty(),
-        Block::Table => table_has_text(source),
+        Block::List | Block::Table => !summary_text(source).trim().is_empty(),
         Block::Html => !strip_markup(source).trim().is_empty(),
         Block::Heading | Block::Code | Block::Quote | Block::Rule => true,
     }
 }
 
-/// Whether a table shows any cell text. It is parsed with tables on, as
-/// the shape walk is, so pipes and separator hyphens are structure, never
-/// text, and a cell holding only an HTML comment or nothing shows nothing.
-fn table_has_text(source: &str) -> bool {
-    Parser::new_ext(source, Options::ENABLE_TABLES).any(
-        |event| matches!(event, Event::Text(text) | Event::Code(text) if !text.trim().is_empty()),
-    )
+/// The text a reader sees in a Summary block, for the shape check only.
+/// It is parsed with tables on, as the shape walk is, so pipes and
+/// separator hyphens are structure, never text. Code blocks, quotes and
+/// image descriptions are left out: an image's description renders as an
+/// `alt` attribute, not as prose, and an HTML comment is never text.
+/// Breaks end a line, so a lone `Task:` line stays recognizable.
+fn summary_text(source: &str) -> String {
+    let mut text = String::new();
+    let mut hidden = 0usize;
+    for event in Parser::new_ext(source, Options::ENABLE_TABLES) {
+        match event {
+            Event::Start(Tag::CodeBlock(_) | Tag::BlockQuote(_) | Tag::Image { .. }) => {
+                hidden += 1;
+            }
+            Event::End(TagEnd::CodeBlock | TagEnd::BlockQuote(_) | TagEnd::Image) => {
+                hidden = hidden.saturating_sub(1);
+            }
+            Event::Text(value) | Event::Code(value) if hidden == 0 => text.push_str(&value),
+            Event::SoftBreak | Event::HardBreak if hidden == 0 => text.push('\n'),
+            _ => {}
+        }
+    }
+    text
 }
 
 /// The text of an HTML block a reader sees: without its comments, where an
@@ -988,6 +1003,10 @@ mod tests {
                 "<!-- the template comment -->\n\nTask: TSK-001\n\nAdds the check.\n\n<!-- note -->\n\n- one",
             ),
             (
+                "prose and details that carry an image",
+                "Adds the check ![diagram](https://example.com/d.png) shown here.\n\n- one ![icon](https://example.com/i.png) change\n\n| A | B |\n|---|---|\n| ![x](https://example.com/x.png) cell | 2 |",
+            ),
+            (
                 "a tag-only HTML block shows no text",
                 "<p align=\"center\">\n\nAdds the check.\n\n- one\n\n</p>",
             ),
@@ -1120,6 +1139,21 @@ mod tests {
             (
                 "a table with only empty cells",
                 "Adds the check.\n\n|  |  |\n|---|---|\n|  |  |",
+                "no list or table follows the lead",
+            ),
+            (
+                "a lead that is only an image description",
+                "![This text is only an image description](https://example.com/picture.png)\n\n- one change",
+                "it opens with a list",
+            ),
+            (
+                "a list whose items are only images",
+                "Adds the check.\n\n- ![one change](https://example.com/a.png)\n- ![two](https://example.com/b.png)",
+                "no list or table follows the lead",
+            ),
+            (
+                "a table whose only content is an image",
+                "Adds the check.\n\n|  |  |\n|---|---|\n| ![a description](https://example.com/a.png) |  |",
                 "no list or table follows the lead",
             ),
             (
