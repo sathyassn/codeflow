@@ -283,6 +283,7 @@ fn clears_push_over_budget_target() {
 
 /// Write `script` as an executable `python3` in `bin`, a stand-in on the
 /// `PATH` the hooks see that ends by running the real one.
+#[cfg(unix)]
 fn python_stand_in(bin: &Path, script: &str) {
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .map(|dir| dir.join("python3"))
@@ -299,9 +300,43 @@ fn python_stand_in(bin: &Path, script: &str) {
 
 /// A `python3` that takes 61 s to start: a release preflight slower than
 /// the push set's budget.
+#[cfg(unix)]
 fn slow_python(root: &Path) -> PathBuf {
     let bin = root.parent().unwrap().join("slow-bin");
     python_stand_in(&bin, "sleep 61\n");
+    bin
+}
+
+/// The same stand-in on Windows, which starts only a `python3.exe` by that
+/// name: a small program, compiled here, that waits and runs the real one.
+#[cfg(windows)]
+fn slow_python(root: &Path) -> PathBuf {
+    let bin = root.parent().unwrap().join("slow-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3.exe"))
+        .find(|path| path.is_file())
+        .expect("python3 on PATH");
+    let source = bin.join("slow_python.rs");
+    std::fs::write(
+        &source,
+        format!(
+            "fn main() {{\n    std::thread::sleep(std::time::Duration::from_secs(61));\n    \
+             let status = std::process::Command::new(r\"{}\")\n        \
+             .args(std::env::args_os().skip(1))\n        .status()\n        \
+             .expect(\"python3 runs\");\n    std::process::exit(status.code().unwrap_or(1));\n}}\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let built = Command::new(rustc)
+        .arg(&source)
+        .arg("-o")
+        .arg(bin.join("python3.exe"))
+        .output()
+        .unwrap();
+    assert!(built.status.success(), "{}", text(&built));
     bin
 }
 
@@ -335,6 +370,7 @@ fn clears_push_over_budget_builtin() {
 /// hook's own binary, and a one-shot `python3` beside it that deletes the
 /// copy and itself: the binary vanishes during the release preflight, after
 /// `codeflow ci` ran through it and before `codeflow validate --docs` does.
+#[cfg(unix)]
 fn vanishing_binary(root: &Path) -> PathBuf {
     let bin = root.parent().unwrap().join("vanishing-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -351,6 +387,9 @@ fn vanishing_binary(root: &Path) -> PathBuf {
     bin
 }
 
+// The binary deletes itself while a hook runs it. Windows cannot delete a
+// running executable, so the vanishing binary exists only on Unix.
+#[cfg(unix)]
 #[test]
 fn clears_push_set_by_hand() {
     let dir = scaffolded("--standard");

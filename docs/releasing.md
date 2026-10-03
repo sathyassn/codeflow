@@ -30,7 +30,7 @@ reinterpret an earlier decision.
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility. It also refuses a pending section the publication could not carry: one that would push the plan job output, which carries the section twice and GitHub counts in UTF-16, past 1 MB, or notes over GitHub's release body limit even with each entry cut to its label. The main-push state check and `codeflow integrate` apply the same refusal |
 | Merge | A human | PR CI checks the actual proposed merge tree, which is more than the absence of conflicts. Main-push and integration-line CI repeat the state check without writing. These release jobs live in `codeflow-release.yml`, outside the managed `codeflow-ci.yml` that every adopter receives, and no scaffold installs them. Without strict branch protection a stale clean merge is still possible, so the human merger must require the fresh check |
 | Dispatch | A human with current write, maintain or admin permission | First dispatches with `--ref main` and `tag=dry-run`, which builds every artifact and publishes nothing, and waits for it and for current main's push runs of `codeflow-ci` and `codeflow-release` to pass. Then dispatches with `--ref main` and the `vX.Y.Z` tag. The actor and any rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
-| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes (the curated section, or each entry cut to its label with a link to the full section when the section exceeds GitHub's 125,000-character release body), the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, secret scan and security review, and write-visible host collisions. The Windows jobs are advisory until TSK-197 and are not read. `codeflow gates` is the one verdict over the gate's parallel parts. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
+| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes (the curated section, or each entry cut to its label with a link to the full section when the section exceeds GitHub's 125,000-character release body), the latest exact-source GitHub Actions main-push results of `codeflow-ci` and `codeflow-release` (`publication_workflows`) for `release state`, `codeflow gates`, `windows`, secret scan and security review, and write-visible host collisions. `codeflow gates` is the one verdict over the gate's parallel parts, and `windows` the one verdict over the Windows checks, test partitions and journeys. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing. First it reads every platform archive and refuses one whose binary does not identify as `X.Y.Z source=<release commit> dirty=false` in `codeflow --version`; that check also runs on a dry run |
 | Upload and announce | cargo-dist | Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |
 | Post-announce verification | cargo-dist's verifier | Compares tag and source, and every asset name, size and SHA-256 digest, with the same-run files |
@@ -52,11 +52,10 @@ reinterpret an earlier decision.
   must match it.
 - Conventional markers are conservative mismatch tripwires. They do not
   calculate a second version.
-- cargo-dist is the only tag, release and artifact publisher. For 3.0.0 it
-  builds three target binaries, macOS arm64 and x86-64 and Linux x86-64, plus
-  the shell installer. Native Windows and the PowerShell installer return with
-  TSK-197, planned for a later release. Its generated workflow runs only by explicit
-  human dispatch on `main`.
+- cargo-dist is the only tag, release and artifact publisher. It builds four
+  target binaries, macOS arm64 and x86-64, Linux x86-64 and Windows x86-64,
+  plus shell and PowerShell installers; 3.0.0 published no Windows target.
+  Its generated workflow runs only by explicit human dispatch on `main`.
 - The generated workflow uses the repository's scoped `GITHUB_TOKEN` and
   provisions no personal access token (PAT) or publication credential. Hosted settings can still
   prevent exact-source checks, workflow dispatch, drafts, uploads or releases.
@@ -100,10 +99,10 @@ Work through each section below that your release touches.
 
 ### Cross-build toolchain
 
-Release CI uses native cargo-dist runners for macOS and Linux, so each binary
-links against its platform SDK and can be exercised there. The Windows aliases
-below stay for TSK-197. For an earlier host-agnostic target lint and build
-check, the repository also provides Cargo aliases.
+Release CI uses native cargo-dist runners for macOS, Linux and Windows, so each
+binary links against its platform SDK and can be exercised there. For an
+earlier host-agnostic target lint and build check, the repository also
+provides Cargo aliases.
 
 ```sh
 cargo install --locked cargo-xwin --version 0.23.0
@@ -429,7 +428,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
 | Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI billing or availability never substitutes for this evidence |
-| Distribution plan and installers | `cargo dist plan --output-format=json` lists the three archives (macOS arm64 and x86-64, Linux x86-64), the shell installer and their native runner rows, and no Windows archive or PowerShell installer. `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`); a contract test compares the real archive with the tracked files. Canary the shell installer on each macOS and Linux architecture and confirm WSL2 selects the Linux archive. Native Windows returns with TSK-197 |
+| Distribution plan and installers | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows. `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`); a contract test compares the real archive with the tracked files. Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |
 
 Record new verification in a current ADR or release note, and update
 [the harness posture](harness-posture.md) if parity drifted. Historical ADR

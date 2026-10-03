@@ -58,4 +58,14 @@ fn stale_sources_warn_twice_and_matching_inputs_clear_the_warning() {
             1
         );
     }
+    // The guards read paths through `portable_path`, so an edit there alone
+    // is a stale binary too.
+    let before = source_identity::input_digest(root).unwrap();
+    std::fs::write(
+        root.join("crates/codeflow-core/src/portable_path.rs"),
+        "edit",
+    )
+    .unwrap();
+    let stale = judging_identity(root, "3", "unavailable", "true", &before);
+    assert!(stale[1].contains("built from different hook or policy sources"));
 }

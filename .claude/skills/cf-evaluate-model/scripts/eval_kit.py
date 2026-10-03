@@ -41,6 +41,10 @@ except ImportError:  # POSIX
     msvcrt = None
 # What msvcrt.locking raises while another process holds the lock.
 LOCK_BUSY = getattr(errno, "EDEADLOCK", errno.EDEADLK)
+# The byte msvcrt.locking takes on Windows, where a byte-range lock is
+# mandatory: far past the marker's content, so reading the marker through
+# another handle is never refused, and within the 32-bit offset it accepts.
+LOCK_OFFSET = 1 << 30
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1873,13 +1877,35 @@ def ensure_run_root(run_root: Path, subjects_root: Path | None = None) -> dict:
     return marker
 
 
+def remove_tree(path: Path) -> None:
+    """Remove a directory tree, read-only files included.
+
+    Git writes its object files read-only, and on Windows a read-only file
+    cannot be deleted until that bit is cleared. A permission failure on a
+    file that is not a link gets the bit cleared and one more try; any other
+    failure stands.
+    """
+
+    def retry(function, name, error):
+        failure = error if isinstance(error, BaseException) else error[1]
+        if not isinstance(failure, PermissionError) or os.path.islink(name):
+            raise failure
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
 def remove_grader_material(fixture_root: Path) -> None:
     for relative in GRADER_MATERIAL_DIRS:
         target = fixture_root / relative
         if target.is_symlink():
             raise EvalError(f"refusing grader-material symlink: {target}")
         if target.exists():
-            shutil.rmtree(target)
+            remove_tree(target)
     for relative in GRADER_ROUTE_FILES:
         target = fixture_root / relative
         if not target.is_file():
@@ -1961,7 +1987,7 @@ def reset_fixture_history(
     if git_dir.is_symlink():
         raise EvalError("refusing symlinked fixture .git")
     if git_dir.exists():
-        shutil.rmtree(git_dir)
+        remove_tree(git_dir)
     run_command(["git", "init", "-b", branch], root)
     run_command(["git", "config", "user.name", "CodeFlow Eval"], root)
     run_command(["git", "config", "user.email", "eval@codeflow.invalid"], root)
@@ -2999,7 +3025,7 @@ def configure_closeout_inventory(root: Path, codeflow: Path) -> None:
     write_fixture_file(stale, "stale-work.txt", "unfinished stale worktree change\n")
     run_command(["git", "add", "stale-work.txt"], stale)
     run_command(["git", "commit", "-m", "test: retain unmerged stale work"], stale)
-    shutil.rmtree(stale)
+    remove_tree(stale)
     a, b, c = entries
     inventory = (
         "# Worktree inventory\n\n"
@@ -3954,8 +3980,8 @@ def registration_lock(run_root: Path):
     registers and settles a trial under it, and grading takes its inventory
     and reads the registrations under it, so a trial finishing in parallel is
     never half seen. POSIX takes it with flock and Windows with
-    msvcrt.locking on the marker's first byte; a platform with neither is
-    refused, never left to race."""
+    msvcrt.locking on one byte past the marker's content (LOCK_OFFSET); a
+    platform with neither is refused, never left to race."""
 
     if fcntl is None and msvcrt is None:
         raise EvalError("this platform has no file lock, so trials cannot be materialized or graded safely")
@@ -3964,7 +3990,7 @@ def registration_lock(run_root: Path):
             fcntl.flock(marker.fileno(), fcntl.LOCK_EX)
         else:
             while True:
-                marker.seek(0)
+                os.lseek(marker.fileno(), LOCK_OFFSET, os.SEEK_SET)
                 try:
                     msvcrt.locking(marker.fileno(), msvcrt.LK_LOCK, 1)
                     break
@@ -3979,7 +4005,7 @@ def registration_lock(run_root: Path):
             if fcntl is not None:
                 fcntl.flock(marker.fileno(), fcntl.LOCK_UN)
             else:
-                marker.seek(0)
+                os.lseek(marker.fileno(), LOCK_OFFSET, os.SEEK_SET)
                 msvcrt.locking(marker.fileno(), msvcrt.LK_UNLCK, 1)
 
 
@@ -4308,11 +4334,141 @@ def evaluator_key_path() -> Path:
     return (evaluator_home() / EVALUATOR_KEY).resolve()
 
 
+# Windows has no POSIX mode bits (every folder reads as 0o777 there), so the
+# key's privacy is its access list: the kit makes the folder and then the
+# empty key file owner-only, reads each list back, and writes the key only
+# once both are proven private. SYSTEM and the Administrators group can read
+# any file anyway, so their entries are no exposure.
+WINDOWS_TRUSTED = {"S-1-5-18", "S-1-5-32-544"}
+# CREATOR OWNER: an inheritable entry for it grants the account that creates
+# the child, so it exposes nothing of a key this account creates.
+WINDOWS_CREATOR_OWNER = "S-1-3-0"
+
+
+def windows_api():
+    """advapi32 and kernel32 with the signatures this check calls."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    pointer = ctypes.POINTER(ctypes.c_void_p)
+    advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, pointer, pointer, pointer, pointer, pointer]
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetAclInformation.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.c_int]
+    advapi.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, pointer]
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.LocalFree.restype = ctypes.c_void_p
+    return ctypes, wintypes, advapi, kernel
+
+
+def windows_sid_text(sid: int) -> str:
+    ctypes, _, advapi, kernel = windows_api()
+    text = ctypes.c_void_p()
+    if not advapi.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+        raise EvalError(f"cannot read a Windows account (error {ctypes.get_last_error()})")
+    try:
+        return ctypes.wstring_at(text.value)
+    finally:
+        kernel.LocalFree(text)
+
+
+def windows_user() -> str:
+    """The SID of the account this process runs as."""
+
+    ctypes, wintypes, advapi, kernel = windows_api()
+    token = wintypes.HANDLE()
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+        raise EvalError(f"cannot read this process's Windows account (error {ctypes.get_last_error()})")
+    try:
+        needed = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+        buffer = ctypes.create_string_buffer(needed.value)
+        if not advapi.GetTokenInformation(token, 1, buffer, needed, ctypes.byref(needed)):
+            raise EvalError(f"cannot read this process's Windows account (error {ctypes.get_last_error()})")
+        # TOKEN_USER begins with the pointer to the account's SID.
+        return windows_sid_text(ctypes.c_void_p.from_buffer(buffer).value)
+    finally:
+        kernel.CloseHandle(token)
+
+
+def windows_access(path: Path) -> tuple[str, set[str]]:
+    """The owner of `path` and every account its access list allows anything
+    to, read through the Windows security API, counting the grants a folder
+    passes to what is created in it. Refused when the list cannot be read or
+    holds an entry this check cannot judge."""
+
+    ctypes, _, advapi, kernel = windows_api()
+    owner, dacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p(), ctypes.c_void_p()
+    # SE_FILE_OBJECT; OWNER_ and DACL_SECURITY_INFORMATION.
+    status = advapi.GetNamedSecurityInfoW(str(path), 1, 0x1 | 0x4, ctypes.byref(owner), None, ctypes.byref(dacl), None, ctypes.byref(descriptor))
+    if status != 0:
+        raise EvalError(f"cannot read the access list of {path} (error {status})")
+    try:
+        if not dacl.value:
+            # A missing list grants everyone everything.
+            return windows_sid_text(owner.value), {"S-1-1-0"}
+        size = (ctypes.c_uint32 * 3)()
+        if not advapi.GetAclInformation(dacl, size, ctypes.sizeof(size), 2):
+            raise EvalError(f"cannot read the access list of {path} (error {ctypes.get_last_error()})")
+        allowed = set()
+        for index in range(size[0]):
+            ace = ctypes.c_void_p()
+            if not advapi.GetAce(dacl, index, ctypes.byref(ace)):
+                raise EvalError(f"cannot read the access list of {path} (error {ctypes.get_last_error()})")
+            kind, flags = ctypes.string_at(ace.value, 2)
+            if kind == 1:
+                continue  # a denial
+            if kind != 0:
+                raise EvalError(f"the access list of {path} holds an entry of type {kind} this check cannot judge")
+            # ACCESS_ALLOWED_ACE: a 4-byte header and a 4-byte mask, then the SID.
+            account = windows_sid_text(ace.value + 8)
+            if not (flags & 0x08 and account == WINDOWS_CREATOR_OWNER):
+                allowed.add(account)
+        return windows_sid_text(owner.value), allowed
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def windows_make_private(path: Path, user: str) -> None:
+    """Drop the entries `path` inherits and set `user`'s own to full control,
+    inherited by what a folder holds. Another account's explicit entry
+    survives this; `windows_require_private` refuses it afterwards."""
+
+    grant = f"*{user}:(OI)(CI)F" if path.is_dir() else f"*{user}:F"
+    done = subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", grant], capture_output=True, text=True, check=False)
+    if done.returncode != 0:
+        raise EvalError(f"cannot make {path} owner-only: {(done.stdout + done.stderr).strip()}")
+
+
+def windows_exposure(path: Path, user: str) -> str | None:
+    """Why `path` is not private to `user`, or None when it is."""
+
+    owner, allowed = windows_access(path)
+    if owner != user and owner not in WINDOWS_TRUSTED:
+        return f"owned by another account ({owner})"
+    others = sorted(allowed - {user} - WINDOWS_TRUSTED)
+    return f"open to other accounts ({', '.join(others)})" if others else None
+
+
+def windows_require_private(path: Path, user: str, name: str) -> None:
+    exposure = windows_exposure(path, user)
+    if exposure is not None:
+        raise EvalError(f"{name} is {exposure}; make it owner-only, for example with icacls: {path}")
+
+
 def evaluator_key(*, create: bool = False) -> bytes | None:
     """The evaluator's signing key, made owner-only on first use when
     `create`; None when there is none. Refused when the key or its folder
     belongs to another user, others can write the folder, or others can read
-    the key."""
+    the key; on Windows, when either access list lets in another account or
+    cannot be read."""
 
     path = evaluator_key_path()
     try:
@@ -4322,22 +4478,45 @@ def evaluator_key(*, create: bool = False) -> bytes | None:
     exposed += [GRADED_SUITE] if GRADED_SUITE is not None else []
     if any(nested(path, root.resolve()) for root in exposed):
         raise EvalError(f"the evaluator key must live outside the repository and the graded suite: {path}")
+    windows = sys.platform == "win32"
+    user = windows_user() if windows else ""
     if not path.exists():
         if not create:
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(path.parent, 0o700)
+        if windows:
+            windows_make_private(path.parent, user)
+            windows_require_private(path.parent, user, "the evaluator key's folder")
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            try:
+                if windows:
+                    windows_make_private(path, user)
+                    windows_require_private(path, user, "the evaluator key")
+            except EvalError:
+                handle.close()
+                path.unlink()
+                raise
             handle.write(secrets.token_hex(32) + "\n")
-    folder, key = path.parent.stat(), path.stat()
-    if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
-        raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
-    if stat.S_IMODE(folder.st_mode) & 0o022:
-        raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
-    if stat.S_IMODE(key.st_mode) & 0o077:
-        raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
-    return bytes.fromhex(path.read_text(encoding="utf-8").strip())
+    if windows:
+        windows_require_private(path.parent, user, "the evaluator key's folder")
+        windows_require_private(path, user, "the evaluator key")
+    else:
+        folder, key = path.parent.stat(), path.stat()
+        if hasattr(os, "geteuid") and {folder.st_uid, key.st_uid} != {os.geteuid()}:
+            raise EvalError(f"the evaluator key or its folder is owned by another user: {path}")
+        if stat.S_IMODE(folder.st_mode) & 0o022:
+            raise EvalError(f"the evaluator key's folder is writable by others; make it owner-only: {path.parent}")
+        if stat.S_IMODE(key.st_mode) & 0o077:
+            raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
+    try:
+        key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        key = b""
+    if len(key) != 32:
+        raise EvalError(f"the evaluator key is not 32 bytes in hexadecimal; remove it to make a new one: {path}")
+    return key
 
 
 def judgement_signature(key: bytes, judge: Judge, assertion: str, excerpt_digest: str, verdict: str) -> str:
@@ -7281,8 +7460,8 @@ def cleanup_run(run_root: Path, confirmation: str) -> None:
         if nested(subjects, resolved) or nested(resolved, subjects):
             raise EvalError("refusing a subjects root that overlaps the run root")
         if subjects.exists():
-            shutil.rmtree(subjects)
-    shutil.rmtree(resolved)
+            remove_tree(subjects)
+    remove_tree(resolved)
 
 
 def parser() -> argparse.ArgumentParser:

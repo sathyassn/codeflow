@@ -168,19 +168,15 @@ jobs:
           fi
           echo "every part of the full gate passed"
 
-  # Advisory until TSK-197: 3.0.0 ships without native Windows (operator
-  # decision 2026-10-01). These jobs keep running so Windows evidence builds
-  # up, and their own results still show failures. continue-on-error keeps a
-  # Windows failure from failing the workflow run, and .release/config.json
-  # does not require these checks for publication. TSK-197 restores them as
-  # a gate. The raw referee is split in three: the nextest suite in
-  # partitions that together run every test once, the other Rust and Node
-  # checks beside them, and the journey gate over every partition's results.
+  # Native Windows is a release target again (TSK-197). The raw referee is
+  # split in three: the nextest suite in partitions that together run every
+  # test once, the other Rust and Node checks beside them, and the journey
+  # gate over every partition's results. The `windows` verdict below is the
+  # one check branch rules and .release/config.json read.
   windows-tests:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
-    name: windows advisory tests (${{ matrix.partition }} of 6, TSK-197)
+    name: windows tests (${{ matrix.partition }} of 6)
     runs-on: windows-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -189,9 +185,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
-      # Saved even when tests fail: while TSK-197 is open the suite fails, and
-      # without this every run would rebuild the dependencies from scratch.
-      # The cache holds dependencies only, never workspace crates.
+      # Saved even when tests fail, so a red run does not force the next one
+      # to rebuild the dependencies from scratch. The cache holds
+      # dependencies only, never workspace crates.
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -215,9 +211,8 @@ jobs:
 
   windows:
     if: github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push'
-    name: windows advisory (build + test + clippy, TSK-197)
+    name: windows checks (fmt, doc, clippy, Node)
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
@@ -250,18 +245,23 @@ jobs:
           npm run deps:install --prefix docs-portal
           node --test docs-portal/tests/adapter.test.mjs docs-portal/tests/composition.test.mjs docs-portal/tests/figure-grammar.test.mjs
 
+      # The docs-portal target ends by validating the portal with codeflow,
+      # so the cmd.exe check needs a built binary.
+      - name: Build codeflow for the portal target
+        run: cargo build --locked -p codeflow-cli
+
       - name: Windows Node target through cmd.exe
-        run: python scripts/test_gate_parity.py
+        shell: bash
+        run: CODEFLOW_BIN="$(cygpath -m "$PWD")/target/debug/codeflow.exe" python scripts/test_gate_parity.py
 
   # Consume this raw run's exact results from every partition. Unix-only
   # journeys and the own read-benchmark target are disclosed as skipped on
   # Windows. It runs when a partition fails, so the journeys still report.
   windows-journeys:
     if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
-    name: windows advisory journeys (TSK-197)
+    name: windows journeys
     needs: windows-tests
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
 
@@ -280,6 +280,28 @@ jobs:
       - name: journey gate
         shell: bash
         run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/partitions --skip-benchmark
+
+  # The required Windows check. Like `codeflow gates`, it runs even when a
+  # job fails or is cancelled, so it is never skipped, and it passes only
+  # when the checks, every test partition and the journey gate passed.
+  windows-verdict:
+    if: always() && (github.event_name == 'pull_request' && contains(fromJSON('["main","master"]'), github.event.pull_request.base.ref) || github.event_name == 'push')
+    name: windows
+    needs: [windows, windows-tests, windows-journeys]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every Windows job passed
+        shell: bash
+        env:
+          CHECKS: ${{ needs.windows.result }}
+          TESTS: ${{ needs.windows-tests.result }}
+          JOURNEYS: ${{ needs.windows-journeys.result }}
+        run: |
+          if [ "$CHECKS" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ]; then
+            echo "::error::Windows concluded checks=${CHECKS} tests=${TESTS} journeys=${JOURNEYS}; see the windows jobs"
+            exit 1
+          fi
+          echo "every Windows job passed"
 
   secret-scan:
     name: secret scan

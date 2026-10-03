@@ -271,3 +271,79 @@ fn walk(root: &Path) -> Vec<PathBuf> {
     }
     files
 }
+
+/// Windows has no mode bits, so the eval kit makes the evaluator key and its
+/// folder owner-only through their access lists, writes the key only once
+/// both are proven private, and refuses it once either lets in another
+/// account.
+#[cfg(windows)]
+#[test]
+fn the_windows_evaluator_key_is_refused_once_others_can_reach_it() {
+    let home = tempfile::tempdir().expect("home");
+    let judgements = home.path().join("judgements.json");
+    let record = || {
+        python(
+            &[
+                "record-judgement",
+                "--judgements",
+                judgements.to_str().expect("utf-8 path"),
+                "--assertion",
+                "a",
+                "--excerpt-digest",
+                &format!("sha256:{}", "1".repeat(64)),
+                "--verdict",
+                "pass",
+                "--judge",
+                "human: ana",
+                "--judge-config",
+                "reads the rubric",
+                "--rationale",
+                "names PAY-12",
+            ],
+            home.path(),
+        )
+    };
+    let folder = home.path().join("eval");
+    let icacls = |target: &Path, args: &[&str]| {
+        let out = Command::new("icacls")
+            .arg(target)
+            .args(args)
+            .output()
+            .expect("icacls runs");
+        assert!(out.status.success(), "{out:?}");
+    };
+    // A folder that passes read access to everyone on what it holds: the
+    // kit's own grant cannot remove that entry, so no key is written.
+    std::fs::create_dir_all(&folder).expect("key folder");
+    icacls(&folder, &["/grant", "*S-1-1-0:(OI)(IO)R"]);
+    let refused = record();
+    assert!(
+        !refused.status.success(),
+        "an inheritable grant to everyone"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("open to other accounts (S-1-1-0)"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!folder.join("judgement.key").exists());
+    icacls(&folder, &["/remove:g", "*S-1-1-0"]);
+    let made = record();
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    for target in [folder.join("judgement.key"), folder] {
+        icacls(&target, &["/grant", "*S-1-1-0:R"]);
+        let refused = record();
+        assert!(!refused.status.success(), "{target:?} open to everyone");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("open to other accounts (S-1-1-0)"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+        icacls(&target, &["/remove:g", "*S-1-1-0"]);
+    }
+    assert!(record().status.success());
+}

@@ -44,7 +44,10 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
 /// Creation flag that starts the target suspended until [`TargetJob::adopt`].
-pub use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+///
+/// A local constant, not a re-export: rustdoc resolves a link in a foreign
+/// re-export's docs from the foreign crate and stops with an internal error.
+pub const CREATE_SUSPENDED: u32 = windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 
 /// The job holding one target's process tree. Dropping it ends any process
 /// still in the tree.
