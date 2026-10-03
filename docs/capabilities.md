@@ -466,6 +466,7 @@ The work records a plan produces are judged by one core (SPC-013):
 | Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, an epic's planning-only range, an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |
+| Deliverables | a task record lists each output and its home as a path in the project's structure under `## Deliverables`, after its Description, and an epic names the homes its tasks write or points to the project's structure authority; `validate --docs` warns, and never blocks, about an open task with no filled section and no path in its Description, and never reads a complete or cancelled record for it |
 | Completion and release | a completion is bound to the reviewed commit, at a batch landing at the commit that introduced its block; on a release branch each change is judged where it was introduced |
 | Release integration workflow | CodeFlow's own workflow imports verified epic-line tips into the release branch; it is not a task pull request gate and is not installed for adopters |
 

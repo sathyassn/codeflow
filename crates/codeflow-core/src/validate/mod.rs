@@ -627,6 +627,8 @@ pub fn validate_task(
         });
     }
 
+    warns.extend(deliverables_warning(&data, &body_text));
+
     let repo_root = record_repo_root(path);
     errs.extend(awaiting_selection_errors(
         &data,
@@ -649,6 +651,23 @@ pub fn validate_task(
     }
 
     Ok((errs, warns))
+}
+
+/// An open task names what it delivers and where it goes; a closed record
+/// is history and never warns (sathyassn/codeflow#40).
+fn deliverables_warning(
+    data: &HashMap<String, serde_yaml::Value>,
+    body: &str,
+) -> Option<ValidationWarning> {
+    let open = matches!(
+        get_string_field(data, "status").as_str(),
+        "todo" | "blocked" | "in_progress"
+    );
+    (open && !crate::workgraph::record_text::names_deliverables(body)).then(|| ValidationWarning {
+        field: "deliverables".into(),
+        message: "open task names no deliverables: no filled `## Deliverables` section and no path in its Description".into(),
+        clearing: &crate::remedy::TASK_DELIVERABLES,
+    })
 }
 
 /// The repository root of a record under `project-management/`.
@@ -905,6 +924,9 @@ depends_on: []
 ## Description
 Some description
 
+## Deliverables
+- the change: `crates/codeflow-core/src/`
+
 ## Acceptance Criteria
 Some criteria
 "#
@@ -976,6 +998,109 @@ Criteria
         let (errs, warns) = validate_task(&path, &opts).unwrap();
         assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
         assert!(warns.is_empty(), "Expected no warnings, got: {warns:?}");
+    }
+
+    /// The deliverables warnings of a task with `status` whose body, from
+    /// `## Description` on, is `body` (sathyassn/codeflow#40).
+    fn deliverables_warnings(status: &str, body: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("TSK-022.md");
+        let content = valid_task_content()
+            .replace("status: \"in_progress\"", &format!("status: \"{status}\""));
+        let (front, _) = content.split_once("## Description").unwrap();
+        std::fs::write(&path, format!("{front}{body}")).unwrap();
+        let (_, warns) = validate_task(&path, &ValidateOptions::default()).unwrap();
+        warns
+            .iter()
+            .filter(|warning| warning.message.contains("names no deliverables"))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn task_body(description: &str, deliverables: Option<&str>) -> String {
+        let section = deliverables
+            .map(|text| format!("## Deliverables\n\n{text}\n\n"))
+            .unwrap_or_default();
+        format!(
+            "## Description\n\n{description}\n\n{section}## Acceptance Criteria\n\n- AC-1 it works\n"
+        )
+    }
+
+    /// sathyassn/codeflow#40: an open task with no filled `## Deliverables`
+    /// section and no path in its Description warns; a template comment
+    /// alone fills nothing.
+    #[test]
+    fn an_open_task_that_names_no_deliverables_warns() {
+        let comment = "<!-- `- <output>: <path>`, such as `docs/guide.md` -->";
+        for status in ["todo", "blocked", "in_progress"] {
+            for body in [
+                task_body("Some description", None),
+                task_body("Some description", Some(comment)),
+                task_body(&format!("{comment}\nSome description"), Some("-")),
+            ] {
+                let warned = deliverables_warnings(status, &body);
+                assert_eq!(warned.len(), 1, "{status}: {body}\n{warned:?}");
+                assert!(warned[0].contains("`## Deliverables`"), "{warned:?}");
+            }
+        }
+    }
+
+    /// sathyassn/codeflow#40: a filled `## Deliverables` section, even a
+    /// provisional home, silences the warning.
+    #[test]
+    fn a_task_with_a_filled_deliverables_section_does_not_warn() {
+        for deliverables in [
+            "- the guide: `docs/guide.md`",
+            "- a decision record: provisional, decided by the structure review",
+            "```text\ndocs/\n  guide.md\n```",
+        ] {
+            let body = task_body("Some description", Some(deliverables));
+            assert!(
+                deliverables_warnings("todo", &body).is_empty(),
+                "{deliverables}"
+            );
+        }
+    }
+
+    /// sathyassn/codeflow#40: a path in the Description silences the
+    /// warning; a URL, a command or a word with a slash is no path.
+    #[test]
+    fn a_path_in_the_description_names_a_deliverable() {
+        for description in [
+            "Edits `crates/codeflow-core/src/lib.rs`.",
+            "Rewrites docs/cli.md for the new flag.",
+            "Adds a page under docs/guides/.",
+            "Updates `AGENTS.md` and nothing else.",
+            "Moves the policy (`.codeflow/policy.json`) default.",
+        ] {
+            let body = task_body(description, None);
+            assert!(
+                deliverables_warnings("todo", &body).is_empty(),
+                "{description}"
+            );
+        }
+        for description in [
+            "Choose one and/or the other.",
+            "See https://example.com/a/b.md for context.",
+            "Runs `codeflow validate --docs` on the result.",
+        ] {
+            let body = task_body(description, None);
+            assert_eq!(
+                deliverables_warnings("todo", &body).len(),
+                1,
+                "{description}"
+            );
+        }
+    }
+
+    /// sathyassn/codeflow#40: a complete or cancelled record never warns, so
+    /// closed history stays quiet.
+    #[test]
+    fn a_closed_task_never_warns_about_deliverables() {
+        for status in ["complete", "cancelled"] {
+            let body = task_body("Some description", None);
+            assert!(deliverables_warnings(status, &body).is_empty(), "{status}");
+        }
     }
 
     /// TSK-103 AC-5: a join awaiting selection is a valid blocked record

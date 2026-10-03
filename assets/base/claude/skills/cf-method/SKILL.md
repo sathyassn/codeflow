@@ -65,7 +65,7 @@ single task with acceptance criteria and no epic, and an epic never gates a
 single task. The clarity checklist below applies either way.
 
 Input clarity checklist, the one statement of it (`cf-plan` and the
-orchestrator point here). Do not draft until you can state all five:
+orchestrator point here). Do not draft until you can state all six:
 
 1. **Problem and audience.** What hurts, for whom, in one or two sentences.
 2. **Outcome and public behavior.** The intended result and what users or
@@ -83,6 +83,14 @@ orchestrator point here). Do not draft until you can state all five:
    implementation plan (that is design, not acceptance).
 5. **Touched surface.** Which areas and which existing capabilities
    (`docs/capabilities.md`) this creates or changes.
+6. **Deliverables and homes.** What each task produces (files or a folder,
+   a decision record, a research note, evidence, a record update, a human
+   board) and its home as a path in the project's structure, in the task's
+   `## Deliverables`. Before materializing records, check every home
+   against the project's structure authority, the document that says where
+   things live (an agreed target tree, an architecture doc, the "Where
+   things live" line of `AGENTS.md`), where one exists. A home not known
+   yet is marked provisional with what decides it.
 
 If a missing answer changes the outcome, public behavior, authority, material
 security boundary, irreversible action, or another choice

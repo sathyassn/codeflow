@@ -2372,9 +2372,16 @@ fn stale_findings_clear_by_their_printed_steps(root: &Path, dest: &Path, target:
     let record = root.join("project-management/tasks/TSK-001.md");
     let text = std::fs::read_to_string(&record).unwrap();
     assert!(text.contains("\nstatus: todo "), "{text}");
+    // The task names its deliverable, so its only finding is the stale
+    // status (sathyassn/codeflow#40).
     std::fs::write(
         &record,
-        text.replacen("\nstatus: todo ", "\nstatus: in_progress ", 1),
+        text.replacen("\nstatus: todo ", "\nstatus: in_progress ", 1)
+            .replacen(
+                "\n## Acceptance Criteria\n",
+                "\n- the change: `x.txt`\n\n## Acceptance Criteria\n",
+                1,
+            ),
     )
     .unwrap();
     git_with_binary(root, &["add", "project-management"]);

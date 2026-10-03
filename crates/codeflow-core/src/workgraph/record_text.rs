@@ -334,6 +334,64 @@ pub fn has_section(body: &str, heading: &str) -> bool {
     section(body, heading).is_some()
 }
 
+/// Whether a task record names what it delivers (sathyassn/codeflow#40):
+/// its `## Deliverables` section has visible content, or its
+/// `## Description` names a path. A comment, a blank line or a bare list
+/// marker fills nothing.
+#[must_use]
+pub fn names_deliverables(body: &str) -> bool {
+    let filled = section(body, "## Deliverables").is_some_and(|lines| {
+        lines.iter().any(|line| match line.kind {
+            LineKind::Text => !matches!(line.visible.trim(), "" | "-" | "*" | "+"),
+            LineKind::FenceContent => !line.visible.trim().is_empty(),
+            _ => false,
+        })
+    });
+    filled
+        || section_text(body, "## Description")
+            .is_some_and(|lines| lines.iter().any(|line| names_path(line)))
+}
+
+/// Whether a line of visible text names a path: a code span such as
+/// `crates/x.rs`, `docs/` or `AGENTS.md`, or a written-out word with a `/`
+/// and a file name or a trailing `/`, such as docs/cli.md or docs/guides/.
+/// A URL is no path, and neither is a bare word such as and/or.
+fn names_path(line: &str) -> bool {
+    line.split('`').enumerate().any(|(index, part)| {
+        let code = index % 2 == 1;
+        part.split_whitespace().any(|word| is_path(word, code))
+    })
+}
+
+fn is_path(word: &str, code: bool) -> bool {
+    let word = word
+        .trim_start_matches(['(', '[', '"', '\''])
+        .trim_end_matches([')', ']', '"', '\'', ',', ';', ':', '.', '!', '?']);
+    if word.is_empty() || word.contains("://") {
+        return false;
+    }
+    let named_file = |segment: &str| {
+        segment.rsplit_once('.').is_some_and(|(_, extension)| {
+            (1..=5).contains(&extension.len())
+                && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+                && extension.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+    };
+    let segments: Vec<&str> = word.split('/').collect();
+    if segments.len() == 1 {
+        return code && named_file(word);
+    }
+    let shaped = segments.iter().all(|segment| {
+        segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-*~@+<>{}".contains(c))
+    });
+    let named = segments.iter().any(|segment| !segment.is_empty());
+    shaped
+        && named
+        && (code || word.ends_with('/') || segments.last().is_some_and(|last| named_file(last)))
+}
+
 fn collapse(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }

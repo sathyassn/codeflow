@@ -23,6 +23,17 @@ created: {{DATE}}
      public contracts or boundaries this task changes, and how to recover
      from an irreversible step, when a reviewer needs them. -->
 
+## Deliverables
+
+<!-- Each output this task produces and its home, one line each as
+     `- <output>: <path>`: files or a folder, a decision record, a research
+     note, evidence, a record update or a human board, at its path in the
+     project's structure. Check each home against the project's structure
+     authority (the document that says where things live) where one exists.
+     Where a home is not known yet, give what is known, mark it provisional
+     and name what decides it. `codeflow validate --docs` warns about an open
+     task with no entry here and no path in its Description. -->
+
 ## Acceptance Criteria
 
 <!-- The single home for this task's acceptance: testable statements,
