@@ -55,14 +55,18 @@ erratum below, never an edit of the section.
 - **`codeflow doctor --check grok` checks that Grok can run the CodeFlow
   guards.** It warns, naming each file, about a CodeFlow hook command
   Grok would skip because it carries a `$`, with the step that fixes it:
-  `codeflow update` for the files it manages and a hand edit for
-  `.claude/settings.local.json`, and it names a `.new` file update left
-  waiting. When the shipped exec-guard command is bound where Grok's
-  shell tool hits it, doctor runs `codeflow hook exec-guard --contract 3`
-  from PATH on a canary dangerous command, in the payload Grok sends and
-  in a scratch directory, and warns unless it refuses with exit 2, a
-  reason and Grok's deny answer. Doctor never runs hook text from the
-  repository: a customised exec-guard command is reported as unverified.
+  `codeflow update` for the files its manifest manages and a hand edit
+  for any other file, such as `.claude/settings.local.json`, and it names
+  a `.new` file update left waiting. When the shipped exec-guard handler
+  (its command, timeout and environment) is bound where Grok's shell tool
+  hits it, matched as Grok matches, doctor runs
+  `codeflow hook exec-guard --contract 3` with its own binary on a canary
+  dangerous command, in the payload Grok sends and in a scratch
+  directory, and warns unless it refuses with exit 2, a reason and Grok's
+  deny answer. Doctor never runs hook text, hook environment or a
+  `codeflow` found on PATH: a customised handler is reported as
+  unverified, and where PATH resolves `codeflow` is reported, flagged
+  when it lies inside the repository or is not doctor's own binary.
 
 ### Changed
 
@@ -125,15 +129,18 @@ erratum below, never an edit of the section.
   only the first line of a hook's error output as the reason it denied a
   call, so a guard refusing a Grok call also returns Grok's deny decision
   with the whole refusal, the rule and its sanctioned path included.
-  `codeflow update` rewrites these files only where you have not edited
-  them. A Grok or Codex hook file you edited stays as it is, and update
-  writes a `.new` file beside it holding a 3-way merge: resolve its
-  conflict markers in favour of the shipped CodeFlow hook commands,
+  `codeflow update` keeps your own edits to these files. It merges Claude
+  settings by their hook entries, and merges a Grok or Codex hook file
+  you edited by a 3-way merge that applies on its own when your edit does
+  not overlap the new commands. When it overlaps, update leaves the file
+  as it is and writes a `.new` file beside it holding the merge: resolve
+  its conflict markers in favour of the shipped CodeFlow hook commands,
   replace your file with it and delete the `.new` file. Update never
-  touches `.claude/settings.local.json`, which Grok also reads: replace
-  any CodeFlow hook command there that carries a `$` with the one in
-  `.claude/settings.json`. Then run `codeflow doctor --check grok` and
-  confirm that a live Grok session refuses a dangerous shell command.
+  touches a hook file it does not manage, such as
+  `.claude/settings.local.json`, which Grok also reads: replace any
+  CodeFlow hook command there that carries a `$` with the shipped one.
+  Then run `codeflow doctor --check grok` and confirm that a live Grok
+  session refuses a dangerous shell command.
 
 <!-- codeflow:release-impact patch -->
 - **The release binary reports a clean build.** The 3.0.0 binaries print

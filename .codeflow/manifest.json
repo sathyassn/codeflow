@@ -485,7 +485,7 @@
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "8d6714d4ee5c1b956457435693f10a257e28039577cb21b793b8d23680d45f56",
+      "sha256": "0544e898355761f1ee75df0648d022f892ca0fc9a19a3408f247b7bd8b37afb8",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -1301,7 +1301,7 @@
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "8d6714d4ee5c1b956457435693f10a257e28039577cb21b793b8d23680d45f56",
+      "sha256": "0544e898355761f1ee75df0648d022f892ca0fc9a19a3408f247b7bd8b37afb8",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {

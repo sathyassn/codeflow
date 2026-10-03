@@ -165,11 +165,14 @@ variable is unset (issue 29). Grok shows only the first stderr line of a
 denying hook, so a guard refusing a Grok call also writes Grok's deny
 decision with the whole refusal on stdout. `codeflow doctor --check grok`
 names a CodeFlow hook command Grok would skip. When the shipped exec-guard
-command is bound where Grok's shell tool hits it, doctor runs its fixed
-invocation, `codeflow hook exec-guard --contract 3`, on a canary in a
-scratch directory and expects exit 2, a reason and Grok's deny answer.
-Doctor never runs hook text from the repository, so a customised command
-is reported unverified.
+handler (command, timeout and environment) is bound where Grok's shell
+tool hits it, matched as Grok matches, doctor runs its fixed invocation,
+`codeflow hook exec-guard --contract 3`, with its own binary on a canary
+in a scratch directory and expects exit 2, a reason and Grok's deny
+answer. Doctor never runs hook text, hook environment or a `codeflow`
+found on PATH, which the repository could plant: a customised handler is
+reported unverified, and where PATH resolves `codeflow` is reported
+without being run.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

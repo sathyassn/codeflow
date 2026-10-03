@@ -288,7 +288,7 @@ fn fake_codeflow(bin: &Path, stderr: &str, code: i32) {
 /// `codeflow hook <name> --contract 3` followed by one shared fallback with
 /// no `$`, which Grok would read as its own template and skip. It exits 0
 /// when the binary allows and 2 whenever the hook fails: a policy refusal
-/// keeps only the guard's message, a missing binary names the installer
+/// prints the guard's message first, a missing binary names the installer
 /// and `codeflow update`, a binary older than contract 3 keeps its own
 /// usage error, and any other failure still blocks. Every failure ends with
 /// one closing line, so a binary that fails silently, or is killed, still
