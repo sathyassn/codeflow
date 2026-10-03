@@ -69,9 +69,10 @@ erratum below, never an edit of the section.
   New scaffolds word it differently. For repositories that already hold the
   3.0.0 line, the CI workflow `codeflow update` installs runs gitleaks with
   your configuration as before, then drops only `generic-api-key` findings
-  whose value is exactly that prose in those two paths, so the scan passes
-  without editing history. Anything else, on the same line included, still
-  fails the job, and so does a scan that does not complete. A wrapper that
+  whose value and matched text are exactly that prose in those two paths, so
+  the scan passes without editing history. Anything else, on the same line
+  included, still fails the job, and so does a scan that logs an error or
+  reads no commit. A wrapper that
   runs gitleaks itself can add the entry the CI README shows.
 
 ## [3.0.0]

@@ -176,8 +176,10 @@ jobs:
       # the report: the security-stage prose CodeFlow 3.0.0 seeded on line
       # 209 of the pipeline workflow ("vulnerable/malicious deps"), which the
       # generic-api-key rule mistakes for a key. Only a generic-api-key
-      # finding whose value is exactly that, in those two paths, is dropped;
-      # anything else, on the same line included, fails the job.
+      # finding whose value and matched text are exactly that prose, in one
+      # of those two paths exactly, is dropped; anything else, on the same
+      # line included, fails the job. So does a scan that logs an error or
+      # reads no commit.
       - name: gitleaks
         run: |
           GITLEAKS_VERSION=8.30.1
@@ -189,15 +191,22 @@ jobs:
           # The report stays in the runner's temp directory; the log names
           # each finding's rule, file, line and commit, never its value.
           report="$RUNNER_TEMP/gitleaks-report.json"
+          log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           ./gitleaks detect --source . --no-banner --exit-code 0 \
-            --report-format json --report-path "$report" || rc=$?
-          if [ "$rc" -ne 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
-            echo "::error::gitleaks did not complete a scan (exit ${rc})"
+            --report-format json --report-path "$report" 2>"$log" || rc=$?
+          cat "$log" >&2
+          # gitleaks exits 0 with an empty report when git itself fails, so
+          # its log must show no error and at least one commit read.
+          plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
+          scanned=$(printf '%s\n' "$plain" | sed -n 's/.* \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
+          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE ' (ERR|FTL) ' \
+            || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
+            echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
             exit 1
           fi
-          # The value is split so this file does not hold the text it allows.
-          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and (.File | test("^(\\.codeflow/\\.baseline/)?\\.claude/workflows/pipeline\\.workflow\\.js$")))'
+          # The text is split so this file does not hold the text it allows.
+          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and .Match == ("authz gaps, vulnerable/" + "malicious ") and (.File == ".claude/workflows/pipeline.workflow.js" or .File == ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js"))'
           allowed=$(jq "[.[] | $known] | length" "$report")
           if [ "$allowed" -gt 0 ]; then
             echo "Allowed ${allowed} finding(s) of the CodeFlow 3.0.0 pipeline prose \"vulnerable/malicious\"."
@@ -205,7 +214,8 @@ jobs:
           leaks=$(jq "[.[] | select(([.] | map($known) | length) == 0)]" "$report")
           count=$(printf '%s' "$leaks" | jq length)
           if [ "$count" -gt 0 ]; then
-            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
+            # Workflow-command properties escape %, CR, LF, : and , in names.
+            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | gsub(":"; "%3A") | gsub(","; "%2C")),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
             echo "gitleaks found ${count} leak(s)."
             exit 1
           fi

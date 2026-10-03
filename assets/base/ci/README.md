@@ -141,9 +141,9 @@ as extra steps when your stack warrants:
   positive from the report: the security-stage prose CodeFlow 3.0.0 seeded on
   line 209 of `.claude/workflows/pipeline.workflow.js` and its baseline copy,
   which the `generic-api-key` rule mistakes for a key. Only a
-  `generic-api-key` finding whose value is exactly that prose, in those two
-  paths, is dropped; every other finding fails the job, as does a scan that
-  does not complete. A wrapper that runs gitleaks itself on a repository
+  `generic-api-key` finding whose value and matched text are exactly that
+  prose, in one of those two paths, is dropped; every other finding fails
+  the job, as does a scan that logs an error or reads no commit. A wrapper that runs gitleaks itself on a repository
   scaffolded by 3.0.0 can allow the same prose in its own configuration.
   With no `.gitleaks.toml` yet, create one that keeps the default rules:
 
@@ -155,8 +155,8 @@ as extra steps when your stack warrants:
   description = "CodeFlow 3.0.0 seeded pipeline workflow: security-stage prose, not a credential"
   condition = "AND"
   paths = ['''^(?:\.codeflow/\.baseline/)?\.claude/workflows/pipeline\.workflow\.js$''']
-  regexTarget = "secret"
-  regexes = ['''^vulnerable/malicious$''']
+  regexTarget = "match"
+  regexes = ['''^authz gaps, vulnerable[/]malicious $''']
   ```
 
   With a `.gitleaks.toml` already, add only the `[[allowlists]]` block to

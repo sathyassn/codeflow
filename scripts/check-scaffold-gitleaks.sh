@@ -109,11 +109,12 @@ expect() {
   python3 - "$TMP/$name.out" "$name" "$status" "$rc" "$KEY" "$@" <<'PY'
 import re
 import sys
+from urllib.parse import unquote
 
 out = open(sys.argv[1], encoding="utf-8").read()
 name, status, rc, key = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 expected = sorted(sys.argv[6:])
-found = sorted(f"{f}:{l}" for f, l in re.findall(r"::error file=([^,]+),line=(\d+)::", out))
+found = sorted(f"{unquote(f)}:{l}" for f, l in re.findall(r"^::error file=([^,\n]+),line=(\d+)::", out, re.M))
 problems = []
 if (rc == 0) != (status == 0):
     problems.append(f"exit {rc}, expected {'0' if status == 0 else 'non-zero'}")
@@ -142,6 +143,26 @@ done
 git -C "$REPO" init -q
 commit "prose only"
 expect prose-only 0
+# A longer credential that starts with the prose yields the same extracted
+# value, and a path one character longer than an allowed one is another
+# file: both are reported.
+REPO="$TMP/near-misses"
+LONGER="password = \"$(printf '%s%s' 'vulnerable/' 'malicious') $KEY\""
+NL='
+'
+mkdir -p "$REPO/.claude/workflows"
+printf '// x\n%s\n' "$LONGER" >"$REPO/.claude/workflows/pipeline.workflow.js"
+printf '// x\n%s\n' "$PROSE" >"$REPO/.claude/workflows/pipeline.workflow.js$NL"
+git -C "$REPO" init -q
+commit "near misses"
+expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
+  ".claude/workflows/pipeline.workflow.js$NL:2"
+
+# A scan in which git fails reads no commit and exits 0 with an empty
+# report; the step fails it.
+STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
+expect git-failure 1
+STEP_ENV=
 REPO=$SCAFFOLD
 
 # An adopter configuration is read as gitleaks reads it, whatever its
@@ -203,7 +224,7 @@ expect broken-config 1
 REPO="$TMP/readme-recipe"
 for path in .claude/workflows .codeflow/.baseline/.claude/workflows; do
   mkdir -p "$REPO/$path"
-  printf '// seeded by CodeFlow 3.0.0\n%s\n%s %s\n' "$PROSE" "$PROSE" "$PLANTED" \
+  printf '// seeded by CodeFlow 3.0.0\n%s\n%s %s\n%s\n' "$PROSE" "$PROSE" "$PLANTED" "$LONGER" \
     >"$REPO/$path/pipeline.workflow.js"
 done
 python3 - "$ROOT/assets/base/ci/README.md" "$REPO/.gitleaks.toml" <<'PY'
@@ -226,7 +247,7 @@ import json
 import sys
 
 found = sorted(f"{f['File']}:{f['StartLine']}" for f in json.load(open(sys.argv[1], encoding="utf-8")))
-expected = [".claude/workflows/pipeline.workflow.js:3", ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js:3"]
+expected = sorted(f"{p}pipeline.workflow.js:{n}" for p in (".claude/workflows/", ".codeflow/.baseline/.claude/workflows/") for n in (3, 4))
 if found != expected:
     raise SystemExit(f"the CI README's gitleaks recipe: expected {expected}, got {found}")
 PY
