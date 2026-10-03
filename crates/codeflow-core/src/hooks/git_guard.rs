@@ -1057,10 +1057,7 @@ fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             if matches!(file, "-" | "/dev/stdin") {
-                let mut elsewhere = line.to_string();
-                for arg in args.iter().filter(|arg| read(arg) && !arg.is_empty()) {
-                    elsewhere = elsewhere.replace(arg.as_str(), "");
-                }
+                let elsewhere = line_without_reads(line, args.iter().filter(|arg| read(arg)));
                 words.extend(words_of(std::iter::once(&elsewhere)));
             } else if !Path::new(file).is_absolute() {
                 return UnknownDirUse::Uncertain(format!(
@@ -1070,6 +1067,39 @@ fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
         }
     }
     UnknownDirUse::Words(words)
+}
+
+/// The command line without the files a `sed` only reads (TSK-216 round
+/// 7). Each read operand clears one occurrence of its text, where it
+/// stands as a whole word, the last one, which is where the operand sits
+/// after any producer. The same text elsewhere on the line, such as a
+/// producer's `w FILE` script, stays to be judged: when the operand's
+/// text appears more than once, a copy always remains. An operand whose
+/// text the line does not hold as a whole word clears nothing.
+fn line_without_reads<'a>(line: &str, reads: impl IntoIterator<Item = &'a String>) -> String {
+    let bounded = |c: Option<char>| {
+        c.is_none_or(|c| {
+            c.is_whitespace() || matches!(c, '\'' | '"' | '|' | ';' | '&' | '(' | ')' | '<' | '>')
+        })
+    };
+    let mut out = line.to_string();
+    for read in reads {
+        if read.is_empty() {
+            continue;
+        }
+        let found = out
+            .match_indices(read.as_str())
+            .map(|(at, _)| at)
+            .filter(|&at| {
+                bounded(out[..at].chars().next_back())
+                    && bounded(out[at + read.len()..].chars().next())
+            })
+            .last();
+        if let Some(at) = found {
+            out.replace_range(at..at + read.len(), " ");
+        }
+    }
+    out
 }
 
 /// Where the guard cannot list every directory a command can run in, a
@@ -2273,10 +2303,7 @@ fn sed_text_violation(
         ));
     }
     // The rest of the line, without the files this `sed` only reads.
-    let mut elsewhere = line.to_string();
-    for arg in args.iter().filter(|arg| read(arg) && !arg.is_empty()) {
-        elsewhere = elsewhere.replace(arg.as_str(), "");
-    }
+    let elsewhere = line_without_reads(line, args.iter().filter(|arg| read(arg)));
     let line = elsewhere.as_str();
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
@@ -8342,6 +8369,21 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// Clearing the files a `sed` only reads removes the operand's own
+    /// occurrence, never the same text in a producer's script.
+    #[test]
+    fn test_line_without_reads_keeps_the_same_text_elsewhere() {
+        let operand = "policy.json".to_string();
+        let line = "printf '%s\\n' 'w policy.json' | sed -f - policy.json";
+        let cleared = line_without_reads(line, [&operand]);
+        assert_eq!(cleared.matches("policy.json").count(), 1, "{cleared}");
+        assert!(cleared.contains("'w policy.json'"), "{cleared}");
+        let plain = line_without_reads("sed -n p policy.json", [&operand]);
+        assert!(!plain.contains("policy.json"), "{plain}");
+        let inside = line_without_reads("sed -n p x/policy.json.bak", [&operand]);
+        assert!(inside.contains("policy.json"), "{inside}");
     }
 
     /// Many directory moves on one line stop at the limit as they are
