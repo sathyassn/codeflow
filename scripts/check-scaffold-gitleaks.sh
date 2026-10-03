@@ -179,6 +179,31 @@ REPO="$TMP/prose-only"
 STEP_ENV="PATH=$TMP/failing-git:$PATH"
 expect git-exit 1
 STEP_ENV=
+
+# The same words in scanned text are not git's failure: a configuration
+# title, and file content gitleaks decodes, both reach the debug log, and a
+# complete scan with them passes.
+ABORTED="hello command aborted harmless text"
+REPO="$TMP/aborted-words"
+mkdir -p "$REPO"
+printf 'blob = "%s"\n' "$(printf '%s' "$ABORTED" | base64)" >"$REPO/encoded.txt"
+git -C "$REPO" init -q
+commit "aborted words"
+in_debug_log() {
+  grep -q "$ABORTED" "$TMP/gitleaks.log" || {
+    echo "template secret scan, $1: the words never reached the debug log" >&2
+    exit 1
+  }
+}
+expect aborted-in-content 0
+in_debug_log aborted-in-content
+GITLEAKS_CONFIG_TOML="title = \"$ABORTED\"
+[extend]
+useDefault = true"
+export GITLEAKS_CONFIG_TOML
+expect aborted-in-config 0
+in_debug_log aborted-in-config
+unset GITLEAKS_CONFIG_TOML
 REPO=$SCAFFOLD
 
 # An adopter configuration is read as gitleaks reads it, whatever its
