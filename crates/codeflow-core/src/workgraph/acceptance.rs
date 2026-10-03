@@ -160,6 +160,85 @@ pub enum Transport {
     TaskLanding,
 }
 
+/// The two kinds of target authority a run hands the binding (TSK-220),
+/// kept as separate types in their own module so neither can be built from
+/// the other or from points the range itself supplies.
+mod authority {
+    use git2::Oid;
+
+    /// The fixed target tips one run is judged against (TSK-220): the base
+    /// `codeflow ci` is given (in hosted CI, the pull request's base) and the
+    /// pre-push hook's candidate authority, or, in the status verb, the task's
+    /// target as `work start` anchors it. They come from the run, never from
+    /// the range under judgement, and they are the only source of both sets
+    /// below, so neither can be built from anything else.
+    #[derive(Clone, Debug, Default)]
+    pub struct RunBases(Vec<Oid>);
+
+    impl RunBases {
+        /// The run's fixed target tips, deduplicated in order.
+        #[must_use]
+        pub fn new(tips: impl IntoIterator<Item = Oid>) -> Self {
+            let mut bases: Vec<Oid> = Vec::new();
+            for tip in tips {
+                if !bases.contains(&tip) {
+                    bases.push(tip);
+                }
+            }
+            Self(bases)
+        }
+
+        /// The tips whose first-parent lines may carry a clean merge after a
+        /// review. `with_own_line` may add a planning or line range's own
+        /// head.
+        #[must_use]
+        pub fn stacking(&self) -> StackingTips {
+            StackingTips(self.0.clone())
+        }
+
+        /// The bases that alone may supply a reopened task's criteria.
+        #[must_use]
+        pub fn criteria(&self) -> CriteriaBases {
+            CriteriaBases(self.0.clone())
+        }
+    }
+
+    /// Stacking authority: target tips whose first-parent lines may carry a
+    /// clean merge after a review. Only [`RunBases::stacking`] builds it and
+    /// only `with_own_line` extends it; it never supplies criteria.
+    #[derive(Clone, Debug, Default)]
+    pub struct StackingTips(Vec<Oid>);
+
+    impl StackingTips {
+        pub(super) fn tips(&self) -> &[Oid] {
+            &self.0
+        }
+
+        /// These tips and a planning or line range's own head, for a task that
+        /// targets that line (`with_own_line`).
+        pub(super) fn with_line_head(mut self, head: Oid) -> Self {
+            if !self.0.contains(&head) {
+                self.0.push(head);
+            }
+            self
+        }
+    }
+
+    /// Criteria authority: the run's fixed bases, the only points besides the
+    /// range anchor allowed to supply a reopened task's criteria. Only
+    /// [`RunBases::criteria`] builds it, so a range's own line head, which
+    /// stacks merges, can never join it.
+    #[derive(Clone, Debug, Default)]
+    pub struct CriteriaBases(Vec<Oid>);
+
+    impl CriteriaBases {
+        pub(super) fn bases(&self) -> &[Oid] {
+            &self.0
+        }
+    }
+}
+pub use authority::{CriteriaBases, RunBases, StackingTips};
+
 /// Bind a completion to its reviewed source. Only this record's status and
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range always reviews its
@@ -176,6 +255,7 @@ pub fn bind_completion(
     transport: Transport,
     base: Option<Oid>,
 ) -> Vec<Finding> {
+    let run = RunBases::new(default_target);
     bind_completion_with_amendment(
         repo,
         task,
@@ -185,7 +265,8 @@ pub fn bind_completion(
         transport,
         base,
         None,
-        default_target.as_slice(),
+        &run.stacking(),
+        &run.criteria(),
     )
 }
 
@@ -198,13 +279,12 @@ pub fn bind_completion(
 /// the target rule. `None`, or a range that reopens the task, keeps the
 /// target rule alone.
 ///
-/// `authorities` are the target tips this run is judged against (TSK-220):
-/// after its review, a task pull request's chain may stack a clean merge
+/// After its review, a task pull request's chain may stack a clean merge
 /// only when the merge brings a commit on the first-parent line of one of
-/// them. They come from the run, never from a local branch or its upstream
-/// configuration: the range base CI is given, and the pre-push hook's
-/// candidate authority.
-#[allow(clippy::too_many_arguments)] // bind_completion's inputs, the own-range base and the authorities.
+/// the `stacking` tips; a reopened task's criteria come only from the range
+/// anchor and the `criteria` bases (TSK-220). Both derive from the run's
+/// [`RunBases`], never from a local branch or its upstream configuration.
+#[allow(clippy::too_many_arguments)] // bind_completion's inputs, the own-range base and the two authorities.
 pub(crate) fn bind_completion_with_amendment(
     repo: &Repository,
     task: &RecordView,
@@ -214,7 +294,8 @@ pub(crate) fn bind_completion_with_amendment(
     transport: Transport,
     base: Option<Oid>,
     own_range_base: Option<Oid>,
-    authorities: &[Oid],
+    stacking: &StackingTips,
+    criteria: &CriteriaBases,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -266,7 +347,7 @@ pub(crate) fn bind_completion_with_amendment(
         })
         .or_else(|| {
             let (at, old, note) =
-                recovered_completion(repo, task, &block, landing, anchor, authorities)?;
+                recovered_completion(repo, task, &block, landing, anchor, criteria)?;
             unreadable = note;
             recovered = true;
             Some((at, old))
@@ -312,7 +393,7 @@ pub(crate) fn bind_completion_with_amendment(
                 } else {
                     transport
                 };
-                binding_problem(repo, task, landing, reviewed, carried, authorities)
+                binding_problem(repo, task, landing, reviewed, carried, stacking)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -542,7 +623,7 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
 
 /// Apply the one reviewed-span check, resolving task-landing transport only
 /// when the source and completion do not share a directly reviewed span.
-/// `authorities` are the target tips a clean merge after the review must
+/// `stacking` holds the target tips a clean merge after the review must
 /// come from.
 fn binding_problem(
     repo: &Repository,
@@ -550,13 +631,13 @@ fn binding_problem(
     landing: Landing<'_>,
     reviewed: Oid,
     transport: Transport,
-    authorities: &[Oid],
+    stacking: &StackingTips,
 ) -> Option<String> {
     // A task landing's own span may stack (TSK-184): the task branch may
     // re-merge its integration target cleanly after the review. Direct
     // work, a reopening range and a completion bound at a head never stack.
     let stacking = if transport == Transport::TaskLanding {
-        Stacking::OnTarget(authorities)
+        Stacking::OnTarget(stacking)
     } else {
         Stacking::Never
     };
@@ -578,7 +659,7 @@ enum Stacking<'a> {
     /// Direct work, a reopening range, a landed head and an epic.
     Never,
     /// A task pull request's own chain, judged against these target tips.
-    OnTarget(&'a [Oid]),
+    OnTarget(&'a StackingTips),
 }
 
 /// The only binding predicate: the reviewed commit is the source head or
@@ -626,7 +707,7 @@ fn reviewed_span_problem(
     // whole change from the reviewed commit to C, naming the commit that
     // stopped the stack.
     let stack = match stacking {
-        Stacking::OnTarget(authorities) => stacked(repo, task, reviewed, at, authorities),
+        Stacking::OnTarget(tips) => stacked(repo, task, reviewed, at, tips),
         Stacking::Never => Stacked::No(None),
     };
     match stack {
@@ -688,7 +769,7 @@ enum Stop {
 
 /// Walk C's first-parent chain back to the reviewed commit. A merge whose
 /// second parent lies on the first-parent line of one of the run's target
-/// tips (`authorities`), with the tree git's clean merge of its parents
+/// tips (`stacking`), with the tree git's clean merge of its parents
 /// gives, brings only target work: it stacks. A non-merge commit stacks only
 /// by changing this record's status and Closeout. Anything else stops the
 /// stack and is named: a merge from elsewhere, a merge of more than two
@@ -700,8 +781,9 @@ fn stacked(
     task: &RecordView,
     reviewed: Oid,
     at: Oid,
-    authorities: &[Oid],
+    stacking: &StackingTips,
 ) -> Stacked {
+    let authorities = stacking.tips();
     let stop = |why: String| Stacked::No(Some(Stop::Other(why)));
     match super::release_line::history_overlay(repo) {
         Ok(None) => {}
@@ -974,16 +1056,16 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
 /// reopen (TSK-217). When a record that may be the task cannot be read, a
 /// target it names does not resolve, or a branch outside the range records
 /// it, the recovered criteria stay and a changed set gets the returned
-/// refusal. Only the anchor and `authorities`, the target tips the run is
-/// judged against, supply the criteria to keep (TSK-220): a branch or
-/// remote-tracking ref can only make the answer stricter.
+/// refusal. Only the anchor and the run's `criteria` bases supply the
+/// criteria to keep (TSK-220): a branch, a remote-tracking ref or a range's
+/// own line can only make the answer stricter.
 fn recovered_completion(
     repo: &Repository,
     task: &RecordView,
     block: &AcceptanceBlock,
     landing: Landing<'_>,
     anchor: Option<Oid>,
-    authorities: &[Oid],
+    criteria: &CriteriaBases,
 ) -> Option<(Oid, RecordView, Option<String>)> {
     let (at, mut old) = previous_completion(repo, task, block, landing)?;
     let mut refusal = None;
@@ -992,7 +1074,7 @@ fn recovered_completion(
             anchor,
             head: landing.commit(),
         };
-        match target_record(repo, task, range, &old, authorities) {
+        match target_record(repo, task, range, &old, criteria) {
             Presence::Present(record) => old.criteria = record.criteria,
             Presence::Absent => old.criteria = task.criteria.clone(),
             Presence::Unreadable(reason) => {
@@ -1066,12 +1148,13 @@ enum Presence {
 ///
 /// Only the judged points supply the criteria to keep (TSK-220): the
 /// range anchor, the record this range was cut from (R-52), then each of
-/// `authorities`, the target tips the run is judged against (the base
-/// `codeflow ci` is given and the pre-push candidate authority; in the
-/// verb, the task's target as `work start` anchors it). A planning
-/// amendment landed on the target after the reopen is on the judged tip,
-/// so its criteria bind. An authority inside the range (the range's own
-/// line) is the branch's own work and is skipped. Every other tip, of the
+/// the run's `criteria` bases (the base `codeflow ci` is given and the
+/// pre-push candidate authority; in the verb, the task's target as `work
+/// start` anchors it). A planning amendment landed on the target after the
+/// reopen is on the judged base, so its criteria bind. A base the landing
+/// reaches beyond the anchor is the branch's own history, not a fixed
+/// target point, so it only joins the other tips. A range's own line head
+/// is stacking authority and never reaches here. Every other tip, of the
 /// declared target, each former target and the default target, is a local
 /// branch or a remote-tracking ref this clone can move: when one holds the
 /// task and no judged point does, the answer is [`Presence::Unjudged`],
@@ -1087,7 +1170,7 @@ fn target_record(
     task: &RecordView,
     range: Range,
     recovered: &RecordView,
-    authorities: &[Oid],
+    criteria: &CriteriaBases,
 ) -> Presence {
     let uid = record_uid(&task.content);
     let mut index = RecordIndex::new(repo, &task.id, uid.clone());
@@ -1107,11 +1190,16 @@ fn target_record(
         Err(reason) => return Presence::Unreadable(reason),
     }
     let mut judged = vec![range.anchor];
-    judged.extend(authorities.iter().copied().filter(|tip| {
-        *tip == range.anchor
-            || !(*tip == range.head || repo.graph_descendant_of(range.head, *tip).unwrap_or(false))
-    }));
     let mut tips: Vec<(String, Oid)> = Vec::new();
+    for base in criteria.bases().iter().copied() {
+        let in_range = base != range.anchor
+            && (base == range.head || repo.graph_descendant_of(range.head, base).unwrap_or(false));
+        if in_range {
+            tips.push((base.to_string(), base));
+        } else {
+            judged.push(base);
+        }
+    }
     for name in &targets {
         let found = target_tips(repo, name);
         if found.is_empty() {
@@ -1897,10 +1985,10 @@ pub(super) fn reopened_ids(
 /// whose active block or archived review it changes, with provenance read
 /// before applying the shared binding rule.
 /// `default_target` stands in for a task that declares no integration
-/// target when its waivers are judged; `authorities` are the target tips a
-/// clean merge after a review must come from, and `line` is the branch the
-/// range judges, whose own line a planning or line range adds for the tasks
-/// that target it.
+/// target when its waivers are judged; `run` holds the fixed target tips
+/// the run is judged against, and `line` is the branch the range judges,
+/// whose own line a planning or line range adds to the stacking tips (never
+/// the criteria bases) for the tasks that target it.
 ///
 /// # Errors
 ///
@@ -1912,7 +2000,7 @@ pub fn completions_in_range(
     head: &str,
     default_target: Option<Oid>,
     criteria: &Criteria,
-    authorities: &[Oid],
+    run: &RunBases,
     line: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let amendable = *criteria == Criteria::Amendable;
@@ -1983,7 +2071,8 @@ pub fn completions_in_range(
                 Transport::TaskLanding,
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
-                &with_own_line(authorities, line, task, amendable.then_some(head_oid)),
+                &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                &run.criteria(),
             ));
         }
     }
@@ -1994,17 +2083,18 @@ pub fn completions_in_range(
 }
 
 /// The target tips a completion in a range may stack merges from: the run's
-/// `authorities`, and, in a planning or line range (`line_head`), the range
+/// stacking tips, and, in a planning or line range (`line_head`), the range
 /// head's own line, but only for a task whose declared target is that line
 /// (`line`, the branch the range judges). A task bound for another target
-/// never takes that line's merges as its target's (TSK-220).
+/// never takes that line's merges as its target's, and the line head is
+/// stacking authority only, never a criteria base (TSK-220).
 fn with_own_line(
-    authorities: &[Oid],
+    stacking: StackingTips,
     line: Option<&str>,
     task: &RecordView,
     line_head: Option<Oid>,
-) -> Vec<Oid> {
-    let mut tips = authorities.to_vec();
+) -> StackingTips {
+    let mut tips = stacking;
     let declared = task
         .integration_target
         .as_deref()
@@ -2012,7 +2102,7 @@ fn with_own_line(
         .filter(|target| !target.is_empty());
     if let (Some(head), Some(line), Some(declared)) = (line_head, line, declared) {
         if super::work_start::logical_target(declared) == super::work_start::logical_target(line) {
-            tips.push(head);
+            tips = tips.with_line_head(head);
         }
     }
     tips
@@ -2182,17 +2272,15 @@ pub fn pull_request_findings_judged(
         };
         found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
     }
-    let mut authorities = vec![target_tip];
-    if let Some(authority) = authority {
-        authorities.push(oid(authority)?);
-    }
+    let candidate = authority.map(oid).transpose()?;
+    let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     found.extend(completions_in_range(
         &repo,
         base,
         head,
         Some(target_tip),
         criteria,
-        &authorities,
+        &run,
         branch,
     )?);
     Ok(found)

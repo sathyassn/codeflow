@@ -3961,3 +3961,56 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
         "CI took the changed criteria in: {passed:?}"
     );
 }
+
+/// TSK-220, re-review of the judged-target fix: a line range's own head may
+/// carry merges for the tasks that target the line, but it never supplies
+/// a reopened task's criteria. The task is planned on the line; its branch,
+/// cut before that planning, completes it, reopens it and adds a
+/// criterion, which the verb and CI refuse there. Carrying the same
+/// completion onto the line, with no criteria amendment, still refuses on
+/// the line's pull request into `main`.
+#[test]
+fn a_lines_own_head_never_supplies_a_reopened_tasks_criteria() {
+    let dir = repo(&[("TSK-002", OWN_JOURNEY)], "");
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-002"),
+        &line_task("TSK-002", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): target the line");
+    let early = head(root);
+    let path = record_path("TSK-001");
+    git(root, &["switch", "-q", "-c", LINE]);
+    git(root, &["switch", "-q", "-c", "plan/add-task", LINE]);
+    write(
+        root,
+        &path,
+        &standalone_one(&line_task("TSK-001", "todo", "Pending.\n")),
+    );
+    commit(root, "docs(records): plan the task on the line");
+    land(root, "plan/add-task");
+    git(root, &["switch", "-q", "-c", "task/TSK-001-fix", &early]);
+    let shape = |record: String| {
+        standalone_one(&record).replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        )
+    };
+    let [verb, ci] = complete_reopen_complete(root, &path, &shape, LINE, true);
+    assert_ne!(verb.0, 0, "the verb on the task branch: {}", verb.1);
+    assert_ne!(ci.0, 0, "CI on the task branch: {}", ci.1);
+    let completed = std::fs::read_to_string(root.join(&path)).unwrap();
+    git(root, &["switch", "-q", LINE]);
+    git_try(
+        root,
+        &["merge", "--no-ff", "--no-commit", "task/TSK-001-fix"],
+    );
+    write(root, &path, &completed);
+    commit(root, "merge: task/TSK-001-fix");
+    assert_blocks(
+        &ci_on(root, "main", LINE, ""),
+        "the carried completion on the line",
+        &["work.acceptance_binding", "TSK-001", "keeps its criteria"],
+    );
+}

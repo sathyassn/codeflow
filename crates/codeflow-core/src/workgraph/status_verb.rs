@@ -397,7 +397,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                 .and_then(|target| repo.revparse_single(&target).ok())
                 .and_then(|object| object.peel_to_commit().ok())
                 .and_then(|target| repo.merge_base(head, target.id()).ok());
-            let authorities = verb_authorities(repo_root, &repo, task, default_target);
+            let run = verb_authorities(repo_root, &repo, task, default_target);
             shown(super::acceptance::bind_completion_with_amendment(
                 &repo,
                 task,
@@ -407,7 +407,8 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                 super::acceptance::Transport::TaskLanding,
                 None,
                 own_range_base,
-                &authorities,
+                &run.stacking(),
+                &run.criteria(),
             ))
         }
         Err(error) => {
@@ -432,14 +433,15 @@ fn verb_authorities(
     repo: &git2::Repository,
     task: &RecordView,
     default_target: Option<git2::Oid>,
-) -> Vec<git2::Oid> {
-    super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-        .and_then(|target| repo.revparse_single(&target).ok())
-        .and_then(|object| object.peel_to_commit().ok())
-        .map(|commit| commit.id())
-        .into_iter()
-        .chain(default_target)
-        .collect()
+) -> super::acceptance::RunBases {
+    super::acceptance::RunBases::new(
+        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+            .and_then(|target| repo.revparse_single(&target).ok())
+            .and_then(|object| object.peel_to_commit().ok())
+            .map(|commit| commit.id())
+            .into_iter()
+            .chain(default_target),
+    )
 }
 
 /// Replace `path` with `content` only when its bytes still hash to
