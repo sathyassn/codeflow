@@ -4534,8 +4534,12 @@ fn is_prefix_launcher(t: &str) -> bool {
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
 /// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
-/// `time -p -o FILE`, and `--` for all. `None` when nothing after the
-/// options runs: `--help`, `--version`, or `command -v`/`-V`, a lookup.
+/// `time -p -o FILE`, and `--` for all. `None` when the options make
+/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
+/// Any other option is skipped, never read as "runs nothing": a launcher's
+/// `--help` can be another option's value (`time --format --help git ...`),
+/// so a non-executing form such as `nohup --help git push` is judged as the
+/// command after it and may be refused, which fails closed.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
     let launcher = basename(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
@@ -4545,20 +4549,25 @@ fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> O
         if !a.starts_with('-') || a.len() < 2 {
             break;
         }
-        // `--help` and `--version` print and exit, and `command -v`/`-V`
-        // only looks the name up: nothing after them runs.
-        if a == "--help" || a == "--version" || (launcher == "command" && a.contains(['v', 'V'])) {
+        if launcher == "command" && a.contains(['v', 'V']) {
             return None;
         }
-        idx += 1 + usize::from(takes_next_word(launcher, &a[1..]));
+        idx += 1 + usize::from(takes_next_word(launcher, a));
     }
     Some(idx)
 }
 
-/// `true` when the option cluster `flags` (without its `-`) ends in an
-/// option whose value is the next word: `exec -a NAME` (a name attached as
-/// in `-aNAME` is its own value), and `time -o FILE` or `time -f FORMAT`.
-fn takes_next_word(launcher: &str, flags: &str) -> bool {
+/// `true` when the option `a` takes the next word as its value: `exec -a
+/// NAME` (a name attached as in `-aNAME` is its own value), and `time -o
+/// FILE`, `time -f FORMAT`, `time --output FILE` or `time --format FORMAT`
+/// (`--output=FILE` carries its own).
+fn takes_next_word(launcher: &str, a: &str) -> bool {
+    if launcher == "time" && matches!(a, "--output" | "--format") {
+        return true;
+    }
+    let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
+        return false;
+    };
     let valued: &[char] = match launcher {
         "exec" => &['a'],
         "time" => &['o', 'f'],
@@ -6416,6 +6425,13 @@ mod tests {
             "/usr/bin/time git push origin main",
             "command time -p git push origin main",
             "/usr/bin/time -o out.txt git push origin main",
+            // An option value that looks like help is still a value.
+            "/usr/bin/time --format --help git push origin main",
+            "/usr/bin/time --output --version git push origin main",
+            "/usr/bin/time --output out.txt git push origin main",
+            "/usr/bin/time --output=out.txt git push origin main",
+            // Fails closed: a help option is skipped, not read as a no-op.
+            "nohup --help git push origin main",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.push_to_protected"), "{cmd}: {v:?}");
@@ -6423,13 +6439,6 @@ mod tests {
         // `command -v git` only looks git up, and a name attached to `-a`
         // is not followed by another: `echo` is the program here.
         assert!(evaluate("command -v git", &ctx(&p, "main")).is_empty());
-        for printed in [
-            "nohup --help git push origin main",
-            "/usr/bin/time --version git push",
-        ] {
-            let v = evaluate(printed, &ctx(&p, "feat/x"));
-            assert!(v.is_empty(), "{printed}: {v:?}");
-        }
         let echo = evaluate(
             "exec -aprobea echo git push origin main",
             &ctx(&p, "feat/x"),
@@ -6437,6 +6446,10 @@ mod tests {
         assert!(echo.is_empty(), "{echo:?}");
         // The shell after an attached name still has its heredoc judged.
         let heredoc = "exec -aprobea bash -s cat <<'EOF'\nCODEFLOW_HUMAN_OVERRIDE=1 git push origin main\nEOF";
+        let laundered =
+            "/usr/bin/time --format --help env CODEFLOW_HUMAN_OVERRIDE=1 git push origin main";
+        let v = evaluate(laundered, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.override_token_laundering"), "{v:?}");
         let v = evaluate(heredoc, &ctx(&p, "feat/x"));
         assert!(has_rule(&v, "git.override_token_laundering"), "{v:?}");
     }
