@@ -1010,11 +1010,17 @@ fn git_guard_keeps_every_baseline_refusal() {
             .copied()
             .collect(),
     ));
+    let relaxed = tmp.path().join("relaxed/repo");
+    std::fs::create_dir_all(&relaxed).unwrap();
+    relaxed_fixture(&relaxed);
+    sessions.push((relaxed.as_path(), RELAXED_AUTHORITY.to_vec()));
     let mut weaker = Vec::new();
     let mut table = Vec::new();
     for (session, commands) in &sessions {
         let place = if *session == root.as_path() {
             "main checkout"
+        } else if *session == relaxed.as_path() {
+            "relaxed hook integrity"
         } else {
             "linked worktree"
         };
@@ -1041,6 +1047,57 @@ fn git_guard_keeps_every_baseline_refusal() {
         "the head is weaker than the baseline on:\n{}",
         weaker.join("\n")
     );
+}
+
+/// A repository whose landed policy relaxes `git.hook_integrity`, as the
+/// refusal journey's authority test sets it up: the remote-tracking
+/// authority metadata stays protected all the same.
+fn relaxed_fixture(root: &Path) {
+    enforced_repo(root);
+    let remote = root.with_file_name("remote.git");
+    git(
+        root.parent().unwrap(),
+        &["init", "-q", "--bare", &shell_path(&remote)],
+    );
+    git(root, &["remote", "add", "origin", &shell_path(&remote)]);
+    write_agent_policy(root, r#"{"git":{"hook_integrity":"off"}}"#);
+    git(root, &["push", "-q", "origin", "HEAD:main"]);
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+}
+
+/// The authority metadata 3.0.0 kept protected when hook integrity is
+/// relaxed (refusal journey `ac2_authority_metadata_is_not_disabled_by_local_edit_relief`
+/// and its neighbours), which the new hardening must not shadow.
+const RELAXED_AUTHORITY: &[&str] = &[
+    "printf x > .git/config",
+    "rm -rf .git/refs/remotes",
+    "rm -r .git/refs/remotes",
+    "printf x > .git/packed-refs",
+    "rm .git/packed-refs",
+    "rm -rf .git/refs/remotes/origin",
+    "find .git/refs/remotes -delete",
+    "chmod -R 000 .git/refs/remotes",
+    "env FOO=1 rm -rf .git/refs/remotes",
+    "nice rm -rf .git/refs/remotes",
+];
+
+/// CI round on PR 36: the new recursive-change check answered first for
+/// `rm -rf .git/refs/remotes` with a message that lost its authority class,
+/// so a relaxed policy let it through. Every authority write is refused
+/// with hook integrity relaxed.
+#[test]
+fn git_guard_keeps_authority_metadata_when_integrity_is_relaxed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    relaxed_fixture(&root);
+    assert_guard(&root, RELAXED_AUTHORITY, &[], "git.hook_integrity");
 }
 
 /// `path` as a bare word in a Bash command. Bash removes an unquoted

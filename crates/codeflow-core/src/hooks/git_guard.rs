@@ -1427,10 +1427,15 @@ struct RunDirs {
 /// `start`. Each literal directory change is applied, in order, to every
 /// directory listed before it, so the list holds wherever the shell can be
 /// whatever runs, a pipeline member, a subshell or a shell body included.
-/// It over-approximates: a command is judged from each listed directory.
+/// A directory `pushd -n` only puts on the stack joins the list once a
+/// stack rotation or `popd` can move there. It over-approximates: a command
+/// is judged from each listed directory.
 fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
-    let mut dirs = vec![start.to_path_buf()];
-    let mut unknown = None;
+    let mut run = RunDirs {
+        dirs: vec![start.to_path_buf()],
+        unknown: None,
+    };
+    let mut stacked: Vec<PathBuf> = Vec::new();
     let mut repeats = false;
     let mut moves = false;
     for segment in segments {
@@ -1446,80 +1451,174 @@ fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
             continue;
         };
         let name = basename(program);
-        let mut targets: Vec<&str> = launcher_effects(&tokens).0;
         if unresolved_word(program) {
-            unknown.get_or_insert_with(|| "a program filled in at run time".to_string());
+            run.unknown
+                .get_or_insert_with(|| "a program filled in at run time".to_string());
             continue;
         }
         if matches!(name, "source" | "." | "eval") {
-            unknown.get_or_insert_with(|| format!("`{name}`, which can move the shell"));
+            run.unknown
+                .get_or_insert_with(|| format!("`{name}`, which can move the shell"));
             continue;
         }
-        if matches!(name, "cd" | "pushd" | "chdir") {
-            match args
-                .iter()
-                .find(|a| !a.starts_with('-') || a.as_str() == "-")
-            {
-                Some(target) if target == "-" => {}
-                Some(target) => targets.push(target),
-                None => targets.push("~"),
+        let mut moves_to: Vec<&str> = launcher_effects(&tokens).0;
+        let mut stacks = None;
+        match dir_move(name, args) {
+            DirMove::To(target) => moves_to.push(target),
+            DirMove::Stack(target) => stacks = Some(target),
+            DirMove::Rotate => {
+                moves = true;
+                for dir in std::mem::take(&mut stacked) {
+                    if !add_run_dir(&mut run, dir) {
+                        return run;
+                    }
+                }
+            }
+            DirMove::Stay => {}
+        }
+        for target in moves_to {
+            moves = true;
+            for dir in reach_dirs(target, &mut run) {
+                if !add_run_dir(&mut run, dir) {
+                    return run;
+                }
             }
         }
-        for target in targets {
-            moves = true;
-            if unresolved_word(target) {
-                unknown.get_or_insert_with(|| {
-                    format!(
-                        "`{}`, a directory filled in at run time",
-                        shown_word(target)
-                    )
-                });
-                continue;
-            }
-            // Each new directory is checked against the limit as it is
-            // added, so the list never grows past it (TSK-216 round 6).
-            let before = dirs.len();
-            for at in 0..before {
-                let dir = dirs[at].clone();
-                let path = if target == "~" {
-                    std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
-                } else {
-                    integrity_shell_path(target, &dir)
-                };
-                let reached = if target.contains(['*', '?', '[']) {
-                    match expand_glob(&path) {
-                        Ok(found) => found,
-                        Err(GlobStop::TooManyEntries) => {
-                            unknown.get_or_insert_with(|| {
-                                format!("`{target}`, a directory glob over too many entries")
-                            });
-                            Vec::new()
-                        }
-                    }
-                } else {
-                    vec![path]
-                };
-                for path in reached {
-                    if dirs.contains(&path) {
-                        continue;
-                    }
-                    if dirs.len() >= RUN_DIR_LIMIT {
-                        let why =
-                            format!("more than {RUN_DIR_LIMIT} directories the line can move to");
-                        return RunDirs {
-                            dirs,
-                            unknown: Some(why),
-                        };
-                    }
-                    dirs.push(path);
+        if let Some(target) = stacks {
+            for dir in reach_dirs(target, &mut run) {
+                if stacked.len() >= RUN_DIR_LIMIT {
+                    run.unknown = Some(format!(
+                        "more than {RUN_DIR_LIMIT} directories the line can move to"
+                    ));
+                    return run;
+                }
+                if !stacked.contains(&dir) {
+                    stacked.push(dir);
                 }
             }
         }
     }
     if repeats && moves {
-        unknown.get_or_insert_with(|| "a directory change in a loop or function".to_string());
+        run.unknown
+            .get_or_insert_with(|| "a directory change in a loop or function".to_string());
     }
-    RunDirs { dirs, unknown }
+    run
+}
+
+/// Add a directory to the list, unless it is there already. `false`, with
+/// the directory marked unknown, once the list is full: it never grows past
+/// [`RUN_DIR_LIMIT`] (TSK-216 round 6).
+fn add_run_dir(run: &mut RunDirs, dir: PathBuf) -> bool {
+    if run.dirs.contains(&dir) {
+        return true;
+    }
+    if run.dirs.len() >= RUN_DIR_LIMIT {
+        run.unknown = Some(format!(
+            "more than {RUN_DIR_LIMIT} directories the line can move to"
+        ));
+        return false;
+    }
+    run.dirs.push(dir);
+    true
+}
+
+/// The directories a move to `target` reaches from each listed directory,
+/// a glob expanded; a target filled in at run time reaches none and marks
+/// the directory unknown. At most [`RUN_DIR_LIMIT`] are returned.
+fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
+    if unresolved_word(target) {
+        run.unknown.get_or_insert_with(|| {
+            format!(
+                "`{}`, a directory filled in at run time",
+                shown_word(target)
+            )
+        });
+        return Vec::new();
+    }
+    let mut reached = Vec::new();
+    for dir in &run.dirs {
+        let path = if target == "~" {
+            std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
+        } else {
+            integrity_shell_path(target, dir)
+        };
+        if target.contains(['*', '?', '[']) {
+            match expand_glob(&path) {
+                Ok(found) => reached.extend(found),
+                Err(GlobStop::TooManyEntries) => {
+                    run.unknown.get_or_insert_with(|| {
+                        format!("`{target}`, a directory glob over too many entries")
+                    });
+                }
+            }
+        } else {
+            reached.push(path);
+        }
+        if reached.len() > RUN_DIR_LIMIT {
+            run.unknown = Some(format!(
+                "more than {RUN_DIR_LIMIT} directories the line can move to"
+            ));
+            reached.truncate(RUN_DIR_LIMIT);
+            break;
+        }
+    }
+    reached
+}
+
+/// How a `cd`, `pushd`, `popd` or `chdir` moves the shell.
+enum DirMove<'a> {
+    /// To its operand, or home for a bare `cd`.
+    To(&'a str),
+    /// `pushd -n DIR`: DIR goes on the stack and the shell stays.
+    Stack(&'a str),
+    /// A stack rotation (`pushd +1`, `pushd -1`, a bare `pushd`) or a
+    /// `popd`: to a directory on the stack.
+    Rotate,
+    /// Nowhere new: `cd -` returns to a listed directory, and other
+    /// programs do not move the shell.
+    Stay,
+}
+
+fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
+    if name == "popd" {
+        return DirMove::Rotate;
+    }
+    if !matches!(name, "cd" | "pushd" | "chdir") {
+        return DirMove::Stay;
+    }
+    let stack_index = |n: &str| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
+    let mut options = true;
+    let mut no_change = false;
+    for arg in args {
+        let word = arg.as_str();
+        if options && word == "--" {
+            options = false;
+            continue;
+        }
+        if name == "pushd" && word.strip_prefix('+').is_some_and(stack_index) {
+            return DirMove::Rotate;
+        }
+        if options && word.len() > 1 && word.starts_with('-') {
+            if name == "pushd" && stack_index(&word[1..]) {
+                return DirMove::Rotate;
+            }
+            no_change |= name == "pushd" && word == "-n";
+            continue;
+        }
+        if word == "-" {
+            return DirMove::Stay;
+        }
+        return if no_change {
+            DirMove::Stack(word)
+        } else {
+            DirMove::To(word)
+        };
+    }
+    if name == "pushd" {
+        DirMove::Rotate
+    } else {
+        DirMove::To("~")
+    }
 }
 
 /// Judge a command from every directory it can run in. Where that list may
@@ -2409,37 +2508,94 @@ fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     })
 }
 
-/// The command of each `-exec`, `-execdir`, `-ok` or `-okdir` in a `find`
-/// expression.
-fn find_commands(args: &[String]) -> Vec<&[String]> {
-    let mut out = Vec::new();
+/// The `find` primaries that take the next word as their value, which is
+/// never an action, however it is spelled (`-name -delete`).
+const FIND_VALUE_PRIMARIES: &[&str] = &[
+    "-name",
+    "-iname",
+    "-path",
+    "-ipath",
+    "-wholename",
+    "-iwholename",
+    "-regex",
+    "-iregex",
+    "-lname",
+    "-ilname",
+    "-type",
+    "-xtype",
+    "-user",
+    "-group",
+    "-uid",
+    "-gid",
+    "-perm",
+    "-size",
+    "-links",
+    "-inum",
+    "-samefile",
+    "-mtime",
+    "-mmin",
+    "-atime",
+    "-amin",
+    "-ctime",
+    "-cmin",
+    "-used",
+    "-fstype",
+    "-context",
+    "-maxdepth",
+    "-mindepth",
+    "-printf",
+    "-files0-from",
+    "-regextype",
+];
+
+/// The actions of a `find` expression, read in order (TSK-216): the
+/// primaries it runs, with the value of a primary that takes one skipped,
+/// and the command of each `-exec`, `-execdir`, `-ok` or `-okdir`, whose
+/// words are its own and never primaries.
+fn find_expression(args: &[String]) -> (Vec<&str>, Vec<&[String]>) {
+    let mut actions = Vec::new();
+    let mut commands = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
-        if matches!(arg.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
-            let tail = &args[at + 1..];
-            let len = tail
-                .iter()
-                .position(|a| matches!(a.as_str(), ";" | "+"))
-                .unwrap_or(tail.len());
-            out.push(&tail[..len]);
-            at += len + 1;
+        let word = arg.as_str();
+        match word {
+            "-exec" | "-execdir" | "-ok" | "-okdir" => {
+                let tail = &args[at + 1..];
+                let len = tail
+                    .iter()
+                    .position(|a| matches!(a.as_str(), ";" | "+"))
+                    .unwrap_or(tail.len());
+                commands.push(&tail[..len]);
+                at += len + 1;
+            }
+            "-fprintf" => {
+                actions.push(word);
+                at += 2;
+            }
+            "-fprint" | "-fprint0" | "-fls" => {
+                actions.push(word);
+                at += 1;
+            }
+            _ if FIND_VALUE_PRIMARIES.contains(&word) || word.starts_with("-newer") => at += 1,
+            _ if word.starts_with('-') => actions.push(word),
+            _ => {}
         }
         at += 1;
     }
-    out
+    (actions, commands)
 }
 
-/// Whether a `find` expression changes files: `-delete`, an output-file
-/// action, or a command that is not read-only.
+/// Whether a `find` expression changes files: a `-delete` or output-file
+/// action, or a command that is not read-only. A word that is a primary's
+/// value or a command's argument is never an action.
 fn find_mutates(args: &[String]) -> bool {
-    args.iter().any(|a| {
-        matches!(
-            a.as_str(),
-            "-delete" | "-fprint" | "-fprint0" | "-fprintf" | "-fls"
-        )
-    }) || find_commands(args)
-        .into_iter()
-        .any(|command| !read_only_program(command))
+    let (actions, commands) = find_expression(args);
+    actions
+        .iter()
+        .any(|a| matches!(*a, "-delete" | "-fprint" | "-fprint0" | "-fprintf" | "-fls"))
+        || commands
+            .into_iter()
+            .any(|command| !read_only_program(command))
 }
 
 /// Judge what a `find` does to the paths it visits. First the text floor:
@@ -2878,23 +3034,36 @@ fn integrity_write_violation(
     // moves its directory, and a launcher the guard cannot read with
     // certainty is not dropped silently (TSK-216 round 4).
     let (dirs, uncertain) = launcher_effects(tokens);
-    if let Some(why) = uncertain {
-        if !read_only_program(tokens) {
-            return Some(hook_integrity_violation(
-                level,
-                format!("the guard cannot read the launcher in front of `{cmd}` ({why}), so it cannot tell what that command changes"),
-            ));
-        }
-    }
     let launched_cwd = dirs.iter().fold(cwd.to_path_buf(), |dir, change| {
         integrity_shell_path(change, &dir)
     });
     let cwd = launched_cwd.as_path();
+    // The direct checks 3.0.0 made run first, so a command they refuse keeps
+    // their reading, the remote-tracking authority class included, which
+    // stays blocked when hook integrity is relaxed. The new hardening only
+    // adds refusals after them (TSK-216).
+    direct_write_violation(cmd, args, level, cwd, payload_cwd, line)
+        .or_else(|| {
+            let why = uncertain.filter(|_| !read_only_program(tokens))?;
+            Some(hook_integrity_violation(
+                level,
+                format!("the guard cannot read the launcher in front of `{cmd}` ({why}), so it cannot tell what that command changes"),
+            ))
+        })
+        .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
+}
 
-    if let Some(v) = wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line) {
-        return Some(v);
-    }
-
+/// The writes 3.0.0 judged directly: a mutating command's own path
+/// arguments, `dd of=`, `sed -i` files and script writes, the destination
+/// of `cp`, `ln` and `rsync`, and `git rm` or `git mv`.
+fn direct_write_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
         "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install" => {
@@ -8397,6 +8566,33 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+    }
+
+    /// A `find` primary's value and an `-exec` command's argument are never
+    /// actions, and `pushd -n` only stacks a directory, which a later
+    /// rotation can reach (PR 36 CI round).
+    #[test]
+    fn test_find_values_and_pushd_stack_are_read_as_written() {
+        let words = |line: &str| shell_tokens(line)[1..].to_vec();
+        assert!(!find_mutates(&words("find x -name -delete")));
+        assert!(!find_mutates(&words("find x -exec echo -delete {} +")));
+        assert!(find_mutates(&words("find x -name y -delete")));
+        assert!(find_mutates(&words("find x -exec rm {} +")));
+        let start = Path::new("/r");
+        let run = run_dirs(&expand_commands("pushd -n sub && rm x"), start);
+        assert_eq!(run.dirs, vec![PathBuf::from("/r")]);
+        let run = run_dirs(&expand_commands("pushd -n sub && pushd +1 && rm x"), start);
+        assert!(
+            run.dirs.contains(&PathBuf::from("/r/sub")),
+            "{:?}",
+            run.dirs
+        );
+        let run = run_dirs(&expand_commands("pushd -n sub; popd; rm x"), start);
+        assert!(
+            run.dirs.contains(&PathBuf::from("/r/sub")),
+            "{:?}",
+            run.dirs
+        );
     }
 
     /// The files a `sed` only reads are dropped at their own positions in
