@@ -134,15 +134,15 @@ the project accepts.
 
 5. Inspect every created, skipped or merged file. Init preserves existing
    content mechanically, but a skipped file or combined instruction file may
-   still need reconciling by hand. Never use `--force` to pass a collision.
+   still need reconciling by hand. Do not use `--force` to get past a collision.
 6. At standard or full, run `/cf-customize`. It verifies the installed harness
    settings and tools, then walks the consuming project's `docs/product.md`,
    `docs/architecture.md`, `AGENTS.md`, `CLAUDE.md` differences, README and
    manifests, CI commands, policy, and required Model Context Protocol (MCP)
    servers. CodeFlow never invents these facts or silently changes global
    harness settings, so review them and commit.
-7. With an empty remote, push the scaffold commit from your terminal
-   with the override, which lifts only the protected-branch rules:
+7. With an empty remote, push the scaffold commit yourself with the
+   override, which lifts only the protected-branch rules:
 
    ```sh
    git remote add origin <url>
