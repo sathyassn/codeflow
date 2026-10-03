@@ -375,6 +375,13 @@ class RetentionPackSchemaTests(unittest.TestCase):
                 lambda c, f: f[fixture_id]["script"]["compaction"]["env"].update(ANTHROPIC_MODEL="x"),
                 "must set exactly",
             ),
+            (
+                # The materializer owns the percentage pin; a fixture cannot move it.
+                lambda c, f: f[fixture_id]["script"]["compaction"]["env"].update(
+                    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="50"
+                ),
+                "must set exactly",
+            ),
             (lambda c, f: f[fixture_id]["script"]["compaction"].update(trigger="manual"), "trigger must be auto"),
             (
                 lambda c, f: f[fixture_id]["files"].update({".claude/settings.local.json": "{}"}),
@@ -451,7 +458,10 @@ class MaterializeScriptedTests(unittest.TestCase):
                 else:
                     self.assertEqual(11, len(plan["warmup"]))
                     self.assertEqual(
-                        {"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000"}},
+                        {"env": {
+                            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000",
+                            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "100",
+                        }},
                         json.loads(settings.read_text(encoding="utf-8")),
                     )
                     for turn in plan["warmup"]:

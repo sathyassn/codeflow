@@ -1,6 +1,6 @@
 //! Structured merge for `.claude/settings.json` (charter §4.3.2).
 //!
-//! Codeflow owns exactly two kinds of keys inside the user's settings file:
+//! Codeflow owns these kinds of keys inside the user's settings file:
 //!
 //! - **hook entries** whose command starts with the `codeflow` binary name
 //!   (`"codeflow hook git-guard"` etc.) — added on init, regenerated on
@@ -25,6 +25,11 @@
 //!   removed while user-only entries survive. This lets security additions and
 //!   boundary corrections reach existing projects without taking ownership of
 //!   project-specific sandbox configuration.
+//! - **env entries** — the shipped `env` keys are added to a project that
+//!   lacks them, unless the recorded baseline shows codeflow wrote a key
+//!   before and the project removed it since; every entry the project has
+//!   keeps its value, and an `env` that is not an object of strings is
+//!   reported and left untouched.
 //!
 //! Every other key — user or shipped — is preserved verbatim: shipped
 //! top-level keys (`statusLine`, `$schema`) are added only when
@@ -41,6 +46,22 @@ const COMMAND_PREFIX: &str = "codeflow ";
 /// The report wording for a permission entry the project removed and update
 /// keeps removed.
 pub const KEPT_REMOVAL: &str = "kept the project's removal of";
+
+/// The start of every report line about a malformed `env`.
+const ENV_MALFORMED: &str = "settings: \"env\" ";
+
+/// The wording of every report line about a shipped `env` key update did
+/// not add.
+const ENV_UNSET: &str = "stays unset";
+
+/// Whether a report line describes a standing condition that update reports
+/// on every run, even when the settings file does not change: a permission
+/// entry the project removed, a malformed `env`, or a shipped `env` key
+/// update did not add. Such lines name keys, never `env` values.
+#[must_use]
+pub fn is_standing_note(line: &str) -> bool {
+    line.contains(KEPT_REMOVAL) || line.starts_with(ENV_MALFORMED) || line.contains(ENV_UNSET)
+}
 
 fn is_codeflow_command(cmd: &str) -> bool {
     cmd == "codeflow" || cmd.starts_with(COMMAND_PREFIX)
@@ -170,6 +191,12 @@ fn merge(
                 inc_val,
                 report,
             ),
+            "env" => merge_env(
+                cur,
+                previous.as_ref().filter(|_| kind == Previous::Recorded),
+                inc_val,
+                report,
+            ),
             _ => {
                 if cur.contains_key(key) {
                     if cur[key] != *inc_val {
@@ -189,6 +216,85 @@ fn merge(
             s
         })
         .map_err(ScaffoldError::from)
+}
+
+/// Merge the shipped `env` keys into the project's `env` without changing any
+/// entry the project has. `baseline` is the shipped settings recorded at the
+/// last install or update, or `None` when no such record exists.
+///
+/// - With no `env`, the shipped keys are added, except a key the baseline
+///   shows codeflow wrote before: the project removed it, so it stays out.
+/// - With an `env` object, a shipped key the project lacks is added only when
+///   the baseline exists and did not carry it. A key the baseline carried was
+///   removed by the project; with no baseline, update cannot tell a removal
+///   from a key the project never had, so it adds nothing.
+/// - An `env` that is not an object of strings is reported and left as is.
+///
+/// Report lines name keys only, never values, since `env` may hold secrets.
+fn merge_env(
+    cur: &mut Map<String, Value>,
+    baseline: Option<&Value>,
+    inc_env: &Value,
+    report: &mut Vec<String>,
+) {
+    let Some(inc_env) = inc_env.as_object() else {
+        return;
+    };
+    let shipped_before = baseline
+        .and_then(|value| value.get("env"))
+        .and_then(Value::as_object);
+    let removed = |key: &str| shipped_before.is_some_and(|env| env.contains_key(key));
+    let kept = |key: &str| {
+        format!(
+            "settings: env.{key} {ENV_UNSET}; update does not restore a shipped key \
+             it wrote before"
+        )
+    };
+    match cur.get_mut("env") {
+        None => {
+            let mut added = Map::new();
+            for (key, value) in inc_env {
+                if removed(key) {
+                    report.push(kept(key));
+                } else {
+                    added.insert(key.clone(), value.clone());
+                    report.push(format!("settings: added env.{key}"));
+                }
+            }
+            if !added.is_empty() {
+                cur.insert("env".to_string(), Value::Object(added));
+            }
+        }
+        Some(Value::Object(env)) => {
+            if env.values().any(|value| !value.is_string()) {
+                report.push(format!(
+                    "{ENV_MALFORMED}has a value that is not a string; left untouched"
+                ));
+                return;
+            }
+            for (key, value) in inc_env {
+                match env.get(key) {
+                    Some(existing) => {
+                        if existing != value {
+                            report.push(format!("settings: preserved user value for env.{key}"));
+                        }
+                    }
+                    None if baseline.is_none() => report.push(format!(
+                        "settings: env.{key} {ENV_UNSET}; no recorded baseline shows \
+                         whether the project removed it from its own \"env\""
+                    )),
+                    None if removed(key) => report.push(kept(key)),
+                    None => {
+                        env.insert(key.clone(), value.clone());
+                        report.push(format!("settings: added env.{key}"));
+                    }
+                }
+            }
+        }
+        Some(_) => {
+            report.push(format!("{ENV_MALFORMED}is not an object; left untouched"));
+        }
+    }
 }
 
 fn merge_sandbox(
@@ -725,61 +831,180 @@ mod tests {
         );
     }
 
+    /// The shipped compaction keys, as the presets carry them.
+    const ENV_PRESET: &str = r#"{
+        "env": {
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+        }
+    }"#;
+
+    fn env_of(merged: &str) -> Value {
+        serde_json::from_str::<Value>(merged).unwrap()["env"].clone()
+    }
+
+    /// No report line carries an `env` value, which may be a secret.
+    fn assert_no_values(report: &[String], values: &[&str]) {
+        for line in report {
+            for value in values {
+                assert!(!line.contains(value), "report printed a value: {line}");
+            }
+        }
+    }
+
     #[test]
-    fn top_level_env_is_consumer_owned_and_preserved_wholesale() {
+    fn a_project_without_env_gains_the_shipped_keys() {
+        for baseline in [None, Some("{}"), Some(PRESET)] {
+            let mut report = vec![];
+            let merged =
+                merge_settings_from_baseline(PRESET, baseline, ENV_PRESET, &mut report).unwrap();
+            assert_eq!(
+                env_of(&merged),
+                serde_json::json!({
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+                }),
+                "baseline {baseline:?}"
+            );
+            assert!(report
+                .iter()
+                .any(|line| line == "settings: added env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"));
+            assert_no_values(&report, &["1000000", "\"50\""]);
+
+            let mut again = vec![];
+            let twice =
+                merge_settings_from_baseline(&merged, Some(ENV_PRESET), ENV_PRESET, &mut again)
+                    .unwrap();
+            assert_eq!(merged, twice);
+            assert!(again.is_empty(), "{again:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_env_keeps_its_values_and_gains_a_key_codeflow_never_wrote() {
         let user = r#"{
             "env": {
-                "KEEP_PROJECT_VALUE": "yes",
+                "KEEP_PROJECT_VALUE": "opaque-secret",
                 "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000"
             }
         }"#;
-        let incoming = r#"{
-            "env": {
-                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
-            }
-        }"#;
-
         let mut report = vec![];
-        let merged = merge_settings(user, incoming, &mut report).unwrap();
-        let actual: Value = serde_json::from_str(&merged).unwrap();
-        let expected: Value = serde_json::from_str(user).unwrap();
-
-        assert_eq!(actual["env"], expected["env"]);
+        let merged =
+            merge_settings_from_baseline(user, Some("{}"), ENV_PRESET, &mut report).unwrap();
+        assert_eq!(
+            env_of(&merged),
+            serde_json::json!({
+                "KEEP_PROJECT_VALUE": "opaque-secret",
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "750000",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+            })
+        );
         assert!(report
             .iter()
-            .any(|line| line == "settings: preserved user value for \"env\""));
+            .any(|line| line
+                == "settings: preserved user value for env.CLAUDE_CODE_AUTO_COMPACT_WINDOW"));
+        assert!(report
+            .iter()
+            .any(|line| line == "settings: added env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"));
+        assert_no_values(&report, &["opaque-secret", "750000", "1000000"]);
     }
 
     #[test]
-    fn absent_and_non_object_env_are_not_silently_rewritten() {
-        let mut absent_report = vec![];
-        let absent = merge_settings("{}", PRESET, &mut absent_report).unwrap();
-        let absent: Value = serde_json::from_str(&absent).unwrap();
-        assert!(absent.get("env").is_none());
+    fn a_key_the_project_removed_or_changed_stays_its_choice() {
+        let user = r#"{"env": {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"}}"#;
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline(user, Some(ENV_PRESET), ENV_PRESET, &mut report).unwrap();
+        assert_eq!(
+            env_of(&merged),
+            serde_json::json!({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "30"})
+        );
+        assert!(report.iter().any(|line| line
+            == "settings: env.CLAUDE_CODE_AUTO_COMPACT_WINDOW stays unset; \
+                update does not restore a shipped key it wrote before"));
+        // The kept key is a standing note, reported on every update; the
+        // preserved value is not.
+        for line in &report {
+            assert_eq!(
+                is_standing_note(line),
+                line.contains("stays unset"),
+                "{line}"
+            );
+        }
+        assert!(report
+            .iter()
+            .any(|line| line
+                == "settings: preserved user value for env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"));
+        assert_no_values(&report, &["\"30\"", "1000000"]);
 
-        let malformed = r#"{"env": ["not", "a", "string map"]}"#;
-        let mut malformed_report = vec![];
-        let merged = merge_settings(malformed, PRESET, &mut malformed_report).unwrap();
+        let mut again = vec![];
+        let twice = merge_settings_from_baseline(&merged, Some(ENV_PRESET), ENV_PRESET, &mut again)
+            .unwrap();
+        assert_eq!(merged, twice);
+    }
+
+    #[test]
+    fn a_removed_env_object_stays_removed() {
+        let mut report = vec![];
+        let merged =
+            merge_settings_from_baseline("{}", Some(ENV_PRESET), ENV_PRESET, &mut report).unwrap();
         let merged: Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(merged["env"], serde_json::json!(["not", "a", "string map"]));
+        assert!(merged.get("env").is_none(), "{merged}");
+        assert_eq!(report.len(), 2, "{report:?}");
     }
 
     #[test]
-    fn project_env_is_idempotent_across_generic_updates() {
-        let user = r#"{
-            "env": {
-                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
-            }
-        }"#;
-        let mut first_report = vec![];
-        let once = merge_settings(user, PRESET, &mut first_report).unwrap();
-        let mut second_report = vec![];
-        let twice = merge_settings(&once, PRESET, &mut second_report).unwrap();
+    fn without_a_baseline_an_existing_env_gains_nothing() {
+        let user = r#"{"env": {"KEEP_PROJECT_VALUE": "yes"}}"#;
+        let mut report = vec![];
+        let merged = merge_settings(user, ENV_PRESET, &mut report).unwrap();
+        assert_eq!(
+            env_of(&merged),
+            serde_json::json!({"KEEP_PROJECT_VALUE": "yes"})
+        );
+        assert!(report
+            .iter()
+            .all(|line| line.contains("no recorded baseline shows whether")
+                && is_standing_note(line)));
+        assert_eq!(report.len(), 2);
 
-        assert_eq!(once, twice);
-        assert!(second_report.is_empty());
+        // An earlier release's preset is no record of what this project had.
+        let mut prior_report = vec![];
+        let prior =
+            merge_settings_from_prior_release(user, PRESET, ENV_PRESET, &mut prior_report).unwrap();
+        assert_eq!(
+            env_of(&prior),
+            serde_json::json!({"KEEP_PROJECT_VALUE": "yes"})
+        );
+        let mut absent_report = vec![];
+        let absent =
+            merge_settings_from_prior_release("{}", PRESET, ENV_PRESET, &mut absent_report)
+                .unwrap();
+        assert_eq!(env_of(&absent)["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50");
+    }
+
+    #[test]
+    fn a_malformed_env_is_reported_and_left_as_is() {
+        for (user, line) in [
+            (
+                r#"{"env": ["not", "a", "string map"]}"#,
+                "settings: \"env\" is not an object; left untouched",
+            ),
+            (
+                r#"{"env": {"PORT": 8080}}"#,
+                "settings: \"env\" has a value that is not a string; left untouched",
+            ),
+        ] {
+            for baseline in [None, Some("{}"), Some(ENV_PRESET)] {
+                let mut report = vec![];
+                let merged =
+                    merge_settings_from_baseline(user, baseline, ENV_PRESET, &mut report).unwrap();
+                let expected: Value = serde_json::from_str(user).unwrap();
+                assert_eq!(env_of(&merged), expected["env"]);
+                assert_eq!(report, vec![line.to_string()]);
+                assert!(is_standing_note(line), "{line}");
+            }
+        }
     }
 
     /// A shipped matcher change moves the codeflow hook to the new group

@@ -66,12 +66,37 @@ fn isolated_home() -> &'static Path {
 /// Runs the binary under test with the git-hook shims pointed back at it (they
 /// `exec codeflow` from PATH) and host git config neutralized.
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
+    codeflow_command(dir, args)
+        .output()
+        .expect("codeflow binary runs")
+}
+
+/// [`codeflow`] with `input` on stdin, such as the init answers.
+fn codeflow_with_input(dir: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    let mut child = codeflow_command(dir, args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("codeflow binary starts");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("write the answers");
+    child.wait_with_output().expect("codeflow binary runs")
+}
+
+fn codeflow_command(dir: &Path, args: &[&str]) -> Command {
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new(&exe)
+    let mut command = Command::new(&exe);
+    command
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
@@ -86,9 +111,8 @@ fn codeflow(dir: &Path, args: &[&str]) -> Output {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("CODEFLOW_INTEGRATE_TOKEN")
-        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-        .output()
-        .expect("codeflow binary runs")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    command
 }
 
 /// Runs `git` in `dir` with the binary on PATH (so wired hooks fire) and an
@@ -1114,6 +1138,251 @@ fn every_harness_wiring_judges_composed_deletions_and_help_at_every_tier() {
                     "{tier} {wiring} {twin}: {stderr}"
                 );
             }
+        }
+    }
+}
+
+// ---- The compaction default in the Claude settings (TSK-211) ---------------
+
+const CLAUDE_SETTINGS: &str = ".claude/settings.json";
+const CLAUDE_SETTINGS_BASELINE: &str = ".codeflow/.baseline/.claude/settings.json";
+
+/// The `env` every Claude settings preset ships.
+fn shipped_compaction_env() -> serde_json::Value {
+    serde_json::json!({
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"
+    })
+}
+
+fn read_json(root: &Path, rel: &str) -> serde_json::Value {
+    serde_json::from_str(&read(root, rel)).unwrap_or_else(|e| panic!("parse {rel}: {e}"))
+}
+
+fn write_json(root: &Path, rel: &str, value: &serde_json::Value) {
+    std::fs::write(
+        root.join(rel),
+        format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
+    )
+    .unwrap_or_else(|e| panic!("write {rel}: {e}"));
+}
+
+fn update(root: &Path) -> String {
+    let out = codeflow(root, &["update"]);
+    let report = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "update failed: {report}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    report
+}
+
+/// TSK-211 AC-1: `codeflow init` writes the compaction default, as strings,
+/// at every tier and with every permission preset the init prompt offers.
+#[test]
+fn init_writes_the_compaction_default_at_every_tier_and_preset() {
+    for tier_flag in ["--minimal", "--standard", "--full"] {
+        for (answer, mode) in [
+            ("default", None),
+            ("acceptEdits", Some("acceptEdits")),
+            ("bypassPermissions", Some("bypassPermissions")),
+        ] {
+            let (_tmp, root) = project();
+            let out = codeflow_with_input(
+                &root,
+                &["init", tier_flag],
+                &format!("proj\ncore\n{answer}\n"),
+            );
+            assert!(
+                out.status.success(),
+                "init {tier_flag} {answer}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let written = read_json(&root, CLAUDE_SETTINGS);
+            assert_eq!(
+                written["permissions"]
+                    .get("defaultMode")
+                    .and_then(serde_json::Value::as_str),
+                mode,
+                "{tier_flag} {answer}: the wrong preset was written"
+            );
+            assert_eq!(
+                written["env"],
+                shipped_compaction_env(),
+                "{tier_flag} {answer}"
+            );
+        }
+    }
+}
+
+/// TSK-211 AC-2: update keeps a project's own compaction choices. The
+/// project removes one shipped key, changes the other and adds its own;
+/// two updates leave the file as the project wrote it and print no value.
+/// Deleting the whole `env` afterwards is kept the same way.
+#[test]
+fn update_keeps_the_projects_compaction_choices() {
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+    let mut value = read_json(&root, CLAUDE_SETTINGS);
+    value["env"] = serde_json::json!({
+        "PROJECT_TOKEN": "opaque-project-value",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
+    });
+    write_json(&root, CLAUDE_SETTINGS, &value);
+    let before = read(&root, CLAUDE_SETTINGS);
+
+    for attempt in 1..=2 {
+        let report = update(&root);
+        assert_eq!(
+            read(&root, CLAUDE_SETTINGS),
+            before,
+            "update {attempt} changed the project's env:\n{report}"
+        );
+        assert!(
+            !report.contains("opaque-project-value") && !report.contains("400000"),
+            "update {attempt} printed an env value:\n{report}"
+        );
+    }
+
+    value.as_object_mut().unwrap().remove("env");
+    write_json(&root, CLAUDE_SETTINGS, &value);
+    let before = read(&root, CLAUDE_SETTINGS);
+    for attempt in 1..=2 {
+        update(&root);
+        assert_eq!(
+            read(&root, CLAUDE_SETTINGS),
+            before,
+            "update {attempt} restored an env the project removed"
+        );
+    }
+}
+
+/// TSK-211 AC-2: a project installed before the default, whose recorded
+/// baseline has no `env`, gains both keys on update; one with its own `env`
+/// keeps every entry and gains the two keys; a second update is a no-op.
+#[test]
+fn update_brings_the_compaction_default_to_an_earlier_install() {
+    for own_env in [None, Some(serde_json::json!({"PROJECT_FLAG": "1"}))] {
+        let (_tmp, root) = project();
+        init(&root, "--minimal");
+        for rel in [CLAUDE_SETTINGS, CLAUDE_SETTINGS_BASELINE] {
+            let mut earlier = read_json(&root, rel);
+            let earlier_map = earlier.as_object_mut().unwrap();
+            earlier_map.remove("env");
+            if let (CLAUDE_SETTINGS, Some(env)) = (rel, &own_env) {
+                earlier_map.insert("env".to_string(), env.clone());
+            }
+            write_json(&root, rel, &earlier);
+        }
+
+        update(&root);
+        let mut expected = own_env
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        expected.extend(shipped_compaction_env().as_object().unwrap().clone());
+        assert_eq!(
+            read_json(&root, CLAUDE_SETTINGS)["env"],
+            serde_json::Value::Object(expected),
+            "own env {own_env:?}"
+        );
+
+        let after_first = read(&root, CLAUDE_SETTINGS);
+        update(&root);
+        assert_eq!(
+            read(&root, CLAUDE_SETTINGS),
+            after_first,
+            "the second update was not a no-op"
+        );
+    }
+}
+
+/// TSK-211 AC-2: a malformed `env` is reported on every update, even when
+/// nothing else in the settings changes, and is left exactly as it was. The
+/// report never prints an `env` value.
+#[test]
+fn update_reports_a_malformed_env_on_every_run_without_its_values() {
+    for (env, diagnostic) in [
+        (
+            serde_json::json!(["secret-array-value"]),
+            "\"env\" is not an object",
+        ),
+        (
+            serde_json::json!({"PROJECT_TOKEN": "secret-map-value", "PORT": 8080}),
+            "\"env\" has a value that is not a string",
+        ),
+    ] {
+        let (_tmp, root) = project();
+        init(&root, "--minimal");
+        let mut value = read_json(&root, CLAUDE_SETTINGS);
+        value["env"] = env.clone();
+        write_json(&root, CLAUDE_SETTINGS, &value);
+        let before = read(&root, CLAUDE_SETTINGS);
+
+        for attempt in 1..=2 {
+            let report = update(&root);
+            assert!(
+                report.contains(diagnostic),
+                "update {attempt} did not report the malformed env {env}:\n{report}"
+            );
+            assert!(
+                !report.contains("secret-array-value")
+                    && !report.contains("secret-map-value")
+                    && !report.contains("8080"),
+                "update {attempt} printed an env value:\n{report}"
+            );
+            assert_eq!(
+                read(&root, CLAUDE_SETTINGS),
+                before,
+                "update {attempt} touched a malformed env"
+            );
+        }
+    }
+}
+
+/// TSK-211 AC-2: with no recorded baseline, a project's own `env` gains
+/// neither shipped key, and every update names the keys it left unset,
+/// without printing the project's values.
+#[test]
+fn update_names_the_keys_it_did_not_add_without_a_baseline() {
+    let (_tmp, root) = project();
+    init(&root, "--minimal");
+    let mut value = read_json(&root, CLAUDE_SETTINGS);
+    value["env"] = serde_json::json!({"PROJECT_TOKEN": "secret-project-value"});
+    write_json(&root, CLAUDE_SETTINGS, &value);
+    std::fs::remove_file(root.join(CLAUDE_SETTINGS_BASELINE)).expect("drop the baseline");
+
+    let mut after_first = String::new();
+    for attempt in 1..=2 {
+        let report = update(&root);
+        for key in [
+            "env.CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+            "env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+        ] {
+            assert!(
+                report.contains(key),
+                "update {attempt} did not name {key}:\n{report}"
+            );
+        }
+        assert!(
+            !report.contains("secret-project-value"),
+            "update {attempt} printed an env value:\n{report}"
+        );
+        assert_eq!(
+            read_json(&root, CLAUDE_SETTINGS)["env"],
+            serde_json::json!({"PROJECT_TOKEN": "secret-project-value"}),
+            "update {attempt} changed the project's env"
+        );
+        if attempt == 1 {
+            after_first = read(&root, CLAUDE_SETTINGS);
+        } else {
+            assert_eq!(
+                read(&root, CLAUDE_SETTINGS),
+                after_first,
+                "the second update was not a no-op"
+            );
         }
     }
 }
