@@ -208,6 +208,9 @@ catalog! {
     /// A standalone task delivered by several pull requests.
     STANDALONE_SPLIT = Step::Edit("{path}"),
         "give {path} an `epic_id`: work that takes several pull requests belongs to an epic (SPC-013 R-66)";
+    /// An open task that names no deliverables (sathyassn/codeflow#40).
+    TASK_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";

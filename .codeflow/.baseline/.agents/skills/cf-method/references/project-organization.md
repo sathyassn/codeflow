@@ -449,6 +449,8 @@ checklist theater. A record instantiates only what is specific:
 
 - outcome, audience where relevant, scope, and non-goals;
 - affected capabilities, surfaces, interfaces, and direct dependencies;
+- each task's deliverables and their homes as paths in the project's
+  structure (`## Deliverables`), and the homes an epic's tasks write;
 - testable acceptance criteria and selected evidence;
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in
