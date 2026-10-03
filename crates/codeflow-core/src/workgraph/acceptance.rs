@@ -185,6 +185,7 @@ pub fn bind_completion(
         transport,
         base,
         None,
+        default_target.as_slice(),
     )
 }
 
@@ -196,7 +197,14 @@ pub fn bind_completion(
 /// target, so a line and the release judge accept the same waiver under
 /// the target rule. `None`, or a range that reopens the task, keeps the
 /// target rule alone.
-#[allow(clippy::too_many_arguments)] // bind_completion's inputs and the own-range base.
+///
+/// `authorities` are the target tips this run is judged against (TSK-220):
+/// after its review, a task pull request's chain may stack a clean merge
+/// only when the merge brings a commit on the first-parent line of one of
+/// them. They come from the run, never from a local branch or its upstream
+/// configuration: the range base CI is given, and the pre-push hook's
+/// candidate authority.
+#[allow(clippy::too_many_arguments)] // bind_completion's inputs, the own-range base and the authorities.
 pub(crate) fn bind_completion_with_amendment(
     repo: &Repository,
     task: &RecordView,
@@ -206,6 +214,7 @@ pub(crate) fn bind_completion_with_amendment(
     transport: Transport,
     base: Option<Oid>,
     own_range_base: Option<Oid>,
+    authorities: &[Oid],
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -233,8 +242,10 @@ pub(crate) fn bind_completion_with_amendment(
         .then_some(anchor)
         .flatten()
         .and_then(|anchor| {
-            let content = blob_at(repo, anchor, &task.path)?;
-            let old = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+            // By identity, wherever the target holds the record (TSK-220).
+            let Anchored::Present(old) = anchored_task(repo, anchor, task) else {
+                return None;
+            };
             let reopened = old.status == "complete"
                 && (matches!(landing, Landing::Worktree { .. })
                     || super::lifecycle::is_recompletion(Some(&old), task)
@@ -245,22 +256,12 @@ pub(crate) fn bind_completion_with_amendment(
                         &Graph::default().with(task.clone()),
                     )
                     .contains(&task.id));
-            reopened.then_some((anchor, old))
+            reopened.then_some((anchor, *old))
         })
         .or_else(|| {
-            // The recovered completion supplies the archive and the old
-            // review boundary. Its criteria may predate a planning pull
-            // request that amended them on the target after the reopen
-            // (R-52), so the criteria are the anchored record's.
-            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
-            if let Some(anchored) = anchor.and_then(|anchor| {
-                let content = blob_at(repo, anchor, &task.path)?;
-                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
-            }) {
-                old.criteria = anchored.criteria;
-            }
+            let recovery = recovered_completion(repo, task, &block, landing, anchor)?;
             recovered = true;
-            Some((at, old))
+            Some(recovery)
         });
     let before_range = |at: Oid| anchor.is_some_and(|base| is_ancestor_or_same(repo, at, base));
     // A reopening range reviews its own work: no task landing or clean line
@@ -296,10 +297,13 @@ pub(crate) fn bind_completion_with_amendment(
                     || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && !reopens_range {
-                binding_problem(repo, task, landing, reviewed, transport)
             } else {
-                binding_problem(repo, task, landing, reviewed, Transport::Direct)
+                let carried = if reopens_range {
+                    Transport::Direct
+                } else {
+                    transport
+                };
+                binding_problem(repo, task, landing, reviewed, carried, authorities)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -356,7 +360,9 @@ pub fn bind_epic_completion(
             block.reviewed
         )),
         Some(reviewed) => {
-            if let Some(problem) = reviewed_span_problem(repo, epic, landing, reviewed, false) {
+            if let Some(problem) =
+                reviewed_span_problem(repo, epic, landing, reviewed, Stacking::Never)
+            {
                 bind(problem);
             }
         }
@@ -465,6 +471,83 @@ pub(super) fn epic_completions_in_range(
     findings
 }
 
+/// The completion a range reopened before `landing`, recovered from its
+/// history: it supplies the archive and the old review boundary. Its
+/// criteria may predate a planning pull request that amended them on the
+/// target after the reopen (R-52), so the criteria are the anchored
+/// record's. When the record is not on the anchored target at all, no
+/// landed criteria exist to protect, so a reopen inside the range may
+/// change the task's own criteria, as the range's own-task delta allows
+/// (TSK-220); once the record is on the target, its criteria there stand.
+/// The record is found by identity in every supported layout, and a target
+/// that cannot be read keeps the recovered completion's criteria.
+fn recovered_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+    anchor: Option<Oid>,
+) -> Option<(Oid, RecordView)> {
+    let (at, mut old) = previous_completion(repo, task, block, landing)?;
+    match anchor.map(|anchor| anchored_task(repo, anchor, task)) {
+        Some(Anchored::Present(anchored)) => old.criteria = anchored.criteria.clone(),
+        Some(Anchored::Absent) => old.criteria = task.criteria.clone(),
+        Some(Anchored::Unknown) | None => {}
+    }
+    Some((at, old))
+}
+
+/// How a task stands on an anchored target commit, found by identity.
+enum Anchored {
+    /// No task record at the commit has this id or `uid`.
+    Absent,
+    /// The one record with this id or `uid`.
+    Present(Box<RecordView>),
+    /// The commit cannot settle it: its tree or a record cannot be read or
+    /// parsed, or several records claim the identity. Never read as absent.
+    Unknown,
+}
+
+/// The task record at `anchor` with `task`'s id or `uid`, read by the
+/// work-record tree reader itself, so every path and file name it accepts
+/// counts (the flat `tasks/` folder or an epic's, any case of the `.md`
+/// extension) and identity is the parsed id, never a file name. Moving or
+/// renaming a record never makes a landed task look unlanded (TSK-220).
+fn anchored_task(repo: &Repository, anchor: Oid, task: &RecordView) -> Anchored {
+    let uid = crate::ids::entry::frontmatter_value(&task.content, "uid")
+        .filter(|uid| !uid.trim().is_empty());
+    let Ok(tree) = repo.find_commit(anchor).and_then(|commit| commit.tree()) else {
+        return Anchored::Unknown;
+    };
+    let mut found = Vec::new();
+    let read = super::work_start::visit_tree_records(
+        repo,
+        &tree,
+        |_, kind| kind == RecordKind::Task,
+        |path, text, record| {
+            let same_uid =
+                uid.is_some() && crate::ids::entry::frontmatter_value(text, "uid") == uid;
+            if record.id == task.id || same_uid {
+                found.push((path.to_string(), text.to_string()));
+            }
+            Ok(())
+        },
+    );
+    if read.is_err() {
+        return Anchored::Unknown;
+    }
+    match found.as_slice() {
+        [] => Anchored::Absent,
+        [(path, text)] => RecordView::parse(RecordKind::Task, path, text)
+            .ok()
+            .filter(|record| record.id == task.id)
+            .map_or(Anchored::Unknown, |record| {
+                Anchored::Present(Box::new(record))
+            }),
+        _ => Anchored::Unknown,
+    }
+}
+
 /// Find the prior completed record when a range or target checkout starts
 /// after the task was reopened. The range base can be `todo`, so it cannot
 /// itself supply the acceptance block that the reopen must preserve.
@@ -527,32 +610,43 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
 
 /// Apply the one reviewed-span check, resolving task-landing transport only
 /// when the source and completion do not share a directly reviewed span.
+/// `authorities` are the target tips a clean merge after the review must
+/// come from.
 fn binding_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
     transport: Transport,
+    authorities: &[Oid],
 ) -> Option<String> {
     // A task landing's own span may stack (TSK-184): the task branch may
     // re-merge its integration target cleanly after the review. Direct
     // work, a reopening range and a completion bound at a head never stack.
-    let direct = reviewed_span_problem(
-        repo,
-        task,
-        landing,
-        reviewed,
-        transport == Transport::TaskLanding,
-    )?;
+    let stacking = if transport == Transport::TaskLanding {
+        Stacking::OnTarget(authorities)
+    } else {
+        Stacking::Never
+    };
+    let direct = reviewed_span_problem(repo, task, landing, reviewed, stacking)?;
     if transport == Transport::Direct {
         return Some(direct);
     }
     match task_landing(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
-        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, false)
+        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
             .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
         Landed::Refused(problem) => Some(problem),
     }
+}
+
+/// Whether a reviewed span may stack clean merges of the target.
+#[derive(Debug, Clone, Copy)]
+enum Stacking<'a> {
+    /// Direct work, a reopening range, a landed head and an epic.
+    Never,
+    /// A task pull request's own chain, judged against these target tips.
+    OnTarget(&'a [Oid]),
 }
 
 /// The only binding predicate: the reviewed commit is the source head or
@@ -566,7 +660,7 @@ fn reviewed_span_problem(
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
-    stacking: bool,
+    stacking: Stacking<'_>,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
         let outside: Vec<&str> = changed
@@ -597,11 +691,11 @@ fn reviewed_span_problem(
     // Reviewed stacking: after the review, the task branch may re-merge
     // its integration target cleanly, and its own commits may change only
     // this record's status and Closeout. Anything else is judged as the
-    // whole change from the reviewed commit to C.
-    let stack = if stacking {
-        stacked(repo, task, reviewed, at)
-    } else {
-        Stacked::No
+    // whole change from the reviewed commit to C, naming the commit that
+    // stopped the stack.
+    let stack = match stacking {
+        Stacking::OnTarget(authorities) => stacked(repo, task, reviewed, at, authorities),
+        Stacking::Never => Stacked::No(None),
     };
     match stack {
         Stacked::Clean => {
@@ -617,9 +711,24 @@ fn reviewed_span_problem(
         Stacked::Unclean(merge) => Some(format!(
             "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
         )),
-        Stacked::No => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+        // Where stacking does not apply, the whole change from the review
+        // decides. A stopped stack refuses even when that change nets out
+        // (SPC-013 R-60: the task's own later commits change only this
+        // record's status and Closeout), leading with the net change when
+        // there is one and naming the commit that stopped it.
+        Stacked::No(None) => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
             format!("{problem} after the reviewed commit {reviewed}; review the result again")
         }),
+        Stacked::No(Some(stop)) => {
+            let detail = match stop {
+                Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),
+                Stop::Other(why) => why,
+            };
+            Some(match later_change(repo, &task.path, &completed, reviewed, at) {
+                Some(problem) => format!("{problem} after the reviewed commit {reviewed} ({detail}); review the result again"),
+                None => format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again"),
+            })
+        }
     }
 }
 
@@ -631,37 +740,120 @@ enum Stacked {
     /// A merge from the integration target whose tree is not the clean
     /// re-merge of its parents.
     Unclean(Oid),
-    /// The reviewed commit is not on the chain, or a commit between changes
-    /// more than a clean re-merge or the record allows.
-    No,
+    /// The chain does not stack on the review, and where it stopped. `None`
+    /// where stacking does not apply.
+    No(Option<Stop>),
 }
 
-fn stacked(repo: &Repository, task: &RecordView, reviewed: Oid, at: Oid) -> Stacked {
-    let target = task_target(repo, task, None);
+/// Where a chain stopped stacking on the review.
+enum Stop {
+    /// A non-merge commit that changes more than this record's status and
+    /// Closeout, and what it changed.
+    Commit { commit: Oid, changed: String },
+    /// A merge from outside the target, or history that cannot be read.
+    Other(String),
+}
+
+/// Walk C's first-parent chain back to the reviewed commit. A merge whose
+/// second parent lies on the first-parent line of one of the run's target
+/// tips (`authorities`), with the tree git's clean merge of its parents
+/// gives, brings only target work: it stacks. A non-merge commit stacks only
+/// by changing this record's status and Closeout. Anything else stops the
+/// stack and is named: a merge from elsewhere, a merge of more than two
+/// parents, a history overlay (grafts or replace refs) that could fake the
+/// parents walked, a shallow boundary on the chain, or history that cannot
+/// be read.
+fn stacked(
+    repo: &Repository,
+    task: &RecordView,
+    reviewed: Oid,
+    at: Oid,
+    authorities: &[Oid],
+) -> Stacked {
+    let stop = |why: String| Stacked::No(Some(Stop::Other(why)));
+    match super::release_line::history_overlay(repo) {
+        Ok(None) => {}
+        Ok(Some(overlay)) => {
+            return stop(format!(
+                "this clone overlays its recorded history with {overlay}, so the parents a merge records cannot be trusted; remove it, or judge from a clone without it"
+            ))
+        }
+        Err(why) => return stop(why),
+    }
+    let shallow = match super::release_line::shallow_boundary(repo) {
+        Ok(shallow) => shallow,
+        Err(why) => return stop(why),
+    };
+    let tips = || {
+        authorities
+            .iter()
+            .map(Oid::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let mut cursor = at;
     while cursor != reviewed {
+        let unreadable = || {
+            stop(format!(
+                "the history from {at} to the reviewed commit cannot be read at {cursor}"
+            ))
+        };
+        if shallow.contains(&cursor) {
+            return stop(format!(
+                "this clone is shallow at {cursor}, so the history to the reviewed commit is cut; fetch it in full"
+            ));
+        }
         let Ok(commit) = repo.find_commit(cursor) else {
-            return Stacked::No;
+            return unreadable();
         };
         let Ok(parent) = commit.parent_id(0) else {
-            return Stacked::No;
+            return unreadable();
         };
-        if commit.parent_count() == 2 {
-            let from_target = target.is_some_and(|tip| {
-                commit
-                    .parent_id(1)
-                    .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
-            });
-            if !from_target {
-                return Stacked::No;
+        if !is_ancestor_or_same(repo, reviewed, parent) {
+            return stop(format!(
+                "{cursor} brings the reviewed commit through a parent other than its first, so the reviewed commit is not on the head's first-parent chain"
+            ));
+        }
+        match commit.parent_count() {
+            1 => {
+                let changed = match blob_at(repo, cursor, &task.path) {
+                    None => Some(format!("{} was removed", task.path)),
+                    Some(content) => later_change(repo, &task.path, &content, parent, cursor),
+                };
+                if let Some(changed) = changed {
+                    return Stacked::No(Some(Stop::Commit {
+                        commit: cursor,
+                        changed,
+                    }));
+                }
             }
-            if !is_clean_remerge(repo, &commit).unwrap_or(false) {
-                return Stacked::Unclean(cursor);
+            2 => {
+                let Ok(side) = commit.parent_id(1) else {
+                    return unreadable();
+                };
+                if authorities.is_empty() {
+                    return stop(format!(
+                        "merge {cursor} cannot be checked: this run names no target tip"
+                    ));
+                }
+                if !authorities
+                    .iter()
+                    .any(|tip| is_first_parent_ancestor(repo, side, *tip))
+                {
+                    return stop(format!(
+                        "merge {cursor} brings {side}, which is not on the first-parent line of the target tip this run is judged against ({})",
+                        tips()
+                    ));
+                }
+                if !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                    return Stacked::Unclean(cursor);
+                }
             }
-        } else if blob_at(repo, cursor, &task.path).is_none_or(|content| {
-            later_change(repo, &task.path, &content, parent, cursor).is_some()
-        }) {
-            return Stacked::No;
+            _ => {
+                return stop(format!(
+                    "merge {cursor} has more than two parents, so it is not a merge of the target"
+                ))
+            }
         }
         cursor = parent;
     }
@@ -1192,7 +1384,10 @@ pub(super) fn reopened_ids(
 /// whose active block or archived review it changes, with provenance read
 /// before applying the shared binding rule.
 /// `default_target` stands in for a task that declares no integration
-/// target when its waivers are judged.
+/// target when its waivers are judged; `authorities` are the target tips a
+/// clean merge after a review must come from, and `line` is the branch the
+/// range judges, whose own line a planning or line range adds for the tasks
+/// that target it.
 ///
 /// # Errors
 ///
@@ -1204,6 +1399,8 @@ pub fn completions_in_range(
     head: &str,
     default_target: Option<Oid>,
     criteria: &Criteria,
+    authorities: &[Oid],
+    line: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let amendable = *criteria == Criteria::Amendable;
     // The task a task pull request is for may waive a criterion by a
@@ -1226,6 +1423,7 @@ pub fn completions_in_range(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
+
     let mut findings = Vec::new();
     for task in after
         .records
@@ -1272,6 +1470,7 @@ pub fn completions_in_range(
                 Transport::TaskLanding,
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
+                &with_own_line(authorities, line, task, amendable.then_some(head_oid)),
             ));
         }
     }
@@ -1279,6 +1478,31 @@ pub fn completions_in_range(
         repo, &before, &after, head_oid, amendable,
     ));
     Ok(findings)
+}
+
+/// The target tips a completion in a range may stack merges from: the run's
+/// `authorities`, and, in a planning or line range (`line_head`), the range
+/// head's own line, but only for a task whose declared target is that line
+/// (`line`, the branch the range judges). A task bound for another target
+/// never takes that line's merges as its target's (TSK-220).
+fn with_own_line(
+    authorities: &[Oid],
+    line: Option<&str>,
+    task: &RecordView,
+    line_head: Option<Oid>,
+) -> Vec<Oid> {
+    let mut tips = authorities.to_vec();
+    let declared = task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    if let (Some(head), Some(line), Some(declared)) = (line_head, line, declared) {
+        if super::work_start::logical_target(declared) == super::work_start::logical_target(line) {
+            tips.push(head);
+        }
+    }
+    tips
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
@@ -1399,6 +1623,28 @@ pub fn pull_request_findings(
     head: &str,
     criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
+    pull_request_findings_judged(repo_root, base, head, criteria, None, None)
+}
+
+/// [`pull_request_findings`] for a run that also names a candidate
+/// authority (the pre-push hook's destination default tip) and the branch
+/// it judges: a clean merge after a review may come from the first-parent
+/// line of the base or of that authority, and in a planning or line range
+/// from the range's own line for the tasks that target `branch`; never from
+/// what a local branch or its configuration says (TSK-220).
+///
+/// # Errors
+///
+/// Returns a message when a revision, the merge-base or a tree cannot be
+/// read.
+pub fn pull_request_findings_judged(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    criteria: &Criteria,
+    authority: Option<&str>,
+    branch: Option<&str>,
+) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1423,12 +1669,18 @@ pub fn pull_request_findings(
         };
         found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
     }
+    let mut authorities = vec![target_tip];
+    if let Some(authority) = authority {
+        authorities.push(oid(authority)?);
+    }
     found.extend(completions_in_range(
         &repo,
         base,
         head,
         Some(target_tip),
         criteria,
+        &authorities,
+        branch,
     )?);
     Ok(found)
 }

@@ -15,8 +15,8 @@ description: Land finished work (docs and capability updates, then a PR through 
    complete --acceptance <file>`; its block names the reviewed code commit
    (late: the clean landing merge's second parent, or its reviewed ancestor
    followed only by that record's status and Closeout), and CI binds it. A
-   one-PR fix of a complete task reopens it (the old block kept as
-   superseded) and completes it again in that PR; its criteria change only
+   one-PR fix of a complete task reopens it (old block kept as superseded)
+   and completes it again in that PR; once landed, its criteria change only
    through a separate planning PR.
    After-release criteria stay `deferred`, never verified at build time.
    When a work item is planned, started, blocked, completed or cancelled,

@@ -295,6 +295,13 @@ completion record; each follow-up gets one real home, filed with
 `--follow-up-of` in the batched epic amendment, or as its own standalone task
 when it follows a standalone task.
 
+After the review, a task pull request may merge its moved target and keep
+the binding when the merge's recorded result equals the conflict-free
+automatic merge of its parents, so refreshing a stale base needs no new
+review; any other merge or a later code change needs one. A reopened task
+keeps its criteria once its record is on the target; before that, a reopen
+inside its own pull request may change them.
+
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
 revision replaces it. `implemented` is derived when every consumer is

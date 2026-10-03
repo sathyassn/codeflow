@@ -397,6 +397,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                 .and_then(|target| repo.revparse_single(&target).ok())
                 .and_then(|object| object.peel_to_commit().ok())
                 .and_then(|target| repo.merge_base(head, target.id()).ok());
+            let authorities = verb_authorities(repo_root, &repo, task, default_target);
             shown(super::acceptance::bind_completion_with_amendment(
                 &repo,
                 task,
@@ -406,6 +407,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
                 super::acceptance::Transport::TaskLanding,
                 None,
                 own_range_base,
+                &authorities,
             ))
         }
         Err(error) => {
@@ -418,6 +420,26 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             refused
         }
     }
+}
+
+/// The target tips a clean merge after the review may come from when the
+/// verb binds a completion. The verb has no run base, so it reads the
+/// task's target as `work start` anchors it, beside the default target. It
+/// is a local preview: CI judges the same chain against its own base
+/// (TSK-220).
+fn verb_authorities(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    task: &RecordView,
+    default_target: Option<git2::Oid>,
+) -> Vec<git2::Oid> {
+    super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+        .and_then(|target| repo.revparse_single(&target).ok())
+        .and_then(|object| object.peel_to_commit().ok())
+        .map(|commit| commit.id())
+        .into_iter()
+        .chain(default_target)
+        .collect()
 }
 
 /// Replace `path` with `content` only when its bytes still hash to
