@@ -145,16 +145,64 @@ The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
 - **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
-  The GitHub workflow runs gitleaks with your configuration exactly as
-  gitleaks finds it (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`,
-  `.gitleaks.toml`, else its default rules). It then drops one known false
-  positive from the report: the security-stage prose CodeFlow 3.0.0 seeded on
-  line 209 of `.claude/workflows/pipeline.workflow.js` and its baseline copy,
-  which the `generic-api-key` rule mistakes for a key. Only a
-  `generic-api-key` finding whose value and matched text are exactly that
-  prose, in one of those two paths, is dropped; every other finding fails
-  the job, as does a scan that logs an error or reads no commit. A wrapper that runs gitleaks itself on a repository
-  scaffolded by 3.0.0 can allow the same prose in its own configuration.
+  The GitHub workflow reads every exemption from the trusted commit: the
+  pull request's base, or the pushed commit on a push. A pull request
+  cannot exempt the leak it adds, so a new exemption takes effect once its
+  own pull request merges. The step deletes the checkout's
+  `.gitleaksignore`, `.gitleaks.toml` and `.gitleaks.json` and gives
+  gitleaks the trusted commit's copies, choosing your configuration as
+  gitleaks does (`GITLEAKS_CONFIG`, `GITLEAKS_CONFIG_TOML`, a
+  `.gitleaks.json` beside `.gitleaks.toml`, `.gitleaks.toml`, else its
+  default rules). A file your configuration extends by `[extend] path`, and
+  a `GITLEAKS_CONFIG` file in the repository, come from the trusted commit
+  too; the step fails when that commit does not hold the file, and refuses
+  an absolute path into the checkout. An inline `gitleaks:allow` comment
+  counts only on a commit the trusted commit already holds. The step fails
+  before it scans when the trusted commit is not in the checkout, and it
+  downloads gitleaks under the runner's temp directory. Nothing from the
+  checkout runs or steers the scan: its Python helpers run isolated (they
+  need Python 3.11 or later), git reads `.gitattributes` from the trusted
+  commit (git 2.41 or later), and no step before the scan runs code from
+  the checkout, since such a step could set the scan's environment. Add
+  any new step to that job after the scan. If you customised the workflow
+  before this release and the secret-scan job runs a step of yours before
+  the gitleaks step, `codeflow update` keeps it through the merge and warns
+  about it on every run: move it after the gitleaks step or into another
+  job. Update recognises the scan step by its shipped name, `gitleaks`,
+  with `TRUSTED_SHA` in its env; if you renamed it, update cannot check the
+  order and says on every run that the job's step order needs your review.
+  gitleaks reads the whole history of HEAD, the base's included (on a
+  pull request, the pull request merged into its base; on a push, the
+  pushed commit), with what each merge adds beyond its automatic result,
+  files whose type changes and files git judges binary, which gitleaks'
+  default history scan leaves out. That scope is narrower on purpose: a
+  branch with no pull request, or a tag, is not scanned by this workflow
+  unless its commits become reachable from a scanned HEAD, so a
+  repository-wide audit needs a scan of its own. The refusals below check
+  only the commits a pull request brings, those HEAD holds and the trusted
+  commit does not; on a push that range is empty, since the pushed commit
+  is the trusted commit, so a push scan reads its history without them.
+  In those commits, git cannot show what an octopus merge adds, so the
+  step refuses one; merge the branches one at a time. It also refuses a path with a
+  backslash, a double quote or a control character that one of those
+  commits changes, or that either side of a merge among them changes,
+  since gitleaks cannot read such names reliably. Each refusal names the
+  commit and the refs that hold it. Renaming the file in a later commit
+  leaves the name in the earlier one, so rewrite the pull request's
+  commits, or rebase onto the base when the change is on the base's side.
+  Names with spaces or non-ASCII letters pass. The scan pins git's patch
+  format, so git configuration on the runner, such as `diff.noprefix`,
+  cannot move a finding to another path. It then drops one
+  known false positive from the report: the security-stage prose CodeFlow
+  3.0.0 seeded on line 209 of `.claude/workflows/pipeline.workflow.js` and
+  its baseline copy, which the `generic-api-key` rule mistakes for a key.
+  Only a `generic-api-key` finding whose value and matched text are exactly
+  that prose, in one of those two paths, is dropped; every other finding
+  fails the job, as does a scan that logs an error or reads no commit. A
+  wrapper that runs gitleaks on the change's own checkout reads the
+  change's own exemptions; read them from the target branch instead. A
+  wrapper that runs gitleaks itself on a repository scaffolded by 3.0.0 can
+  allow the same prose in its own configuration.
   With no `.gitleaks.toml` yet, create one that keeps the default rules:
 
   ```toml
