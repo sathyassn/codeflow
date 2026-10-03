@@ -106,6 +106,26 @@ pub fn pr_sections_effective(
     }
 }
 
+/// The effective `git.pr_summary` level: at most `warn`, with origin
+/// `diagnosed`, while the PR-section check runs diagnosed, since the Summary
+/// it judges sits in a template the adopter has not yet decided on;
+/// otherwise the configured or default level.
+#[must_use]
+pub fn pr_summary_effective(
+    raw: &Result<Option<Value>, String>,
+    git: &GitPolicy,
+    pr_sections: EffectiveLevel,
+) -> EffectiveLevel {
+    let configured = effective(raw, "pr_summary", git.pr_summary);
+    if pr_sections.origin == LevelOrigin::Diagnosed && git.pr_summary == PolicyLevel::Block {
+        return EffectiveLevel {
+            level: PolicyLevel::Warn,
+            origin: LevelOrigin::Diagnosed,
+        };
+    }
+    configured
+}
+
 /// The pending decision `doctor` names, if any.
 #[must_use]
 pub fn pending_decision(git: &GitPolicy) -> Option<String> {
@@ -174,8 +194,9 @@ pub fn pattern_only_profile<'p>(
 }
 
 /// A copy of `git` with the rules a matched profile skips turned off:
-/// branch naming and the commit message shape rules (format, body, ticket
-/// and required footers). Every other rule and every level is unchanged.
+/// branch naming, the commit message shape rules (format, body, ticket and
+/// required footers) and the PR Summary shape, since a bot writes its body
+/// to its own format. Every other rule and every level is unchanged.
 #[must_use]
 pub fn apply_profile_exemptions(git: &GitPolicy) -> GitPolicy {
     let mut exempt = git.clone();
@@ -185,6 +206,7 @@ pub fn apply_profile_exemptions(git: &GitPolicy) -> GitPolicy {
     exempt.commit_ticket_required = PolicyLevel::Off;
     exempt.commit_ticket_keys = Vec::new();
     exempt.commit_required_footers = Vec::new();
+    exempt.pr_summary = PolicyLevel::Off;
     exempt
 }
 
@@ -428,6 +450,37 @@ mod tests {
     }
 
     #[test]
+    fn summary_runs_at_warn_while_the_template_is_diagnosed() {
+        let git = GitPolicy::default();
+        let raw = Ok(Some(serde_json::json!({"git": {}})));
+        let diagnosed = EffectiveLevel {
+            level: PolicyLevel::Warn,
+            origin: LevelOrigin::Diagnosed,
+        };
+        let decided = EffectiveLevel {
+            level: PolicyLevel::Block,
+            origin: LevelOrigin::ShippedDefault,
+        };
+        assert_eq!(
+            pr_summary_effective(&raw, &git, diagnosed),
+            diagnosed,
+            "a kept template awaiting a decision only warns"
+        );
+        assert_eq!(pr_summary_effective(&raw, &git, decided), decided);
+        let mut lowered = git.clone();
+        lowered.pr_summary = PolicyLevel::Off;
+        let configured = Ok(Some(serde_json::json!({"git": {"pr_summary": "off"}})));
+        assert_eq!(
+            pr_summary_effective(&configured, &lowered, diagnosed),
+            EffectiveLevel {
+                level: PolicyLevel::Off,
+                origin: LevelOrigin::Configured,
+            },
+            "a level below warn is never raised"
+        );
+    }
+
+    #[test]
     fn exemptions_touch_only_naming_and_message_shape() {
         let base = GitPolicy::default();
         let exempt = apply_profile_exemptions(&base);
@@ -439,6 +492,7 @@ mod tests {
         assert_eq!(exempt.policy_characters, base.policy_characters);
         assert_eq!(exempt.pr_sections, base.pr_sections);
         assert_eq!(exempt.pr_release_impact, base.pr_release_impact);
+        assert_eq!(exempt.pr_summary, PolicyLevel::Off);
         assert_eq!(exempt.secret_scan, base.secret_scan);
     }
 }

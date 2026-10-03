@@ -694,6 +694,7 @@ fn evaluate_pr_checks(
     let required = release_required(protected, breaking_commit);
     findings.extend(evaluate_pr_structure(git, body, class, required));
     findings.extend(pr_body::presentation(git, body, protected));
+    findings.extend(pr_body::summary_shape(git, body));
     if required || find_section(body, &pr_body::release_heading(git)) != SectionState::Missing {
         findings.extend(pr_body::release(git, body, breaking_commit));
     }

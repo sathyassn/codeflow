@@ -627,10 +627,10 @@ const PROJECT_TEMPLATE: &str = "## Description\n\n<!-- What and why. -->\n\n## C
 const TEMPLATE_PATH: &str = ".github/PULL_REQUEST_TEMPLATE.md";
 
 /// A PR body written in the project's template.
-const PROJECT_BODY: &str = "Task: widget endpoint\n\n## Description\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## How has this been tested?\n\nUnit tests pass locally.\n\n## Checklist\n\nNone: reviewed by the team.\n\n## Release notes\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
+const PROJECT_BODY: &str = "Task: widget endpoint\n\n## Description\n\nAdds the widget endpoint.\n\n- the endpoint\n\n## Changes\n\n- add the endpoint\n\n## How has this been tested?\n\nUnit tests pass locally.\n\n## Checklist\n\nNone: reviewed by the team.\n\n## Release notes\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
 
 /// A PR body written in `CodeFlow`'s shipped sections.
-const SHIPPED_BODY: &str = "Task: widget endpoint\n\n## Summary\n\nAdds the widget endpoint.\n\n## Changes\n\n- add the endpoint\n\n## Testing\n\nUnit tests pass locally.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
+const SHIPPED_BODY: &str = "Task: widget endpoint\n\n## Summary\n\nAdds the widget endpoint.\n\n- the endpoint\n\n## Changes\n\n- add the endpoint\n\n## Testing\n\nUnit tests pass locally.\n\n## Reviews\n\nNone: reviewed by the team.\n\n## Release impact\n\n- Impact: minor\n- Breaking: no\n- Rationale: new endpoint.\n- Migration: none\n";
 
 /// An existing repository with a kept template and, when `prior_policy` is
 /// given, an existing `CodeFlow` policy file (an upgrade).

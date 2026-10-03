@@ -390,6 +390,9 @@ catalog! {
     /// A PR body over the presentation guidelines.
     PR_PRESENTATION = Step::Codeflow("codeflow ci"),
         "keep the body concise and link detailed evidence; retain necessary verification; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A Summary that is not one prose lead, then a list or table.
+    PR_SUMMARY_SHAPE = Step::Codeflow("codeflow ci"),
+        "open the Summary with one short prose paragraph that anchors the reader, put the details after it as `-` bullets or a table, and end with at most one closing paragraph (`.codeflow/rules/writing.md` \"Summaries\"); `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A Release impact section that does not declare the release.
     PR_RELEASE_IMPACT = Step::Codeflow("codeflow ci"),
         "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level; `codeflow ci --pr-body-file <body.md>` checks the new text";

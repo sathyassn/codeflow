@@ -155,7 +155,7 @@ fn ci_blocks_task_whose_planning_record_is_not_on_target() {
             "--branch",
             "task/TSK-001-unanchored",
             "--pr-body",
-            "## Summary\nUnanchored work.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
+            "## Summary\nUnanchored work.\n\n- one change\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -202,7 +202,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
             "--branch",
             "task/TSK-001-repair",
             "--pr-body",
-            "## Summary\nRepair.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- repair work\n\n## Testing\n- focused test",
+            "## Summary\nRepair.\n\n- one change\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- repair work\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -229,7 +229,7 @@ fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
             "--branch",
             "task/tidy-the-logger",
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
+            "## Summary\nBounded task.\n\n- one change\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(
@@ -302,7 +302,7 @@ fn ci_recognizes_nested_only_historical_task() {
 }
 
 /// A body satisfying every default-required section with real content.
-const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
+const FULL_BODY: &str = "## Summary\n\nAdds a thing so the command explains itself.\n\n- adds a thing\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
                          ## Testing\n\n- cargo test: 12 passed\nNot tested: Windows.\n";
 
 #[test]
@@ -362,7 +362,7 @@ fn ci_docs_only_range_does_not_require_code_sections() {
     repo_with_range(dir.path(), "docs");
     let out = ci_with_body(
         dir.path(),
-        "## Summary\n\n- docs\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- reword a guide\n",
+        "## Summary\n\nDocs.\n\n- docs\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- reword a guide\n",
     );
     assert_eq!(
         out.status.code(),
@@ -376,7 +376,8 @@ fn ci_docs_only_range_does_not_require_code_sections() {
 /// block, so an absent section would fail the run.
 #[test]
 fn ci_scales_the_pr_body_sections_to_the_change_class() {
-    const LIGHT: &str = "## Summary\n\n- reword the guide\n\n## Changes\n\n- one file\n";
+    const LIGHT: &str =
+        "## Summary\n\nRewords the guide.\n\n- reword the guide\n\n## Changes\n\n- one file\n";
     let blocking = |dir: &Path| {
         let cf = dir.join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
@@ -461,7 +462,7 @@ fn ci_executable_documentation_requires_testing_for_the_entire_range() {
 
     let missing = ci_with_body(
         dir.path(),
-        "## Summary\n\nUpdate installation.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- Update example.\n",
+        "## Summary\n\nUpdate installation.\n\n- one change\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- Update example.\n",
     );
     assert_eq!(missing.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&missing.stderr).contains("'## Testing'"));
@@ -525,6 +526,63 @@ fn ci_full_body_on_code_range_is_clean() {
         stdout.contains("PR-body"),
         "the summary names the check that ran: {stdout}"
     );
+}
+
+/// The Summary shape (`git.pr_summary`, ADR-0071 note of 2026-10-03) blocks
+/// by default through the real binary, names what it found and clears once
+/// the Summary is a lead then bullets; a project lowers it to warn or off.
+#[test]
+fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let prose = FULL_BODY.replacen(
+        "- adds a thing\n",
+        "It also explains the thing at length.\n",
+        1,
+    );
+    assert_ne!(prose, FULL_BODY, "the fixture names its Summary list");
+    let out = ci_with_body(dir.path(), &prose);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("git.pr_summary (block)"), "{stderr}");
+    assert!(stderr.contains("(found: paragraph, paragraph)"), "{stderr}");
+    assert!(stderr.contains("writing.md` \"Summaries\""), "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("level pr_summary = block (shipped default)"),
+        "{stdout}"
+    );
+
+    let out = ci_with_body(dir.path(), FULL_BODY);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cf = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&cf).unwrap();
+    for (level, code) in [("warn", 0), ("off", 0)] {
+        std::fs::write(
+            cf.join("policy.json"),
+            format!(r#"{{"schema_version":1,"git":{{"pr_summary":"{level}"}}}}"#),
+        )
+        .unwrap();
+        let out = ci_with_body(dir.path(), &prose);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(code), "{level}: {stderr}");
+        assert_eq!(
+            stderr.contains("git.pr_summary"),
+            level == "warn",
+            "{level}: {stderr}"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stdout)
+                .contains(&format!("level pr_summary = {level} (configured)")),
+            "{level}"
+        );
+    }
 }
 
 // -- policy characters (ADR-0067) --------------------------------------------
@@ -655,7 +713,7 @@ fn ci_pr_body_policy_character_blocks() {
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.policy_characters"), "{stderr}");
-    assert!(stderr.contains("PR body line 4"), "{stderr}");
+    assert!(stderr.contains("PR body line 6"), "{stderr}");
 }
 
 #[test]

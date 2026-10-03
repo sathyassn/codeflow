@@ -57,7 +57,7 @@ fn merge(root: &Path, branch: &str) {
 
 fn ci(root: &Path, branch: &str, named: bool) -> std::process::Output {
     let body = format!(
-        "## Summary\nRepair work.\n\n{}\n## Changes\n- repair\n\n## Testing\n- fixture\n",
+        "## Summary\nRepair work.\n\n- repair\n\n{}\n## Changes\n- repair\n\n## Testing\n- fixture\n",
         if named { "Task: TSK-001" } else { "" }
     );
     run_in(

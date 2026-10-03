@@ -125,7 +125,7 @@ fn claim_checks_prospective_pin_then_start_checks_actual_ancestry() {
         Some(bin.path()),
     ));
     // The explicit stack never changes landing readiness.
-    let out = cli(root, &["ci", "--base", "main", "--branch", child, "--pr-body", "Task: TSK-002\n## Summary\nWork.\n## Changes\n- Work.\n## Testing\nNot tested: nothing."], Some(bin.path()));
+    let out = cli(root, &["ci", "--base", "main", "--branch", child, "--pr-body", "Task: TSK-002\n## Summary\nWork.\n\n- work\n## Changes\n- Work.\n## Testing\nNot tested: nothing."], Some(bin.path()));
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("not complete"));
     review_tool(bin.path(), branch, &pin, false);
@@ -304,7 +304,7 @@ fn standalone_allocation_claim_start_complete_and_ci_is_one_pr() {
         root,
         &["commit", "-qm", "docs: complete standalone outcome"],
     );
-    succeeds(&cli(root, &["ci", "--base", "main", "--branch", &branch, "--pr-body", "Task: TSK-003\n## Summary\nDeliver the bounded fix.\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows."], None));
+    succeeds(&cli(root, &["ci", "--base", "main", "--branch", &branch, "--pr-body", "Task: TSK-003\n## Summary\nDeliver the bounded fix.\n\n- the fix\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows."], None));
     assert!(!cli(root, &["work", "start", "TSK-003"], None)
         .status
         .success());
@@ -347,7 +347,7 @@ fn base_checkout_ci_admits_the_standalone_route_and_a_task_pr() {
     succeeds(&cli(root, &["ids", "seed"], None));
     let main = git(root, &["rev-parse", "main"]);
     let body = |id: &str| {
-        format!("Task: {id}\n## Summary\nDeliver the bounded fix.\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows.")
+        format!("Task: {id}\n## Summary\nDeliver the bounded fix.\n\n- the fix\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows.")
     };
 
     // The standalone route: record and code on one branch, absent from main.
