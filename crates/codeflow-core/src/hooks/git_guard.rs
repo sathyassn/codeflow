@@ -1042,22 +1042,17 @@ fn unknown_dir_use(name: &str, args: &[String], line: &str) -> UnknownDirUse {
 /// read by name, a script from its input by the rest of the line, and a
 /// relative script file it cannot see is uncertain.
 fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
-    let in_place = requests_in_place(args);
-    let gnu = sed_operands_in(args, &SED_OPTIONS);
-    let bsd = sed_operands_in(args, &BSD_SED_OPTIONS);
-    let read = |arg: &String| {
-        !in_place
-            && [&gnu, &bsd].iter().all(|operands| {
-                operands
-                    .iter()
-                    .any(|op| std::ptr::eq(op.as_ptr(), arg.as_ptr()) && op.len() == arg.len())
-            })
-    };
-    let mut words = words_of(args.iter().filter(|arg| !read(arg)));
+    let reads = sed_read_flags(args);
+    let mut words = words_of(
+        args.iter()
+            .zip(&reads)
+            .filter(|(_, r)| !**r)
+            .map(|(a, _)| a),
+    );
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
             if matches!(file, "-" | "/dev/stdin") {
-                let elsewhere = line_without_reads(line, args.iter().filter(|arg| read(arg)));
+                let elsewhere = line_without_reads(line, args, &reads);
                 words.extend(words_of(std::iter::once(&elsewhere)));
             } else if !Path::new(file).is_absolute() {
                 return UnknownDirUse::Uncertain(format!(
@@ -1069,37 +1064,80 @@ fn sed_unknown_dir_use(args: &[String], line: &str) -> UnknownDirUse {
     UnknownDirUse::Words(words)
 }
 
-/// The command line without the files a `sed` only reads (TSK-216 round
-/// 7). Each read operand clears one occurrence of its text, where it
-/// stands as a whole word, the last one, which is where the operand sits
-/// after any producer. The same text elsewhere on the line, such as a
-/// producer's `w FILE` script, stays to be judged: when the operand's
-/// text appears more than once, a copy always remains. An operand whose
-/// text the line does not hold as a whole word clears nothing.
-fn line_without_reads<'a>(line: &str, reads: impl IntoIterator<Item = &'a String>) -> String {
-    let bounded = |c: Option<char>| {
-        c.is_none_or(|c| {
-            c.is_whitespace() || matches!(c, '\'' | '"' | '|' | ';' | '&' | '(' | ')' | '<' | '>')
-        })
+/// Which arguments of a `sed` are files it only reads, by position
+/// (TSK-216 round 8): without `-i`, an operand both grammars read as an
+/// input file. A redirection and its target (`<<< TEXT`, `< FILE`, a
+/// heredoc operator) is never one: it is shell text, judged whole.
+fn sed_read_flags(args: &[String]) -> Vec<bool> {
+    let in_place = requests_in_place(args);
+    let gnu = sed_operands_in(args, &SED_OPTIONS);
+    let bsd = sed_operands_in(args, &BSD_SED_OPTIONS);
+    let operand_in = |arg: &String, operands: &[&str]| {
+        operands
+            .iter()
+            .any(|op| std::ptr::eq(op.as_ptr(), arg.as_ptr()) && op.len() == arg.len())
     };
-    let mut out = line.to_string();
-    for read in reads {
-        if read.is_empty() {
-            continue;
-        }
-        let found = out
-            .match_indices(read.as_str())
-            .map(|(at, _)| at)
-            .filter(|&at| {
-                bounded(out[..at].chars().next_back())
-                    && bounded(out[at + read.len()..].chars().next())
-            })
-            .last();
-        if let Some(at) = found {
-            out.replace_range(at..at + read.len(), " ");
+    let mut redirected = vec![false; args.len()];
+    for (at, arg) in args.iter().enumerate() {
+        if let Some(len) = redirect_operator_len(arg) {
+            redirected[at] = true;
+            if len == arg.len() {
+                if let Some(target) = redirected.get_mut(at + 1) {
+                    *target = true;
+                }
+            }
         }
     }
-    out
+    args.iter()
+        .enumerate()
+        .map(|(at, arg)| {
+            !in_place && !redirected[at] && operand_in(arg, &gnu) && operand_in(arg, &bsd)
+        })
+        .collect()
+}
+
+/// The command line a `sed` script from its input can come from, without
+/// the files this `sed` only reads (TSK-216 round 8). The line is judged
+/// command by command: every other command, producers, heredoc bodies and
+/// here-strings included, is kept whole. In the one command whose argument
+/// list is this `sed`'s own, the words at the read operands' positions are
+/// dropped; nothing is searched for by text. When no command, or more than
+/// one, has that argument list, the position cannot be established and
+/// the whole line is kept.
+fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
+    let segments = expand_commands(line);
+    let mut own = Vec::new();
+    for (at, segment) in segments.iter().enumerate() {
+        let mut tokens = shell_tokens(segment);
+        strip_reserved_words(&mut tokens);
+        let matches = strip_launchers(&tokens)
+            .is_some_and(|(program, rest)| basename(program) == "sed" && rest == args);
+        if matches {
+            own.push((at, tokens));
+        }
+    }
+    let [(own_at, tokens)] = own.as_slice() else {
+        return line.to_string();
+    };
+    let start = tokens.len() - args.len();
+    segments
+        .iter()
+        .enumerate()
+        .map(|(at, segment)| {
+            if at == *own_at {
+                tokens
+                    .iter()
+                    .enumerate()
+                    .filter(|(pos, _)| *pos < start || !reads[pos - start])
+                    .map(|(_, token)| token.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                segment.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Where the guard cannot list every directory a command can run in, a
@@ -2273,37 +2311,27 @@ fn sed_text_violation(
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    let in_place = requests_in_place(args);
-    let gnu = sed_operands_in(args, &SED_OPTIONS);
-    let bsd = sed_operands_in(args, &BSD_SED_OPTIONS);
-    let read = |arg: &String| {
-        !in_place
-            && [&gnu, &bsd].iter().all(|operands| {
-                operands
-                    .iter()
-                    .any(|op| std::ptr::eq(op.as_ptr(), arg.as_ptr()) && op.len() == arg.len())
-            })
+    let reads = sed_read_flags(args);
+    let unread = || {
+        args.iter()
+            .zip(&reads)
+            .filter(|(_, r)| !**r)
+            .map(|(a, _)| a)
     };
-    if let Some((arg, p)) = args
-        .iter()
-        .filter(|arg| !read(arg))
-        .find_map(|arg| enforcement_text(arg).map(|p| (arg, p)))
-    {
+    if let Some((arg, p)) = unread().find_map(|arg| enforcement_text(arg).map(|p| (arg, p))) {
         return Some(hook_integrity_violation(
             level,
             format!("`sed` names the enforcement path `{p}` in `{arg}`, where its script or in-place edit can write it"),
         ));
     }
-    if let Some(p) =
-        unresolved_names_enforcement(args.iter().filter(|arg| !read(arg)), line, cwd, payload_cwd)
-    {
+    if let Some(p) = unresolved_names_enforcement(unread(), line, cwd, payload_cwd) {
         return Some(hook_integrity_violation(
             level,
             format!("`sed` takes a word the shell fills in, and the command line names the enforcement path `{p}`"),
         ));
     }
     // The rest of the line, without the files this `sed` only reads.
-    let elsewhere = line_without_reads(line, args.iter().filter(|arg| read(arg)));
+    let elsewhere = line_without_reads(line, args, &reads);
     let line = elsewhere.as_str();
     for spec in SED_GRAMMARS {
         for file in parse_options(args, spec).values_of('f', "--file") {
@@ -8371,19 +8399,39 @@ mod tests {
         }
     }
 
-    /// Clearing the files a `sed` only reads removes the operand's own
-    /// occurrence, never the same text in a producer's script.
+    /// The files a `sed` only reads are dropped at their own positions in
+    /// its argument list; every other command on the line, a heredoc body,
+    /// a here-string or a producer, is kept whole (TSK-216 round 8).
     #[test]
-    fn test_line_without_reads_keeps_the_same_text_elsewhere() {
-        let operand = "policy.json".to_string();
-        let line = "printf '%s\\n' 'w policy.json' | sed -f - policy.json";
-        let cleared = line_without_reads(line, [&operand]);
-        assert_eq!(cleared.matches("policy.json").count(), 1, "{cleared}");
-        assert!(cleared.contains("'w policy.json'"), "{cleared}");
-        let plain = line_without_reads("sed -n p policy.json", [&operand]);
-        assert!(!plain.contains("policy.json"), "{plain}");
-        let inside = line_without_reads("sed -n p x/policy.json.bak", [&operand]);
-        assert!(inside.contains("policy.json"), "{inside}");
+    fn test_line_without_reads_drops_only_the_operands_position() {
+        let judged = |line: &str| {
+            let sed = expand_commands(line)
+                .iter()
+                .map(|segment| shell_tokens(segment))
+                .find(|tokens| tokens.first().is_some_and(|p| p == "sed"))
+                .expect("a sed command");
+            let args = &sed[1..];
+            line_without_reads(line, args, &sed_read_flags(args))
+        };
+        let escaped =
+            judged("sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED");
+        assert!(escaped.contains("w .codeflow/policy.json"), "{escaped}");
+        let produced = judged("printf '%s\\n' 'w policy.json' | sed -f - policy.json");
+        assert_eq!(produced.matches("policy.json").count(), 1, "{produced}");
+        let here = judged("sed -f - policy.json <<< 'w policy.json'");
+        assert!(here.contains("w policy.json"), "{here}");
+        for read in [
+            "printf 'p\\n' | sed -f - .codeflow/policy.json",
+            "printf 'p\\n' | sed -f - '.codeflow/policy.json'",
+            "printf 'p\\n' | sed -f - .codeflow/policy\\.json",
+        ] {
+            let plain = judged(read);
+            assert!(!plain.contains("policy.json"), "{read}: {plain}");
+        }
+        let body = judged("sed -f - a.txt <<'S'\nsed -f - a.txt\nS");
+        assert!(body.contains("\nsed -f - a.txt"), "{body}");
+        let twice = judged("sed -f - a.txt; sed -f - a.txt");
+        assert_eq!(twice.matches("a.txt").count(), 2, "{twice}");
     }
 
     /// Many directory moves on one line stop at the limit as they are

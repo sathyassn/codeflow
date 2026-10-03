@@ -705,7 +705,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to seven of PR 36 that
+/// The reviewers' exact commands from rounds two to eight of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -772,6 +772,11 @@ const REVIEWER_REFUSALS: &[&str] = &[
     // reads, beside the plain reads of the same file allowed below.
     r#"cd "$dir" && printf '%s\n' 'w policy.json' | sed -f - policy.json"#,
     r"printf 'w .codeflow/policy.json\n' | sed -f - .codeflow/policy.json",
+    // Round eight: an escaped read operand beside a heredoc that writes the
+    // same file, from a known and a run-time directory, and a here-string.
+    "sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED",
+    "cd \"$dir\" && sed -f - policy\\.json <<'SED'\nw policy.json\nSED",
+    "sed -f - .codeflow/policy.json <<< 'w .codeflow/policy.json'",
 ];
 
 /// On unix, where the fixture's `build/link` and `alias` point at the
@@ -834,6 +839,11 @@ const REVIEWER_ALLOWED: &[&str] = &[
     // Round seven: plain reads of the file the writes above target.
     r#"cd "$dir" && sed -n p policy.json"#,
     r"printf 'p\n' | sed -f - .codeflow/policy.json",
+    // Round eight: the same plain reads with a quoted or escaped operand.
+    r"printf 'p\n' | sed -f - '.codeflow/policy.json'",
+    r"printf 'p\n' | sed -f - .codeflow/policy\.json",
+    r#"cd "$dir" && sed -n p 'policy.json'"#,
+    r#"cd "$dir" && sed -n p policy\.json"#,
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 
