@@ -725,7 +725,10 @@ mod tests {
     }
 
     /// TSK-216 AC-3: doctor's probe names each gate directory this process
-    /// cannot write, and leaves nothing behind in one it can.
+    /// cannot write. Where it can write, it creates the directories and the
+    /// empty lock files a gate would, and keeps them: a lock file is shared
+    /// with any running gate and is never unlinked. Only its evidence probe
+    /// file is removed.
     #[test]
     fn unwritable_gate_dirs_names_each_directory_the_gate_cannot_write() {
         let tmp = tempfile::tempdir().unwrap();
@@ -736,6 +739,12 @@ mod tests {
             .unwrap()
             .collect();
         assert!(evidence.is_empty(), "the probe file is removed");
+        let lock = home.join(HOME_LOCK_DIR).join(LOCK_FILE);
+        assert_eq!(
+            std::fs::metadata(&lock).map(|m| m.len()).ok(),
+            Some(0),
+            "{lock:?}"
+        );
 
         let blocker = tmp.path().join("not-a-dir");
         std::fs::write(&blocker, "file").unwrap();
