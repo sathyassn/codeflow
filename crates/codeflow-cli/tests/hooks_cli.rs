@@ -706,7 +706,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to ten of PR 36 that
+/// The reviewers' exact commands from rounds two to eleven of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -778,6 +778,14 @@ const REVIEWER_REFUSALS: &[&str] = &[
     "sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED",
     "cd \"$dir\" && sed -f - policy\\.json <<'SED'\nw policy.json\nSED",
     "sed -f - .codeflow/policy.json <<< 'w .codeflow/policy.json'",
+    // Round eleven: redirections that open their target for writing, from a
+    // run-time and a known directory, a target attached mid-word included.
+    r#"cd "$dir" && printf x 1<>policy.json"#,
+    r#"cd "$dir" && : {fd}>policy.json"#,
+    "printf x 1<>.codeflow/policy.json",
+    ": {fd}>.codeflow/policy.json",
+    "printf x>.codeflow/policy.json",
+    "printf x &>>.codeflow/policy.json",
 ];
 
 /// On unix, where the fixture's `build/link`, `build/review-stack` and
@@ -806,6 +814,10 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     "pushd -n review-stack; cd build; popd; printf x > policy.json",
     "pushd -n review-stack; cd build; popd; sed -i '' s/a/b/ policy.json",
     r"pushd -n review-stack; cd build; popd; printf '%s\n' policy.json | xargs rm",
+    // Round eleven: a stack reference as a `cd` operand.
+    "pushd -n review-stack; cd build; cd ~1; printf x > policy.json",
+    "pushd -n review-stack; cd build; cd ~+1; printf x > policy.json",
+    r"pushd -n review-stack; cd build; cd ~1; printf '%s\n' policy.json | xargs rm",
 ];
 
 /// Round three, finding 5, from the linked worktree under
@@ -862,6 +874,13 @@ const REVIEWER_ALLOWED: &[&str] = &[
     // that can reach a stacked directory still passes.
     "pushd -n .codeflow && printf x > policy.json",
     "pushd -n review-stack; cd build; pushd; sed -n p policy.json",
+    // Round eleven: quoted text that looks like a redirection, reads and
+    // descriptor copies, and a read after a stack reference.
+    r#"cd "$dir" && printf '%s\n' ">policy.json""#,
+    r"printf '%s\n' '>.codeflow/policy.json'",
+    r#"cd "$dir" && cat < policy.json"#,
+    r#"cd "$dir" && make 2>&1 >&2 3<&0 4>&- | tee build.log"#,
+    "pushd -n review-stack; cd build; cd ~1; cat policy.json",
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 

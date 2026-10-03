@@ -483,6 +483,7 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
         let moved = line.moves_for(&shell, top_level, &tokens);
         if let Some(mut v) = integrity_write_in_dirs(
             &tokens,
+            &redirect_writes(segment),
             ctx.policy.hook_integrity,
             cwd,
             &moved.cwd,
@@ -939,6 +940,7 @@ fn normalize_path(s: &str) -> String {
 
 fn integrity_write_in_dirs(
     tokens: &[String],
+    redirects: &[String],
     level: PolicyLevel,
     cwd: &Path,
     dirs: &Cwd,
@@ -946,10 +948,10 @@ fn integrity_write_in_dirs(
     run: &RunDirs,
 ) -> Option<Violation> {
     match dirs {
-        Cwd::Paths(dirs) => dirs
-            .iter()
-            .find_map(|dir| integrity_write_violation(tokens, level, &cwd.join(dir), cwd, line)),
-        Cwd::Unknown(_) => integrity_write_in_run(tokens, level, run, cwd, line),
+        Cwd::Paths(dirs) => dirs.iter().find_map(|dir| {
+            integrity_write_violation(tokens, redirects, level, &cwd.join(dir), cwd, line)
+        }),
+        Cwd::Unknown(_) => integrity_write_in_run(tokens, redirects, level, run, cwd, line),
     }
 }
 
@@ -1146,20 +1148,17 @@ fn line_without_reads(line: &str, args: &[String], reads: &[bool]) -> String {
 /// word that could name what it writes could name an enforcement path from
 /// some directory (`cd "$d" && rm policy.json`), and so is a write
 /// redirect whose target could (`cd "$d" && printf x > policy.json`,
-/// TSK-216 round 10); a command proven to only read passes
+/// TSK-216 rounds 10 and 11); a command proven to only read passes
 /// (`cd "$d" && sed -n p policy.json`).
 fn unknown_dir_name_violation(
     tokens: &[String],
+    redirects: &[String],
     level: PolicyLevel,
     line: &str,
     why: &str,
 ) -> Option<Violation> {
     let why = shown_word(why);
-    let targets: Vec<String> = redirect_write_targets(tokens)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    let redirected = words_of(&targets);
+    let redirected = words_of(redirects);
     if let Some((target, p)) = redirected
         .iter()
         .find_map(|w| word_could_name(w).map(|p| (w, p)))
@@ -1498,6 +1497,17 @@ fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
                     });
                 }
             }
+            DirMove::Unresolved(operand) => {
+                moves = true;
+                run.unknown.get_or_insert_with(|| {
+                    let shown = shown_word(operand);
+                    if unresolved_word(operand) {
+                        format!("`{shown}`, a directory filled in at run time")
+                    } else {
+                        format!("`{name} {shown}`, a directory the guard does not resolve")
+                    }
+                });
+            }
             DirMove::Stay => {}
         }
         for target in moves_to {
@@ -1586,9 +1596,20 @@ enum DirMove<'a> {
     /// A stack rotation (`pushd +1`, `pushd -1`, a bare `pushd`) or a
     /// `popd`: to a directory on the stack.
     Rotate,
-    /// Nowhere new: `cd -` returns to a listed directory, and other
-    /// programs do not move the shell.
+    /// To an operand that is not a plain literal path ([`plain_dir`]): the
+    /// directory becomes unknown (TSK-216 round 11).
+    Unresolved(&'a str),
+    /// Nowhere: other programs do not move the shell.
     Stay,
+}
+
+/// A `cd` or `pushd` operand the guard resolves as written: no stack
+/// reference or other tilde form (`~1`, `~+1`, `~-`, `~user`) beyond `~`
+/// and `~/...`, no bare `-`, nothing the shell fills in (`$`, a
+/// substitution) and no pattern or brace expansion (TSK-216 round 11).
+fn plain_dir(word: &str) -> bool {
+    let tilde = word.starts_with('~') && word != "~" && !word.starts_with("~/");
+    !(tilde || word == "-" || unresolved_word(word) || word.contains(['*', '?', '[', '{']))
 }
 
 fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
@@ -1617,13 +1638,12 @@ fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
             no_change |= name == "pushd" && word == "-n";
             continue;
         }
-        if word == "-" {
-            return DirMove::Stay;
-        }
         return if no_change {
             DirMove::Stack
-        } else {
+        } else if plain_dir(word) {
             DirMove::To(word)
+        } else {
+            DirMove::Unresolved(word)
         };
     }
     if name == "pushd" {
@@ -1639,6 +1659,7 @@ fn dir_move<'a>(name: &str, args: &'a [String]) -> DirMove<'a> {
 /// it from a listed directory proves nothing (TSK-216 round 5).
 fn integrity_write_in_run(
     tokens: &[String],
+    redirects: &[String],
     level: PolicyLevel,
     run: &RunDirs,
     payload_cwd: &Path,
@@ -1646,10 +1667,10 @@ fn integrity_write_in_run(
 ) -> Option<Violation> {
     run.dirs
         .iter()
-        .find_map(|dir| integrity_write_violation(tokens, level, dir, payload_cwd, line))
+        .find_map(|dir| integrity_write_violation(tokens, redirects, level, dir, payload_cwd, line))
         .or_else(|| {
             let why = run.unknown.as_deref()?;
-            unknown_dir_name_violation(tokens, level, line, why)
+            unknown_dir_name_violation(tokens, redirects, level, line, why)
         })
 }
 
@@ -1763,78 +1784,104 @@ fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option
         .find_map(|a| token_integrity_path(a, cwd, payload_cwd))
 }
 
-/// Where a write-redirect operator's target sits.
-enum RedirectTarget<'a> {
-    /// Attached to the operator (`>policy.json`).
-    Attached(&'a str),
-    /// The following token (`> policy.json`).
-    Next,
+/// The targets the redirections of one shell command can write, read from
+/// its text with quote provenance, so a quoted `">x"` is text (TSK-216
+/// round 11). A redirection is a read only when it is provably `<`, `<<`,
+/// `<<-`, `<<<` or a descriptor copy or close (`N>&M`, `>&N`, `N<&M`,
+/// `N>&-`, `N<&-`). Every other operator, `>`, `>>`, `>|`, `&>`, `&>>`,
+/// `<>`, `{name}>` or one attached mid-word (`x>file`) included, opens its
+/// target for writing. A process substitution (`>(...)`, `<(...)`) is a
+/// command, judged as one, not a redirection.
+fn redirect_writes(segment: &str) -> Vec<String> {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut targets = Vec::new();
+    let (mut single, mut double) = (false, false);
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => i += 1,
+            '<' | '>' if !single && !double && chars.get(i) != Some(&'(') => {
+                let (writes, after) = redirect_operator(&chars, i - 1);
+                let (target, end) = redirect_word(&chars, after);
+                if writes(&target) {
+                    targets.push(target);
+                }
+                i = end;
+            }
+            _ => {}
+        }
+    }
+    targets
 }
 
-/// If `token` is a write-redirect operator, classify where its target is.
-/// Handles an optional leading file-descriptor number (`1>`, `2>>`), clobber
-/// `>|`, append `>>`, and the both-streams forms (`&>file`, `>&file`) — a
-/// *shape*, not an enumerated set. A `>&`/`&>` followed by a digit or `-`
-/// (`2>&1`, `>&-`) duplicates or closes an fd and is not a file write; a `>&`
-/// followed by a filename (csh/bash `>&file`) writes both streams to it.
-fn redirect_target(token: &str) -> Option<RedirectTarget<'_>> {
-    // `&>file` / `&>>file`: bash redirect of both stdout and stderr to a file.
-    if let Some(rest) = token
-        .strip_prefix("&>>")
-        .or_else(|| token.strip_prefix("&>"))
-    {
-        return Some(classify_redirect_rest(rest));
+/// The redirection operator starting at `at`: whether it writes the target
+/// that follows, and where that target starts.
+fn redirect_operator(chars: &[char], at: usize) -> (fn(&str) -> bool, usize) {
+    fn never(_: &str) -> bool {
+        false
     }
-    let after_fd = token.trim_start_matches(|c: char| c.is_ascii_digit());
-    let rest = after_fd
-        .strip_prefix(">>")
-        .or_else(|| after_fd.strip_prefix(">|"))
-        .or_else(|| after_fd.strip_prefix('>'))?;
-    if let Some(after_amp) = rest.strip_prefix('&') {
-        // `>&1` / `>&-` duplicate or close an fd; `>&file` is a write.
-        return match after_amp.chars().next() {
-            Some(c) if c.is_ascii_digit() || c == '-' => None,
-            None => Some(RedirectTarget::Next),
-            Some(_) => Some(RedirectTarget::Attached(after_amp)),
+    fn always(_: &str) -> bool {
+        true
+    }
+    // `>&N`, `>&N-` and `>&-` copy, move or close a descriptor; `>&file`
+    // writes the file.
+    fn unless_copy(target: &str) -> bool {
+        let fd = target.strip_suffix('-').unwrap_or(target);
+        !(target == "-" || (!fd.is_empty() && fd.chars().all(|c| c.is_ascii_digit())))
+    }
+    let next = |n: usize| chars.get(at + n).copied();
+    if chars[at] == '<' {
+        return match (next(1), next(2)) {
+            (Some('<'), Some('<' | '-')) => (never, at + 3),
+            (Some('<' | '&'), _) => (never, at + 2),
+            (Some('>'), _) => (always, at + 2),
+            _ => (never, at + 1),
         };
     }
-    Some(classify_redirect_rest(rest))
-}
-
-/// A redirect operator's trailing text names its target inline (`>file`), or the
-/// operator stands alone and the next token is the target (`> file`).
-fn classify_redirect_rest(rest: &str) -> RedirectTarget<'_> {
-    if rest.is_empty() {
-        RedirectTarget::Next
-    } else {
-        RedirectTarget::Attached(rest)
+    match next(1) {
+        // csh's `>>&file` appends both streams.
+        Some('>' | '|') if next(2) == Some('&') => (always, at + 3),
+        Some('>' | '|') => (always, at + 2),
+        Some('&') => (unless_copy, at + 2),
+        _ => (always, at + 1),
     }
 }
 
-/// A write redirect (`>`, `>>`, `>|`, `1>`, `2>>`, …) whose target is an
-/// integrity path, from the token stream — target attached (`>policy.json`) or
-/// the next token (`> policy.json`).
-fn redirect_integrity_path(
-    tokens: &[String],
-    cwd: &Path,
-    payload_cwd: &Path,
-) -> Option<&'static str> {
-    redirect_write_targets(tokens)
-        .into_iter()
-        .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
-}
-
-/// The files the write redirects in `tokens` write, attached to their
-/// operator (`>policy.json`) or the token after it (`> policy.json`).
-fn redirect_write_targets(tokens: &[String]) -> Vec<&str> {
-    tokens
-        .iter()
-        .enumerate()
-        .filter_map(|(i, token)| match redirect_target(token)? {
-            RedirectTarget::Attached(t) => Some(t),
-            RedirectTarget::Next => tokens.get(i + 1).map(String::as_str),
-        })
-        .collect()
+/// The word after a redirection operator, quotes removed, and where it
+/// ends: blanks before it are skipped, and it stops at an unquoted blank
+/// or shell metacharacter.
+fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
+    let mut i = start;
+    while chars.get(i).is_some_and(|c| matches!(c, ' ' | '\t')) {
+        i += 1;
+    }
+    let mut word = String::new();
+    let (mut single, mut double) = (false, false);
+    while let Some(&c) = chars.get(i) {
+        match c {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => {
+                i += 1;
+                if let Some(&escaped) = chars.get(i) {
+                    word.push(escaped);
+                }
+            }
+            c if !single
+                && !double
+                && (c.is_whitespace() || matches!(c, '<' | '>' | '|' | ';' | '&' | '(' | ')')) =>
+            {
+                break;
+            }
+            c => word.push(c),
+        }
+        i += 1;
+    }
+    (word, i)
 }
 
 fn rsync_dry_run(args: &[String]) -> bool {
@@ -2383,12 +2430,19 @@ fn wrapped_violation(
                 let segments = expand_commands(&bound);
                 let run = run_dirs(&segments, &start);
                 return segments.iter().find_map(|segment| {
-                    integrity_write_in_run(&shell_tokens(segment), level, &run, payload_cwd, line)
+                    integrity_write_in_run(
+                        &shell_tokens(segment),
+                        &redirect_writes(segment),
+                        level,
+                        &run,
+                        payload_cwd,
+                        line,
+                    )
                 });
             }
         }
     }
-    integrity_write_violation(tokens, level, cwd, payload_cwd, line)
+    integrity_write_violation(tokens, &[], level, cwd, payload_cwd, line)
 }
 
 /// The arguments of `sed` that a grammar reads as input files.
@@ -3021,15 +3075,21 @@ fn wrapper_write_violation(
 /// plane: a redirect into, or a mutating command targeting, the hook shims
 /// (`.git/hooks`, `.codeflow/git-hooks`) or the integrity files
 /// (`.codeflow/policy.json`, `.codeflow/project.toml`). Reads (`cat`, a `cp`
-/// *from* an integrity path) stay allowed.
+/// *from* an integrity path) stay allowed. `redirects` are the targets the
+/// command's redirections write ([`redirect_writes`]); a command run by
+/// `xargs` or `find -exec` has none.
 fn integrity_write_violation(
     tokens: &[String],
+    redirects: &[String],
     level: PolicyLevel,
     cwd: &Path,
     payload_cwd: &Path,
     line: &str,
 ) -> Option<Violation> {
-    if let Some(p) = redirect_integrity_path(tokens, cwd, payload_cwd) {
+    if let Some(p) = redirects
+        .iter()
+        .find_map(|t| token_integrity_path(t, cwd, payload_cwd))
+    {
         return Some(hook_integrity_violation(
             level,
             format!("redirect would overwrite the integrity path `{p}`"),
@@ -8607,7 +8667,14 @@ mod tests {
         }
         // From there a write redirect is read by its target's name.
         let judged = |cmd: &str| {
-            unknown_dir_name_violation(&shell_tokens(cmd), PolicyLevel::Block, cmd, "a stack")
+            let redirects = redirect_writes(cmd);
+            unknown_dir_name_violation(
+                &shell_tokens(cmd),
+                &redirects,
+                PolicyLevel::Block,
+                cmd,
+                "a stack",
+            )
         };
         for cmd in [
             "printf x > policy.json",
@@ -8687,6 +8754,7 @@ mod tests {
         let why = run.unknown.expect("a run-time directory");
         let v = unknown_dir_name_violation(
             &shell_tokens("rm policy.json"),
+            &[],
             PolicyLevel::Block,
             line,
             &why,
@@ -8699,6 +8767,55 @@ mod tests {
             "{}",
             v.message
         );
+    }
+
+    /// A redirection is a read only when it is provably one; every other
+    /// operator writes its target, and quoted text is never an operator
+    /// (TSK-216 round 11).
+    #[test]
+    fn test_redirect_writes_reads_operators_from_the_text() {
+        for (segment, writes) in [
+            ("printf x > a", vec!["a"]),
+            (
+                "printf x >a >>b >|c &>d &>>e",
+                vec!["a", "b", "c", "d", "e"],
+            ),
+            ("printf x 1<>a", vec!["a"]),
+            ("printf x <>a", vec!["a"]),
+            (": {fd}>a", vec!["a"]),
+            (": {fd}<>a", vec!["a"]),
+            ("printf x>a", vec!["a"]),
+            ("printf x 2> 'a b'", vec!["a b"]),
+            ("printf x >\"$d\"/a", vec!["$d/a"]),
+            ("printf x >&a", vec!["a"]),
+            ("printf x >& a", vec!["a"]),
+            ("printf x >a;", vec!["a"]),
+            ("printf x >a|cat", vec!["a"]),
+        ] {
+            assert_eq!(redirect_writes(segment), writes, "{segment}");
+        }
+        for segment in [
+            "cat < a",
+            "cat <a",
+            "cat 0<a",
+            "cat << EOF",
+            "cat <<-EOF",
+            "cat <<< a",
+            "make 2>&1",
+            "make >&2",
+            "make 3>&-",
+            "make >&-",
+            "make 3>&4-",
+            "cat 3<&0",
+            "cat <&-",
+            "printf '%s' '>a'",
+            "printf '%s' \">a\"",
+            "printf '%s' \\>a",
+            "printf x 'a>b'",
+            "diff <(cat a) >(cat b)",
+        ] {
+            assert!(redirect_writes(segment).is_empty(), "{segment}");
+        }
     }
 
     /// From a directory the guard cannot determine, a word is read by its
@@ -8760,6 +8877,27 @@ mod tests {
         let run = run_dirs(&expand_commands("rm build/a.o"), start);
         assert_eq!(run.dirs, vec![PathBuf::from("/r")]);
         assert!(run.unknown.is_none());
+        // Only a plain literal operand is followed (TSK-216 round 11).
+        for line in [
+            "cd ~1 && rm x",
+            "cd ~+1 && rm x",
+            "cd ~-1 && rm x",
+            "cd ~+ && rm x",
+            "cd ~- && rm x",
+            "cd ~root && rm x",
+            "cd - && rm x",
+            "pushd ~2 && rm x",
+            "cd .code* && rm x",
+            "cd {a,b} && rm x",
+            "cd \"$d\" && rm x",
+        ] {
+            let run = run_dirs(&expand_commands(line), start);
+            assert!(run.unknown.is_some(), "{line}: {:?}", run.dirs);
+        }
+        for line in ["cd build && rm x", "cd ~/w && rm x", "cd -- build && rm x"] {
+            let run = run_dirs(&expand_commands(line), start);
+            assert!(run.unknown.is_none(), "{line}: {:?}", run.unknown);
+        }
     }
 
     /// Glob expansion reads the file system as the shell does: a leading
