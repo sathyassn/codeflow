@@ -706,7 +706,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to fifteen of PR 36 that
+/// The reviewers' exact commands from rounds two to sixteen of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -803,6 +803,13 @@ const REVIEWER_REFUSALS: &[&str] = &[
     // closes the expression at the next `]`.
     r"find . -name '[p\]]olicy.json' -delete",
     r#"cd "$dir" && rm [p\]]olicy.json"#,
+    // Round sixteen: braces, a value filled in at run time before a name,
+    // a tilde prefix the guard cannot resolve, and a line that lets
+    // patterns match names that start with `.`.
+    "rm .code{flow,x}/policy.json",
+    r#"rm "$d"/policy.json"#,
+    "rm ~-/policy.json",
+    "shopt -s dotglob; rm -f *",
 ];
 
 /// On unix, where the fixture's `build/link`, `build/review-stack` and
@@ -840,6 +847,18 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     // Round fifteen: escapes inside a bracket expression, through the link.
     r"rm alias/[p\]]olicy.json",
     r"rm alias/[pa\[:alpha:]olicy.json",
+    // Round sixteen: brace expansion through the link, in a command and in
+    // a producer, and the other expansions the round's inventory found.
+    "rm alias/{[pq],x}olicy.json",
+    "rm alias/p{ol,uz}*.json",
+    r"printf '%s\0' alias/p{ol,uz}*.json | xargs -0 rm",
+    "printf x > alias/polic{y..y}.json",
+    r"printf '%s\0' alias/policy.json | xargs -0 rm",
+    "IFS=/; x=alias/policy.json; rm $x",
+    "rm alias/**/policy.json",
+    "rm alias/$x",
+    "rm ~+/alias/policy.json",
+    "rm alias/^x",
 ];
 
 /// Round three, finding 5, from the linked worktree under
@@ -908,6 +927,13 @@ const REVIEWER_ALLOWED: &[&str] = &[
     r"printf $'\e[32mhello\e[0m\n' > build.log",
     r"printf $'\e[32mhello\e[0m\n' 2>&1",
     "find . -name 'x[' -delete",
+    // Round sixteen: braces and run-time values in ordinary work.
+    "rm build/{a,b}.o",
+    "rm build/out{1..100}.o",
+    r#"rm "$tmpfile""#,
+    r#"cp README.md "$OUT"/notes.md"#,
+    "awk '{print $1}' README.md > build/out.txt",
+    "git log --format='%H,%s' > build/log.txt",
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 
