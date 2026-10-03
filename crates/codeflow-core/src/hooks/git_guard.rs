@@ -4522,16 +4522,22 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
     }
 }
 
-/// `true` for the shell builtins that run the simple command after them.
+/// `true` for the launchers that run the simple command after them: the
+/// `command`, `builtin` and `exec` builtins, `nohup`, and `time` in its
+/// program form (`/usr/bin/time`, `command time`), any path form.
 fn is_prefix_launcher(t: &str) -> bool {
-    matches!(t, "command" | "builtin" | "exec")
+    matches!(
+        basename(t),
+        "command" | "builtin" | "exec" | "nohup" | "time"
+    )
 }
 
 /// Skip the options of a prefix launcher starting at `idx` and return the
-/// index of the command it runs: `command -p`, `exec -c -l -a NAME`, and
-/// `--` for all three. `None` when the options make `command` only look the
-/// name up (`-v`, `-V`), so nothing after it runs.
+/// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
+/// `time -p -o FILE`, and `--` for all. `None` when the options make
+/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+    let launcher = basename(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if a == "--" {
             return Some(idx + 1);
@@ -4542,15 +4548,21 @@ fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> O
         if launcher == "command" && a.contains(['v', 'V']) {
             return None;
         }
-        // `exec -a NAME` (alone or last in a cluster such as `-ca`) takes
-        // the next word as the name it runs the command under.
-        idx += if launcher == "exec" && a.ends_with('a') {
-            2
-        } else {
-            1
-        };
+        idx += 1 + usize::from(takes_next_word(launcher, &a[1..]));
     }
     Some(idx)
+}
+
+/// `true` when the option cluster `flags` (without its `-`) ends in an
+/// option whose value is the next word: `exec -a NAME` (a name attached as
+/// in `-aNAME` is its own value), and `time -o FILE` or `time -f FORMAT`.
+fn takes_next_word(launcher: &str, flags: &str) -> bool {
+    let valued: &[char] = match launcher {
+        "exec" => &['a'],
+        "time" => &['o', 'f'],
+        _ => return false,
+    };
+    flags.find(valued).is_some_and(|at| at + 1 == flags.len())
 }
 
 /// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
@@ -6396,12 +6408,28 @@ mod tests {
             "builtin -- git push origin main",
             "exec -a probe git push origin main",
             "exec -cl git push origin main",
+            "exec -aprobea git push origin main",
+            "exec -ca probe git push origin main",
+            "nohup git push origin main",
+            "/usr/bin/time git push origin main",
+            "command time -p git push origin main",
+            "/usr/bin/time -o out.txt git push origin main",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.push_to_protected"), "{cmd}: {v:?}");
         }
-        // `command -v git` only looks git up.
+        // `command -v git` only looks git up, and a name attached to `-a`
+        // is not followed by another: `echo` is the program here.
         assert!(evaluate("command -v git", &ctx(&p, "main")).is_empty());
+        let echo = evaluate(
+            "exec -aprobea echo git push origin main",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(echo.is_empty(), "{echo:?}");
+        // The shell after an attached name still has its heredoc judged.
+        let heredoc = "exec -aprobea bash -s cat <<'EOF'\nCODEFLOW_HUMAN_OVERRIDE=1 git push origin main\nEOF";
+        let v = evaluate(heredoc, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.override_token_laundering"), "{v:?}");
     }
 
     #[test]
