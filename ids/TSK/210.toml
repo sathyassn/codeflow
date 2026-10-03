@@ -1,0 +1,11 @@
+id = "TSK-210"
+uid = "fbec7dc5-a549-4b14-9b30-85341a4cd038"
+kind = "TSK"
+title = "the secret scan reads its exemptions from the trusted commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T04:10:11Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
