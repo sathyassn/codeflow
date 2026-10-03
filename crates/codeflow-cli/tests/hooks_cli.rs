@@ -706,7 +706,7 @@ fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
     claude_tree
 }
 
-/// The reviewers' exact commands from rounds two to twelve of PR 36 that
+/// The reviewers' exact commands from rounds two to fourteen of PR 36 that
 /// wrote, deleted or exposed enforcement files or worktrees, run from the
 /// main checkout. Each one is refused under `git.hook_integrity`.
 const REVIEWER_REFUSALS: &[&str] = &[
@@ -794,6 +794,11 @@ const REVIEWER_REFUSALS: &[&str] = &[
     r"printf '%s\n' $'it\'s' > .codeflow/policy.json",
     r#"cd "$dir" && printf x > $'policy.json'"#,
     r#"cd "$dir" && printf x >$"policy.json""#,
+    // Round fourteen: a bracket expression holding POSIX classes, which
+    // ends at its own closing `]`, not at a class's.
+    "find . -name '[[:alpha:]_]olicy.json' -delete",
+    "find . -name '[[:alpha:][:digit:]]olicy.json' -delete",
+    r#"cd "$dir" && rm [[:alpha:]_]olicy.json"#,
 ];
 
 /// On unix, where the fixture's `build/link`, `build/review-stack` and
@@ -826,6 +831,8 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     "pushd -n review-stack; cd build; cd ~1; printf x > policy.json",
     "pushd -n review-stack; cd build; cd ~+1; printf x > policy.json",
     r"pushd -n review-stack; cd build; cd ~1; printf '%s\n' policy.json | xargs rm",
+    // Round fourteen: the same bracket expression through the link.
+    "rm alias/[[:alpha:]_]olicy.json",
 ];
 
 /// Round three, finding 5, from the linked worktree under
