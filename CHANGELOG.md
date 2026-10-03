@@ -61,6 +61,20 @@ erratum below, never an edit of the section.
   The file is now ignored, so a release build reports `dirty=false`.
 
 <!-- codeflow:release-impact patch -->
+- **The dependency audit names the suppression file osv-scanner reads.**
+  When the CI template's audit step fails, it told you to record a
+  justified suppression in `.osv-scanner.toml`, a name osv-scanner never
+  reads. It now names `osv-scanner.toml` in the same directory as the
+  lockfile it covers. A docs portal scaffolded by CodeFlow currently reports
+  GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which has no fixed
+  version; Astro uses it only to time its build-time cache of remote
+  images. A new portal now starts with an `osv-scanner.toml` that ignores
+  it, with that reason, until 2026-11-30; the file is yours to edit or
+  delete. An existing portal is not changed: if your policy blocks on
+  advisories and you accept the reasoning, add the same entry to
+  `docs-portal/osv-scanner.toml`.
+
+<!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
   says a human can override the git-hook plane with
   `CODEFLOW_HUMAN_OVERRIDE=1`, but the pre-commit and pre-push hooks
