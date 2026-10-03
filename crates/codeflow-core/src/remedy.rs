@@ -502,6 +502,12 @@ catalog! {
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
+    /// Directories a full gate writes that this process cannot write.
+    DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
+        "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+    /// A state the sandbox hides from doctor.
+    DOCTOR_SANDBOX_UNSEEN = Step::Codeflow("codeflow doctor"),
+        "the operator runs `codeflow doctor --check {check}` outside the sandbox, in a separate terminal, where it can read {what}";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";

@@ -257,6 +257,7 @@ customization and test config.
 |---|---|
 | Always-loaded instruction size | a warning when the `AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit |
 | Reading sizes | the kernel, the per-task reading chain and each shipped skill against guideline numbers: information within them, a warning above them that names the detail to move behind a trigger, never a failure |
+| Permissions and the sandbox | a warning naming each directory a full gate writes outside the worktree (its locks and its evidence) that this process cannot write; inside the Claude Code sandbox it says so, probes the network over HTTPS, and reports the Codex sign-in as unreadable there rather than signed out |
 
 Doctor leaves live interactive account and tool canaries to the harness
 (ADR-0023).

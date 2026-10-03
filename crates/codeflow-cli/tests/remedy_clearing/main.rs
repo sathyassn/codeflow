@@ -178,6 +178,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
+    ("DOCTOR_GATE_DIRS", Excluded(HumanAuthority)),
+    ("DOCTOR_SANDBOX_UNSEEN", Excluded(HumanAuthority)),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),

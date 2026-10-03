@@ -92,6 +92,21 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The full gate runs inside CodeFlow's own Claude sandbox.** The full
+  gate takes a machine-wide lock under `~/.codeflow/locks` and keeps its
+  evidence under `~/.codeflow/gate-runs`, which the shipped Claude settings
+  presets did not let a sandboxed command write, so every full gate in a
+  sandboxed session refused with `gate lock unavailable`. The presets now
+  allow writes to those two directories and nothing else in the CodeFlow
+  home, and `codeflow update` adds them to existing settings. Two full
+  gates still never run at once on one machine. The refusal now points at
+  `codeflow doctor --check permissions`, which names each gate directory
+  this process cannot write. Inside the sandbox (`SANDBOX_RUNTIME` set),
+  doctor says so, probes the network over HTTPS instead of a DNS lookup
+  the sandbox cannot make, and reports the Codex sign-in as unreadable
+  there instead of asking you to run `codex login`.
+
+<!-- codeflow:release-impact patch -->
 - **An in-place `sed` on macOS is no longer read as an edit of the
   enforcement files.** In a worktree under `.claude/worktrees/`, the git
   guard refused `sed -i '' ...` on any file, and an empty operand of `rm`
