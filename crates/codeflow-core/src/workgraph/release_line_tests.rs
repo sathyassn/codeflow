@@ -625,3 +625,43 @@ fn a_resolution_keeping_a_backfilled_uid_changes_no_criteria() {
         );
     }
 }
+
+/// TSK-214: an epic closed on the release line binds its own block as the
+/// verb and CI do. A waiver naming no commit is refused; a block reviewed
+/// at the commit it completes on is bound.
+#[test]
+fn an_epic_closed_on_the_release_line_binds_its_own_block() {
+    let fx = Fx::new();
+    fx.release_importing(LINE_A);
+    let reviewed = fx.git(&["rev-parse", "HEAD"]);
+    let closed = |ac1: &str| {
+        format!(
+            "{}\n## Closeout\n\n```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/review/1\n  criteria:\n    AC-1: {ac1}\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none: done\n  verdict: approved\n```\n",
+            epic("EPC-002").replace("status: planning", "status: complete")
+        )
+    };
+    let epic_path = "project-management/epics/EPC-002.md";
+    fx.write(epic_path, &closed("waived | deadbee"));
+    fx.commit("docs(epics): close EPC-002");
+    let judged = fx.judged(&[]).unwrap();
+    assert!(
+        judged
+            .findings
+            .iter()
+            .any(|found| found.message.contains("EPC-002: AC-1 waiver names deadbee")),
+        "{:?}",
+        judged.findings
+    );
+    fx.git(&["reset", "-q", "--hard", "HEAD~1"]);
+    fx.write(epic_path, &closed("verified | the release journey"));
+    fx.commit("docs(epics): close EPC-002");
+    let judged = fx.judged(&[]).unwrap();
+    assert!(
+        !judged
+            .findings
+            .iter()
+            .any(|found| found.message.contains("EPC-002")),
+        "{:?}",
+        judged.findings
+    );
+}

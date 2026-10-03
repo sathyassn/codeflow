@@ -1179,9 +1179,19 @@ fn ticked_ordinary(criterion: &Criterion) -> bool {
     criterion.checkbox == Some(true) && !criterion.is_journey()
 }
 
+/// Whether every task serving `criterion` is cancelled. A cancelled child
+/// never satisfies the epic's outcome (R-33), so such a criterion is proven
+/// by the epic's own acceptance block, as an unserved one is.
+fn served_only_by_cancelled(epic: &RecordView, criterion: &Criterion, graph: &Graph) -> bool {
+    let serving = serving_tasks(epic, criterion, graph);
+    !serving.is_empty() && serving.iter().all(|(task, _)| task.status == "cancelled")
+}
+
 /// The epic's own acceptance block, when it is the one active block and it
-/// passes the structural rules of R-60 for the criteria no task serves.
-/// Problems with it are reported, and an invalid block proves nothing.
+/// passes the structural rules of R-60 for the criteria it must prove: those
+/// no task serves, unless a legacy tick verifies them, and those served only
+/// by cancelled tasks, which a tick never verifies. Problems with it are
+/// reported, and an invalid block proves nothing.
 fn epic_own_block(
     epic: &RecordView,
     graph: &Graph,
@@ -1191,8 +1201,10 @@ fn epic_own_block(
         .criteria
         .items
         .iter()
-        .filter(|criterion| serving_tasks(epic, criterion, graph).is_empty())
-        .filter(|criterion| !ticked_ordinary(criterion))
+        .filter(|criterion| {
+            served_only_by_cancelled(epic, criterion, graph)
+                || (serving_tasks(epic, criterion, graph).is_empty() && !ticked_ordinary(criterion))
+        })
         .cloned()
         .collect();
     let active = epic.active_blocks();
@@ -1235,7 +1247,13 @@ fn epic_criterion_verified(
     let serving = serving_tasks(epic, criterion, graph);
     if !serving.is_empty() {
         if serving.iter().all(|(task, _)| task.status == "cancelled") {
-            return Err("served only by cancelled tasks".into());
+            // A valid own block was checked against every criterion served
+            // only by cancelled tasks; cancelling a task proves nothing.
+            return if own_block.is_some() {
+                Ok(())
+            } else {
+                Err("served only by cancelled tasks, and the epic has no valid acceptance block verifying it".into())
+            };
         }
         let verified = serving.iter().any(|(task, item)| {
             task.status == "complete"

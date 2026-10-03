@@ -250,6 +250,10 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// An epic's own acceptance block that does not bind to its review or
+    /// whose waiver is no planning amendment the review saw (R-33, R-60).
+    EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
+        "correct the epic's own acceptance block and have the review cover it: the block names the reviewed commit, after which only the epic's status and Closeout change, and each waiver names a planning-only commit that amends that criterion and that the reviewed commit contains; for an epic still open, write the corrected block to a file and run `codeflow epic status <id> complete --acceptance <file>`; for an epic this change already completes, replace the fenced `yaml` acceptance block in the Closeout of {path} with the corrected one in this pull request and rerun `codeflow ci`, since a complete epic is never reopened ({note})";
     /// A completion bound to its reviewed commit: evidence, not a refusal.
     ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
         "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
