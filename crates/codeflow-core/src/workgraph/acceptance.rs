@@ -695,10 +695,10 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
 /// criteria may predate a planning pull request that amended them on the
 /// target after the reopen (R-52), so the criteria are the target's
 /// record's, found by identity in any layout. A task no reference point of
-/// its target holds is new in this range: its own pull request may change
+/// its targets holds is new in this range: its own pull request may change
 /// its criteria with the reopen (TSK-217). When a record that may be the
-/// task cannot be read, the recovered criteria stay and a changed set gets
-/// the returned refusal.
+/// task cannot be read, or a target it names does not resolve, the
+/// recovered criteria stay and a changed set gets the returned refusal.
 fn recovered_completion(
     repo: &Repository,
     task: &RecordView,
@@ -710,13 +710,17 @@ fn recovered_completion(
     let (at, mut old) = previous_completion(repo, task, block, landing)?;
     let mut refusal = None;
     if let Some(anchor) = anchor {
-        match target_record(repo, task, anchor, default_target) {
+        let range = Range {
+            anchor,
+            head: landing.commit(),
+        };
+        match target_record(repo, task, range, &old, default_target) {
             Presence::Present(record) => old.criteria = record.criteria,
             Presence::Absent => old.criteria = task.criteria.clone(),
             Presence::Unreadable(reason) => {
                 if old.criteria.signature() != task.criteria.signature() {
                     refusal = Some(format!(
-                        "{}: cannot tell whether the target holds this task, so its criteria stay as they were: {reason}",
+                        "{}: cannot tell whether a target holds this task, so its criteria stay as they were: {reason}",
                         task.id
                     ));
                 }
@@ -724,6 +728,14 @@ fn recovered_completion(
         }
     }
     Some((at, old, refusal))
+}
+
+/// The commits a completion is judged over: those `head` reaches and
+/// `anchor` does not, and the anchor itself.
+#[derive(Clone, Copy)]
+struct Range {
+    anchor: Oid,
+    head: Oid,
 }
 
 /// Whether a reference point holds a task, found by identity.
@@ -740,55 +752,78 @@ enum Presence {
 /// The target's record of `task`, read at every reference point the verb or
 /// `codeflow ci` could judge it against, so neither an older range base, a
 /// stale local branch, an upstream on another remote, nor a retargeted
-/// record makes a task the target holds look new (TSK-217).
+/// record makes a task a target holds look new (TSK-217).
+///
+/// The targets are every integration target the task's record has named:
+/// the declared one, the recovered completion's, and each version of the
+/// record in the range, the anchor's version included. A record retargeted
+/// in this pull request still names its former target in an earlier
+/// version, and a branch cut from an integration line carries that line's
+/// version, so the record's own history supplies its provenance.
 ///
 /// The first point that holds the task supplies the criteria to keep, so
-/// the order is deliberate: the range `anchor` first, the record this range
+/// the order is deliberate: the range anchor first, the record this range
 /// was cut from (R-52); then the tips of the declared target, remote ones
 /// before the local branch, since a planning amendment landed there after
 /// the reopen is the criteria that bind and a local branch may be stale;
-/// then `default_target` (the pull request's base in CI, the resolved
-/// default target in the verb); then the tips of the default work target,
-/// which catch a record retargeted away from it.
+/// then the tips of each former target; then `default_target` (the pull
+/// request's base in CI, the resolved default target in the verb); then
+/// the tips of the default target, which catch a record retargeted away
+/// from it.
 ///
-/// It fails closed: a required target (the declared one, and the default
-/// work target) with no tip here makes the answer unreadable, never absent.
+/// It fails closed: a required target (each one the record names, and the
+/// default target) with no tip here makes the answer unreadable, never
+/// absent.
 fn target_record(
     repo: &Repository,
     task: &RecordView,
-    anchor: Oid,
+    range: Range,
+    recovered: &RecordView,
     default_target: Option<Oid>,
 ) -> Presence {
-    let declared = task
-        .integration_target
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty());
-    let default_name = repo
-        .workdir()
-        .and_then(super::work_start::default_work_target)
-        .map(|name| name.strip_prefix("origin/").unwrap_or(&name).to_string());
-    let mut points = vec![anchor];
-    if let Some(name) = declared {
+    let uid = record_uid(&task.content);
+    let mut targets = Vec::new();
+    let mut add = |name: Option<&str>| {
+        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        if let Some(name) = name {
+            if !targets.iter().any(|known| known == name) {
+                targets.push(name.to_string());
+            }
+        }
+    };
+    add(task.integration_target.as_deref());
+    add(recovered.integration_target.as_deref());
+    match named_targets(repo, task, uid.as_deref(), range) {
+        Ok(names) => names.iter().for_each(|name| add(Some(name))),
+        Err(reason) => return Presence::Unreadable(reason),
+    }
+    let mut points = vec![range.anchor];
+    for name in &targets {
         let tips = target_tips(repo, name);
         if tips.is_empty() {
             return Presence::Unreadable(format!(
-                "the declared target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+                "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
             ));
         }
         points.extend(tips);
     }
     points.extend(default_target);
-    let Some(default_name) = default_name else {
-        return Presence::Unreadable(
-            "the default target (`main` or `master`) does not resolve here; fetch it (`git fetch origin main`)"
-                .to_string(),
-        );
-    };
-    points.extend(target_tips(repo, &default_name));
+    match default_target_name(repo) {
+        Ok(name) => {
+            let tips = target_tips(repo, &name.name);
+            if tips.is_empty() {
+                return Presence::Unreadable(format!(
+                    "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
+                    name.name,
+                    if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
+                ));
+            }
+            points.extend(tips);
+        }
+        Err(reason) => return Presence::Unreadable(reason),
+    }
     let mut seen = std::collections::HashSet::new();
     points.retain(|point| seen.insert(*point));
-    let uid = record_uid(&task.content);
     let own_file = std::path::Path::new(&task.path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -805,6 +840,100 @@ fn target_record(
         }
     }
     unreadable.map_or(Presence::Absent, Presence::Unreadable)
+}
+
+/// The integration targets that versions of the task's record name in
+/// `range`, the anchor's version included, in first-seen order from the
+/// head back. Each distinct record blob is read once. A history that
+/// cannot be walked is the reason returned, so the caller fails closed.
+fn named_targets(
+    repo: &Repository,
+    task: &RecordView,
+    uid: Option<&str>,
+    range: Range,
+) -> Result<Vec<String>, String> {
+    let unwalkable = |error: git2::Error| {
+        format!(
+            "cannot read the history from {} to {}: {error}",
+            range.anchor, range.head
+        )
+    };
+    let mut walk = repo.revwalk().map_err(unwalkable)?;
+    walk.push(range.head).map_err(unwalkable)?;
+    walk.hide(range.anchor).map_err(unwalkable)?;
+    let mut commits = walk.collect::<Result<Vec<_>, _>>().map_err(unwalkable)?;
+    commits.push(range.anchor);
+    let mut read = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for commit in commits {
+        let entries = task_entries(repo, commit)
+            .ok_or_else(|| format!("cannot read the tree of {commit}"))?;
+        for (path, blob) in entries {
+            if !read.insert(blob) {
+                continue;
+            }
+            let Ok(blob) = repo.find_blob(blob) else {
+                continue;
+            };
+            let content = String::from_utf8_lossy(blob.content());
+            if !content.contains(task.id.as_str()) && !uid.is_some_and(|uid| content.contains(uid))
+            {
+                continue;
+            }
+            let Ok(record) = RecordView::parse(RecordKind::Task, &path, &content) else {
+                continue;
+            };
+            if is_same_task(&record, &task.id, uid) {
+                if let Some(name) = record.integration_target {
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The default target this check reads, and whether `origin/HEAD` named it.
+struct DefaultName {
+    name: String,
+    from_origin_head: bool,
+}
+
+/// The default target: the branch `origin/HEAD` names when this clone
+/// records one, else the first of `main` and `master` that resolves
+/// ([`super::work_start::default_work_target`]). Any other default branch is
+/// found only through `origin/HEAD`, so its absence is the refusal returned.
+fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
+    let origin_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|head| {
+            head.symbolic_target()
+                .ok()
+                .flatten()
+                .and_then(|target| target.strip_prefix("refs/remotes/origin/"))
+                .map(str::to_string)
+        });
+    if let Some(name) = origin_head {
+        return Ok(DefaultName {
+            name,
+            from_origin_head: true,
+        });
+    }
+    repo.workdir()
+        .and_then(super::work_start::default_work_target)
+        .map(|name| DefaultName {
+            name: name.strip_prefix("origin/").unwrap_or(&name).to_string(),
+            from_origin_head: false,
+        })
+        .ok_or_else(|| {
+            "no default target is found here: discovery reads `origin/HEAD`, then `main` and `master`, and none resolves. \
+             If the default branch is `main` or `master`, fetch it (`git fetch origin main`); \
+             for another default branch, record it (`git remote set-head origin --auto`)"
+                .to_string()
+        })
 }
 
 /// Every tip of the target `name` this clone knows: the configured
@@ -831,29 +960,19 @@ fn target_tips(repo: &Repository, name: &str) -> Vec<Oid> {
         .collect()
 }
 
-/// Whether the tree at `at` holds a task record with `id` or `uid`, read
-/// only in the task directories of the supported layouts
-/// (`project-management/tasks/` and `project-management/epics/<EPC>/tasks/`).
-/// Identity is the parsed `id` and `uid` frontmatter values. A record that
-/// does not parse is this task's only when it sits at the task's own file
-/// name, and then the answer is unreadable, never absent.
-fn presence_at(
-    repo: &Repository,
-    at: Oid,
-    id: &str,
-    uid: Option<&str>,
-    own_file: &str,
-) -> Presence {
-    let Ok(tree) = repo.find_commit(at).and_then(|commit| commit.tree()) else {
-        return Presence::Unreadable(format!("cannot read the tree of {at}"));
-    };
+/// The task records in the tree at `at`, as path and blob, read only in the
+/// task directories of the supported layouts (`project-management/tasks/`
+/// and `project-management/epics/<EPC>/tasks/`). `None` when the tree
+/// cannot be read.
+fn task_entries(repo: &Repository, at: Oid) -> Option<Vec<(String, Oid)>> {
+    let tree = repo.find_commit(at).and_then(|commit| commit.tree()).ok()?;
     let subtree = |tree: &git2::Tree<'_>, name: &str| {
         tree.get_name(name)
             .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
             .and_then(|entry| repo.find_tree(entry.id()).ok())
     };
     let Some(records) = subtree(&tree, "project-management") else {
-        return Presence::Absent;
+        return Some(Vec::new());
     };
     let mut directories = Vec::new();
     if let Some(tasks) = subtree(&records, "tasks") {
@@ -870,33 +989,57 @@ fn presence_at(
             }
         }
     }
-    let mut unreadable = None;
+    let mut entries = Vec::new();
     for (directory, tasks) in directories {
         for entry in &tasks {
             let Ok(name) = entry.name() else { continue };
             let path = format!("{directory}/{name}");
-            if super::work_start::record_kind_for_tree_path(&path) != Some(RecordKind::Task) {
-                continue;
+            if super::work_start::record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
+                entries.push((path, entry.id()));
             }
-            let Ok(blob) = repo.find_blob(entry.id()) else {
-                if name == own_file {
-                    unreadable.get_or_insert(format!("cannot read {path} at {at}"));
-                }
-                continue;
-            };
-            let content = String::from_utf8_lossy(blob.content());
-            match RecordView::parse(RecordKind::Task, &path, &content) {
-                Ok(record) => {
-                    let same_uid = uid.is_some() && record_uid(&record.content).as_deref() == uid;
-                    if record.id == id || same_uid {
-                        return Presence::Present(Box::new(record));
-                    }
-                }
-                Err(_) if name == own_file => {
-                    unreadable.get_or_insert(format!("{path} at {at} does not parse"));
-                }
-                Err(_) => {}
+        }
+    }
+    Some(entries)
+}
+
+/// Whether `record` is the task with `id` or `uid`, by parsed identity.
+fn is_same_task(record: &RecordView, id: &str, uid: Option<&str>) -> bool {
+    record.id == id || (uid.is_some() && record_uid(&record.content).as_deref() == uid)
+}
+
+/// Whether the tree at `at` holds a task record with `id` or `uid`, read
+/// in the task directories ([`task_entries`]). Identity is the parsed `id`
+/// and `uid` frontmatter values. A record that does not parse is this
+/// task's only when it sits at the task's own file name, and then the
+/// answer is unreadable, never absent.
+fn presence_at(
+    repo: &Repository,
+    at: Oid,
+    id: &str,
+    uid: Option<&str>,
+    own_file: &str,
+) -> Presence {
+    let Some(entries) = task_entries(repo, at) else {
+        return Presence::Unreadable(format!("cannot read the tree of {at}"));
+    };
+    let mut unreadable = None;
+    for (path, blob) in entries {
+        let own = path.rsplit('/').next() == Some(own_file);
+        let Ok(blob) = repo.find_blob(blob) else {
+            if own {
+                unreadable.get_or_insert(format!("cannot read {path} at {at}"));
             }
+            continue;
+        };
+        let content = String::from_utf8_lossy(blob.content());
+        match RecordView::parse(RecordKind::Task, &path, &content) {
+            Ok(record) if is_same_task(&record, id, uid) => {
+                return Presence::Present(Box::new(record));
+            }
+            Err(_) if own => {
+                unreadable.get_or_insert(format!("{path} at {at} does not parse"));
+            }
+            Ok(_) | Err(_) => {}
         }
     }
     unreadable.map_or(Presence::Absent, Presence::Unreadable)

@@ -2947,3 +2947,109 @@ fn a_kept_uid_matches_in_every_yaml_form() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
+
+/// A task planned on an integration line that `main` predates keeps the
+/// line's criteria however its record is later retargeted: kept on the
+/// line, retargeted to `main` from the first commit of its branch, or
+/// retargeted after its first completion. The record's own history in the
+/// range names the line, so the verb and CI both read it (TSK-217).
+#[test]
+fn a_task_planned_on_an_integration_line_keeps_its_criteria_on_retarget() {
+    let line = "integration/EPC-001-source";
+    let mut wrong = Vec::new();
+    for case in ["kept", "retarget", "later"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        git(root, &["switch", "-c", line]);
+        let on_line = |record: String| {
+            standalone_one(&record).replace(
+                "integration_target: main",
+                &format!("integration_target: {line}"),
+            )
+        };
+        write(
+            root,
+            &path,
+            &on_line(task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+        );
+        commit(root, "docs: plan the task on the integration line");
+        let admitted = codeflow()
+            .args(["ids", "admit", &path])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(admitted.status.success());
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        let writes = std::cell::Cell::new(0);
+        let shape = |record: String| {
+            writes.set(writes.get() + 1);
+            let keep_line = case == "kept" || (case == "later" && writes.get() <= 2);
+            if keep_line {
+                on_line(record)
+            } else {
+                standalone_one(&record)
+            }
+        };
+        let base = if case == "kept" { line } else { "main" };
+        let results = complete_reopen_complete(root, &path, &shape, base, false);
+        wrong.extend(wrongly_accepted(
+            case,
+            results,
+            "reopened task keeps its criteria",
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
+/// A default branch other than `main` or `master` is found through
+/// `origin/HEAD`: a task new in its range may then change its criteria on
+/// reopen. Without `origin/HEAD` the default target is unknown and both
+/// paths refuse with the discovery rule; with `origin/HEAD` naming a branch
+/// this clone lacks, both name that branch to fetch (TSK-217).
+#[test]
+fn a_custom_default_branch_is_found_through_origin_head() {
+    let mut wrong = Vec::new();
+    for case in ["origin-head", "no-origin-head", "unfetched"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        git(root, &["branch", "-m", "develop"]);
+        let at = head(root);
+        git(root, &["update-ref", "refs/remotes/origin/develop", &at]);
+        let named = match case {
+            "origin-head" => Some("refs/remotes/origin/develop"),
+            "unfetched" => Some("refs/remotes/origin/trunk"),
+            _ => None,
+        };
+        if let Some(named) = named {
+            git(root, &["symbolic-ref", "refs/remotes/origin/HEAD", named]);
+        }
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        let shape = |record: String| {
+            standalone_one(&record)
+                .replace("integration_target: main", "integration_target: develop")
+        };
+        let results =
+            complete_reopen_complete(root, &record_path("TSK-001"), &shape, "develop", true);
+        match case {
+            "origin-head" => {
+                for (who, result) in ["verb", "ci"].into_iter().zip(results) {
+                    if result.0 != 0 {
+                        wrong.push(format!("{case} {who} refused: {}", result.1));
+                    }
+                }
+            }
+            "no-origin-head" => wrong.extend(wrongly_accepted(
+                case,
+                results,
+                "discovery reads `origin/HEAD`, then `main` and `master`",
+            )),
+            _ => wrong.extend(wrongly_accepted(
+                case,
+                results,
+                "the default target `trunk`, which `origin/HEAD` names, does not resolve here",
+            )),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
