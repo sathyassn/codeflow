@@ -95,6 +95,39 @@ pub fn update(
     Ok(report)
 }
 
+/// Whether [`update`] would rewrite the file at `dest` (relative to `root`),
+/// by the rules it applies: the project state, `[scaffold]` config and
+/// installed manifest all read; a shipped entry for `dest` applies to the
+/// project's tier and permission preset and is managed, whole or by
+/// region; and `[scaffold] ignore` does not opt it out. A record in the
+/// installed manifest alone never counts. Doctor uses it to offer
+/// `codeflow update` only where update repairs the file (TSK-215).
+#[must_use]
+pub fn repairs(source: &dyn super::AssetSource, root: &Path, dest: &str) -> bool {
+    let Ok(state) = ProjectState::load(root) else {
+        return false;
+    };
+    let Ok(ignore) = ScaffoldConfig::load(root) else {
+        return false;
+    };
+    let Ok(manifest) = ScaffoldManifest::load(source) else {
+        return false;
+    };
+    if InstalledManifest::load_or_default(root, &state.scaffold_version).is_err()
+        || ignore.is_ignored(dest)
+    {
+        return false;
+    }
+    manifest.entries.iter().any(|entry| {
+        entry.dest == dest
+            && entry.applies(state.tier, &state.permission_preset)
+            && matches!(
+                entry.ownership,
+                Ownership::Managed | Ownership::ManagedRegion
+            )
+    })
+}
+
 #[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
 fn update_writes(
     source: &dyn super::AssetSource,

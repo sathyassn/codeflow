@@ -62,7 +62,28 @@ pub fn render_outcome(
     notes: &[codeflow_core::remedy::Finding],
     block_code: i32,
 ) -> i32 {
-    render_findings(plane, root, &[], violations, notes, &[], block_code)
+    render_outcome_to(
+        &mut std::io::stderr(),
+        plane,
+        root,
+        violations,
+        notes,
+        block_code,
+    )
+}
+
+/// [`render_outcome`] into `err` in place of stderr: the doctor's in-process
+/// guard canary reads the same lines a harness would (TSK-215).
+#[must_use]
+pub fn render_outcome_to(
+    err: &mut dyn std::io::Write,
+    plane: &str,
+    root: &Path,
+    violations: &[Violation],
+    notes: &[codeflow_core::remedy::Finding],
+    block_code: i32,
+) -> i32 {
+    render_findings(err, plane, root, &[], violations, notes, &[], block_code)
 }
 
 /// Render a git hook stage: the findings another plane printed for it, its
@@ -77,6 +98,7 @@ pub fn render_stage(
         eprintln!("codeflow {plane}: {status}");
     }
     render_findings(
+        &mut std::io::stderr(),
         plane,
         root,
         &report.relayed,
@@ -87,7 +109,9 @@ pub fn render_stage(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_findings(
+    err: &mut dyn std::io::Write,
     plane: &str,
     root: &Path,
     relayed: &[String],
@@ -97,13 +121,13 @@ fn render_findings(
     block_code: i32,
 ) -> i32 {
     for finding in relayed {
-        eprintln!("codeflow {plane}: {finding}");
+        let _ = writeln!(err, "codeflow {plane}: {finding}");
     }
     for note in notes {
-        eprintln!("{}", note.line(&format!("codeflow {plane}"), "note"));
+        let _ = writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
     }
     for v in violations {
-        eprintln!("{}", v.render(plane));
+        let _ = writeln!(err, "{}", v.render(plane));
     }
     let stopped = any_blocking(violations);
     record_refusal(root, plane, violations, refused_by, stopped);
@@ -111,8 +135,9 @@ fn render_findings(
     if !relayed.is_empty() || !violations.is_empty() || !notes.is_empty() {
         let operation = operation_of(plane);
         let verdict = if stopped { "stopped" } else { "not stopped" };
-        eprintln!("codeflow {plane}: {operation} {verdict}");
+        let _ = writeln!(err, "codeflow {plane}: {operation} {verdict}");
     }
+    let _ = err.flush();
     if stopped {
         block_code
     } else {

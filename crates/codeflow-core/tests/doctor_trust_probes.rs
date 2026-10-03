@@ -27,12 +27,10 @@ fn opts(project: &Path, home: &Path) -> Options {
         env_var: Some(|_| None),
         // The grok guard canary (TSK-215) answers as a refusing guard; this
         // file probes trust, not the guard.
-        exec_command_capture: Some(|_, _, _| {
-            Ok(CapturedRun {
-                code: Some(2),
-                stdout: r#"{"decision":"deny","reason":"codeflow exec-guard: BLOCKED"}"#.into(),
-                stderr: "codeflow exec-guard: BLOCKED".into(),
-            })
+        guard_canary: Some(|_| CapturedRun {
+            code: Some(2),
+            stdout: r#"{"decision":"deny","reason":"codeflow exec-guard: BLOCKED"}"#.into(),
+            stderr: "codeflow exec-guard: BLOCKED".into(),
         }),
         ..Options::default()
     }

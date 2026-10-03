@@ -1946,6 +1946,58 @@ fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
     );
 }
 
+/// PR 35 review round 3, finding 2: doctor offers `codeflow update` only
+/// where update would rewrite the file, by update's own rules. An
+/// ownership update rejects, a fabricated record for a file update does
+/// not ship, and a file `[scaffold] ignore` opts out all get the hand
+/// edit instead.
+#[test]
+fn the_grok_update_remedy_follows_what_update_repairs() {
+    let stale = grok_hooks_3_0_0();
+    let hand_edit = |root: &Path, path: &str| {
+        let said = doctor(root, "grok");
+        assert!(
+            said.contains(&format!("`codeflow update` does not manage {path}")),
+            "{said}"
+        );
+        assert!(!said.contains("run `codeflow update`"), "{said}");
+    };
+    let manifest = |root: &Path| -> serde_json::Value {
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap()
+    };
+
+    // An ownership update rejects.
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    write(&root, ".grok/hooks/codeflow.json", &stale);
+    let mut record = manifest(&root);
+    record["files"][".grok/hooks/codeflow.json"]["ownership"] = "managed-nonsense".into();
+    write(&root, ".codeflow/manifest.json", &record.to_string());
+    hand_edit(&root, ".grok/hooks/codeflow.json");
+
+    // A managed record for a file update does not ship.
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    write(&root, ".grok/hooks/custom.json", &stale);
+    let mut record = manifest(&root);
+    record["files"][".grok/hooks/custom.json"] =
+        record["files"][".grok/hooks/codeflow.json"].clone();
+    write(&root, ".codeflow/manifest.json", &record.to_string());
+    hand_edit(&root, ".grok/hooks/custom.json");
+
+    // A shipped file the project opted out of.
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    write(&root, ".grok/hooks/codeflow.json", &stale);
+    let project_toml = read(&root, ".codeflow/project.toml");
+    write(
+        &root,
+        ".codeflow/project.toml",
+        &format!("{project_toml}\n[scaffold]\nignore = [\".grok/hooks/codeflow.json\"]\n"),
+    );
+    hand_edit(&root, ".grok/hooks/codeflow.json");
+}
+
 /// PR 35 review finding 5: a stale `CodeFlow` hook in
 /// `.claude/settings.local.json`, which grok reads, survives
 /// `codeflow update`, which does not manage the file; doctor names it with

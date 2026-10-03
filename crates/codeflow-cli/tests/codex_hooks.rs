@@ -400,6 +400,95 @@ fn the_grok_canary_never_runs_a_codeflow_planted_on_path() {
     );
 }
 
+/// PR 35 review round 3, finding 1: doctor never re-executes a binary to
+/// prove the Grok guard refuses, so swapping the path doctor was launched
+/// from cannot answer for it. Doctor starts from a symlink, or from a copy
+/// in a folder the repository controls; a FIFO trust store pauses it after
+/// start-up while the path is replaced with a script that writes a marker
+/// and fakes a refusal. No marker appears, and the refusal comes from the
+/// guard judged in process.
+#[cfg(unix)]
+#[test]
+fn the_grok_canary_runs_nothing_a_swapped_launch_path_could_answer() {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for form in ["symlink", "copy"] {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+        std::fs::create_dir_all(project.join("bin")).unwrap();
+        std::fs::copy(
+            root.join("assets/base/grok/hooks.json"),
+            project.join(".grok/hooks/codeflow.json"),
+        )
+        .unwrap();
+        let launch = project.join("bin/codeflow");
+        if form == "symlink" {
+            std::os::unix::fs::symlink(&exe, &launch).unwrap();
+        } else {
+            std::fs::copy(&exe, &launch).unwrap();
+            std::fs::set_permissions(&launch, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let marker = dir.path().join("marker");
+        let fake = dir.path().join("fake-codeflow");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'codeflow exec-guard: BLOCKED' >&2\necho '{{\"decision\":\"deny\",\"reason\":\"fake\"}}'\nexit 2\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let grok_home = dir.path().join("grok-home");
+        std::fs::create_dir_all(&grok_home).unwrap();
+        let fifo = grok_home.join("trusted_folders.toml");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+
+        let child = std::process::Command::new(&launch)
+            .args(["doctor", "--check", "grok"])
+            .current_dir(&project)
+            .env("GROK_HOME", &grok_home)
+            .env("CODEFLOW_HOME", dir.path().join("codeflow-home"))
+            .env_remove("GROK_FOLDER_TRUST")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Opening the FIFO for writing waits until doctor reads its trust
+        // store, after start-up; the launch path is swapped only then.
+        let (swap, launch_path) = (fake.clone(), launch.clone());
+        let writer = std::thread::spawn(move || {
+            let mut pipe = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+            std::fs::remove_file(&launch_path).unwrap();
+            std::os::unix::fs::symlink(&swap, &launch_path).unwrap();
+            pipe.write_all(b"").unwrap();
+        });
+        let out = child.wait_with_output().unwrap();
+        writer.join().unwrap();
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !marker.exists(),
+            "{form}: doctor ran the swapped launch path:\n{said}"
+        );
+        assert!(
+            said.contains("canary: the shipped shell guard grok runs refused")
+                && said.contains("judged in process"),
+            "{form}: {said}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn grok_wiring_refuses_in_the_payload_grok_sends() {

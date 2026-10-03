@@ -23,7 +23,13 @@ pub fn run(args: &DoctorArgs) -> i32 {
         project_dir: super::repo_root().to_string_lossy().into_owned(),
         qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
         codeflow_home: home,
-        // The grok guard canary runs this binary, never one PATH finds.
+        // The grok guard canary judges the exec-guard in this process; it
+        // never executes a binary, which a swapped path could answer for.
+        guard_canary: Some(super::hook::exec_guard_canary),
+        update_repairs: Some(|root, dest| {
+            codeflow_core::scaffold::update::repairs(&crate::embedded::EmbeddedAssets, root, dest)
+        }),
+        // Only reported beside where PATH resolves codeflow; never run.
         codeflow_exe: std::env::current_exe().ok(),
         ..Options::default()
     };
@@ -132,7 +138,8 @@ mod tests {
                 })
             }),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
-            exec_command_capture: None,
+            guard_canary: None,
+            update_repairs: None,
             codeflow_exe: None,
             codeflow_home: None,
             qualification_dir: None,

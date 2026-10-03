@@ -25,23 +25,13 @@ pub(super) const CANARY_PAYLOAD: &str = concat!(
     r#""tool_input":{"command":"rm -rf /","description":"codeflow doctor canary"}}"#
 );
 
-/// Whether `codeflow update` repairs the hook file at `path` (relative to
-/// `root`): the installed manifest lists it as managed, whole or by region.
-/// A file the manifest does not list, or a manifest that does not read, is
-/// the adopter's to fix by hand.
-pub(super) fn update_manages(root: &Path, path: &str) -> bool {
-    std::fs::read_to_string(root.join(".codeflow").join("manifest.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|manifest| {
-            manifest
-                .get("files")?
-                .get(path)?
-                .get("ownership")?
-                .as_str()
-                .map(|ownership| ownership.starts_with("managed"))
-        })
-        .unwrap_or(false)
+/// The canary payload with `cwd` set to `scratch`, so the guard judges it
+/// against an empty folder and records nothing in the project.
+pub(super) fn canary_payload(scratch: &Path) -> String {
+    let mut payload: Value =
+        serde_json::from_str(CANARY_PAYLOAD).expect("the canary payload is JSON");
+    payload["cwd"] = Value::from(scratch.to_string_lossy().into_owned());
+    payload.to_string()
 }
 
 /// Where a `PATH` value resolves `codeflow`: the first entry holding an
@@ -412,16 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn update_manages_only_what_the_manifest_lists_as_managed() {
-        let manifest = r#"{"files":{".grok/hooks/codeflow.json":{"ownership":"managed"},".claude/settings.json":{"ownership":"managed-region"},".grok/sandbox.toml":{"ownership":"user-owned"}}}"#;
-        let dir = project(&[(".codeflow/manifest.json", manifest)]);
-        assert!(update_manages(dir.path(), ".grok/hooks/codeflow.json"));
-        assert!(update_manages(dir.path(), ".claude/settings.json"));
-        assert!(!update_manages(dir.path(), ".grok/sandbox.toml"));
-        assert!(!update_manages(dir.path(), ".grok/hooks/custom.json"));
-        assert!(!update_manages(dir.path(), ".claude/settings.local.json"));
-        let none = project(&[]);
-        assert!(!update_manages(none.path(), ".grok/hooks/codeflow.json"));
+    fn the_canary_payload_judges_in_the_scratch_folder() {
+        let scratch = Path::new("/tmp/codeflow-grok-canary-x");
+        let text = canary_payload(scratch);
+        let payload = crate::hooks::git_guard::HookPayload::parse(&text).unwrap();
+        assert_eq!(payload.cwd.as_deref(), Some(scratch));
+        assert_eq!(payload.shell_command(), Some("rm -rf /"));
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert!(value.get("hookEventName").is_some());
     }
 
     /// Grok's matcher semantics (`xai-grok-hooks` `matcher.rs`): empty or
