@@ -4588,9 +4588,9 @@ impl Reader<'_> {
     /// appended; `None` for a path the reader cannot place.
     fn real_path(&self, path: &str) -> Option<String> {
         // On native Windows a path that starts with `/` names no fixed
-        // place (`canonical_operand`): it is judged as written. Resolving
-        // it against the current drive gives `\\?\C:\/…`, which reads as
-        // no place at all and refused scratch space below a temp root.
+        // place, so this reader cannot place it; resolving it against the
+        // current drive gives `\\?\C:\/…`. The temp check refuses such a
+        // deletion as an unresolved temp path (`dangerous::canonical_operand`).
         if cfg!(windows) && path.starts_with('/') {
             return None;
         }
@@ -7415,6 +7415,9 @@ mod tests {
     fn a_project_deletion_is_allowed() {
         for command in PROJECT_DELETIONS {
             assert_eq!(refused(command), None, "{command}");
+        }
+        for command in super::super::guard_forms::UNIX_TEMP_DELETIONS {
+            assert_eq!(refused(command).is_some(), cfg!(windows), "{command}");
         }
         // A form named as data is not run.
         for command in [

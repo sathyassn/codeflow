@@ -127,6 +127,11 @@ pub const COMPOSED_PAIRS: &[(&str, &str)] = &[
     ("rm -rf --no-preserve-root /", "rm -rf /"),
 ];
 
+/// Scratch deletions below a Unix temp root: allowed on Unix, where the
+/// root resolves, and refused on native Windows, where a `/`-rooted path
+/// names no fixed place and its containment cannot be established.
+pub const UNIX_TEMP_DELETIONS: &[&str] = &["rm -r /tmp/scratch"];
+
 /// Deletions that stay inside the project: allowed, alone and nested
 /// (TSK-141 AC-2).
 pub const PROJECT_DELETIONS: &[&str] = &[
@@ -149,7 +154,6 @@ pub const PROJECT_DELETIONS: &[&str] = &[
     "cd /; ls",
     "find / -name '*.log'",
     "echo / | xargs ls",
-    "rm -r /tmp/scratch",
     // Round 1 review: quoting, scope and plain narrowing stay precise.
     "D=/; rm -rf '$D'",
     "(cd /; pwd); rm -rf *",

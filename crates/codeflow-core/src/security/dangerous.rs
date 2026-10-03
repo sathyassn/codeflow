@@ -443,8 +443,8 @@ enum TempPlace {
 /// Containment is canonical, never lexical: the longest existing prefix is
 /// canonicalized (following symlinks) and the rest appended; a `..` in that
 /// rest, a failed canonicalization or a component that exists but does not
-/// resolve (a dangling link) establishes nothing. Native Windows, where these
-/// paths name no fixed place, is the one lexical case (`canonical_operand`). A glob is judged by its
+/// resolve (a dangling link) establishes nothing. On native Windows, where
+/// these paths name no fixed place, nothing is established (`canonical_operand`). A glob is judged by its
 /// text before the first glob character, and only when the glob is in the
 /// last component, since a match in the middle may itself be a link.
 ///
@@ -512,18 +512,13 @@ fn temp_root_depth(canonical: &str) -> Option<usize> {
 /// On native Windows a path that starts with `/` names no fixed place: Git
 /// Bash reads it below its own install root (`/tmp` is the user's temp
 /// folder) and other shells below the current drive, and neither is the
-/// path this process would resolve. Containment is lexical there, and a
-/// `..` establishes nothing.
+/// path this process would resolve. A junction can also redirect any part of
+/// it. Its containment cannot be established, so nothing below a Unix temp
+/// root is exempt there and such a deletion is refused as an unresolved
+/// temp path.
 #[cfg(windows)]
-fn canonical_operand(path: &str) -> Option<String> {
-    let parts: Vec<&str> = path
-        .split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .collect();
-    if parts.contains(&"..") {
-        return None;
-    }
-    Some(format!("/{}", parts.join("/")))
+fn canonical_operand(_path: &str) -> Option<String> {
+    None
 }
 
 /// Canonicalize the longest existing prefix of an absolute path and append
@@ -1258,7 +1253,6 @@ mod tests {
     fn test_rm_recursive_safe_paths_allowed() {
         for cmd in [
             "rm -rf ./build",
-            "rm -r /tmp/scratch",
             "rm -rf target",
             "rm -rf node_modules",
             "rm -f /etc/hosts.bak",             // not recursive
@@ -1492,7 +1486,10 @@ mod tests {
 
     #[test]
     fn test_safe_rm() {
-        assert!(DangerousModule.check(&ctx("rm -rf /tmp/test")).is_none());
+        // On native Windows a Unix temp path names no fixed place and is
+        // refused (`canonical_operand`).
+        let verdict = DangerousModule.check(&ctx("rm -rf /tmp/test"));
+        assert_eq!(verdict.is_some(), cfg!(windows), "{verdict:?}");
     }
 
     #[test]
@@ -1508,18 +1505,33 @@ mod tests {
             "/private/var/folders/ab/cd123/T",
             "/private/var/folders/ab/cd123/T/*",
         ] {
-            assert_eq!(temp_place(root, None), TempPlace::Root, "{root}");
+            // On native Windows nothing below a Unix temp root is placed,
+            // and every such deletion is refused (`canonical_operand`).
+            let place = if cfg!(windows) {
+                TempPlace::Outside(None)
+            } else {
+                TempPlace::Root
+            };
+            assert_eq!(temp_place(root, None), place, "{root}");
             assert!(DangerousModule
                 .check(&ctx(&format!("rm -rf {root}")))
                 .is_some());
         }
         for below in [
+            "/tmp/scratch",
             "/private/tmp/claude-501/work",
             "/private/var/tmp/cache",
             "/private/var/folders/ab/cd123/T/scratch",
             "/private/var/folders/a_/x+y_0/T/build/*",
         ] {
-            assert_eq!(temp_place(below, None), TempPlace::Below, "{below}");
+            let place = if cfg!(windows) {
+                TempPlace::Outside(None)
+            } else {
+                TempPlace::Below
+            };
+            assert_eq!(temp_place(below, None), place, "{below}");
+            let verdict = DangerousModule.check(&ctx(&format!("rm -r {below}")));
+            assert_eq!(verdict.is_some(), cfg!(windows), "{below}: {verdict:?}");
         }
         // Lookalikes of the per-user root are not roots.
         for outside in [

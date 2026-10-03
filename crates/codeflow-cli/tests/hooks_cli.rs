@@ -971,14 +971,19 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
     std::os::unix::fs::symlink("/etc", &link).unwrap();
     let guard = |command: &str| exec_guard_with_tmpdir(dir.path(), &tmpdir, command);
 
-    let mut allowed = vec![
+    // Below the Unix temp roots. On native Windows these spellings name no
+    // fixed place (Git Bash maps them below its install root, and a junction
+    // can redirect them), so the guard refuses them as unresolved temp paths.
+    let unix_temp = [
         "rm -rf /private/var/folders/ab/cd123/T/scratch".to_string(),
         "rm -rf /private/tmp/claude-501/work".to_string(),
         "rm -rf /var/tmp/cache && ls".to_string(),
     ];
+    let mut allowed = Vec::new();
     // `$TMPDIR` below a Unix temp root; on native Windows the temp folder
     // lies below none, so these spellings name no exempt place there.
     if cfg!(unix) {
+        allowed.extend(unix_temp.iter().cloned());
         allowed.extend([
             format!("rm -rf {own}/work"),
             format!("rm -rf \"{own}/quoted dir\""),
@@ -1032,6 +1037,8 @@ fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
             format!("rm -rf {link}/*"),
             format!("rm -rf {link}/../var/db"),
         ]);
+    } else {
+        blocked.extend(unix_temp.iter().cloned());
     }
     for command in &blocked {
         let out = guard(command);
