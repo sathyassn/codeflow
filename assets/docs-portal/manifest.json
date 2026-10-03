@@ -5,6 +5,7 @@
     { "path": ".gitignore", "ownership": "managed" },
     { "path": ".node-version", "ownership": "managed" },
     { "path": "astro.config.mjs", "ownership": "managed" },
+    { "path": "osv-scanner.toml", "ownership": "user-owned" },
     { "path": "package-lock.json", "ownership": "managed" },
     { "path": "package.json", "ownership": "managed" },
     { "path": "portal.config.json", "ownership": "user-owned" },
