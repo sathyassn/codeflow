@@ -71,9 +71,10 @@ fn current_branch(repo_root: &Path) -> Option<String> {
 /// never uses a `plan/` branch, because a planning pull request names an
 /// epic and it has none. A follow-up of a standalone task is itself a
 /// standalone task (R-78): it states the source it follows as its reason,
-/// is written on a task branch cut from the target, and lands with its work
-/// in its own pull request. Running this on a `plan/` branch for a
-/// standalone source is refused.
+/// is written on a task branch cut from the target, filled in and committed
+/// there, then claimed with `work claim`, and lands with its work in its own
+/// pull request. Running this on a `plan/` branch for a standalone source is
+/// refused.
 ///
 /// # Errors
 ///
@@ -128,8 +129,8 @@ pub fn create_follow_up_with(
             "{source_id} is a standalone task, so its follow-up is a standalone task too: \
              its record lands with its work on its own task branch, since a planning pull \
              request names an epic (current branch '{branch}'); run \
-             `git switch -c task/<slug> {target}`, file the follow-up there, then \
-             `codeflow work claim <TSK-NNN>`"
+             `git switch -c task/<slug> {target}`, file the follow-up there, fill in and \
+             commit its record, then run `codeflow work claim <TSK-NNN>`"
         )));
     }
     let reason = epic

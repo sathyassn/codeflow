@@ -200,7 +200,8 @@ admitted through the structural checks of readiness and may arrive complete.
 `task new --standalone-reason` may run on the task's own branch; `task new
 --follow-up-of` runs on a `plan/` branch for an epic task. A standalone task
 never uses a `plan/` branch: its follow-up is a standalone task, filed on a
-task branch cut from the target, and lands with its work in its own pull
+task branch cut from the target with its record filled in and committed,
+then claimed with `work claim`, and it lands with its work in its own pull
 request (TSK-214); `epic new --integration` and
 `adr new` (numbered, written `proposed`) are one command each. `init` writes
 a stack default for `git.product_paths` and `update` adds it once; with

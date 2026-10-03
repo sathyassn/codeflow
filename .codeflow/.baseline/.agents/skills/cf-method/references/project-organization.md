@@ -204,9 +204,10 @@ target; a standalone task's record is allocated on its own task branch:
   `plan/` branch and lands in the epic's batched amendment. A standalone task
   never uses a `plan/` branch, and the command refuses one; its follow-up is
   a standalone task too. Cut a task branch from the target, file the
-  follow-up there, then run `codeflow work claim <TSK-NNN>`, which renames
-  that branch to `task/TSK-NNN-<slug>` and pushes it (it creates no worktree).
-  The record lands with its work in that task's pull request.
+  follow-up there, fill in and commit its record, then run
+  `codeflow work claim <TSK-NNN>` (it reads the committed record). Claim
+  renames that branch to `task/TSK-NNN-<slug>` and pushes it; it creates no
+  worktree. The record lands with its work in that task's pull request.
 - `codeflow adr new "<title>"` allocates a decision record.
 
 The epic's one planning change is validated with `codeflow validate --docs`,

@@ -378,7 +378,7 @@ fn a_follow_up_of_a_standalone_task_lands_with_its_work() {
         ],
     );
 
-    // Off a planning branch: one command, then the claim names its branch.
+    // A standalone source: file the follow-up on a task branch, commit its record, then claim it.
     git(&root, &["switch", "-q", "-c", "task/tidy", &main]);
     let follow = ok(
         &codeflow(&root, &["task", "new", "--follow-up-of", "TSK-001", "Tidy"]),

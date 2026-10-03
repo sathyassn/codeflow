@@ -124,7 +124,8 @@ pub enum TaskCommand {
         /// its target. An epic task's follow-up inherits the epic and is filed
         /// on a plan/ branch. A standalone task never uses a plan/ branch and
         /// the command refuses one: its follow-up is a standalone task, filed
-        /// on a task branch cut from the target and claimed with `work claim`.
+        /// on a task branch cut from the target, with its record filled in and
+        /// committed, then claimed with `work claim`.
         #[arg(
             long,
             value_name = "TSK-NNN",
