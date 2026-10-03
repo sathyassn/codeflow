@@ -26,6 +26,25 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
     evaluate_at(command, levels, PolicyLevel::Block, &cwd, &cwd)
 }
 
+/// The catastrophic-command floor alone, which no policy relaxes: the first
+/// check [`evaluate_at`] applies. It takes no policy, directory or
+/// repository; doctor's Grok guard canary judges with it (TSK-215).
+#[must_use]
+pub fn evaluate_floor(command: &str) -> Vec<Violation> {
+    let policy = SecurityPolicy::defaults();
+    let ctx = CheckContext {
+        command,
+        sandbox_bypass: false,
+        current_branch: "",
+        policy: &policy,
+    };
+    DangerousModule
+        .check(&ctx)
+        .map(|verdict| dangerous_violation(&verdict))
+        .into_iter()
+        .collect()
+}
+
 /// Evaluate commands and interpreter literals at the shell's actual directory.
 #[must_use]
 pub fn evaluate_at(
@@ -46,14 +65,10 @@ pub fn evaluate_at(
         policy: &policy,
     };
 
-    let mut violations = Vec::new();
-
     // A consuming repository cannot turn the catastrophic floor off or
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
-    if let Some(verdict) = DangerousModule.check(&ctx) {
-        violations.push(dangerous_violation(&verdict));
-    }
+    let mut violations = evaluate_floor(command);
     if levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
