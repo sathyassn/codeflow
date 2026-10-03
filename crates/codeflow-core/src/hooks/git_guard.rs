@@ -624,10 +624,12 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
     // An override var carried inside any token (e.g. a `git config alias.*`
     // value `!CODEFLOW_HUMAN_OVERRIDE=1 git …`) — the assignment is embedded,
     // not a leading prefix, so the positional scan below would miss it. The
-    // `git` word may follow a launcher (`command git config …`,
-    // `env X=1 git config …`), so it is found anywhere before `config`.
-    let git_at = tokens.iter().position(|t| basename(t) == "git");
-    if git_at.is_some_and(|at| tokens[at + 1..].iter().any(|t| t == "config")) {
+    // program is judged after its launchers (`command git config …`,
+    // `env X=1 git config …`), so printed text naming git is not.
+    let git_config = strip_launchers(tokens).is_some_and(|(program, args)| {
+        basename(program) == "git" && args.iter().any(|t| t == "config")
+    });
+    if git_config {
         if let Some(var) = tokens.iter().find_map(|t| embedded_override_assignment(t)) {
             return Some(var);
         }
@@ -6343,6 +6345,12 @@ mod tests {
         assert!(evaluate("/usr/bin/env FOO=1 git status", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("declare -x EDITOR=vim", &ctx(&p, "feat/x")).is_empty());
         assert!(evaluate("git config alias.st status", &ctx(&p, "feat/x")).is_empty());
+        // Printed text that names git config is not a git invocation.
+        assert!(evaluate(
+            "printf '%s\\n' git config '!CODEFLOW_HUMAN_OVERRIDE=1'",
+            &ctx(&p, "feat/x")
+        )
+        .is_empty());
     }
 
     // -- review round 2: generalized matchers (B1-B7) --
