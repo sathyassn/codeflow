@@ -1518,6 +1518,70 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "same-run"):
             release.verify_published_assets(args)
 
+    def test_clean_builds_require_the_release_commit_and_no_dirty_flag(self) -> None:
+        """sathyassn/codeflow#14: every release archive's binary must report a
+        clean build of the release commit and version."""
+        import tarfile
+        import zipfile
+
+        source = "c" * 40
+
+        def line(dirty: str = "false", rev: str = source, version: str = "3.1.0") -> bytes:
+            return b"\x00pad\x00" + f"{version} source={rev} dirty={dirty} inputs={'d' * 64}".encode() + b"\x00"
+
+        def archives(root: Path, binaries: dict[str, bytes | None]) -> Path:
+            # Shaped like cargo-dist's: a tar.xz per Unix target, a zip for Windows.
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            for name, data in binaries.items():
+                members = {"README.md": b"readme"}
+                if name.endswith(".zip"):
+                    if data is not None:
+                        members["codeflow.exe"] = data
+                    with zipfile.ZipFile(artifacts / name, "w") as archive:
+                        for member, content in members.items():
+                            archive.writestr(member, content)
+                    continue
+                stem = name.removesuffix(".tar.xz")
+                if data is not None:
+                    members["codeflow"] = data
+                with tarfile.open(artifacts / name, "w:xz") as archive:
+                    for member, content in members.items():
+                        info = tarfile.TarInfo(f"{stem}/{member}")
+                        info.size = len(content)
+                        archive.addfile(info, io.BytesIO(content))
+            (artifacts / "sha256.sum").write_text("not an archive\n")
+            return artifacts
+
+        linux, mac, windows = (
+            "codeflow-x86_64-unknown-linux-gnu.tar.xz",
+            "codeflow-aarch64-apple-darwin.tar.xz",
+            "codeflow-x86_64-pc-windows-msvc.zip",
+        )
+        cases: dict[str, tuple[dict[str, bytes | None], str | None]] = {
+            "clean": ({linux: line(), mac: line(), windows: line()}, None),
+            "dirty": ({linux: line(), windows: line(dirty="true")}, r"windows-msvc\.zip: codeflow\.exe .*: it reports dirty=true$"),
+            "other source": ({mac: line(rev="e" * 40)}, r"apple-darwin\.tar\.xz: .* not a clean build of 3\.1\.0 at c{40}: it carries an identity from source e{40}$"),
+            "other version": ({mac: line(version="3.0.0")}, r"identity for a version other than 3\.1\.0"),
+            "longer version": ({mac: line(version="13.1.0")}, r"identity for a version other than 3\.1\.0"),
+            "dirty beside clean": ({mac: line(dirty="true") + line()}, r"it reports dirty=true$"),
+            "other source beside clean": ({mac: line(rev="e" * 40) + line()}, r"identity from source e{40}$"),
+            "no identity": ({mac: b"\x00a binary with no version line\x00"}, r"it has no version identity$"),
+            "packed after a word": ({linux: b"Cli" + line()[5:], mac: line(), windows: line()}, None),
+            "no binary": ({linux: line(), mac: None}, r"apple-darwin\.tar\.xz holds no codeflow binary"),
+            "no archive": ({}, r"no release archive"),
+        }
+        for name, (binaries, refusal) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as root:
+                args = argparse.Namespace(artifacts_dir=archives(Path(root), binaries), source=source, version="3.1.0")
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    if refusal is None:
+                        release.verify_clean_builds(args)
+                        self.assertEqual(json.loads(out.getvalue())["archives"], 3)
+                    else:
+                        with self.assertRaisesRegex(release.ReleaseError, refusal):
+                            release.verify_clean_builds(args)
+
     def test_command_surface_has_no_candidate_or_finalizer(self) -> None:
         commands = {release.parser().parse_args(values).command for values in [
             ["sync"],

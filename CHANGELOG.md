@@ -117,6 +117,13 @@ erratum below, never an edit of the section.
   reads no commit, or whose git run fails part way. A wrapper that
   runs gitleaks itself can add the entry the CI README shows.
 
+<!-- codeflow:release-impact patch -->
+- **A release refuses a binary that is not a clean build.** Before a
+  release is hosted, and on every dry run, each platform archive is opened
+  and its `codeflow` binary must identify as the release version at the
+  release commit with `dirty=false`. A dirty build, a build from another
+  commit, or an archive without a binary stops the release.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
