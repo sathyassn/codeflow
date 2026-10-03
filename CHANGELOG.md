@@ -180,6 +180,16 @@ erratum below, never an edit of the section.
   that browser and run `show` again; `show --no-launch` prints the
   session's address. The exit code is still 4.
 
+<!-- codeflow:release-impact patch -->
+- **A new task may change its criteria after a reopen in its own pull
+  request.** A standalone task whose record exists only on its branch,
+  completed, reopened and given another criterion there, could not be
+  completed again: `codeflow task status` and `codeflow ci` refused with
+  "a reopened task keeps its criteria as the anchored target has them",
+  though the target holds no criteria to keep. Such a task now completes
+  with its new criteria. A task the target already records still keeps
+  its criteria across a reopen.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
