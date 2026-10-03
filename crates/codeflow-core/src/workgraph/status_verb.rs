@@ -196,21 +196,10 @@ pub fn set_status(
             ));
         }
         let findings = binding(repo_root, &graph.with(after.clone()), &after);
-        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
-        if !findings.is_empty() {
-            if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
-                let mut refused = findings;
-                refused.push(super::acceptance::SCOPE_NOTE.to_string());
-                return Err(VerbError::Refused(refused));
-            }
-            let remedy =
-                crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
-            warnings.extend(
-                findings
-                    .into_iter()
-                    .map(|finding| crate::remedy::Finding::new(finding, remedy.clone())),
-            );
-        }
+        gate_binding(repo_root, findings, &mut warnings)?;
+    }
+    if kind == RecordKind::Epic && change.target == "complete" {
+        gate_binding(repo_root, epic_binding(repo_root, &after), &mut warnings)?;
     }
     replace_if_unchanged(&path, digest.as_slice(), &proposed)?;
     Ok(VerbOutcome {
@@ -219,6 +208,65 @@ pub fn set_status(
         to: change.target.clone(),
         warnings,
     })
+}
+
+/// Refuse binding findings where `git.work_records` blocks, and carry them
+/// as warnings where it warns.
+fn gate_binding(
+    repo_root: &Path,
+    findings: Vec<String>,
+    warnings: &mut Vec<crate::remedy::Finding>,
+) -> Result<(), VerbError> {
+    if findings.is_empty() {
+        return Ok(());
+    }
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
+        let mut refused = findings;
+        refused.push(super::acceptance::SCOPE_NOTE.to_string());
+        return Err(VerbError::Refused(refused));
+    }
+    let remedy = crate::remedy::ACCEPTANCE_BINDING.with(&[("note", super::acceptance::SCOPE_NOTE)]);
+    warnings.extend(
+        findings
+            .into_iter()
+            .map(|finding| crate::remedy::Finding::new(finding, remedy.clone())),
+    );
+    Ok(())
+}
+
+/// The binding of an epic's own acceptance block (R-33, R-60), with the
+/// working tree over `HEAD` as the completion, as CI judges it.
+fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
+    let Ok(repo) = git2::Repository::discover(repo_root) else {
+        return vec!["cannot open the repository to bind the acceptance block".into()];
+    };
+    let Some(head) = repo
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok())
+        .map(|commit| commit.id())
+    else {
+        return vec!["no HEAD commit to bind the acceptance block to".into()];
+    };
+    let Ok(changed) = super::acceptance::worktree_changes(&repo) else {
+        return vec![format!(
+            "{}: {}: the working tree's state cannot be read",
+            super::acceptance::BINDING_RULE,
+            epic.id
+        )];
+    };
+    super::acceptance::bind_epic_completion(
+        &repo,
+        epic,
+        super::acceptance::Landing::Worktree {
+            head,
+            changed: &changed,
+        },
+    )
+    .into_iter()
+    .map(|finding| format!("{}: {}", finding.rule, finding.message))
+    .collect()
 }
 
 /// The binding of a completion to the reviewed commit (R-60), with the

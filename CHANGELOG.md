@@ -178,7 +178,15 @@ erratum below, never an edit of the section.
   epic's own block now proves it under the same rules: verified with its
   evidence, or waived with its planning commit, and the journey verified
   for a journey criterion. A cancelled task still never verifies a
-  criterion, and a ticked checkbox does not either.
+  criterion, and a ticked checkbox does not either. The epic's own block,
+  for criteria no task serves as well, is now bound as a task's block is,
+  in `epic status`, `codeflow ci` and the release-line check: before, any
+  commit-shaped value passed as its reviewed commit or a waiver. Its
+  reviewed commit must exist, with only the epic's status and Closeout
+  changed after it, and a waiver must name a planning-only commit that
+  amends that criterion and that the reviewed commit contains. An epic
+  close that names a fabricated or stale review, or a waiver that is no
+  such amendment, is now refused.
 
 ## [3.0.0]
 

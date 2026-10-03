@@ -520,7 +520,7 @@ const EPIC_CRITERION: &str = "- AC-1 When used, the system shall work.";
 /// Close the epic with its own acceptance block verifying AC-1.
 fn close_epic_with_block(repo: &Repo) -> Result<(), VerbError> {
     let close = StatusChange {
-        acceptance: Some(block(&["AC-1"], "none | n/a")),
+        acceptance: Some(repo.reviewed(&block(&["AC-1"], "none | n/a"))),
         ..change("complete")
     };
     set_status(repo.root(), RecordKind::Epic, "EPC-001", &close).map(drop)
@@ -603,13 +603,117 @@ fn a_cancelled_only_journey_criterion_needs_the_journey_in_the_own_block() {
     repo.commit("plan and cancel");
     let close = |journey: &str| {
         let change = StatusChange {
-            acceptance: Some(block(&["AC-1"], journey)),
+            acceptance: Some(repo.reviewed(&block(&["AC-1"], journey))),
             ..change("complete")
         };
         set_status(repo.root(), RecordKind::Epic, "EPC-001", &change).map(drop)
     };
     assert!(refusal(close("none | not run")).contains("`journey` must be `verified"));
     close("verified | fresh init").unwrap();
+}
+
+/// An epic's own acceptance block binds as a task's does (R-60): its
+/// reviewed commit exists and nothing but the record changed after it, and
+/// a waiver names a planning amendment of that criterion the review saw.
+/// AC-1 is served only by a cancelled task, AC-2 by no task; both close
+/// only on real evidence.
+#[test]
+fn an_epic_own_block_binds_its_review_and_its_waivers() {
+    let repo = Repo::new();
+    let criteria =
+        "- AC-1 When used, the system shall work.\n- AC-2 When idle, the system shall rest.";
+    repo.write(EPIC_PATH, &epic("planning", "", criteria));
+    let closeout = "- cancelled: replaced\n- scope: moved to the epic's own evidence";
+    repo.write(TASK_PATH, &task("TSK-001", "cancelled", CRITERIA, closeout));
+    let planned = repo.commit("plan and cancel");
+    let amended_criteria = criteria
+        .replace("shall work.", "shall work, or is waived.")
+        .replace("shall rest.", "shall rest, or is waived.");
+    repo.write(EPIC_PATH, &epic("planning", "", &amended_criteria));
+    let amendment = repo.commit("amend AC-1 and AC-2");
+    repo.write("project-management/notes.md", "Planning notes.\n");
+    let unrelated = repo.commit("an unrelated planning change");
+    repo.write(
+        EPIC_PATH,
+        &epic(
+            "planning",
+            "",
+            &amended_criteria.replace("or is waived.\n", "or is waived by plan.\n"),
+        ),
+    );
+    repo.write("src/lib.rs", "pub fn code() {}\n");
+    let with_code = repo.commit("amend AC-1 beside code");
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    let own = |reviewed: &str, ac1: &str, ac2: &str| {
+        format!(
+            "acceptance:\n  reviewed: {reviewed}\n  review: session:abc@sha256:00\n  criteria:\n    AC-1: {ac1}\n    AC-2: {ac2}\n  journey: none | n/a\n  not_verified: none\n  follow_ups: none: nothing left\n  verdict: approved\n"
+        )
+    };
+    let close = |acceptance: String| {
+        let change = StatusChange {
+            acceptance: Some(acceptance),
+            ..change("complete")
+        };
+        set_status(repo.root(), RecordKind::Epic, "EPC-001", &change).map(drop)
+    };
+    let verified = "verified | the evidence";
+    for (what, acceptance, needle) in [
+        (
+            "a fabricated reviewed commit",
+            own(&"b".repeat(40), verified, verified),
+            "is not in this repository",
+        ),
+        (
+            "a stale review",
+            own(&amendment, verified, verified),
+            "changed after the reviewed commit",
+        ),
+        (
+            "a nonexistent amendment for the cancelled-only criterion",
+            own(&head, "waived | deadbee", verified),
+            "AC-1 waiver names deadbee, which is not a commit here",
+        ),
+        (
+            "an unrelated amendment for the unserved criterion",
+            own(&head, verified, &format!("waived | {unrelated}")),
+            "does not amend AC-2",
+        ),
+        (
+            "an amendment that also changes code",
+            own(&head, &format!("waived | {with_code}"), verified),
+            "also changes src/lib.rs",
+        ),
+        (
+            "an amendment the review did not see",
+            own(&planned, verified, &format!("waived | {amendment}")),
+            "does not contain",
+        ),
+    ] {
+        let refused = refusal(close(acceptance));
+        assert!(refused.contains(needle), "{what}: {refused}");
+    }
+    close(own(
+        &head,
+        &format!("waived | {amendment}"),
+        &format!("waived | {amendment}"),
+    ))
+    .unwrap();
+}
+
+/// A live serving task keeps its criterion: the epic's own block does not
+/// stand in for it.
+#[test]
+fn an_epic_own_block_does_not_replace_a_live_serving_task() {
+    let (repo, _) = project();
+    let close = StatusChange {
+        acceptance: Some(repo.reviewed(&block(&["AC-1"], "none | n/a"))),
+        ..change("complete")
+    };
+    let refused = refusal(set_status(repo.root(), RecordKind::Epic, "EPC-001", &close).map(drop));
+    assert!(
+        refused.contains("AC-1 is unverified: no complete serving task verified it"),
+        "{refused}"
+    );
 }
 
 #[test]

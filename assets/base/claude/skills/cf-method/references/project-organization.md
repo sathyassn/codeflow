@@ -297,7 +297,10 @@ complete; nobody writes it. An epic closes with `codeflow epic status EPC-NNN
 complete --acceptance <file>` once every task is terminal and every criterion
 is verified. A cancelled task never verifies a criterion: one that only
 cancelled tasks serve, like one no task serves, is verified in the epic's own
-acceptance block with its evidence. `cancelled` and `archived` are its other
+acceptance block with its evidence. That block binds as a task's does: it
+names the reviewed commit, after which only the epic's status and Closeout
+change, and a waiver names the planning amendment of that criterion that
+the reviewed commit contains. `cancelled` and `archived` are its other
 terminal acts. A
 multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body

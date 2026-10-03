@@ -271,7 +271,11 @@ migration baseline and never reopened since (SPC-013 R-101). Epic close needs
 every task terminal, every criterion verified and every consumed spec
 implemented or still consumed. A cancelled task never verifies a criterion:
 one served only by cancelled tasks is verified, like an unserved one, in the
-epic's own acceptance block with its evidence (TSK-214). New records list criteria as `- AC-n` without
+epic's own acceptance block with its evidence. The verb, CI and the release
+judge bind that block as a task's: its reviewed commit exists with only the
+epic's status and Closeout changed after it, and a waiver names a
+planning-only amendment of that criterion inside the reviewed commit
+(TSK-214). New records list criteria as `- AC-n` without
 a checkbox. The rules apply from the `work_records_baseline` commit in
 project config, which `codeflow update` records once, and by transition: an
 unchanged older record keeps its exact-blob exemption. `git.work_records`
