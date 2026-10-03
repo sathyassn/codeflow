@@ -192,7 +192,10 @@ erratum below, never an edit of the section.
   another layout, renumbers it with its uid kept, or retargets it away
   from `main` or from the integration line it was planned on, and
   whether the target is read from a stale local branch, an upstream on
-  another remote or an older comparison base. The default branch is the
+  another remote or an older comparison base. A task is new only when no
+  other branch adds or edits its record, so rewriting the branch's own
+  history cannot hide a recorded task; the refusal names the branch that
+  records it. The default branch is the
   one `origin/HEAD` names, else `main` or `master`. A clone that lacks a
   target the task's record names or the default branch cannot tell, so
   it refuses the change and names the branch to fetch, or explains how
