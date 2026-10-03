@@ -948,6 +948,75 @@ fn close_stops_the_browser_open_launched() {
     assert!(named.is_empty(), "clear left state: {named:?}");
 }
 
+/// `present show` on a session whose browser still runs says the browser is
+/// already open and how to reach it, and exits 4. The running browser is a
+/// stand-in process that carries the session's profile and instance
+/// arguments, the identity `CodeFlow` checks, so no window opens.
+#[test]
+fn show_says_the_browser_is_already_open() {
+    use std::os::unix::process::CommandExt as _;
+
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let profile = runtime_session(&fixture, &session_id).join("browser-profile");
+    let instance = "0b5a3a6e-7c55-4c1e-9b8e-3f1d2a4c5e6f";
+    let browser = StandIn(
+        Command::new("/bin/sh")
+            .args(["-c", "sleep 120 & wait", "stand-in-browser"])
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg(format!("--cf-present-instance={instance}"))
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    let session_path = session_dir(&fixture, &session_id).join("session.json");
+    let mut session: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&session_path).unwrap()).unwrap();
+    session["browser_pid"] = browser.0.id().into();
+    session["browser_instance"] = instance.into();
+    fs::write(&session_path, serde_json::to_string(&session).unwrap()).unwrap();
+
+    let shown = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id],
+    );
+    assert_eq!(shown.status.code(), Some(4), "{shown:?}");
+    let message = failure(&shown);
+    for expected in [
+        format!("the browser for presentation session {session_id} is already open"),
+        "Switch to its window, or quit that browser and run".to_string(),
+        format!("`codeflow present show {session_id}` again"),
+        format!("`codeflow present show {session_id} --no-launch` prints the session's address"),
+    ] {
+        assert!(message.contains(&expected), "{message}");
+    }
+    assert!(!message.contains("not qualified"), "{message}");
+    // The named step works: --no-launch prints the address of the session.
+    let address = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(address.starts_with("http://127.0.0.1:"), "{address}");
+
+    drop(browser);
+    close_and_clear(&fixture, &session_id);
+}
+
+/// A stand-in browser process group, killed when the test ends or fails.
+struct StandIn(std::process::Child);
+
+impl Drop for StandIn {
+    fn drop(&mut self) {
+        if let Ok(group) = i32::try_from(self.0.id()) {
+            // SAFETY: signals only the stand-in's own process group.
+            unsafe { libc::kill(-group, libc::SIGKILL) };
+        }
+        let _ = self.0.wait();
+    }
+}
+
 /// Every running process whose command line carries the launch's instance
 /// marker or its profile path, with that command line.
 fn launch_processes(instance: &str, profile: &Path) -> Vec<(u32, String)> {

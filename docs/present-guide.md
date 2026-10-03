@@ -71,10 +71,11 @@ when you submit them.
 
 1. Wait for the agent to run `codeflow present open <document.json>`, or run it
    yourself. If you closed the window, reopen it with
-   `codeflow present show <session-id>`. If `show` says the presentation
-   already has an owned browser window, that browser is still running (on
-   macOS it can outlive its last window): switch to it, or quit it and run
-   `show` again.
+   `codeflow present show <session-id>`. If `show` says the session's
+   browser is already open, that browser is still running (on macOS it
+   keeps running after its last window closes): switch to its window, or
+   quit it and run `show` again. `show --no-launch` prints the session's
+   address.
 2. Read the page from the top. On a wide screen, the left rail lists the
    sections.
 3. Press `C` or click **Comment** to turn on Comment mode. The notes rail
