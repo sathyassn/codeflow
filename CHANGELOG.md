@@ -134,9 +134,9 @@ erratum below, never an edit of the section.
   to, and a glob is expanded from there with each match judged through
   symbolic links and registered worktrees, so `alias/pol*` with `alias`
   linked to `.codeflow` is refused. Patterns are read so they match at
-  least every name the shell would: a bracket expression, POSIX classes
-  included, matches any one character, and only a `[` that never closes
-  is literal. A `cd` or `pushd` operand other than a
+  least every name the shell would: a plain set such as `[ab]` keeps its
+  members, any other bracket expression, POSIX classes included, matches
+  any one character, and only a `[` that never closes is literal. A `cd` or `pushd` operand other than a
   plain literal path, such as `~1`, `cd -` or a pattern, counts as an
   unknown directory, and a redirection counts as a read only when it is
   `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and

@@ -1260,10 +1260,13 @@ enum GlobStop {
 /// One file-name component of a shell pattern, read so that it matches at
 /// least every name the shell would (TSK-216 rounds 13 and 14): the guard's
 /// patterns only ever over-approximate. A run of `*` is one `*`. A bracket
-/// expression is parsed the POSIX way ([`bracket_end`]) and becomes "any
-/// one character", whatever its set, negation or classes. Only a `[` with
-/// no valid closing `]`, and a stray `]`, are literal characters. The
-/// pattern always compiles, so no text becomes a match-everything glob.
+/// expression is parsed the POSIX way ([`bracket_end`]). A plain set of
+/// ASCII letters, digits, `.` and `_` keeps its members, which is exactly
+/// what the shell matches; every other expression (a negation, range,
+/// class, equivalence class, collating symbol or escape) becomes "any one
+/// character". Only a `[` with no valid closing `]`, and a stray `]`, are
+/// literal characters. The pattern always compiles, so no text becomes a
+/// match-everything glob.
 fn shell_pattern(text: &str) -> glob::Pattern {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();
@@ -1278,7 +1281,18 @@ fn shell_pattern(text: &str) -> glob::Pattern {
             }
             '[' => match bracket_end(&chars, i) {
                 Some(end) => {
-                    out.push('?');
+                    let members = &chars[i + 1..end];
+                    let plain = !members.is_empty()
+                        && members
+                            .iter()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_'));
+                    if plain {
+                        out.push('[');
+                        out.extend(members);
+                        out.push(']');
+                    } else {
+                        out.push('?');
+                    }
                     i = end;
                 }
                 None => out.push_str("[[]"),
@@ -9099,6 +9113,11 @@ mod tests {
         "[^p]olicy.json",
         "[![:alpha:]]olicy.json",
         "[pq]olicy.json",
+        "[ab]olicy.json",
+        "[a-q]olicy.json",
+        "[p._]olicy.json",
+        ".[ab]*",
+        ".[cg]*",
         "[]x]",
         "[]]olicy.json",
         "[!]]olicy.json",
@@ -9131,12 +9150,17 @@ mod tests {
         "axyb",
         "[[:alpha:]",
         ":olicy.json",
+        "aolicy.json",
+        ".codeflow",
+        ".git",
+        ".a",
     ];
 
     /// The guard's reading of a shell pattern always compiles and only
     /// over-approximates: a bracket expression, closed the POSIX way past
-    /// its classes, matches any one character, and only a `[` that never
-    /// closes is literal (TSK-216 rounds 13 and 14).
+    /// its classes, keeps a plain member set and otherwise matches any one
+    /// character, and only a `[` that never closes is literal (TSK-216
+    /// rounds 13 and 14).
     #[test]
     fn test_shell_pattern_reads_brackets_as_the_shell_does() {
         for (pattern, name, matches) in [
@@ -9144,6 +9168,12 @@ mod tests {
             ("[[:alpha:][:digit:]]olicy.json", "policy.json", true),
             ("[[:alpha:]]olicy.json", "policy.json", true),
             ("[!p]olicy.json", "policy.json", true),
+            ("[pq]olicy.json", "policy.json", true),
+            ("[ab]olicy.json", "policy.json", false),
+            ("[ab]olicy.json", "aolicy.json", true),
+            ("[a-c]olicy.json", "policy.json", true),
+            (".[ab]*", ".git", false),
+            (".[cg]*", ".git", true),
             ("[]x]", "]", true),
             ("[]]olicy.json", "]olicy.json", true),
             ("[[=p=]]olicy.json", "policy.json", true),
