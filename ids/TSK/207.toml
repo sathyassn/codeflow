@@ -1,0 +1,11 @@
+id = "TSK-207"
+uid = "2a7a2f75-f174-43d3-b365-361554dbdaa4"
+kind = "TSK"
+title = "the human override covers commits and pushes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T00:11:31Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
