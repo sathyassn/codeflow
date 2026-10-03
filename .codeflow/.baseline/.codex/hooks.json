@@ -4,14 +4,14 @@
       {
         "matcher": "^(Bash|PowerShell)$",
         "hooks": [
-          { "type": "command", "command": "codeflow hook git-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; }", "timeout": 10 },
-          { "type": "command", "command": "codeflow hook exec-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; }", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook git-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }", "timeout": 10 },
+          { "type": "command", "command": "codeflow hook exec-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }", "timeout": 10 }
         ]
       },
       {
         "matcher": "^(apply_patch|Edit|Write)$",
         "hooks": [
-          { "type": "command", "command": "codeflow hook edit-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; }", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook edit-guard --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }", "timeout": 10 }
         ]
       }
     ],
@@ -19,14 +19,14 @@
       {
         "matcher": "startup|resume|clear|compact",
         "hooks": [
-          { "type": "command", "command": "codeflow hook session-orient --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; }", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook session-orient --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }", "timeout": 10 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "codeflow hook session-orient --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; exit 2; }", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook session-orient --contract 3 || { command -v codeflow >/dev/null 2>&1 || echo \"codeflow: hook binary missing; install with: curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh ; then run codeflow update\" >&2; echo \"codeflow: hook did not succeed; blocking (exit 2)\" >&2; exit 2; }", "timeout": 10 }
         ]
       }
     ]

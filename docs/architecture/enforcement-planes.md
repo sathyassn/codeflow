@@ -153,7 +153,9 @@ Contract-3 git shims exit 1 when the `codeflow` binary is missing or older,
 printing the installer and `codeflow update`, so install the new binary
 before running `codeflow update`. A harness wrapper is
 `codeflow hook <name> --contract 3`, then a fallback that exits 2 whenever
-the hook fails. A policy refusal prints only the guard's message; a missing
+the hook fails and always ends with a line saying it blocked, since Codex
+treats exit 2 with an empty stderr as a failed hook and lets the call
+through. A policy refusal prints the guard's message first; a missing
 binary also prints the installer and `codeflow update`; a binary too old to
 know `--contract` prints its own usage error, and one that knows the flag
 names the install step for a contract it does not support. The wrapper
@@ -162,8 +164,12 @@ never calls the binary twice and carries no `$`: Grok expands `$name` and
 variable is unset (issue 29). Grok shows only the first stderr line of a
 denying hook, so a guard refusing a Grok call also writes Grok's deny
 decision with the whole refusal on stdout. `codeflow doctor --check grok`
-names a CodeFlow hook command Grok would skip and runs the configured Grok
-shell guard on a canary in a scratch directory.
+names a CodeFlow hook command Grok would skip. When the shipped exec-guard
+command is bound where Grok's shell tool hits it, doctor runs its fixed
+invocation, `codeflow hook exec-guard --contract 3`, on a canary in a
+scratch directory and expects exit 2, a reason and Grok's deny answer.
+Doctor never runs hook text from the repository, so a customised command
+is reported unverified.
 The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
 PowerShell as the hook runner is unsupported.
 

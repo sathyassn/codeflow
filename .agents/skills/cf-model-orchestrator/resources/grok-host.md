@@ -17,8 +17,9 @@ after `/hooks-trust` or `--trust`; `grok inspect` is the local proof of
 discovery and trust. Grok expands `$name` and `${...}` in a hook command
 itself and skips, failing open, a hook whose variable is unset, so
 CodeFlow's hook commands carry no `$`. `codeflow doctor --check grok` names
-a CodeFlow hook command Grok would skip and runs the configured shell guard
-on a canary; a live session's hook lines are the proof that Grok ran it.
+a CodeFlow hook command Grok would skip and runs the shipped shell guard's
+fixed invocation on a canary, never hook text from the repository; a live
+session's hook lines are the proof that Grok ran it.
 Git hooks and CI remain the enforcement floor. This is not a Grok schema-v2
 Stop-hook lifecycle; Claude turn completion still uses schema-v2 when Grok
 hosts Claude.

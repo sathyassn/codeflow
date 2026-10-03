@@ -255,16 +255,28 @@ fn ac3_shims_fail_closed_and_harness_contract_is_wired() {
     wrappers_advise_reinstall_only_for_a_missing_binary(&repo, &assets, &bin);
 }
 
-/// The fake `codeflow` for a wrapper case: the hook prints `stderr` and
-/// exits `code`. `git-hook capabilities` leaves a mark and then stalls, so
-/// a wrapper that calls the binary a second time is seen and would hang.
+/// The fake `codeflow` for a wrapper case: the hook prints `stderr`
+/// (nothing when it is empty) and exits `code`; a negative `code` makes it
+/// kill itself with that signal. `git-hook capabilities` leaves a mark and
+/// then stalls, so a wrapper that calls the binary a second time is seen
+/// and would hang.
 fn fake_codeflow(bin: &Path, stderr: &str, code: i32) {
     use std::os::unix::fs::PermissionsExt;
     let fake = bin.join("codeflow");
+    let say = if stderr.is_empty() {
+        String::new()
+    } else {
+        format!("echo \"{stderr}\" >&2\n")
+    };
+    let end = if code < 0 {
+        format!("kill -{} $$\n", -code)
+    } else {
+        format!("exit {code}\n")
+    };
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then : > '{}'; exec /bin/sleep 30; fi\necho \"{stderr}\" >&2\nexit {code}\n",
+            "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then : > '{}'; exec /bin/sleep 30; fi\n{say}{end}",
             bin.join("probed").display()
         ),
     )
@@ -278,9 +290,12 @@ fn fake_codeflow(bin: &Path, stderr: &str, code: i32) {
 /// when the binary allows and 2 whenever the hook fails: a policy refusal
 /// keeps only the guard's message, a missing binary names the installer
 /// and `codeflow update`, a binary older than contract 3 keeps its own
-/// usage error, and any other failure still blocks. The wrapper never calls
-/// the binary a second time, so nothing it runs can stall, and it writes
-/// no temporary file.
+/// usage error, and any other failure still blocks. Every failure ends with
+/// one closing line, so a binary that fails silently, or is killed, still
+/// leaves the nonempty reason Codex needs before it blocks on exit 2
+/// (TSK-215 round 1). The wrapper never calls the binary a second time, so
+/// the fallback adds no wait of its own (the hook call itself can still
+/// stall until the harness timeout), and it writes no temporary file.
 fn wrappers_advise_reinstall_only_for_a_missing_binary(repo: &Repo, assets: &Path, bin: &Path) {
     let tmp = repo.root().join("wrapper-tmp");
     std::fs::create_dir(&tmp).unwrap();
@@ -320,6 +335,8 @@ fn wrappers_advise_reinstall_only_for_a_missing_binary(repo: &Repo, assets: &Pat
                 ),
                 (Some(("codeflow hook: internal error", 1)), 2, false),
                 (Some(("codeflow: cannot execute", 126)), 2, false),
+                (Some(("", 1)), 2, false),
+                (Some(("", -9)), 2, false),
             ] {
                 wrapper_case(repo, bin, &tmp, command, binary, expected, advised);
             }
@@ -357,6 +374,15 @@ fn wrapper_case(
     );
     assert_eq!(out.status.code(), Some(expected), "{command}: {out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The harness decision, not just the exit code: Codex blocks on exit 2
+    // only when stderr carries a nonempty reason; Claude and Grok block on
+    // exit 2.
+    if expected == 2 {
+        assert!(
+            !stderr.trim().is_empty(),
+            "{binary:?} {command}: exit 2 with no reason"
+        );
+    }
     assert_eq!(
         stderr.contains("codeflow-cli-installer.sh"),
         advised,
