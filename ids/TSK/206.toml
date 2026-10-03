@@ -1,0 +1,11 @@
+id = "TSK-206"
+uid = "187c4cd4-3318-4a60-ac63-d690a7252659"
+kind = "TSK"
+title = "fresh scaffolds pass the secret scan"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T00:00:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
