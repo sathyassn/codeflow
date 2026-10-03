@@ -502,10 +502,15 @@ catalog! {
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
-    /// Grok hook commands that grok skips, or a grok shell guard that does
-    /// not refuse the doctor canary.
+    /// Grok hook commands that grok skips in a file `codeflow update`
+    /// manages, or a grok shell guard that does not refuse the doctor
+    /// canary.
     DOCTOR_GROK_HOOKS = Step::Codeflow("codeflow update"),
-        "install the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then run `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`; `codeflow doctor --check grok` then reruns the guard canary";
+        "install the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then run `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`. Where you edited one of these files, `codeflow update` leaves it as it is and writes a `.new` file beside it holding a 3-way merge: resolve its conflict markers in favour of the shipped CodeFlow hook commands, keeping your own changes, replace your file with it and delete the `.new` file. Then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+    /// Stale `CodeFlow` hook commands in `.claude/settings.local.json`,
+    /// which grok reads and `codeflow update` does not manage.
+    DOCTOR_GROK_LOCAL_HOOKS = Step::Edit(".claude/settings.local.json"),
+        "`codeflow update` does not manage .claude/settings.local.json: in it, replace each CodeFlow hook command that carries a `$` with the matching command from .claude/settings.json, or remove it where .claude/settings.json already runs that hook; then `codeflow doctor --check grok` confirms it, and a dangerous shell command in a live grok session should be refused";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";

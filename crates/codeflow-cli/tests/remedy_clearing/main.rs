@@ -179,6 +179,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GROK_HOOKS", Runs),
+    ("DOCTOR_GROK_LOCAL_HOOKS", Runs),
     ("DOCTOR_NETWORK", Excluded(Network)),
     ("DOCTOR_DELEGATES", Runs),
     ("DOCTOR_DELEGATES_SIGN_IN", Excluded(HumanAuthority)),
@@ -1858,8 +1859,133 @@ fn clears_doctor_grok_hooks() {
     );
     let after = doctor(&root, "grok");
     assert!(
-        after.contains("canary: the shell guard grok runs refused a dangerous command"),
+        after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
         "{after}"
+    );
+}
+
+/// The grok hook file as 3.0.0 shipped it: each wrapper tail carried
+/// `$` variables grok reads as unset templates.
+fn grok_hooks_3_0_0() -> String {
+    let current = include_str!("../../../../assets/base/grok/hooks.json");
+    let start = current.find(" || { ").unwrap();
+    let end = current[start..].find("exit 2; }").unwrap() + start + "exit 2; }".len();
+    current.replace(
+        &current[start..end],
+        "; codeflow_status=$?; if [ \\\"$codeflow_status\\\" -ne 0 ]; then exit 2; fi",
+    )
+}
+
+/// PR 35 review finding 5: an adopter who edited the 3.0.0 grok hook file
+/// keeps the edit. `codeflow update` leaves the file as it is and writes a
+/// `.new` 3-way merge; doctor still names the file and the `.new` file, and
+/// resolving the `.new` file as the remedy says clears the finding with the
+/// adopter's change kept.
+#[test]
+fn clears_doctor_grok_hooks_in_an_edited_hook_file() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let old = grok_hooks_3_0_0();
+    assert!(old.contains("codeflow_status=$?"), "{old}");
+    // The 3.0.0 install: the shipped file is the baseline; the adopter
+    // raised the exec-guard timeout.
+    write(&root, ".codeflow/.baseline/.grok/hooks/codeflow.json", &old);
+    let exec_line = old
+        .lines()
+        .find(|line| line.contains("hook exec-guard"))
+        .unwrap();
+    let edited = old.replace(
+        exec_line,
+        &exec_line.replace("\"timeout\": 10", "\"timeout\": 15"),
+    );
+    assert_ne!(edited, old);
+    write(&root, ".grok/hooks/codeflow.json", &edited);
+
+    let finding = "grok skips the CodeFlow hook commands in .grok/hooks/codeflow.json";
+    prove(
+        "DOCTOR_GROK_HOOKS",
+        finding,
+        || doctor(&root, "grok"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_GROK_HOOKS", None);
+            assert_eq!(step, "codeflow update");
+            // It exits nonzero on the conflict it reports.
+            let said = codeflow(&root, &["update"]);
+            assert!(
+                said.contains("codeflow.json.new holds the 3-way merge"),
+                "{said}"
+            );
+            // Never overwritten: the edit stands and the merge waits.
+            assert_eq!(read(&root, ".grok/hooks/codeflow.json"), edited);
+            let merge = read(&root, ".grok/hooks/codeflow.json.new");
+            assert!(merge.contains("<<<<<<<"), "{merge}");
+            let still = doctor(&root, "grok");
+            assert!(still.contains(finding), "{still}");
+            assert!(
+                still.contains("wrote .grok/hooks/codeflow.json.new, which waits to be resolved"),
+                "{still}"
+            );
+            // Resolve as the remedy says: the shipped commands, the
+            // adopter's timeout; then the `.new` file goes.
+            let shipped = include_str!("../../../../assets/base/grok/hooks.json");
+            let line = shipped
+                .lines()
+                .find(|line| line.contains("hook exec-guard"))
+                .unwrap();
+            let resolved =
+                shipped.replace(line, &line.replace("\"timeout\": 10", "\"timeout\": 15"));
+            write(&root, ".grok/hooks/codeflow.json", &resolved);
+            std::fs::remove_file(root.join(".grok/hooks/codeflow.json.new")).unwrap();
+        },
+    );
+    assert!(read(&root, ".grok/hooks/codeflow.json").contains("\"timeout\": 15"));
+    let after = doctor(&root, "grok");
+    assert!(
+        after.contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+        "{after}"
+    );
+}
+
+/// PR 35 review finding 5: a stale `CodeFlow` hook in
+/// `.claude/settings.local.json`, which grok reads, survives
+/// `codeflow update`, which does not manage the file; doctor names it with
+/// the edit step, and the edit clears it.
+#[test]
+fn clears_doctor_grok_local_hooks() {
+    let dir = scaffolded("--minimal");
+    let root = project(&dir);
+    let stale = serde_json::json!({"hooks": {"PreToolUse": [{
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "codeflow hook git-guard --contract 3; codeflow_status=$?; if [ \"$codeflow_status\" -ne 0 ]; then exit 2; fi"}]
+    }]}});
+    let local = serde_json::to_string_pretty(&stale).unwrap();
+    write(&root, ".claude/settings.local.json", &local);
+    codeflow(&root, &["update"]);
+    assert_eq!(read(&root, ".claude/settings.local.json"), local);
+    prove(
+        "DOCTOR_GROK_LOCAL_HOOKS",
+        "grok skips the CodeFlow hook commands in .claude/settings.local.json",
+        || doctor(&root, "grok"),
+        |printed| {
+            assert!(!printed.contains("run `codeflow update`"), "{printed}");
+            let settings: serde_json::Value =
+                serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+            let shipped = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].clone();
+            assert!(
+                shipped
+                    .as_str()
+                    .unwrap()
+                    .starts_with("codeflow hook git-guard"),
+                "{shipped}"
+            );
+            let mut fixed = stale.clone();
+            fixed["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = shipped;
+            write(
+                &root,
+                ".claude/settings.local.json",
+                &serde_json::to_string_pretty(&fixed).unwrap(),
+            );
+        },
     );
 }
 

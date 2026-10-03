@@ -130,6 +130,7 @@ mod tests {
                 })
             }),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
+            exec_command_capture: None,
             codeflow_home: None,
             qualification_dir: None,
             harness_home: Some(dir.path().join("home")),
