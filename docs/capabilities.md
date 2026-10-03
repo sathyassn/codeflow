@@ -428,11 +428,9 @@ Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth. CodeFlow's gates judge
 the output whoever wrote it (ADR-0005). Transport is interactive only and
 stated once, in `cf-model-orchestrator/resources/routing/transport.md`
-(ADR-0077): another family runs as its own interactive CLI in a Herdr tab
-that `cf-herdr` hosts from any host that reaches a Herdr server, Codex on
-its app-server and a Claude seat's turns tracked by the delegate lifecycle;
-the Codex plugin is an optional fallback and tmux the last one. Headless
-task execution is prohibited. Delegates
+(ADR-0077): another family runs its own interactive CLI in a Herdr tab that
+`cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional
+fallback and tmux the last. Headless task execution is prohibited. Delegates
 edit only inside a worktree on a feature branch, under the same gates. Detail:
 [delegation](delegation.md).
 
