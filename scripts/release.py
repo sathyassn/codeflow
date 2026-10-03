@@ -13,8 +13,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import tomllib
 from typing import Any, NoReturn
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ".release/config.json"
@@ -1956,6 +1958,57 @@ def verify_published_assets(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "verified", "tag": args.tag, "assets": len(actual)}))
 
 
+RELEASE_ARCHIVE_SUFFIXES = (".tar.xz", ".tar.gz", ".zip")
+RELEASE_BINARY_NAMES = {"codeflow", "codeflow.exe"}
+
+
+def archive_binaries(path: Path) -> list[tuple[str, bytes]]:
+    """The `codeflow` binaries inside one release archive, by member name."""
+    found: list[tuple[str, bytes]] = []
+    if path.name.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                if not info.is_dir() and Path(info.filename).name in RELEASE_BINARY_NAMES:
+                    found.append((info.filename, archive.read(info)))
+    else:
+        with tarfile.open(path) as archive:
+            for member in archive.getmembers():
+                if member.isfile() and Path(member.name).name in RELEASE_BINARY_NAMES:
+                    extracted = archive.extractfile(member)
+                    if extracted is not None:
+                        found.append((member.name, extracted.read()))
+    return found
+
+
+def verify_clean_builds(args: argparse.Namespace) -> None:
+    """Refuse release archives whose binary is not a clean build of the
+    release commit (sathyassn/codeflow#14). Each binary embeds its
+    `codeflow --version` line as a literal, so the bytes are read and no
+    platform runner is needed."""
+    version = args.version or tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    clean = f"{version} source={args.source} dirty=false ".encode()
+    archives = sorted(
+        path for path in args.artifacts_dir.iterdir()
+        if path.name.endswith(RELEASE_ARCHIVE_SUFFIXES)
+    )
+    if not archives:
+        fail(f"no release archive in {args.artifacts_dir}")
+    for path in archives:
+        if path.is_symlink() or not path.is_file():
+            fail(f"release archive is not a regular file: {path.name}")
+        binaries = archive_binaries(path)
+        if not binaries:
+            fail(f"{path.name} holds no codeflow binary")
+        for member, data in binaries:
+            if clean not in data:
+                dirty = b" dirty=true " in data
+                fail(
+                    f"{path.name}: {member} is not a clean build of {version} at {args.source}"
+                    + (" (it reports dirty=true)" if dirty else "")
+                )
+    print(json.dumps({"status": "verified", "version": version, "archives": len(archives)}))
+
+
 def add_host_args(value: argparse.ArgumentParser) -> None:
     value.add_argument("--host-state", type=Path)
     value.add_argument("--repository", default="")
@@ -2053,6 +2106,12 @@ def parser() -> argparse.ArgumentParser:
     published.add_argument("--source", required=True)
     published.add_argument("--tag", required=True)
     published.set_defaults(func=verify_published_assets)
+
+    clean = sub.add_parser("verify-clean-builds")
+    clean.add_argument("--artifacts-dir", type=Path, required=True)
+    clean.add_argument("--source", required=True)
+    clean.add_argument("--version", help="the release version; default: Cargo.toml's")
+    clean.set_defaults(func=verify_clean_builds)
     return value
 
 

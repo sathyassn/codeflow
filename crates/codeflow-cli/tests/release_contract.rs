@@ -283,6 +283,19 @@ fn release_workflows_keep_same_pr_and_current_main_boundary() {
     assert!(recheck.contains("--main-source \"$main_sha\""));
     assert!(recheck.contains("GITHUB_TRIGGERING_ACTOR"));
     assert!(recheck.contains("collaborators/${login}/permission"));
+    // sathyassn/codeflow#14: every platform build is read for a clean
+    // version line of the release commit before the host job publishes, on
+    // dry runs too, so this step carries no dry-run condition.
+    let clean = recheck
+        .split("- name: Download the platform builds\n")
+        .nth(1)
+        .and_then(|rest| rest.split("- name: Recheck selected main").next())
+        .expect("main recheck downloads the platform builds before its recheck");
+    assert!(clean.contains("pattern: artifacts-build-local-*"));
+    assert!(clean.contains(
+        "scripts/release.py verify-clean-builds --artifacts-dir /tmp/release-builds --source \"$GITHUB_SHA\""
+    ));
+    assert!(!clean.contains("if:"));
 
     // The cargo-dist plan carries the release notes, and 3.0.0's plan
     // exceeded the 128 KiB limit on one variable, so no workflow passes the
