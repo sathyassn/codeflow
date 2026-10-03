@@ -1,0 +1,11 @@
+id = "TSK-225"
+uid = "32b12a58-5fa2-4785-8ccd-532b0f3c86ff"
+kind = "TSK"
+title = "Managed CI runs a project setup step, checks a pinned release digest and scans only a change's own commits"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-03T23:37:59Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
