@@ -2811,3 +2811,171 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
     let cleared = output_text(&codeflow(&adopt, &["doctor", "--check", "hooks"]));
     assert!(!cleared.contains("git does not run"), "{cleared}");
 }
+
+/// The installed catalog's design owner seat: its id, first and second
+/// line, and the version ids of the first line.
+fn design_owner_lines(root: &Path) -> (String, String, String, Vec<String>) {
+    let catalog: serde_json::Value = serde_json::from_str(&read(
+        root,
+        ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ))
+    .unwrap();
+    let owner = catalog["design_owner"].as_str().unwrap().to_string();
+    let seat = catalog["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|seat| seat["id"] == owner.as_str())
+        .unwrap();
+    let first = seat["lines"][0].as_str().unwrap().to_string();
+    let second = seat["lines"][1].as_str().unwrap().to_string();
+    let versions = catalog["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|line| line["id"] == first.as_str())
+        .unwrap()["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|version| version["id"].as_str().unwrap().to_string())
+        .collect();
+    (owner, first, second, versions)
+}
+
+/// Commit, through the scaffolded hooks, a schema 2 selection naming
+/// `second` co-owner and a task record targeting `integration/design`.
+fn commit_design_authority(root: &Path, owner: &str, first: &str, second: &str) -> String {
+    let selection = serde_json::json!({
+        "schema_version": 2,
+        "bindings": [],
+        "design_authority": {
+            "seat": owner,
+            "designated": {"date": "2026-10-04", "record": "owner instruction, journey"},
+            "lines": {
+                first: {"role": "owner"},
+                second: {"role": "co-owner", "approves": ["phase-exit"]}
+            }
+        }
+    });
+    let selection = format!("{}\n", serde_json::to_string_pretty(&selection).unwrap());
+    git_with_binary(root, &["switch", "-q", "-c", "integration/design"]);
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    // The journey commits at its root checkout on a non-root branch; the
+    // root-checkout rule (TSK-165) has its own journey, so it is off here.
+    policy["git"]["root_checkout_commits"] = "off".into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    std::fs::write(root.join(".codeflow/model-selection.json"), &selection).unwrap();
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: \"journey\"\ntitle: \"Journey\"\n\
+         status: todo\nwork_type: feat\nspecs: []\ndepends_on: []\n\
+         integration_target: \"integration/design\"\ncreated: 2026-10-04\n---\n\n# TSK-001: Journey\n",
+    )
+    .unwrap();
+    git_with_binary(root, &["add", "-A"]);
+    git_with_binary(
+        root,
+        &["commit", "-q", "-m", "chore: designate a design co-owner"],
+    );
+    selection
+}
+
+/// `models resolve --json` for `duty` on task TSK-001, with `extra` flags.
+fn resolve_json(root: &Path, duty: &str, extra: &[String]) -> serde_json::Value {
+    let mut args = vec![
+        "models",
+        "resolve",
+        "--duty",
+        duty,
+        "--task",
+        "TSK-001",
+        "--host",
+        "claude-code",
+        "--json",
+    ];
+    args.extend(extra.iter().map(String::as_str));
+    let out = codeflow(root, &args);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        stderr_text(&out)
+    );
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// TSK-236 AC-1 (journey): in a freshly scaffolded standard project driven
+/// by the binary under test, a schema 2 design-authority block committed on
+/// the task's integration target makes the design owner seat's second line
+/// a co-owner: with the first line excluded, `models resolve --duty design`
+/// returns it with no override and no reduced assurance, `design-approval`
+/// returns it as the same-family approver, doctor prints the block, and
+/// `codeflow update` leaves the user-owned file byte-identical.
+#[test]
+fn a_fresh_project_resolves_design_to_its_committed_co_owner() {
+    let (_tmp, root) = fresh("--standard");
+    let (owner, first, second, first_versions) = design_owner_lines(&root);
+    let selection = commit_design_authority(&root, &owner, &first, &second);
+
+    let exclusions: Vec<String> = first_versions
+        .iter()
+        .flat_map(|id| ["--exclude".to_string(), format!("selector:{id}")])
+        .collect();
+    let result = resolve_json(&root, "design", &exclusions);
+    let chosen = &result["participants"][0];
+    assert_eq!(chosen["line"], second.as_str(), "{result}");
+    assert_eq!(chosen["seat"], owner.as_str());
+    assert_eq!(chosen["operator_override"], serde_json::Value::Null);
+    assert_eq!(chosen["reduced_assurance"], false);
+    assert!(
+        chosen["limitations"].to_string().contains(
+            "design co-owner by project designation (.codeflow/model-selection.json, owner \
+             instruction, journey; committed on integration/design at "
+        ),
+        "{result}"
+    );
+
+    let approval = resolve_json(&root, "design-approval", &[]);
+    assert_eq!(
+        approval["participants"][0]["participant"],
+        format!("approver:{second}").as_str()
+    );
+    assert!(approval["participants"][0]["limitations"]
+        .to_string()
+        .contains("same-family design approval; not the independent review"));
+
+    let doctor = codeflow(&root, &["doctor", "--check", "model-bindings"]);
+    let report = String::from_utf8_lossy(&doctor.stdout).to_string();
+    let mut roles = [
+        format!("{first} owner"),
+        format!("{second} co-owner, approves at phase-exit"),
+    ];
+    roles.sort();
+    assert!(
+        report.contains(&format!(
+            "project design authority: seat {owner}: {}",
+            roles.join("; ")
+        )),
+        "{report}"
+    );
+    for attempt in 1..=2 {
+        let out = codeflow(&root, &["update"]);
+        assert!(
+            out.status.success(),
+            "update {attempt}: {}",
+            stderr_text(&out)
+        );
+        assert_eq!(
+            read(&root, ".codeflow/model-selection.json"),
+            selection,
+            "update {attempt} changed the user-owned selection"
+        );
+    }
+}

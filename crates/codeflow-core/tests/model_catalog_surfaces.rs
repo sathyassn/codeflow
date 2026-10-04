@@ -385,3 +385,141 @@ fn doctor_reads_home_files_from_its_explicit_home_not_the_bindings_parent() {
     assert_eq!(result.status, Status::Fail, "{}", result.message);
     assert!(result.message.contains("broken.json"), "{}", result.message);
 }
+
+/// Every managed-catalog duty resolution, keyed by host, author and trigger.
+fn managed_resolutions(root: &Path) -> String {
+    use codeflow_core::model_catalog::{load_catalog, CatalogInputs, ResolveRequest};
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    let catalog = load_catalog(root).unwrap();
+    let inputs = CatalogInputs::load(catalog, root, None, None).unwrap();
+    let triggers: [&[String]; 3] = [
+        &[],
+        &["operator instruction".to_owned()],
+        &["cross-cutting architecture or security".to_owned()],
+    ];
+    let empty = BTreeMap::new();
+    let mut out = String::new();
+    for family in &inputs.catalog.families {
+        for host in &family.harnesses {
+            for author in [None, Some("claude"), Some("codex"), Some("grok")] {
+                for facts in triggers {
+                    for duty in inputs.catalog.duties.keys() {
+                        let result = inputs
+                            .catalog
+                            .resolve(&ResolveRequest {
+                                duty,
+                                task: "TSK-900",
+                                host_harness: host,
+                                author_lineage: author,
+                                exclusions: &[],
+                                observed_ids: &empty,
+                                trigger_facts: facts,
+                                area: None,
+                                requested_override: None,
+                                operator_override: None,
+                            })
+                            .unwrap();
+                        writeln!(
+                            out,
+                            "{host} {} {facts:?} {duty}: {}",
+                            author.unwrap_or("none"),
+                            serde_json::to_string(&result).unwrap()
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+const MANAGED_BASELINE: &str =
+    "tests/fixtures/model-catalog/managed-resolutions-before-schema-2.txt";
+
+/// With no project file, or a schema 1 file, every managed duty resolves
+/// exactly as the 3.0.0 engine did. The baseline was recorded from main at
+/// 447455ca5, before the project design-authority block existed, so it
+/// carries the current managed catalog.
+#[test]
+fn managed_resolutions_without_a_schema_two_block_match_the_prior_engine() {
+    let baseline_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(MANAGED_BASELINE);
+    let dir = tempfile::tempdir().unwrap();
+    let absent = managed_resolutions(dir.path());
+    if !baseline_path.exists() && std::env::var_os("CODEFLOW_RECORD_BASELINE").is_some() {
+        std::fs::create_dir_all(baseline_path.parent().unwrap()).unwrap();
+        std::fs::write(&baseline_path, &absent).unwrap();
+    }
+    let baseline = std::fs::read_to_string(&baseline_path).unwrap();
+    assert_eq!(
+        absent, baseline,
+        "absent project file drifted from the prior engine"
+    );
+    write(
+        dir.path(),
+        ".codeflow/model-selection.json",
+        r#"{"schema_version":1,"bindings":[]}"#,
+    );
+    assert_eq!(
+        managed_resolutions(dir.path()),
+        baseline,
+        "schema 1 project file drifted from the prior engine"
+    );
+}
+
+/// Issue 43 (TSK-236): doctor prints the project's design authority and
+/// standing reviews as the working tree states them, and an invalid block
+/// fails the check, which blocks preflight.
+#[test]
+fn doctor_prints_design_authority_and_fails_an_invalid_block() {
+    let block = json!({
+        "schema_version": 2,
+        "bindings": [],
+        "design_authority": {
+            "seat": "orchid-seat",
+            "designated": {"date": "2026-10-04", "record": "owner instruction fixture"},
+            "lines": {
+                "orchid-main": {"role": "owner"},
+                "orchid-support": {"role": "co-owner", "approves": ["phase-exit"]}
+            }
+        },
+        "standing_reviews": [
+            {"area": "design", "seat": "cinder-seat", "mode": "read-only", "per": "phase",
+             "record": "owner instruction fixture"}
+        ]
+    });
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), CATALOG, &fixture_data::fixture().to_string());
+    write(
+        dir.path(),
+        ".codeflow/model-selection.json",
+        &block.to_string(),
+    );
+    let result = doctor::run_check("model-bindings", &opts(dir.path())).unwrap();
+    assert_ne!(result.status, Status::Fail, "{}", result.message);
+    for expected in [
+        "project design authority: seat orchid-seat: orchid-main owner; orchid-support \
+         co-owner, approves at phase-exit; designated 2026-10-04, owner instruction fixture; \
+         applies to a task once committed on its integration target; a same-family design \
+         approval is never the independent review",
+        "project standing review: standing assignment (area design, seat cinder-seat, \
+         read-only, per phase; owner instruction fixture)",
+    ] {
+        assert!(result.message.contains(expected), "{}", result.message);
+    }
+    let mut invalid = block.clone();
+    invalid["design_authority"]["lines"]["quartz-main"] = json!({"role": "co-owner"});
+    write(
+        dir.path(),
+        ".codeflow/model-selection.json",
+        &invalid.to_string(),
+    );
+    let result = doctor::run_check("model-bindings", &opts(dir.path())).unwrap();
+    assert_eq!(result.status, Status::Fail, "{}", result.message);
+    assert!(
+        result.message.contains("another family"),
+        "{}",
+        result.message
+    );
+}

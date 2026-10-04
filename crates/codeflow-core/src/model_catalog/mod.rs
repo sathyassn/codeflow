@@ -4,6 +4,7 @@
 //! authenticates an operator. Callers supply fresh native facts and anchored
 //! plan records. Product lines order versions from oldest to newest.
 
+mod authority;
 mod diagnostics;
 mod inputs;
 mod operator;
@@ -18,6 +19,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::model_qualification::RouteEffort as Effort;
+pub use authority::{
+    AnchoredAuthority, AuthorityRecord, AuthorityRole, DesignAuthority, LineAuthority, ReviewMode,
+    ReviewPer, StandingReview, DESIGN_APPROVAL,
+};
 pub use inputs::{load_catalog, CatalogInputs};
 pub use operator::{anchored_override, parse_override_route};
 pub use overlay::{CandidateAddition, PersonalOverlay};
@@ -33,6 +38,13 @@ pub use selection::{BindingReference, ProjectSelection};
 pub struct Catalog {
     #[serde(skip)]
     pub(crate) selection: Option<ProjectSelection>,
+    /// Design authority committed on the task's integration target; never
+    /// the working tree (issue 43).
+    #[serde(skip)]
+    pub(crate) authority: Option<AnchoredAuthority>,
+    /// Why a working-tree design-authority block was not applied.
+    #[serde(skip)]
+    pub(crate) authority_note: Option<String>,
     pub schema_version: u64,
     pub policy_id: String,
     pub families: Vec<Family>,

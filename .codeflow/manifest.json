@@ -89,7 +89,7 @@
     ".agents/skills/cf-design/references/design-sourcing-and-revision.md": {
       "src": "agents/skills/cf-design/references/design-sourcing-and-revision.md",
       "ownership": "managed",
-      "sha256": "b4555a484921759b073720d0cc9ec81e1d100804bb91445cbe5642fc923dd8de",
+      "sha256": "aeaf5680c8b753d5caf4416c6963d38471d658f165093f6cd7f33fb6d47c758f",
       "exec": false
     },
     ".agents/skills/cf-develop/SKILL.md": {
@@ -461,7 +461,7 @@
     ".agents/skills/cf-model-orchestrator/references/model-overrides.md": {
       "src": "agents/skills/cf-model-orchestrator/references/model-overrides.md",
       "ownership": "managed",
-      "sha256": "e15118fa7fa948675e14d751d862a03b14e26339d3153015e550b0f46606fbce",
+      "sha256": "619492b27c4ea2675ce161875548869ce69b3692b417ff63a5c83c11ea8c797d",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/parallel-tasks.md": {
@@ -485,7 +485,7 @@
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "73720d144c9a8e0db6ae9ec4b7c295986faaf92c8754374cf8398a2d48c9feef",
+      "sha256": "917be6cfa33113f59412ef73c0fbbfb961395f9cf946f71eb0ff093e7221dbf2",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -611,7 +611,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/design.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/design.md",
       "ownership": "managed",
-      "sha256": "d3e15f1c8e457855adb498b68d7910e0913befa954e651aac2f6a7a72a1a7e97",
+      "sha256": "4d572a50340f153a13360ca79c35f7b34ecac26f8e36cd3ca9cfce1ea98b408d",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md": {
@@ -923,7 +923,7 @@
     ".claude/skills/cf-design/references/design-sourcing-and-revision.md": {
       "src": "agents/skills/cf-design/references/design-sourcing-and-revision.md",
       "ownership": "managed",
-      "sha256": "b4555a484921759b073720d0cc9ec81e1d100804bb91445cbe5642fc923dd8de",
+      "sha256": "aeaf5680c8b753d5caf4416c6963d38471d658f165093f6cd7f33fb6d47c758f",
       "exec": false
     },
     ".claude/skills/cf-develop/SKILL.md": {
@@ -1295,7 +1295,7 @@
     ".claude/skills/cf-model-orchestrator/references/model-overrides.md": {
       "src": "agents/skills/cf-model-orchestrator/references/model-overrides.md",
       "ownership": "managed",
-      "sha256": "e15118fa7fa948675e14d751d862a03b14e26339d3153015e550b0f46606fbce",
+      "sha256": "619492b27c4ea2675ce161875548869ce69b3692b417ff63a5c83c11ea8c797d",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/parallel-tasks.md": {
@@ -1319,7 +1319,7 @@
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
       "src": "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
       "ownership": "managed",
-      "sha256": "73720d144c9a8e0db6ae9ec4b7c295986faaf92c8754374cf8398a2d48c9feef",
+      "sha256": "917be6cfa33113f59412ef73c0fbbfb961395f9cf946f71eb0ff093e7221dbf2",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
@@ -1445,7 +1445,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/design.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/design.md",
       "ownership": "managed",
-      "sha256": "d3e15f1c8e457855adb498b68d7910e0913befa954e651aac2f6a7a72a1a7e97",
+      "sha256": "4d572a50340f153a13360ca79c35f7b34ecac26f8e36cd3ca9cfce1ea98b408d",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/routing/evidence.md": {

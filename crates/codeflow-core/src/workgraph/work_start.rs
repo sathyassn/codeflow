@@ -1384,6 +1384,82 @@ pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, 
     read(&tree)
 }
 
+/// A project file as committed on a task's integration target.
+#[derive(Debug, Clone)]
+pub struct AnchoredFile {
+    /// The task's declared integration target.
+    pub target: String,
+    /// The merge-base of `HEAD` and the target, where the file was read.
+    pub base: String,
+    /// The file's bytes there; `None` when the target does not carry it.
+    pub content: Option<Vec<u8>>,
+}
+
+/// Read `path` as committed at the merge-base of `HEAD` and the integration
+/// target the task's committed `HEAD` record declares. Neither the working
+/// tree nor the task branch's own commits confer what this returns: only a
+/// file already on the target does.
+///
+/// # Errors
+/// Rejects malformed ids, an uncommitted task, an unstable or unresolved
+/// target, a non-regular file and a file over 1 MiB.
+pub fn anchored_project_file(
+    repo_root: &Path,
+    task_id: &str,
+    path: &str,
+) -> Result<AnchoredFile, String> {
+    const MAX_BYTES: usize = 1024 * 1024;
+    if !is_canonical_task_format_id(task_id) {
+        return Err("design authority requires a canonical task id".into());
+    }
+    let repo = Repository::discover(repo_root).map_err(|e| e.to_string())?;
+    let head = repo
+        .head()
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| e.to_string())?;
+    let record = format!("project-management/tasks/{task_id}.md");
+    let entry = head
+        .tree()
+        .map_err(|e| e.to_string())?
+        .get_path(Path::new(&record))
+        .map_err(|_| format!("task {task_id} not committed"))?;
+    let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+    let content = String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string())?;
+    let target = parse_record(&content, RecordKind::Task)?
+        .integration_target
+        .ok_or("task has no integration_target")?;
+    if !is_stable_work_target(&target) {
+        return Err("task integration target must be a stable non-task branch".into());
+    }
+    let target_commit = target_reference(&repo, &target)
+        .ok_or_else(|| format!("integration target {target} does not resolve"))?;
+    let base = repo
+        .merge_base(head.id(), target_commit.id())
+        .map_err(|_| format!("no merge-base with {target}"))?;
+    let tree = repo
+        .find_commit(base)
+        .and_then(|commit| commit.tree())
+        .map_err(|e| e.to_string())?;
+    let content = match tree.get_path(Path::new(path)) {
+        Err(_) => None,
+        Ok(entry) => {
+            if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
+                return Err(format!("{path} on {target} must be a regular file"));
+            }
+            let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+            if blob.size() > MAX_BYTES {
+                return Err(format!("{path} on {target} exceeds {MAX_BYTES} bytes"));
+            }
+            Some(blob.content().to_vec())
+        }
+    };
+    Ok(AnchoredFile {
+        target,
+        base: base.to_string(),
+        content,
+    })
+}
+
 /// The commit the check reads: `head` when a caller names one (CI's pull
 /// request head), else the checkout's `HEAD`.
 fn head_commit(repo: &Repository, head: Option<&str>) -> Result<Oid, WorkStartError> {

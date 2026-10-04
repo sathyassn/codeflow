@@ -2,17 +2,24 @@ use std::collections::BTreeSet;
 
 use serde::Deserialize;
 
+use super::authority::{validate_standing_reviews, DesignAuthority, StandingReview};
 use super::{Catalog, Effort};
 use crate::model_qualification::{
     harness_catalog, validate_binding, QualifiedBinding, ResolvedSelection,
 };
 
-/// ADR-0041 schema 1 references only. No repository selectors or effort edits.
+/// ADR-0041 binding references; schema 2 adds the project design-authority
+/// block and standing reviews (issue 43). No repository selectors or effort
+/// edits in either schema.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectSelection {
     pub schema_version: u64,
     pub bindings: Vec<BindingReference>,
+    #[serde(default)]
+    pub design_authority: Option<DesignAuthority>,
+    #[serde(default)]
+    pub standing_reviews: Option<Vec<StandingReview>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -23,17 +30,43 @@ pub struct BindingReference {
 }
 
 impl ProjectSelection {
-    /// Parse schema 1 references without silently accepting duplicate JSON keys.
+    /// Parse schema 1 or 2 without silently accepting duplicate JSON keys.
+    /// Schema 1 carries binding references only; schema 2 must carry a
+    /// design-authority block or standing reviews.
     ///
     /// # Errors
     /// Rejects raw selectors, unknown fields, duplicate keys and other schemas.
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let selection: Self =
             crate::strict_json::parse_strict_json(bytes).map_err(|e| e.to_string())?;
-        if selection.schema_version != 1 {
-            return Err("unsupported project model-selection schema".into());
+        let blocks = selection.design_authority.is_some() || selection.standing_reviews.is_some();
+        match (selection.schema_version, blocks) {
+            (1, false) | (2, true) => Ok(selection),
+            (1, true) => Err(
+                "design_authority and standing_reviews need project model-selection schema 2"
+                    .into(),
+            ),
+            (2, false) => Err(
+                "project model-selection schema 2 needs design_authority or standing_reviews; \
+                 use schema 1 for binding references alone"
+                    .into(),
+            ),
+            _ => Err("unsupported project model-selection schema".into()),
         }
-        Ok(selection)
+    }
+
+    /// Validate the schema 2 blocks against the catalog.
+    ///
+    /// # Errors
+    /// Any invalid block rejects the whole file.
+    pub fn validate_blocks(&self, catalog: &Catalog) -> Result<(), String> {
+        if let Some(authority) = &self.design_authority {
+            authority.validate(catalog)?;
+        }
+        if let Some(reviews) = &self.standing_reviews {
+            validate_standing_reviews(reviews, catalog)?;
+        }
+        Ok(())
     }
 
     /// Validate the entire selection before returning the exact role/harness.
@@ -49,7 +82,7 @@ impl ProjectSelection {
         effort: Effort,
     ) -> Result<Option<ResolvedSelection>, String> {
         catalog.validate()?;
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) {
             return Err("unsupported project model-selection schema".into());
         }
         let harnesses = harness_catalog()?;

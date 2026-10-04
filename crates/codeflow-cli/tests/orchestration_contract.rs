@@ -270,6 +270,7 @@ fn resolve(catalog: &Catalog, duty: &str, host: &str, author: Option<&str>) -> R
             exclusions: &[],
             observed_ids: &observed,
             trigger_facts: &[],
+            area: None,
             requested_override: None,
             operator_override: None,
         })
@@ -2447,5 +2448,66 @@ fn guard_plane_count_stays_four() {
             !text.contains("five planes"),
             "{minimal}: a fifth guard plane appeared"
         );
+    }
+}
+
+/// Issue 43 (TSK-236): the one rule that keeps a same-family design approval
+/// apart from the cross-family review lives in the trigger-loaded design
+/// routing section and in cf-design's revision reference, and the catalog
+/// no longer calls the design owner's later line a design fallback outright.
+#[test]
+fn design_approval_and_cross_family_review_stay_separate_duties() {
+    const RULE: &str = "A same-family design approval and a cross-family review are separate \
+                        duties; when both are configured, both are required.";
+    for path in [
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/design.md",
+        "assets/base/agents/skills/cf-design/references/design-sourcing-and-revision.md",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        assert!(text.contains(RULE), "{path} lost the separate-duties rule");
+        assert!(
+            text.contains("never count") || text.contains("never counts"),
+            "{path} no longer says the approval is never the independent review"
+        );
+    }
+    let routing = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing/design.md",
+    ));
+    for marker in [
+        "Only the file committed on the task's integration target counts",
+        "Another family still needs the task-specific override above",
+        "--duty design-approval",
+    ] {
+        assert!(routing.contains(marker), "design routing lost: {marker}");
+    }
+    // The catalog is on the per-task reading chain, so the rule lives in the
+    // trigger-loaded homes above and the catalog only stops calling the later
+    // line a design fallback outright.
+    let catalog = managed_catalog();
+    let texts: Vec<&str> = catalog
+        .rules
+        .iter()
+        .map(String::as_str)
+        .chain(
+            catalog
+                .lines
+                .iter()
+                .flat_map(|line| &line.versions)
+                .flat_map(|version| &version.designations)
+                .map(|designation| designation.record.as_str()),
+        )
+        .collect();
+    for text in texts {
+        assert!(
+            !text.contains("design only by OPERATOR_OVERRIDE")
+                && !text.contains("serves design only through"),
+            "catalog still limits the later line to the override: {text}"
+        );
+        if text.contains("fallback") && text.contains("design") {
+            assert!(
+                text.contains("otherwise"),
+                "catalog calls a later line a fallback without `otherwise`: {text}"
+            );
+        }
     }
 }

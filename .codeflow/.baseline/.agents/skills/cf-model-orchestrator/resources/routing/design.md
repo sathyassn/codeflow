@@ -12,6 +12,18 @@ unavailable. Another family may design only when an explicit
 operator instruction names that task-specific override in Plan vN; Claude
 absence alone is not an override.
 
+A project may name a later line of the design owner seat as a standing
+design co-owner or consultant in `.codeflow/model-selection.json` schema 2
+([project model overrides](../../references/model-overrides.md)). Only the
+file committed on the task's integration target counts, and
+`codeflow models resolve --duty design --task <id>` reports the line it
+admits. Another family still needs the task-specific override above.
+A same-family design approval and a cross-family review are separate duties;
+when both are configured, both are required. Resolve the approval with
+`--duty design-approval`; it never counts as the independent review, and a
+standing extra-family review applies when a review is resolved with its
+`--area`.
+
 For product, UX, UI, interaction, or visual design, the model qualified for
 `claude-judgment-primary` owns intent,
 direction, implementation/execution and fidelity judgment under `cf-design`,

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection};
+use super::{AnchoredAuthority, Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection};
 
 const EMBEDDED: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -53,6 +53,34 @@ pub(super) fn optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
         Err(error) => Err(format!("read {}: {error}", path.display())),
     }
 }
+
+/// Validate the whole selection before any duty resolves. An unrelated bad
+/// entry must not be ignored, and nothing is partially applied.
+fn validate_selection(selection: &ProjectSelection, catalog: &Catalog) -> Result<(), String> {
+    // Validate even an empty selection, and every selected tuple before
+    // resolving any duty.
+    selection.resolve(catalog, &catalog.bindings, "", "", Effort::High)?;
+    for entry in &selection.bindings {
+        let record = catalog
+            .bindings
+            .iter()
+            .find(|b| b.binding_id == entry.binding_id)
+            .ok_or("missing binding record")?;
+        let effort: Effort =
+            serde_json::from_value(serde_json::Value::String(record.requested.effort.clone()))
+                .map_err(|e| e.to_string())?;
+        selection.resolve(
+            catalog,
+            &catalog.bindings,
+            &entry.role,
+            &record.requested.harness,
+            effort,
+        )?;
+    }
+    selection.validate_blocks(catalog)
+}
+
+const SELECTION: &str = ".codeflow/model-selection.json";
 
 /// Validated, read-only inputs shared by resolution and diagnostics.
 pub struct CatalogInputs {
@@ -111,27 +139,7 @@ impl CatalogInputs {
         catalog.validate()?;
         if let Some(bytes) = project_selection(root)? {
             let selection = ProjectSelection::parse(&bytes)?;
-            // Validate even an empty selection, and every selected tuple before
-            // resolving any duty. An unrelated bad entry must not be ignored.
-            selection.resolve(&catalog, &catalog.bindings, "", "", Effort::High)?;
-            for entry in &selection.bindings {
-                let record = catalog
-                    .bindings
-                    .iter()
-                    .find(|b| b.binding_id == entry.binding_id)
-                    .ok_or("missing binding record")?;
-                let effort: Effort = serde_json::from_value(serde_json::Value::String(
-                    record.requested.effort.clone(),
-                ))
-                .map_err(|e| e.to_string())?;
-                selection.resolve(
-                    &catalog,
-                    &catalog.bindings,
-                    &entry.role,
-                    &record.requested.harness,
-                    effort,
-                )?;
-            }
+            validate_selection(&selection, &catalog)?;
             catalog.selection = Some(selection);
         }
         Ok(Self {
@@ -139,5 +147,82 @@ impl CatalogInputs {
             exclusions,
             canary_observations,
         })
+    }
+}
+
+impl CatalogInputs {
+    /// Apply the design-authority block as committed on `task`'s integration
+    /// target (the merge-base of `HEAD` and that target). The working-tree
+    /// file never confers design authority; when it carries a block that
+    /// is not applied, the reason is kept for the resolution to report.
+    ///
+    /// # Errors
+    /// Rejects an invalid committed file as a whole.
+    pub fn anchor_design_authority(
+        &mut self,
+        root: &Path,
+        task: Option<&str>,
+    ) -> Result<(), String> {
+        let working = self
+            .catalog
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.design_authority.is_some());
+        let Some(task) = task else {
+            if working {
+                self.catalog.authority_note = Some(
+                    "the project design-authority block applies only with --task, read as \
+                     committed on the task's integration target"
+                        .into(),
+                );
+            }
+            return Ok(());
+        };
+        let anchored =
+            match crate::workgraph::work_start::anchored_project_file(root, task, SELECTION) {
+                Ok(anchored) => anchored,
+                Err(reason) => {
+                    if working {
+                        self.catalog.authority_note =
+                            Some(format!("project design authority not applied: {reason}"));
+                    }
+                    return Ok(());
+                }
+            };
+        let short = &anchored.base[..anchored.base.len().min(9)];
+        let committed = match &anchored.content {
+            Some(bytes) => {
+                let selection = ProjectSelection::parse(bytes)
+                    .and_then(|selection| {
+                        validate_selection(&selection, &self.catalog)?;
+                        Ok(selection)
+                    })
+                    .map_err(|e| {
+                        format!(
+                            "{SELECTION} committed on {} at {short}: {e}",
+                            anchored.target
+                        )
+                    })?;
+                selection.design_authority
+            }
+            None => None,
+        };
+        match committed {
+            Some(authority) => {
+                self.catalog.authority = Some(AnchoredAuthority {
+                    authority,
+                    source: format!("committed on {} at {short}", anchored.target),
+                });
+            }
+            None if working => {
+                self.catalog.authority_note = Some(format!(
+                    "the working-tree design-authority block is not committed on {} at {short}; \
+                     design stays with the design owner's first line",
+                    anchored.target
+                ));
+            }
+            None => {}
+        }
+        Ok(())
     }
 }

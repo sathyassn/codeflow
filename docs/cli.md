@@ -244,13 +244,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--turn-id <ID>` | Turn identifier; required for accepted and terminal waits. |
 | | `--timeout-seconds <N>` | Bounded wait duration in seconds. Required. |
 | `codeflow models resolve` | | Resolve every participant and obligation without launching or writing |
-| | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved. Required. |
+| | `--duty <DUTY>` | Catalog duty whose participants and obligations must be resolved, or `design-approval`. Required. |
 | | `--host <HOST>` | Supported host harness id, such as claude-code or codex-app. Required. |
 | | `--author <AUTHOR>` | One of `claude`, `codex`, `grok`, `none`. Default `none`. |
 | | `--exclude <EXCLUDE>...` | Fresh native exclusion: `selector:<id>` excludes the whole version across harnesses; `bucket:<id>` excludes its usage bucket (repeatable). |
 | | `--observed <OBSERVED>...` | Fresh identity canary observation: `<pinned-id>=<observed-id>`. |
 | | `--trigger <TRIGGER>...` | Catalog trigger fact to apply to this resolution (repeatable). |
-| | `--task <TASK>` | Canonical task id for this resolution; required with --override. |
+| | `--area <AREA>` | Review area for a project standing review; unit-review and body-review only. |
+| | `--task <TASK>` | Canonical task id for this resolution; required with --override and for project design authority. |
 | | `--override <OVERRIDE_ID>` | Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task. |
 | | `--route <ROUTE>` | Exact override invocation route: `<seat-or-line>@<harness>`. |
 | | `--effort <EFFORT>` | Exact override invocation effort. |

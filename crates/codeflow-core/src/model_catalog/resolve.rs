@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    authority::{designation_text, AuthorityRole, DESIGN_APPROVAL, STANDING_REVIEW_DUTIES},
     validate::{floor, nonempty},
     Adoption, Alternative, Catalog, Effort, Family, Lifecycle, LineageRelation, Participant,
     ParticipantLabel, ProductLine, Seat, Target, Version,
@@ -53,6 +54,8 @@ pub struct ResolveRequest<'a> {
     pub exclusions: &'a [Exclusion],
     pub observed_ids: &'a BTreeMap<String, String>,
     pub trigger_facts: &'a [String],
+    /// Review area for a project standing review (`unit-review`, `body-review`).
+    pub area: Option<&'a str>,
     /// Invocation route to match against the anchored operator record.
     pub requested_override: Option<&'a Alternative>,
     pub operator_override: Option<&'a OperatorOverride>,
@@ -226,7 +229,9 @@ impl Catalog {
                 return Err("line not listed by seat".into());
             }
             if request.duty == "design"
-                && (seat.id != self.design_owner || seat.lines.first() != Some(&line.id))
+                && (seat.id != self.design_owner
+                    || (seat.lines.first() != Some(&line.id)
+                        && self.authority_role(&line.id) != Some(AuthorityRole::CoOwner)))
             {
                 return Err(DESIGN_OVERRIDE_PATH.into());
             }
@@ -341,6 +346,17 @@ impl Catalog {
             return Err("OPERATOR_OVERRIDE is only valid for design".into());
         }
         let mut result = Resolution::default();
+        if request.duty == DESIGN_APPROVAL {
+            self.resolve_design_approval(request, &mut result);
+            if self
+                .xhigh_triggers
+                .iter()
+                .any(|t| request.trigger_facts.contains(t))
+            {
+                self.add_xhigh(request, &mut result);
+            }
+            return Ok(result);
+        }
         if request.duty == "test-authoring" {
             result.open.push(OpenParticipant {
                 participant: "test-authoring".into(),
@@ -371,8 +387,25 @@ impl Catalog {
             {
                 continue;
             }
-            if self.triggered(&triggered.trigger, request.trigger_facts) {
+            let standing = self.standing_review(request, &triggered.participant);
+            if standing.is_some() || self.triggered(&triggered.trigger, request.trigger_facts) {
+                let (filled, open) = (result.participants.len(), result.open.len());
                 self.resolve_participant(&triggered.participant, request, &mut result);
+                if let Some(disposition) = standing {
+                    for chosen in &mut result.participants[filled..] {
+                        chosen.limitations.push(disposition.clone());
+                    }
+                    for gap in &mut result.open[open..] {
+                        gap.reasons.push(disposition.clone());
+                    }
+                }
+            }
+        }
+        if request.duty == "design" {
+            if let Some(note) = &self.authority_note {
+                for chosen in &mut result.participants {
+                    chosen.limitations.push(note.clone());
+                }
             }
         }
         if self
@@ -383,6 +416,130 @@ impl Catalog {
             self.add_xhigh(request, &mut result);
         }
         Ok(result)
+    }
+
+    /// The committed project role of a design owner seat line.
+    fn authority_role(&self, line: &str) -> Option<AuthorityRole> {
+        self.authority.as_ref()?.authority.role(line)
+    }
+
+    /// The disposition of a project standing review that adds `participant`
+    /// to this resolution, when the caller names its area.
+    fn standing_review(
+        &self,
+        request: &ResolveRequest<'_>,
+        participant: &Participant,
+    ) -> Option<String> {
+        let area = request.area?;
+        if !STANDING_REVIEW_DUTIES.contains(&request.duty) {
+            return None;
+        }
+        self.selection
+            .as_ref()?
+            .standing_reviews
+            .as_ref()?
+            .iter()
+            .find(|review| {
+                review.area == area
+                    && review
+                        .participant(self, request.duty)
+                        .is_some_and(|t| t.participant.id == participant.id)
+            })
+            .map(super::StandingReview::disposition)
+    }
+
+    /// Same-family design approval: each committed co-owner is a required
+    /// approver and each consultant an advisory one. It is never the
+    /// independent review, which stays a separate duty. Unconfigured, the
+    /// duty is an optional open gap that leaves the resolution filled.
+    fn resolve_design_approval(&self, request: &ResolveRequest<'_>, result: &mut Resolution) {
+        let not_review = "same-family design approval; not the independent review";
+        let Some((anchored, seat)) = self
+            .authority
+            .as_ref()
+            .and_then(|anchored| Some((anchored, self.seat(&anchored.authority.seat)?)))
+        else {
+            let mut reasons = vec![
+                "no committed project design authority names a co-owner or consultant; design \
+                 approval is not configured"
+                    .to_owned(),
+            ];
+            reasons.extend(self.authority_note.clone());
+            result.open.push(OpenParticipant {
+                participant: DESIGN_APPROVAL.into(),
+                label: ParticipantLabel::SecondOpinion,
+                reasons,
+            });
+            return;
+        };
+        for id in &seat.lines {
+            let Some(entry) = anchored.authority.lines.get(id) else {
+                continue;
+            };
+            let (prefix, label) = match entry.role {
+                AuthorityRole::Owner => continue,
+                AuthorityRole::CoOwner => ("approver", ParticipantLabel::Required),
+                AuthorityRole::Consultant => ("consultant", ParticipantLabel::SecondOpinion),
+            };
+            let participant = Participant {
+                id: format!("{prefix}:{id}"),
+                alternatives: Vec::new(),
+                relation: LineageRelation::Any,
+                label,
+            };
+            let Some(line) = self.line(id) else { continue };
+            let Some(family) = self.family(&line.family) else {
+                continue;
+            };
+            let harness = if family.harnesses.iter().any(|h| h == request.host_harness) {
+                request.host_harness
+            } else {
+                &family.harnesses[0]
+            };
+            let mut candidates = Candidates::default();
+            for version in line.versions.iter().rev() {
+                let eligibility_request = EligibilityRequest {
+                    duty: DESIGN_APPROVAL,
+                    line: &line.id,
+                    version: &version.id,
+                    seat: Some(&seat.id),
+                    harness,
+                    effort: Effort::High,
+                    exclusions: request.exclusions,
+                    observed_ids: request.observed_ids,
+                };
+                self.consider_version(
+                    &participant,
+                    line,
+                    version,
+                    &eligibility_request,
+                    &mut candidates,
+                );
+            }
+            let mut eligible = candidates.eligible.into_iter();
+            if let Some(mut chosen) = eligible.next() {
+                chosen.remaining_alternatives = eligible.map(ResolvedAlternative::from).collect();
+                chosen.limitations.push(not_review.into());
+                for (name, values) in [
+                    ("approves at", &entry.approves),
+                    ("consulted before", &entry.consulted_before),
+                ] {
+                    if let Some(values) = values {
+                        chosen
+                            .limitations
+                            .push(format!("{name}: {}", values.join(", ")));
+                    }
+                }
+                result.participants.push(chosen);
+            } else {
+                candidates.reasons.push(not_review.into());
+                result.open.push(OpenParticipant {
+                    participant: participant.id,
+                    label,
+                    reasons: candidates.reasons,
+                });
+            }
+        }
     }
 
     fn triggered(&self, trigger: &str, facts: &[String]) -> bool {
@@ -436,12 +593,16 @@ impl Catalog {
         seat.map(|seat| {
             seat.lines
                 .iter()
-                .take(if request.duty == "design" {
-                    1
-                } else {
-                    usize::MAX
+                .enumerate()
+                // Design takes the first line, then any project co-owner
+                // committed on the task's integration target.
+                .filter(|(index, id)| {
+                    request.duty != "design"
+                        || *index == 0
+                        || (seat.id == self.design_owner
+                            && self.authority_role(id) == Some(AuthorityRole::CoOwner))
                 })
-                .filter_map(|id| self.line(id).map(|line| (Some(seat), line)))
+                .filter_map(|(_, id)| self.line(id).map(|line| (Some(seat), line)))
                 .collect()
         })
         .unwrap_or_default()
@@ -482,6 +643,9 @@ impl Catalog {
             }
             if request.duty == "design" {
                 candidates.reasons.push(DESIGN_OVERRIDE_PATH.into());
+                if let Some(note) = &self.authority_note {
+                    candidates.reasons.push(note.clone());
+                }
             }
             result.open.push(OpenParticipant {
                 participant: participant.id.clone(),
@@ -664,12 +828,28 @@ impl Catalog {
         if eligibility == Eligibility::Designated {
             limitations.push("designated, full suite not run".into());
         }
-        let reduced_assurance = request
-            .seat
-            .and_then(|id| self.seat(id))
-            .is_some_and(|seat| seat.lines.first() != Some(&line.id));
+        // A line the project designated for design authority is not a
+        // fallback on a design-authority duty; everywhere else it still is.
+        let designated = matches!(request.duty, "design" | DESIGN_APPROVAL)
+            && request.seat == Some(self.design_owner.as_str())
+            && self.authority.as_ref().is_some_and(|anchored| {
+                anchored
+                    .authority
+                    .role(&line.id)
+                    .is_some_and(|role| role != AuthorityRole::Owner)
+            });
+        let reduced_assurance = !designated
+            && request
+                .seat
+                .and_then(|id| self.seat(id))
+                .is_some_and(|seat| seat.lines.first() != Some(&line.id));
         if reduced_assurance {
             limitations.push("seat fallback with reduced assurance".into());
+        }
+        if let Some(anchored) = self.authority.as_ref().filter(|_| designated) {
+            if let Some(role) = anchored.authority.role(&line.id) {
+                limitations.push(designation_text(role, anchored));
+            }
         }
         ResolvedParticipant {
             participant: participant.id.clone(),
