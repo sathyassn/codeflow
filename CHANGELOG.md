@@ -542,15 +542,16 @@ erratum below, never an edit of the section.
   written with `cat` that named Codex and, further on, the word review was
   refused. When the whole line is data, its data is now left out of that
   raw text: every simple command is a data command written by its bare
-  name (`cat`, `tee`, `echo`, `printf`, `grep`, `jq`, `git commit`, `gh pr`
-  and the like) or `cd`, joined only by `;`, `&&`, `||` or newlines, with
-  no assignment, no other command, no path-qualified program, no pipe,
+  name (`cat`, `tee`, `echo`, `grep`, `jq`, `git commit`, `gh pr` and the
+  like) or `cd`, joined only by `;`, `&&`, `||` or newlines, with no
+  assignment, no other command, no path-qualified program, no pipe,
   background job, subshell or process substitution, no substitution other
   than a `$(cat <<'EOF' ...)` message, no `${...}`, `$[...]` or `$((...))`
-  expansion and no `printf` format that can assign (`%n`, `%ln` and the
-  like, so only known conversions pass), and no command after
+  expansion, no unquoted `*`, `?`, `[` or `{` (a pathname or brace
+  expansion supplies words the line does not show), and no command after
   one that can write a file (`>`, `tee`, `git`, `gh` and the like), which
-  could replace the program or hook it then runs. So
+  could replace the program or hook it then runs. `printf` is no data
+  command, since its formats can assign a variable. So
   `grep -c review <<< 'Codex review: approve'` and
   `git commit -F - <<< 'docs: record the Codex review'` pass. Any other
   line keeps the 3.0.0 judgement of its whole text, so a commit message
@@ -559,7 +560,7 @@ erratum below, never an edit of the section.
   still refused. A brief written with `cat` and a heredoc, a `git commit
   -m` message and a `gh pr create --body` text on their own were already
   allowed; a heredoc brief followed by another command on the same line
-  is judged as in 3.0.0. Of 1,600 headless run forms compared with 3.0.0,
+  is judged as in 3.0.0. Of 1,607 headless run forms compared with 3.0.0,
   none that 3.0.0 refused is let through.
 
 <!-- codeflow:release-impact patch -->

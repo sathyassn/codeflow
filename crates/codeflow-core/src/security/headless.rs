@@ -37,10 +37,12 @@
 //! `&&`, `||` or newlines, with no assignment, no other command, no
 //! path-qualified program, no pipe, background job, subshell or process
 //! substitution, no substitution other than a `$(cat <<EOF …)` message,
-//! no `${…}`, `$[…]` or `$((…))` expansion (which can assign), no `printf`
-//! format but known conversions that do not assign and no variable argument, and no command after one that can
-//! write a file (`>`, `tee`, `uniq`, `base64`, `git`, `gh`), which could
-//! replace the program, hook or configuration it then runs.
+//! no `${…}`, `$[…]` or `$((…))` expansion (which can assign), no unquoted
+//! `*`, `?`, `[` or `{` (a pathname or brace expansion supplies words the
+//! line does not show), and no command after one that can write a file
+//! (`>`, `tee`, `uniq`, `base64`, `git`, `gh`), which could replace the
+//! program, hook or configuration it then runs. `printf` is no data
+//! command: its formats can assign (`%n`, and in zsh any numeric operand).
 //! Then the heredoc bodies and the arguments it writes are left out, so
 //! `grep -c review <<< 'Codex review: approve'` is no run. Any other line
 //! keeps the 3.0.0 raw judgement of its whole text. The data left out is
@@ -107,15 +109,17 @@ fn fallback_run(command: &str) -> Option<HeadlessRun> {
 /// Programs whose arguments, here-strings and heredoc bodies are data: they
 /// never run what they read or are given. Tools that can run their input
 /// or a program they name (`awk` `system()`, GNU `sed e`, `sort
-/// --compress-program`, `rg --pre`, interpreters, shells) are left out.
+/// --compress-program`, `rg --pre`, interpreters, shells) are left out, and
+/// so is `printf`, whose formats can assign a variable (`%n` and its length
+/// forms in bash, any numeric operand in zsh).
 const DATA_COMMANDS: &[&str] = &[
-    "cat", "tee", "echo", "printf", "grep", "egrep", "fgrep", "head", "tail", "wc", "uniq", "tr",
-    "cut", "diff", "jq", "base64", "true", ":",
+    "cat", "tee", "echo", "grep", "egrep", "fgrep", "head", "tail", "wc", "uniq", "tr", "cut",
+    "diff", "jq", "base64", "true", ":",
 ];
 
 /// Whether a simple command's words are a data command, written as the
 /// program itself with no assignment or launcher before it: one of
-/// [`DATA_COMMANDS`] (`printf -v` assigns, so it is not), `git commit`,
+/// [`DATA_COMMANDS`], `git commit`,
 /// `tag` or `notes` with no global option but `-C <dir>` (a `-c` in any
 /// spelling can make the subcommand an alias that runs a shell) and no
 /// `-e`/`--edit` (which opens the editor), or `gh` in a subcommand that
@@ -139,40 +143,9 @@ fn data_command(words: &[String]) -> Option<bool> {
             .first()
             .is_some_and(|sub| matches!(sub.as_str(), "pr" | "issue" | "release" | "gist"))
             .then_some(false),
-        "printf"
-            if args
-                .iter()
-                .any(|a| a.starts_with("-v") || a.contains('$') || assigns_count(a)) =>
-        {
-            None
-        }
         name if DATA_COMMANDS.contains(&name) => Some(true),
         _ => None,
     }
-}
-
-/// Whether a `printf` argument may hold a conversion that assigns, such as
-/// `%n`, `%ln` or `%hn`, which store a count in the variable they name. It
-/// fails closed: after a `%` and any flags, width or precision, only a
-/// conversion letter known not to assign (`s`, `d`, `x`, `b`, `q` and the
-/// like) or `%` passes; a length modifier or any other letter does not.
-fn assigns_count(arg: &str) -> bool {
-    const SAFE: &str = "sdiouxXcfFeEgGaAbq";
-    let mut rest = arg;
-    while let Some(at) = rest.find('%') {
-        let tail = &rest[at + 1..];
-        if let Some(after) = tail.strip_prefix('%') {
-            // `%%` is a literal percent sign.
-            rest = after;
-            continue;
-        }
-        let spec = tail.trim_start_matches(|c: char| !c.is_ascii_alphabetic() && c != '%');
-        if !spec.chars().next().is_some_and(|c| SAFE.contains(c)) {
-            return true;
-        }
-        rest = tail;
-    }
-    false
 }
 
 /// A heredoc opened in the current simple command, waiting for its body.
@@ -224,7 +197,9 @@ struct LineShape {
     /// commands joined other than by `;`, `&&`, `||` or a newline.
     joined_otherwise: bool,
     /// A `${…}`, `$[…]` or `$((…))` anywhere on the line, which can assign
-    /// a variable or a command hash (`${BASH_CMDS[cat]:=…}`).
+    /// a variable or a command hash (`${BASH_CMDS[cat]:=…}`), or an unquoted
+    /// `*`, `?`, `[` or `{` outside a heredoc body, whose pathname or brace
+    /// expansion supplies words the line does not show.
     expands: bool,
 }
 
@@ -389,6 +364,10 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                     i = heredoc_bodies(&chars, i + 1, &mut docs, &mut shape.pieces);
                     continue;
                 }
+            }
+            '*' | '?' | '[' | '{' => {
+                shape.expands = true;
+                span.push(c);
             }
             _ => span.push(c),
         }
@@ -1878,22 +1857,17 @@ mod tests {
             "printf '%hn' COUNT; grep -c review <<< 'Codex review: approve'",
             "printf '%Ln' COUNT; grep -c review <<< 'Codex review: approve'",
             "printf '%5hhn' PATH; cat <<< 'import os; os.system(\"codex exec x\")'",
+            // Final review round 4: a zsh numeric operand, a format from a
+            // pathname expansion, and other words the line does not show.
+            "printf '%d' 'COUNT=1'; grep -c review <<< 'Codex review: approve'",
+            "printf '%s' x; grep -c review <<< 'Codex review: approve'",
+            "printf ?n COUNT; grep -c review <<< 'Codex review: approve'",
+            "echo ?n; grep -c review <<< 'Codex review: approve'",
+            "cat *.md; grep -c review <<< 'Codex review: approve'",
+            "git commit {-e,-m} x <<< 'Codex review: approve'",
+            "grep -c review [ab] <<< 'Codex review: approve'",
         ] {
             assert!(found(command).is_some(), "{command}");
-        }
-    }
-
-    /// TSK-223: a `printf` format passes as data only when each conversion
-    /// is one known not to assign.
-    #[test]
-    fn printf_formats_that_may_assign_are_not_data() {
-        for format in ["%s\\n", "%d items", "%-5s|%5.2f", "100%%", "%b", "%q"] {
-            assert!(!assigns_count(format), "{format}");
-        }
-        for format in [
-            "%n", "%ln", "%hn", "%Ln", "%5ln", "%-3hhn", "%jn", "%zn", "%", "%y",
-        ] {
-            assert!(assigns_count(format), "{format}");
         }
     }
 
