@@ -99,7 +99,10 @@ impl Fixture {
         for triple in TRIPLES {
             let asset = format!("codeflow-cli-{triple}.tar.xz");
             let bytes = format!("{triple} {version}\n").into_bytes();
-            sums.push_str(&format!("{}  {asset}\n", sha256_hex(&bytes)));
+            sums.push_str(&sha256_hex(&bytes));
+            sums.push_str("  ");
+            sums.push_str(&asset);
+            sums.push('\n');
             std::fs::write(release.join(asset), bytes).unwrap();
         }
         std::fs::write(release.join("sha256.sum"), sums).unwrap();

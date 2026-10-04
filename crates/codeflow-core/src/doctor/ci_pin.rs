@@ -508,7 +508,10 @@ mod tests {
             state(version)
         );
         for triple in triples {
-            text.push_str(&format!("{triple} = \"{DIGEST}\"\n"));
+            text.push_str(triple);
+            text.push_str(" = \"");
+            text.push_str(DIGEST);
+            text.push_str("\"\n");
         }
         text
     }

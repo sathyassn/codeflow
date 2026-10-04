@@ -151,6 +151,57 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
     Ok(())
 }
 
+/// `codeflow update`: refresh the managed files, then the adopted portal;
+/// exits 2 when either leaves a conflict.
+fn update(
+    assets: &embedded::EmbeddedAssets,
+    cwd: &std::path::Path,
+    diff: Option<PathBuf>,
+    force: bool,
+) -> anyhow::Result<()> {
+    let options = scaffold::UpdateOptions {
+        force,
+        binary_version: BINARY_VERSION.to_string(),
+        diff_out: diff,
+    };
+    let mut report = scaffold::update(assets, cwd, &options)?;
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        decide_pr_template(cwd, &mut report)?;
+    }
+    print!("{report}");
+    cmd::present::provision_state_root_or_warn();
+    print_workspace_hint(cwd);
+    let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
+    if let Some(portal_report) = &portal_report {
+        print!("{portal_report}");
+    }
+    if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// `codeflow update --pin <version>`: pin that release and its archive
+/// digests for CI (sathyassn/codeflow#47). Returns the exit code.
+fn pin_release(root: &std::path::Path, version: &str) -> i32 {
+    let base = scaffold::release_pin::release_url();
+    match scaffold::release_pin::pin_release(
+        root,
+        version,
+        &base,
+        &scaffold::release_pin::fetch_with_curl,
+    ) {
+        Ok(report) => {
+            println!("{report}");
+            0
+        }
+        Err(error) => {
+            eprintln!("codeflow update --pin: error: {error}");
+            1
+        }
+    }
+}
+
 /// Plain `init` and `update` switch nothing in a folder that holds nested
 /// repositories; they name `codeflow init --workspace` instead.
 fn print_workspace_hint(root: &std::path::Path) {
@@ -284,49 +335,10 @@ fn main() -> anyhow::Result<()> {
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }
-        Command::Update {
-            pin: Some(version), ..
-        } => {
-            let base = scaffold::release_pin::release_url();
-            match scaffold::release_pin::pin_release(
-                &cwd,
-                &version,
-                &base,
-                &scaffold::release_pin::fetch_with_curl,
-            ) {
-                Ok(report) => println!("{report}"),
-                Err(error) => {
-                    eprintln!("codeflow update --pin: error: {error}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        Command::Update {
-            diff,
-            force,
-            pin: None,
-        } => {
-            let options = scaffold::UpdateOptions {
-                force,
-                binary_version: BINARY_VERSION.to_string(),
-                diff_out: diff,
-            };
-            let mut report = scaffold::update(&assets, &cwd, &options)?;
-            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                decide_pr_template(&cwd, &mut report)?;
-            }
-            print!("{report}");
-            cmd::present::provision_state_root_or_warn();
-            print_workspace_hint(&cwd);
-            let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
-            if let Some(portal_report) = &portal_report {
-                print!("{portal_report}");
-            }
-            if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts())
-            {
-                std::process::exit(2);
-            }
-        }
+        Command::Update { diff, force, pin } => match pin {
+            Some(version) => std::process::exit(pin_release(&cwd, &version)),
+            None => update(&assets, &cwd, diff, force)?,
+        },
         Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
         Command::Delegate(args) => std::process::exit(cmd::delegate::run(&args)),
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),

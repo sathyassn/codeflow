@@ -29,7 +29,8 @@ use super::hash::sha256_hex;
 use super::state::{read_beneath_root, write_record, PROJECT_TOML};
 use super::version::is_older;
 
-/// The release triples CodeFlow publishes, in the order the table lists them.
+/// The release triples `CodeFlow` publishes for macOS and Linux, the ones the
+/// CI installers download, in the order the table lists them.
 pub const TRIPLES: [&str; 3] = [
     "aarch64-apple-darwin",
     "x86_64-apple-darwin",
@@ -220,13 +221,12 @@ pub fn pin_release(
         let asset = format!("codeflow-cli-{triple}.tar.xz");
         let listed = sums
             .lines()
-            .filter_map(|line| {
+            .find_map(|line| {
                 let mut fields = line.split_whitespace();
                 let digest = fields.next()?;
                 let name = fields.next()?.trim_start_matches('*');
                 (name == asset).then(|| digest.to_ascii_lowercase())
             })
-            .next()
             .filter(|digest| is_digest(digest))
             .ok_or_else(|| {
                 format!("sha256.sum for codeflow {version} lists no checksum for {asset}")
@@ -266,6 +266,7 @@ pub fn pin_release(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::fmt::Write as _;
 
     const DIGEST: &str = "ef27f48a56c6e714773db46585f85ba1a7a4d2982dbd5bfacdcd9e81c1c85b86";
 
@@ -290,7 +291,7 @@ mod tests {
         for triple in TRIPLES {
             let asset = format!("codeflow-cli-{triple}.tar.xz");
             let bytes = format!("{triple} {version}").into_bytes();
-            sums.push_str(&format!("{} *{asset}\n", sha256_hex(&bytes)));
+            writeln!(sums, "{} *{asset}", sha256_hex(&bytes)).unwrap();
             files.insert(format!("base/v{version}/{asset}"), bytes);
         }
         files.insert(format!("base/v{version}/sha256.sum"), sums.into_bytes());
@@ -354,9 +355,8 @@ mod tests {
         let mut unlisted = files.clone();
         let sums = String::from_utf8(unlisted["base/v1.3.0/sha256.sum"].clone()).unwrap();
         let sums: String = sums
-            .lines()
+            .split_inclusive('\n')
             .filter(|line| !line.contains("aarch64"))
-            .map(|line| format!("{line}\n"))
             .collect();
         unlisted.insert("base/v1.3.0/sha256.sum".into(), sums.into_bytes());
         assert!(refused("1.3.0", &unlisted)
