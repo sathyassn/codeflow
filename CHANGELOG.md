@@ -166,12 +166,13 @@ erratum below, never an edit of the section.
   "exceeded its bound" error when one was over 64 KiB, so a single such
   process anywhere on the machine broke `present show`, `present close` and
   the recovery of an interrupted launch (issue 60, seen in hosted CI). The
-  scan now skips a process whose command line does not hold both the profile
-  and the instance argument of the browser it is looking for, and a process
-  that holds both is checked as strictly as before. Each command line is
-  still read within the 64 KiB bound, and the process and candidate bounds
-  are unchanged. macOS lists processes with `ps` and already tolerated such
-  lines.
+  scan now reads each command line once, in fixed memory, and skips a process
+  that lacks an argument equal to the profile argument or one equal to the
+  instance argument of the browser it is looking for, whatever its other
+  bytes are. A process that has both is checked as strictly as before, and a
+  command line over 8 MiB, which the kernel does not allow a new process,
+  still fails the scan. macOS lists processes with `ps` and already
+  tolerated such lines.
 
 <!-- codeflow:release-impact patch -->
 - **The CodeFlow guards run in Grok sessions.** Grok expands `$name` and
