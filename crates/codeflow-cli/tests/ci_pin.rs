@@ -470,6 +470,16 @@ fn unread_tables(digest: &str) -> Vec<(String, String)> {
             format!("{base}\n\"\\u0073caffold_sha256\" = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{digest}\" }}\n"),
             "may be hidden behind an escaped key".to_string(),
         ),
+        // A multi-line string whose line reads as the entry, beside a real
+        // entry the reader would not see.
+        (
+            format!("{base}\n[scaffold_sha256]\nversion = \"1.2.3\"\nnotes = '''\nx86_64-unknown-linux-gnu = \"{digest}\"\n'''\n'x86_64-unknown-linux-gnu' = \"{digest}\"\n"),
+            "may be hidden by a multi-line string".to_string(),
+        ),
+        (
+            format!("{table}'x86_64-unknown-linux-gnu' = \"{digest}\"\n"),
+            "holds a line other than key = \"value\"".to_string(),
+        ),
     ]
 }
 

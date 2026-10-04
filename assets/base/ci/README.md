@@ -119,11 +119,15 @@ target pins the table, every installer requires its `version` to equal
 platform, and still checks `sha256.sum`; a table left from another version,
 a missing entry or a different digest fails the job, even when the release's
 `sha256.sum` was replaced to match. The installers read the table line by
-line, as `--pin` writes it: a table declared twice, a key listed twice, the
-table written as a quoted header, an inline or dotted table or a sub-table,
-or any escaped table name or key (`s` could spell the table's name)
-fails the job too, rather than reading as no table. Only table names and
-keys count, never values or comments. A project that
+line and accept only the form `--pin` writes: inside the table, plain
+`key = "value"` lines (no dots in the key, no escapes in the value), blank
+lines and comments. Anything else fails the job rather than reading as no
+table: another line in the table, a table declared twice, a key listed
+twice, the table written as a quoted header, an inline or dotted table or a
+sub-table, an escaped table name or key anywhere (an escape for one letter
+could spell the table's name), or a multi-line string anywhere in the file
+(its lines could read as a table or an entry). Outside the table, single-line
+values and trailing comments never count. A project that
 has never pinned a table is checked against `sha256.sum` alone, and the job
 says so in a warning. `codeflow doctor --check ci-perimeter` names the check
 CI applies, read from the target since CI reads the table there, and says

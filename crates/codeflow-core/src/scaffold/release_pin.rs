@@ -111,35 +111,49 @@ pub enum PinnedDigests {
 /// Why the installers refuse a table: it is declared twice.
 pub const TWICE: &str = "is declared twice";
 
-/// Why the installers refuse a state with an escaped key or table name: an
-/// escape such as `s` could spell the table's name without its
-/// letters, so they cannot tell it is absent.
+/// Why the installers refuse a state with an escaped key or table name: a
+/// backslash escape for a letter could spell the table's name without that
+/// letter, so they cannot tell the table is absent.
 pub const ESCAPED: &str =
     "may be hidden behind an escaped key, which the CI installers do not read";
+
+/// Why the installers refuse a state with a multi-line string: its lines
+/// could read as a table or an entry that TOML does not declare.
+pub const MULTILINE: &str =
+    "may be hidden by a multi-line string, which the CI installers do not read";
+
+/// Why the installers refuse a table holding anything but plain entries.
+pub const STRAY: &str =
+    "holds a line other than key = \"value\", which the CI installers do not read";
 
 /// Why the installers refuse a table written another way.
 pub const OTHER_FORM: &str = "is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)";
 
 /// Reads the `[scaffold_sha256]` table from a project state's text exactly
 /// as the CI installers' awk reader does, line by line, so doctor reports
-/// what CI will check: a `[scaffold_sha256]` section header, then
-/// `key = "value"` lines with a bare or double-quoted key and a
-/// double-quoted value, up to the next header. Comment lines are skipped.
-/// Any other table name or key naming the table (a quoted header, an inline
-/// or dotted table, a sub-table), an escaped table name or key (which could
-/// spell it), a second header or a key listed twice makes the table
-/// unreadable, and the installers fail closed on it rather than reading it
-/// as absent. Only names count: a table name runs to its first `]` and a
-/// key to its first `=`, so values and trailing comments never do.
-/// Single-quoted values read as missing.
-/// `codeflow update --pin` writes the form they read.
+/// what CI will check. The installers accept one strict form and fail
+/// closed on anything else rather than reading it as absent: a
+/// `[scaffold_sha256]` header, then only `key = "value"` lines (a bare or
+/// double-quoted key without dots, a double-quoted value without escapes, an
+/// optional trailing comment), blank lines and comment lines, up to the next
+/// header. Anywhere in the state, a multi-line string, an escaped table name
+/// or key, or another table name or key naming the table (a quoted header,
+/// an inline or dotted table, a sub-table) is refused, as are a second
+/// header and a key listed twice. A table name runs to its first `]` and a
+/// key to its first `=`, so single-line values and trailing comments never
+/// count. `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
     static HEADER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^\s*\[\s*scaffold_sha256\s*\]\s*(#.*)?$").expect("header pattern")
+        Regex::new(r"^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$")
+            .expect("header pattern")
     });
-    static ENTRY: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"^\s*"?([0-9A-Za-z_.-]+)"?\s*="#).expect("entry pattern"));
+    static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"^[[:space:]]*"?([0-9A-Za-z_-]+)"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$"#,
+        )
+        .expect("entry pattern")
+    });
     let (header, entry) = (&*HEADER, &*ENTRY);
     let (mut inside, mut table) = (false, false);
     let mut version = None;
@@ -152,6 +166,9 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
         let trimmed = line.trim_start();
         if trimmed.starts_with('#') {
             continue;
+        }
+        if line.contains("\"\"\"") || line.contains("'''") {
+            flag(MULTILINE.to_string());
         }
         if trimmed.starts_with('[') {
             inside = header.is_match(line);
@@ -182,7 +199,11 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
                 flag(ESCAPED.to_string());
             }
         }
-        let Some(key) = inside.then(|| entry.captures(line)).flatten() else {
+        if !inside || line.trim().is_empty() {
+            continue;
+        }
+        let Some(key) = entry.captures(line) else {
+            flag(STRAY.to_string());
             continue;
         };
         if (&key[1] == "version" && version.is_some()) || values.contains_key(&key[1]) {
@@ -570,12 +591,36 @@ mod tests {
         );
         assert_eq!(
             pinned_digests(&single),
-            PinnedDigests::Table {
-                version: None,
-                listed: vec![],
-                missing: TRIPLES.to_vec(),
-            }
+            PinnedDigests::Unreadable(STRAY.into())
         );
+        // A multi-line string could fake an entry or a table, so any is
+        // refused; inside the table only plain entries are read, so a
+        // single-quoted or dotted key, an array or an escaped value is too.
+        let faked = format!(
+            "[scaffold_sha256]\nversion = \"1.2.3\"\nnotes = '''\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n'''\n'x86_64-unknown-linux-gnu' = \"{DIGEST}\"\n"
+        );
+        assert_eq!(
+            pinned_digests(&faked),
+            PinnedDigests::Unreadable(MULTILINE.into())
+        );
+        assert_eq!(
+            pinned_digests("scaffold_version = \"3.1.0\"\nnotes = \"\"\"\nscaffold_sha256 is optional = later\n\"\"\"\n"),
+            PinnedDigests::Unreadable(MULTILINE.into())
+        );
+        for stray in [
+            format!("'x86_64-unknown-linux-gnu' = \"{DIGEST}\""),
+            format!("x86_64-unknown-linux-gnu.note = \"{DIGEST}\""),
+            "notes = [\"a\"]".to_string(),
+            "version = \"1.2\\u002e3\"".to_string(),
+        ] {
+            assert_eq!(
+                pinned_digests(&format!(
+                    "[scaffold_sha256]\nversion = \"1.2.3\"\n{stray}\n"
+                )),
+                PinnedDigests::Unreadable(STRAY.into()),
+                "{stray}"
+            );
+        }
         // The section ends at the next header, and a quoted key counts.
         let ended = format!(
             "[scaffold_sha256]\nversion = \"1.2.3\"\n\"x86_64-unknown-linux-gnu\" = \"{DIGEST}\"\n[other]\naarch64-apple-darwin = \"{DIGEST}\"\n"

@@ -757,6 +757,10 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
                 format!("{base}\n\n[\"\\u0073caffold_sha256\"]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
                 "may be hidden behind an escaped key".to_string(),
             ),
+            (
+                format!("{base}\n\n[scaffold_sha256]\nversion = \"1.2.3\"\nnotes = '''\n{t} = \"{reviewed}\"\n'''\n'{t}' = \"{reviewed}\"\n"),
+                "may be hidden by a multi-line string".to_string(),
+            ),
         ] {
             std::fs::write(&path, &state).unwrap();
             let unread = fx.commit("chore: another table form");

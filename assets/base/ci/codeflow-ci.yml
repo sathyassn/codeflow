@@ -74,9 +74,10 @@ jobs:
           asset="codeflow-cli-${triple}.tar.xz"
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
-          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" '
+          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
             /^[[:space:]]*#/ { next }
+            index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
               if (inside && table) fail("is declared twice")
@@ -91,12 +92,14 @@ jobs:
               if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
               if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
             }
-            inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
+            inside && /[^[:space:]]/ {
+              if ($0 !~ /^[[:space:]]*"?[0-9A-Za-z_-]+"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$/) {
+                fail("holds a line other than key = \"value\", which the CI installers do not read"); next
+              }
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
               if (key in seen) fail("lists " key " twice")
               seen[key] = 1
-              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
-              if (value == $0) value = ""; else sub(/".*/, "", value)
+              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value); sub(/".*/, "", value)
               if (key == "version") version = value
               if (key == want) digest = value
             }
@@ -218,9 +221,10 @@ jobs:
           asset="codeflow-cli-${triple}.tar.xz"
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
-          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" '
+          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
             /^[[:space:]]*#/ { next }
+            index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
               if (inside && table) fail("is declared twice")
@@ -235,12 +239,14 @@ jobs:
               if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
               if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
             }
-            inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
+            inside && /[^[:space:]]/ {
+              if ($0 !~ /^[[:space:]]*"?[0-9A-Za-z_-]+"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$/) {
+                fail("holds a line other than key = \"value\", which the CI installers do not read"); next
+              }
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
               if (key in seen) fail("lists " key " twice")
               seen[key] = 1
-              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
-              if (value == $0) value = ""; else sub(/".*/, "", value)
+              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value); sub(/".*/, "", value)
               if (key == "version") version = value
               if (key == want) digest = value
             }
