@@ -37,6 +37,8 @@ unicode-normalization = "=0.1.24"
 diffy = "0.4"
 rust-embed = { version = "8", features = ["compression", "include-exclude"] }
 tempfile = "3"
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 portable-pty = "0.9"
 libc = "0.2"
 windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Ioctl", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_WindowsProgramming", "Win32_System_Com", "Win32_UI_Shell"] }

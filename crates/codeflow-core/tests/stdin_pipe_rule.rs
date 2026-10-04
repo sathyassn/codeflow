@@ -1,33 +1,34 @@
 //! A child's stdin is piped in one place: `crates/codeflow-core/src/git/stdin.rs`
 //! (issue 71, TSK-237). A caller that wrote stdin itself, or piped it and
 //! drained one output stream at a time, could deadlock against a child that
-//! answers while it reads. This scan covers the Rust sources under `crates/`
-//! (not scripts or assets). It reads code tokens, not text: comments, string
-//! and character literals are ignored, and `#[cfg(test)]` items are skipped
-//! one by one, so production code after a test module is still read. Outside
-//! the helper it accepts only a stdin set to null or inherited, or the
-//! process's own `io::stdin()`; any other `.stdin(...)` argument (a variable
-//! or a conditional hides what it pipes), a `Command::stdin` path call and any
-//! use of a child's `stdin` handle, `ChildStdin`, or a `stdin` field in a brace
-//! pattern or literal (`let Child { stdin, .. } = child`, under any alias or
-//! nesting) is a failure. Raw identifiers (`r#stdin`) are read as the plain name. Limits,
-//! stated rather than hidden: code a macro generates, and raw file
-//! descriptors or handles taken from the operating system, are not seen.
+//! answers while it reads.
+//!
+//! This test parses every Rust source under `crates/` (not scripts or assets)
+//! with `syn` and fails on production code outside the helper that
+//!
+//! - calls `.stdin(arg)` with anything but `Stdio::null()` or
+//!   `Stdio::inherit()` (a variable or a conditional hides what it pipes), or
+//!   calls a path function named `stdin` (`Command::stdin(&mut c, x)`) other
+//!   than the process's own `io::stdin()`;
+//! - reads a field named `stdin` (`child.stdin.take()`), or binds one in a
+//!   struct pattern (`let Child { ref mut stdin, .. } = child`, under any
+//!   alias or nesting);
+//! - names the `ChildStdin` type.
+//!
+//! Items marked `#[cfg(test)]` or `#[cfg(all(test, ...))]` are skipped one by
+//! one, so production code after a test module is still read. Raw identifiers
+//! (`r#stdin`) are read as the plain name. Limits, stated rather than hidden:
+//! code inside macro invocations and `macro_rules!` bodies is not parsed, and
+//! raw file descriptors or handles taken from the operating system are not
+//! seen.
 
 use std::path::{Path, PathBuf};
 
+use syn::ext::IdentExt;
+use syn::visit::Visit;
+
 /// The only source file allowed to pipe a child's stdin.
 const HELPER: &str = "crates/codeflow-core/src/git/stdin.rs";
-
-/// The arguments of `.stdin(...)` that do not pipe, whitespace removed.
-const NOT_PIPED: [&str; 6] = [
-    "Stdio::null()",
-    "std::process::Stdio::null()",
-    "process::Stdio::null()",
-    "Stdio::inherit()",
-    "std::process::Stdio::inherit()",
-    "process::Stdio::inherit()",
-];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -46,268 +47,156 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// `text` with comments, string literals and character literals blanked
-/// (newlines kept, so line numbers stay true).
-fn code_only(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = bytes.to_vec();
-    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
-        for byte in &mut out[from..to] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
+fn is_stdin(ident: &syn::Ident) -> bool {
+    ident.unraw() == "stdin"
+}
+
+/// Whether an attribute is `#[cfg(test)]` or `#[cfg(all(test, ...))]`.
+fn is_cfg_test(attribute: &syn::Attribute) -> bool {
+    if !attribute.path().is_ident("cfg") {
+        return false;
+    }
+    let Ok(meta) = attribute.parse_args::<syn::Meta>() else {
+        return false;
     };
-    let mut i = 0;
-    while i < bytes.len() {
-        let rest = &bytes[i..];
-        if rest.starts_with(b"//") {
-            let end = rest
-                .iter()
-                .position(|b| *b == b'\n')
-                .map_or(bytes.len(), |n| i + n);
-            blank(&mut out, i, end);
-            i = end;
-        } else if rest.starts_with(b"/*") {
-            let mut depth = 0_usize;
-            let mut j = i;
-            while j < bytes.len() {
-                if bytes[j..].starts_with(b"/*") {
-                    depth += 1;
-                    j += 2;
-                } else if bytes[j..].starts_with(b"*/") {
-                    depth -= 1;
-                    j += 2;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
-                    j += 1;
-                }
-            }
-            blank(&mut out, i, j);
-            i = j;
-        } else if (i == 0 || !is_ident(bytes[i - 1]))
-            && (rest.starts_with(b"r\"")
-                || rest.starts_with(b"r#")
-                || rest.starts_with(b"br\"")
-                || rest.starts_with(b"br#"))
-        {
-            let start = i + usize::from(rest[0] == b'b') + 1;
-            let hashes = bytes[start..].iter().take_while(|b| **b == b'#').count();
-            if rest.starts_with(b"r#") && bytes.get(start + hashes).is_some_and(|b| is_ident(*b)) {
-                // A raw identifier (`r#stdin`): keep the name, drop `r#`.
-                blank(&mut out, i, i + 2);
-                i += 2;
-            } else if bytes.get(start + hashes) == Some(&b'"') {
-                let closing = format!("\"{}", "#".repeat(hashes));
-                let body = start + hashes + 1;
-                let end = text[body..]
-                    .find(&closing)
-                    .map_or(bytes.len(), |n| body + n + closing.len());
-                blank(&mut out, i, end);
-                i = end;
-            } else {
-                i += 1;
-            }
-        } else if rest[0] == b'"' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j] != b'"' {
-                j += if bytes[j] == b'\\' { 2 } else { 1 };
-            }
-            let end = (j + 1).min(bytes.len());
-            blank(&mut out, i, end);
-            i = end;
-        } else if rest[0] == b'\'' {
-            // A character literal, not a lifetime: `'x'` or an escape.
-            let literal_end = if rest.get(1) == Some(&b'\\') {
-                rest.iter()
-                    .skip(2)
-                    .position(|b| *b == b'\'')
-                    .map(|n| i + n + 3)
-            } else if rest.get(2) == Some(&b'\'') {
-                Some(i + 3)
-            } else {
-                None
-            };
-            if let Some(end) = literal_end {
-                blank(&mut out, i, end.min(bytes.len()));
-                i = end;
-            } else {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|parts| {
+                parts
+                    .iter()
+                    .any(|part| matches!(part, syn::Meta::Path(p) if p.is_ident("test")))
+            }),
+        _ => false,
     }
-    String::from_utf8(out).unwrap()
 }
 
-/// `code` with each `#[cfg(test)]` item blanked.
-fn without_test_items(code: &str) -> String {
-    let bytes = code.as_bytes();
-    let mut out = bytes.to_vec();
-    let mut from = 0;
-    while let Some(found) = code[from..].find("#[cfg(") {
-        let at = from + found;
-        let close = code[at..].find(']').map_or(code.len(), |n| at + n + 1);
-        let attribute: String = code[at..close].split_whitespace().collect();
-        from = close;
-        if attribute != "#[cfg(test)]" && !attribute.starts_with("#[cfg(all(test,") {
-            continue;
-        }
-        let mut depth = 0_usize;
-        let mut end = code.len();
-        for (offset, byte) in code[close..].bytes().enumerate() {
-            match byte {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = close + offset + 1;
-                        break;
-                    }
-                }
-                b';' if depth == 0 => {
-                    end = close + offset + 1;
-                    break;
-                }
-                _ => {}
-            }
-        }
-        for byte in &mut out[at..end] {
-            if *byte != b'\n' {
-                *byte = b' ';
-            }
-        }
-        from = end;
-    }
-    String::from_utf8(out).unwrap()
+fn skipped(attributes: &[syn::Attribute]) -> bool {
+    attributes.iter().any(is_cfg_test)
 }
 
-/// `text` without a leading `pub` or `pub(...)`.
-fn without_visibility(text: &str) -> &str {
-    let rest = text.trim_start();
-    let Some(rest) = rest.strip_prefix("pub") else {
-        return text;
+/// `Stdio::null()` or `Stdio::inherit()`, however the path is qualified.
+fn is_not_piped(argument: &syn::Expr) -> bool {
+    let syn::Expr::Call(call) = argument else {
+        return false;
     };
-    let rest = rest.trim_start();
-    match rest.strip_prefix('(') {
-        Some(inner) => inner
-            .split_once(')')
-            .map_or(rest, |(_, after)| after)
-            .trim_start(),
-        None => rest,
+    if !call.args.is_empty() {
+        return false;
+    }
+    let syn::Expr::Path(path) = &*call.func else {
+        return false;
+    };
+    let names: Vec<String> = path
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.unraw().to_string())
+        .collect();
+    names.len() >= 2
+        && names[names.len() - 2] == "Stdio"
+        && matches!(names[names.len() - 1].as_str(), "null" | "inherit")
+}
+
+#[derive(Default)]
+struct Uses {
+    found: Vec<(usize, String)>,
+}
+
+impl Uses {
+    fn note(&mut self, span: proc_macro2::Span, what: &str) {
+        self.found.push((span.start().line, what.to_string()));
     }
 }
 
-fn is_ident(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+macro_rules! skip_test_items {
+    ($($visit:ident($node:ty) => $walk:ident),* $(,)?) => {
+        $(fn $visit(&mut self, node: &'ast $node) {
+            if !skipped(&node.attrs) {
+                syn::visit::$walk(self, node);
+            }
+        })*
+    };
 }
 
-/// A bare `stdin` that is a field in a brace pattern or literal, such as
-/// `let Child { stdin, .. } = child` or `Process { stdin: pipe, .. }`, under
-/// any alias of the type or nesting of the pattern. Parameters and locals sit
-/// inside parentheses or statements, not directly inside braces.
-fn field_patterns(code: &str) -> Vec<(usize, String)> {
-    let bytes = code.as_bytes();
-    let mut openers: Vec<u8> = Vec::new();
-    let mut found = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' | b'[' | b'{' => openers.push(bytes[i]),
-            b')' | b']' | b'}' => {
-                openers.pop();
+impl<'ast> Visit<'ast> for Uses {
+    skip_test_items! {
+        visit_item_mod(syn::ItemMod) => visit_item_mod,
+        visit_item_fn(syn::ItemFn) => visit_item_fn,
+        visit_item_impl(syn::ItemImpl) => visit_item_impl,
+        visit_item_const(syn::ItemConst) => visit_item_const,
+        visit_item_static(syn::ItemStatic) => visit_item_static,
+        visit_item_struct(syn::ItemStruct) => visit_item_struct,
+        visit_item_enum(syn::ItemEnum) => visit_item_enum,
+        visit_item_trait(syn::ItemTrait) => visit_item_trait,
+        visit_impl_item_fn(syn::ImplItemFn) => visit_impl_item_fn,
+        visit_impl_item_const(syn::ImplItemConst) => visit_impl_item_const,
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if is_stdin(&call.method) {
+            let piped = call.args.len() != 1 || !is_not_piped(&call.args[0]);
+            if piped {
+                self.note(
+                    call.method.span(),
+                    "`.stdin(...)` with an argument that may pipe",
+                );
             }
-            _ if bytes[i..].starts_with(b"stdin")
-                && !(i > 0 && is_ident(bytes[i - 1]))
-                && !bytes.get(i + 5).is_some_and(|b| is_ident(*b)) =>
-            {
-                let before = code[..i].trim_end();
-                let after = code[i + 5..].trim_start();
-                let in_braces = openers.last() == Some(&b'{');
-                let starts_field = before.ends_with('{') || before.ends_with(',');
-                let ends_field = after.starts_with(',')
-                    || after.starts_with('}')
-                    || (after.starts_with(':') && !after.starts_with("::"));
-                if in_braces && starts_field && ends_field {
-                    let line = code[..i].matches('\n').count() + 1;
-                    found.push((line, "a `stdin` field in a pattern or literal".to_string()));
-                }
-                i += 5;
-                continue;
-            }
-            _ => {}
         }
-        i += 1;
+        syn::visit::visit_expr_method_call(self, call);
     }
-    found
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*call.func {
+            let last = path.path.segments.last();
+            let own_stdin = call.args.is_empty();
+            if let Some(segment) = last.filter(|s| is_stdin(&s.ident)) {
+                if path.path.segments.len() > 1 && !own_stdin {
+                    self.note(
+                        segment.ident.span(),
+                        "a path call of `stdin` with arguments",
+                    );
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let syn::Member::Named(name) = &field.member {
+            if is_stdin(name) {
+                self.note(name.span(), "a read of a `stdin` field");
+            }
+        }
+        syn::visit::visit_expr_field(self, field);
+    }
+
+    fn visit_field_pat(&mut self, field: &'ast syn::FieldPat) {
+        if let syn::Member::Named(name) = &field.member {
+            if is_stdin(name) {
+                self.note(name.span(), "a `stdin` field bound in a struct pattern");
+            }
+        }
+        syn::visit::visit_field_pat(self, field);
+    }
+
+    fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+        if segment.ident.unraw() == "ChildStdin" {
+            self.note(segment.ident.span(), "the `ChildStdin` type");
+        }
+        syn::visit::visit_path_segment(self, segment);
+    }
 }
 
 /// Every use of a child's stdin in `source`, as (line, what).
 fn stdin_uses(source: &str) -> Vec<(usize, String)> {
-    let code = without_test_items(&code_only(source));
-    let bytes = code.as_bytes();
-    let mut found = Vec::new();
-    for (at, _) in code.match_indices("stdin") {
-        let end = at + "stdin".len();
-        if (at > 0 && is_ident(bytes[at - 1])) || bytes.get(end).is_some_and(|b| is_ident(*b)) {
-            continue;
-        }
-        let before = code[..at].trim_end();
-        let path_call = before.ends_with("::");
-        if !before.ends_with('.') && !path_call {
-            continue;
-        }
-        let line = code[..at].matches('\n').count() + 1;
-        let after = code[end..].trim_start();
-        if !after.starts_with('(') {
-            // `use std::io::stdin;` names the process's own stdin.
-            let statement = code[..at].rfind([';', '{', '}']).map_or(0, |n| n + 1);
-            let names_import =
-                path_call && without_visibility(&code[statement..at]).starts_with("use ");
-            if !names_import {
-                found.push((line, "a use of a child's stdin handle".to_string()));
-            }
-            continue;
-        }
-        let open = end + (code[end..].len() - after.len());
-        let mut depth = 0_usize;
-        let mut close = code.len();
-        for (offset, byte) in code[open..].bytes().enumerate() {
-            match byte {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        close = open + offset;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let argument: String = code[open + 1..close].split_whitespace().collect();
-        let argument = argument.trim_end_matches(',').to_string();
-        let own_stdin = path_call && argument.is_empty();
-        if !own_stdin && !NOT_PIPED.contains(&argument.as_str()) {
-            found.push((line, format!("stdin({argument})")));
-        }
-    }
-    found.extend(field_patterns(&code));
-    // `ChildStdin` names the handle type.
-    for (at, _) in code.match_indices("ChildStdin") {
-        let end = at + "ChildStdin".len();
-        let after_ident = at > 0 && is_ident(bytes[at - 1]);
-        let before_ident = bytes.get(end).is_some_and(|b| is_ident(*b));
-        if !after_ident && !before_ident {
-            let line = code[..at].matches('\n').count() + 1;
-            found.push((line, "the handle type `ChildStdin`".to_string()));
-        }
-    }
-    found.sort();
-    found
+    let file = syn::parse_file(source).expect("the source parses");
+    let mut uses = Uses::default();
+    uses.visit_file(&file);
+    uses.found.sort();
+    uses.found
 }
 
 #[test]
@@ -329,7 +218,9 @@ fn only_the_stdin_helper_pipes_a_childs_stdin() {
             continue;
         }
         let text = std::fs::read_to_string(&file).unwrap();
-        for (line, what) in stdin_uses(&text) {
+        let file_uses = std::panic::catch_unwind(|| stdin_uses(&text))
+            .unwrap_or_else(|_| panic!("{relative} does not parse as Rust"));
+        for (line, what) in file_uses {
             offenders.push(format!("{relative}:{line}: {what}"));
         }
     }
@@ -345,37 +236,29 @@ fn only_the_stdin_helper_pipes_a_childs_stdin() {
 #[test]
 fn the_scan_flags_each_way_to_reach_a_childs_stdin() {
     for (source, what) in [
-        ("c.stdin(Stdio::piped());", "piped"),
-        ("c.stdin(std::process::Stdio::piped());", "qualified"),
-        ("c . stdin (\n  Stdio::piped(),\n);", "spaced and split"),
-        ("c.stdin(mode);", "a variable"),
+        ("fn f() { c.stdin(Stdio::piped()); }", "piped"),
+        ("fn f() { c.stdin(std::process::Stdio::piped()); }", "qualified"),
+        ("fn f() { c . stdin (\n  Stdio::piped(),\n); }", "spaced, split, trailing comma"),
+        ("fn f() { c.stdin(mode); }", "a variable"),
         (
-            "c.stdin(if x { Stdio::piped() } else { Stdio::null() });",
+            "fn f() { c.stdin(if x { Stdio::piped() } else { Stdio::null() }); }",
             "a conditional",
         ),
-        ("Command::stdin(&mut c, mode);", "a path call"),
-        ("let w = child.stdin.take();", "take"),
-        (
-            "let w = child\n    .stdin\n    .take();",
-            "take across lines",
-        ),
-        ("child.stdin.as_mut().unwrap();", "as_mut"),
-        ("command.r#stdin(Stdio::piped());", "raw identifier call"),
-        ("let w = child.r#stdin.take();", "raw identifier field"),
-        (
-            "Command::r#stdin(&mut command, mode);",
-            "raw identifier path",
-        ),
-        ("let Child { stdin, .. } = child;", "a destructured child"),
-        (
-            "let Child { stdout: Some(ChildStdout { .. }), stdin, .. } = child else { return; };",
-            "a nested pattern",
-        ),
-        (
-            "use std::process::Child as P; let P { stdin: pipe, .. } = c;",
-            "an aliased child",
-        ),
+        ("fn f() { Command::stdin(&mut c, mode); }", "a path call"),
+        ("fn f() { let w = child.stdin.take(); }", "take"),
+        ("fn f() { let w = child\n    .stdin\n    .take(); }", "take across lines"),
+        ("fn f() { child.stdin.as_mut().unwrap(); }", "as_mut"),
+        ("fn f() { c.r#stdin(Stdio::piped()); }", "raw identifier call"),
+        ("fn f() { let w = child.r#stdin.take(); }", "raw identifier field"),
+        ("fn f() { Command::r#stdin(&mut c, mode); }", "raw identifier path"),
+        ("fn f() { let Child { stdin, .. } = child; }", "a destructured child"),
+        ("fn f() { let Child { ref mut stdin, .. } = child; }", "ref mut"),
+        ("fn f() { let Child { ref stdin, .. } = child; }", "ref"),
+        ("fn f() { match c { Child { ref mut stdin, .. } => {} } }", "a match arm"),
+        ("fn f() { let Child { stdout: Some(ChildStdout { .. }), stdin, .. } = c else { return; }; }", "nested"),
+        ("use std::process::Child as P; fn f() { let P { stdin: pipe, .. } = c; }", "aliased"),
         ("fn f(w: ChildStdin) {}", "the handle type"),
+        ("fn f() -> Option<std::process::ChildStdin> { None }", "the qualified handle type"),
     ] {
         assert_eq!(stdin_uses(source).len(), 1, "{what}: {source}");
     }
@@ -384,10 +267,14 @@ fn the_scan_flags_each_way_to_reach_a_childs_stdin() {
 #[test]
 fn the_scan_passes_what_does_not_pipe() {
     for (source, what) in [
-        ("c.stdin(Stdio::null());", "null"),
-        ("c . stdin ( std::process::Stdio::inherit() );", "inherit"),
+        ("fn f() { c.stdin(Stdio::null()); }", "null"),
         (
-            "let mut s = String::new(); std::io::stdin().read_line(&mut s);",
+            "fn f() { c . stdin ( std::process::Stdio::inherit() ); }",
+            "inherit",
+        ),
+        ("fn f() { c.stdin(Stdio::null(),); }", "a trailing comma"),
+        (
+            "fn f() { let mut s = String::new(); std::io::stdin().read_line(&mut s); }",
             "own stdin",
         ),
         (
@@ -395,10 +282,13 @@ fn the_scan_passes_what_does_not_pipe() {
             "line comment",
         ),
         ("/* child.stdin.take() */ fn f() {}", "block comment"),
-        ("let s = \"child.stdin.take()\";", "string"),
-        ("let s = r#\"c.stdin(Stdio::piped())\"#;", "raw string"),
+        ("fn f() { let s = \"child.stdin.take()\"; }", "string"),
         (
-            "let p = \"C:\\\\piped\\\\stdin.rs\"; let c = '\\'';",
+            "fn f() { let s = r#\"c.stdin(Stdio::piped())\"#; }",
+            "raw string",
+        ),
+        (
+            "fn f() { let p = \"C:\\\\piped\\\\stdin.rs\"; let c = '\\''; }",
             "windows path",
         ),
         (
@@ -406,8 +296,42 @@ fn the_scan_passes_what_does_not_pipe() {
             "lifetime",
         ),
         (
-            "fn stdin_text() {} let stdin_bytes = 1;",
+            "fn stdin_text() {} fn g() { let stdin_bytes = 1; }",
             "a name that contains stdin",
+        ),
+        (
+            "use std::io::stdin;\nuse std::io::{stdin as s, Read};",
+            "importing own stdin",
+        ),
+        (
+            "pub use std::io::stdin;\npub(crate) use std::io::stdin as t;",
+            "re-exporting own stdin",
+        ),
+        ("use std::io::{stdin, Read};", "an import group"),
+        (
+            "fn f(stdin: &str, other: Option<&str>) {}",
+            "a parameter named stdin",
+        ),
+        (
+            "fn identity<T: Clone>(stdin: T) -> T { stdin }",
+            "a generic parameter and local",
+        ),
+        (
+            "fn f() { let g = |x: usize, stdin: &str| x; }",
+            "a closure parameter",
+        ),
+        ("struct Request { stdin: String }", "a struct definition"),
+        (
+            "fn f() { let r = Request { stdin: text }; }",
+            "a struct literal of another type",
+        ),
+        (
+            "fn g(&mut self) -> &mut Child { self.0.as_mut() }",
+            "a Child return type",
+        ),
+        (
+            "fn f(child: &mut Child) -> &mut Child { let _ = std::io::stdin(); child }",
+            "own stdin beside Child",
         ),
     ] {
         assert!(stdin_uses(source).is_empty(), "{what}: {source}");
