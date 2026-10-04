@@ -32,14 +32,20 @@ a task id never takes a list. The range may carry records, plans, files
 under `docs/` outside the adopter-facing path set, and the root `AGENTS.md`
 while its managed block stays byte-identical to the target's. `CLAUDE.md`,
 harness and skill trees, `.codeflow/`, record templates, policy, hooks and
-CI still keep a range out of the planning class. CI prints the class as an
-amendment of the named epics and reports per epic each task whose criteria
+CI still keep a range out of the planning class, and so do, in any folder,
+a hidden path, a harness instruction file, an adopter-facing path in any
+letter case, a symbolic link, and a path a link reaches. The project's
+product and watched paths are read from the target's policy. CI prints
+the class as an amendment of the named epics and reports per epic each task whose criteria
 change with its delta, the records added or removed, the status
 transitions, and the instruction and doc files touched. A change to a
 record of an epic the line does not name is refused; a standalone task or a
-spec belongs to no epic and is listed, never refused. A task complete on
-both sides keeps the criteria its acceptance block was reviewed against
-(R-119), so its change is listed as not admitted. The amendment lands on
+spec belongs to no epic and is listed, never refused. A criteria change
+to a task complete on both sides is flagged, since its acceptance block
+was reviewed against the earlier criteria (R-119); a reopened task keeps
+its criteria. A release imports an
+amendment's criteria change as a planning landing under the same path
+rule. The amendment lands on
 `main`, an integration line takes it by merging `main`, and the report flags
 a record that changed on its line since the line last merged the target.
 The pre-push run, which has no body, applies the same path rule, reading the
