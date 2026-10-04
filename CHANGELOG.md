@@ -34,8 +34,9 @@ erratum below, never an edit of the section.
   generic script) requires the archive to match it and still checks
   `sha256.sum`; a table left from another version, a missing platform, a
   different digest or a table written in a form they do not read fails the
-  job closed. CodeFlow now writes every string in the state on one line,
-  with escapes, since the installers refuse a multi-line string. A project
+  job closed. CodeFlow now writes the state in a form they read: a string
+  that needs escapes on one line, and an array whose elements could read as
+  keys on its key's line. A project
   with no table is checked
   against `sha256.sum` alone, with a warning, so a fresh `codeflow init` and
   the upgrade that adds the table still pass. `codeflow doctor --check

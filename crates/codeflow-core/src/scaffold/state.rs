@@ -363,40 +363,87 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
     result
 }
 
-/// Serializes a project state as `toml::to_string_pretty` does, with every
-/// string kept on one line. The managed CI installers read the state line
-/// by line and refuse a multi-line string, which could fake a digest table
-/// (TSK-225); the encoder writes a triple-quoted string for a value with a
-/// line break, with both quote kinds, or with a run of three quotes, so each
-/// such value is written instead as a single-line basic string with escapes.
+/// Serializes a project state as `toml::to_string_pretty` does, in the form
+/// the managed CI installers read (TSK-225). They read the state line by
+/// line: three quotes in a row anywhere, or a backslash or the digest
+/// table's name before a line's first `=` or in a header, fail the install
+/// closed, since such a line could fake or hide the digest table. So every
+/// string that is not plain (a quote, an apostrophe, a backslash or a
+/// control character) is written as a one-line basic string with every one
+/// of those escaped, and an array holding anything but plain strings
+/// without `=` and other scalars is written on its key's line, where no
+/// element can read as a key or a header. Arrays of tables keep their
+/// `[[name]]` sections. A state with nothing to rewrite is written exactly
+/// as `to_string_pretty` writes it.
 pub(crate) fn state_text(table: &toml::Table) -> Result<String, toml::ser::Error> {
-    fn needs_one_line(text: &str) -> bool {
-        text.contains(['\n', '\r'])
-            || (text.contains('"') && text.contains('\''))
-            || text.contains("\"\"\"")
-            || text.contains("'''")
+    /// Characters the encoder writes as themselves inside `"..."`.
+    fn plain(text: &str) -> bool {
+        !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '"' | '\\' | '\''))
+    }
+    /// An element a multi-line array may hold on its own line.
+    fn own_line(item: &toml::Value) -> bool {
+        match item {
+            toml::Value::String(text) => plain(text) && !text.contains('='),
+            toml::Value::Array(_) | toml::Value::Table(_) => false,
+            _ => true,
+        }
     }
     fn hold(value: &mut toml::Value, marker: &str, held: &mut Vec<String>) {
-        match value {
-            toml::Value::String(text) if needs_one_line(text) => {
-                held.push(std::mem::replace(text, format!("{marker}{}", held.len())));
-            }
-            toml::Value::Array(items) => {
+        let inline = match value {
+            toml::Value::String(text) if !plain(text) => basic(text),
+            toml::Value::Array(items)
+                if !items.is_empty() && items.iter().all(toml::Value::is_table) =>
+            {
                 for item in items {
                     hold(item, marker, held);
                 }
+                return;
             }
+            toml::Value::Array(items) if !items.iter().all(own_line) => inline(value),
             toml::Value::Table(table) => {
                 for (_, item) in table.iter_mut() {
                     hold(item, marker, held);
                 }
+                return;
             }
-            _ => {}
+            _ => return,
+        };
+        *value = toml::Value::String(format!("{marker}{}", held.len()));
+        held.push(inline);
+    }
+    /// A value written on one line: strings as [`basic`], arrays and tables
+    /// inline.
+    fn inline(value: &toml::Value) -> String {
+        match value {
+            toml::Value::String(text) => basic(text),
+            toml::Value::Array(items) => {
+                let items: Vec<String> = items.iter().map(inline).collect();
+                format!("[{}]", items.join(", "))
+            }
+            toml::Value::Table(table) if table.is_empty() => "{}".to_string(),
+            toml::Value::Table(table) => {
+                let entries: Vec<String> = table
+                    .iter()
+                    .map(|(key, item)| {
+                        let bare = !key.is_empty()
+                            && key
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+                        let key = if bare { key.clone() } else { basic(key) };
+                        format!("{key} = {}", inline(item))
+                    })
+                    .collect();
+                format!("{{ {} }}", entries.join(", "))
+            }
+            toml::Value::Datetime(when) => when.to_string(),
+            scalar => scalar.to_string(),
         }
     }
-    /// A basic string on one line: quotes, backslashes, line breaks and
-    /// other control characters escaped, and `'` too, so no run of three
-    /// quotes of either kind appears.
+    /// A basic string on one line: quotes, apostrophes, backslashes and
+    /// control characters escaped, so no run of three quotes of either kind
+    /// appears.
     fn basic(text: &str) -> String {
         let mut out = String::from("\"");
         for c in text.chars() {
@@ -417,20 +464,20 @@ pub(crate) fn state_text(table: &toml::Table) -> Result<String, toml::ser::Error
         out.push('"');
         out
     }
-    let plain = toml::to_string_pretty(table)?;
+    let plain_text = toml::to_string_pretty(table)?;
     let mut marker = String::from("codeflow-one-line-");
-    while plain.contains(&marker) {
+    while plain_text.contains(&marker) {
         marker.push('x');
     }
     let mut copy = toml::Value::Table(table.clone());
     let mut held = Vec::new();
     hold(&mut copy, &marker, &mut held);
     if held.is_empty() {
-        return Ok(plain);
+        return Ok(plain_text);
     }
     let mut text = toml::to_string_pretty(&copy)?;
     for (at, value) in held.iter().enumerate() {
-        text = text.replace(&format!("\"{marker}{at}\""), &basic(value));
+        text = text.replace(&format!("\"{marker}{at}\""), value);
     }
     Ok(text)
 }
@@ -1141,7 +1188,7 @@ mod tests {
     fn state_text_keeps_every_string_on_one_line() {
         let digest = "a".repeat(64);
         let source = format!(
-            "scaffold_version = \"1.2.3\"\nnote = \"first line\\nsecond line\"\nboth = \"he said \\\"it's\\\"\"\nruns = \"a'''b\\\"\\\"\\\"c\"\ncontrol = \"a\\u0001b\\tc\"\nplain = \"x\"\n\n[nested]\nlines = [\"l1\\nl2\", \"ok\"]\n\n[scaffold_sha256]\nversion = \"1.2.3\"\naarch64-apple-darwin = \"{digest}\"\nx86_64-apple-darwin = \"{digest}\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"
+            "scaffold_version = \"1.2.3\"\nnote = \"first line\\nsecond line\"\nboth = \"he said \\\"it's\\\"\"\nruns = \"a'''b\\\"\\\"\\\"c\"\ncontrol = \"a\\u0001b\\tc\"\nplain = \"x\"\npath = \"C:\\\\Users\\\\O'Brien\"\nliteral = 'C:\\Temp'\nnotes = [\"first line\\nx = 1\", \"ok\"]\nkeyed = [\"scaffold_sha256 = x\", 1]\nnested = [[\"a\\\\b\"], [2.5, true]]\nmixed = [{{ \"a b\" = \"c'd\", e = [1] }}, 1979-05-27T07:32:00Z, 1.0, -3]\n\n[[jobs]]\nname = \"x\\ny\"\n\n[[jobs]]\nname = \"z\"\n\n[deep]\nlines = [\"l1\\nl2\", \"ok\"]\n\n[scaffold_sha256]\nversion = \"1.2.3\"\naarch64-apple-darwin = \"{digest}\"\nx86_64-apple-darwin = \"{digest}\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"
         );
         let table: toml::Table = toml::from_str(&source).unwrap();
         // The plain encoder writes triple quotes for these values.
@@ -1165,9 +1212,13 @@ mod tests {
             ),
             "{text}"
         );
-        // A state with nothing to hold is written exactly as before.
-        let simple: toml::Table =
-            toml::from_str("tier = \"minimal\"\nareas = [\"a\", \"b\"]\n").unwrap();
+        assert!(text.contains("[[jobs]]"), "{text}");
+        assert!(text.contains(", 1979-05-27T07:32:00Z, 1.0, -3]"), "{text}");
+        // A state with nothing to rewrite is written exactly as before.
+        let simple: toml::Table = toml::from_str(
+            "tier = \"minimal\"\nareas = [\"a\", \"b\"]\ncounts = [1, 2]\n\n[[runs]]\nname = \"x\"\n",
+        )
+        .unwrap();
         assert_eq!(
             state_text(&simple).unwrap(),
             toml::to_string_pretty(&simple).unwrap()
@@ -1205,6 +1256,25 @@ mod tests {
         let final_text = std::fs::read_to_string(&path).unwrap();
         assert!(final_text.contains("[orient]"), "foreign key survived");
         assert!(final_text.contains("policy_armed = false"));
+
+        // Foreign values the plain encoder would write in a form the CI
+        // installers refuse are stored in one they read.
+        let mut text = final_text;
+        text.push_str(
+            "\n[notes]\npath = \"C:\\\\Users\\\\O'Brien\"\nlist = [\"first line\\nx = 1\", \"ok\"]\n",
+        );
+        std::fs::write(&path, &text).unwrap();
+        loaded.store(root).unwrap();
+        let stored = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            super::super::release_pin::pinned_digests(&stored),
+            super::super::release_pin::PinnedDigests::Absent,
+            "{stored}"
+        );
+        assert_eq!(
+            toml::from_str::<toml::Table>(&stored).unwrap()["notes"],
+            toml::from_str::<toml::Table>(&text).unwrap()["notes"]
+        );
     }
 
     #[test]

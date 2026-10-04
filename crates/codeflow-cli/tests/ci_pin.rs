@@ -567,7 +567,7 @@ fn a_state_codeflow_writes_is_one_the_installers_read() {
     set_state(
         &work,
         &format!(
-            "{}note = \"first line\\nsecond line\"\nquoted = \"it's \\\"both\\\"\"\npoem = \"\"\"\nline one\nline two\"\"\"\n\n[notes]\ntext = \"a\\r\\nb '''\"\n",
+            "{}note = \"first line\\nsecond line\"\nquoted = \"it's \\\"both\\\"\"\npoem = \"\"\"\nline one\nline two\"\"\"\npath = \"C:\\\\Users\\\\O'Brien\"\nlist = [\"first line\\nx = 1\", \"ok\"]\n\n[notes]\ntext = \"a\\r\\nb '''\"\n",
             project_toml("1.2.3")
         ),
         "chore: values that need more than one line",
@@ -621,6 +621,11 @@ fn a_state_codeflow_writes_is_one_the_installers_read() {
     assert_eq!(parsed["quoted"].as_str(), Some("it's \"both\""));
     assert_eq!(parsed["notes"]["text"].as_str(), Some("a\r\nb '''"));
     assert_eq!(parsed["poem"].as_str(), Some("line one\nline two"));
+    assert_eq!(parsed["path"].as_str(), Some("C:\\Users\\O'Brien"));
+    assert_eq!(
+        parsed["list"],
+        toml::Value::Array(vec!["first line\nx = 1".into(), "ok".into()])
+    );
     git(&work, &["commit", "-qam", "chore: pin 1.2.3"]);
 
     let install = run_install(&script, &work, "HEAD", &releases);
