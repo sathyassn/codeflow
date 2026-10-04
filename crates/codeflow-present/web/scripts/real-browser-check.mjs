@@ -34,15 +34,18 @@ const injectCloseTimeout = process.argv.includes("--inject-close-timeout");
 const injectSlowClose = process.argv.includes("--inject-slow-close");
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
-// A healthy close returns in well under a second. A busy macOS host (load in
-// the tens) was measured at 10 to 20 seconds for a close that then succeeded,
-// so the bound has to separate a slow close from a hung one, not a quiet
-// machine from a busy one. Only a hung close earns the exact-owned fallback.
-const BROWSER_CLOSE_TIMEOUT_MS = 45_000;
+// A healthy close returns in well under a second. A busy macOS host (load
+// average 50 to 100) was measured at 10 to 20 seconds for a close that then
+// succeeded, and one at load 200 took over 25, so the bound has to separate a
+// slow close from a hung one, not a quiet machine from a busy one. Only a
+// hung close earns the exact-owned fallback. closeWaitMs trims the wait when
+// the run is late, so teardown still ends before the parent check's kill.
+const BROWSER_CLOSE_TIMEOUT_MS = 60_000;
 // The injected hang never settles; this bound only ends the wait for it.
 const INJECTED_CLOSE_HANG_BOUND_MS = 1_000;
-// A close slower than the former 15 s bound that still finishes inside the
-// current one, which must not use the fallback.
+// A close that takes at least this long, longer than the former 15 s bound and
+// well inside the current one, which must not use the fallback. It overlaps the
+// real close, so a slow host adds nothing to it.
 const INJECTED_SLOW_CLOSE_MS = 20_000;
 const BROWSER_TERMINATION_GRACE_MS = 2_500;
 const PROCESS_INVENTORY_TIMEOUT_MS = 10_000;
@@ -795,7 +798,7 @@ async function closeBrowserContext(openContext, profiles, knownProcesses, phase)
   const closePromise = injectTimeout
     ? new Promise(() => {})
     : injectSlow
-      ? delay(INJECTED_SLOW_CLOSE_MS).then(() => openContext.close())
+      ? Promise.all([delay(INJECTED_SLOW_CLOSE_MS), openContext.close()]).then(() => undefined)
       : openContext.close();
   let usedFallback = false;
   try {
