@@ -1,0 +1,11 @@
+id = "ADR-0078"
+uid = "acdf3a4a-33b5-4af4-b0d4-ded5f914ecba"
+kind = "ADR"
+title = "A planning amendment names every epic it changes and carries its instruction text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T02:42:06Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
