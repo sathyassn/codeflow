@@ -954,27 +954,9 @@ fn close_stops_the_browser_open_launched() {
 /// arguments, the identity `CodeFlow` checks, so no window opens.
 #[test]
 fn show_says_the_browser_is_already_open() {
-    use std::os::unix::process::CommandExt as _;
-
     let fixture = setup_project();
     let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
-    let profile = runtime_session(&fixture, &session_id).join("browser-profile");
-    let instance = "0b5a3a6e-7c55-4c1e-9b8e-3f1d2a4c5e6f";
-    let browser = StandIn(
-        Command::new("/bin/sh")
-            .args(["-c", "sleep 120 & wait", "stand-in-browser"])
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--cf-present-instance={instance}"))
-            .process_group(0)
-            .spawn()
-            .unwrap(),
-    );
-    let session_path = session_dir(&fixture, &session_id).join("session.json");
-    let mut session: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&session_path).unwrap()).unwrap();
-    session["browser_pid"] = browser.0.id().into();
-    session["browser_instance"] = instance.into();
-    fs::write(&session_path, serde_json::to_string(&session).unwrap()).unwrap();
+    let browser = register_stand_in_browser(&fixture, &session_id);
 
     let shown = codeflow(
         &fixture.project,
@@ -1003,6 +985,90 @@ fn show_says_the_browser_is_already_open() {
 
     drop(browser);
     close_and_clear(&fixture, &session_id);
+}
+
+/// Stand-in processes of the same user whose command lines the browser scan
+/// cannot read as arguments: one that is not UTF-8 and one over 64 KiB.
+fn unreadable_command_line_processes() -> Vec<StandIn> {
+    use std::os::unix::{ffi::OsStringExt as _, process::CommandExt as _};
+
+    let not_utf8 = std::ffi::OsString::from_vec(b"bytes-\xff\xfe-end".to_vec());
+    let oversize = std::ffi::OsString::from("x".repeat(70 * 1024));
+    [not_utf8, oversize]
+        .iter()
+        .map(|argument| {
+            StandIn(
+                Command::new("/bin/sh")
+                    .args(["-c", "sleep 120 & wait", "stand-in-unrelated"])
+                    .arg(argument)
+                    .process_group(0)
+                    .spawn()
+                    .unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// Starts a stand-in browser that carries the session's profile and instance
+/// arguments and records it in the session as its browser.
+fn register_stand_in_browser(fixture: &TestProject, session_id: &str) -> StandIn {
+    use std::os::unix::process::CommandExt as _;
+
+    let profile = runtime_session(fixture, session_id).join("browser-profile");
+    let instance = "0b5a3a6e-7c55-4c1e-9b8e-3f1d2a4c5e6f";
+    let browser = StandIn(
+        Command::new("/bin/sh")
+            .args(["-c", "sleep 120 & wait", "stand-in-browser"])
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg(format!("--cf-present-instance={instance}"))
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
+    let session_path = session_dir(fixture, session_id).join("session.json");
+    let mut session: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&session_path).unwrap()).unwrap();
+    session["browser_pid"] = browser.0.id().into();
+    session["browser_instance"] = instance.into();
+    fs::write(&session_path, serde_json::to_string(&session).unwrap()).unwrap();
+    browser
+}
+
+/// Issue 60: closing a session whose browser has exited scans every process of
+/// the user, and one whose command line is not UTF-8, or is over 64 KiB, is
+/// not the browser. It must neither fail the scan nor leave the session open.
+#[test]
+fn close_ignores_other_processes_with_unreadable_command_lines() {
+    let unrelated = unreadable_command_line_processes();
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    drop(register_stand_in_browser(&fixture, &session_id));
+
+    close_and_clear(&fixture, &session_id);
+    drop(unrelated);
+}
+
+/// Issue 60: `present show` after the browser exited scans the same way, and
+/// still reports the session ready to open again.
+#[test]
+fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
+    let unrelated = unreadable_command_line_processes();
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    drop(register_stand_in_browser(&fixture, &session_id));
+
+    let shown = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(
+        shown.contains(&format!("session {session_id} ready")),
+        "{shown}"
+    );
+
+    close_and_clear(&fixture, &session_id);
+    drop(unrelated);
 }
 
 /// A stand-in browser process group, killed when the test ends or fails.

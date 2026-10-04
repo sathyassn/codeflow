@@ -17,7 +17,9 @@
 # probed.
 #
 # Launch postures are set by the launcher, not by this file (ADR-0055
-# decision 3; cf-herdr). Operator decisions of 2026-09-28 (ADR-0075):
+# decision 3). Their one home is the posture table of cf-model-orchestrator's
+# resources/routing/transport.md (ADR-0077). The notes below record the
+# operator decisions of 2026-09-28 (ADR-0075) and the D1 spike, as history:
 # - D1 builder seats: `--ask-for-approval never --sandbox danger-full-access`
 #   until the cf-builder spike passes (fetch, worktree add, commit and builds,
 #   all unattended); then `--ask-for-approval never` with

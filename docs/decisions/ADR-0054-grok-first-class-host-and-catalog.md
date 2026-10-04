@@ -139,3 +139,11 @@ seats are `claude-primary` and `codex-primary`; seat `grok-primary` serves its
 product line, whose current version is in ADR-0069's roster. The version named
 in item 2 is retired. Grok joins a review as a triggered participant on the
 routing-policy triggers, unchanged until the operator answers Q4.
+
+## Note (2026-10-03)
+
+ADR-0077 supersedes the 2026-09-05 Note's sentence that a missing plugin
+degrades to solo and does not open a Claude to Codex Herdr CLI lane. Every
+host, a Claude Code host included, reaches Codex through the interactive
+Codex CLI in a Herdr tab; the Claude Code plugin is an optional fallback
+and still not a Grok-host lane; tmux is the last fallback.

@@ -88,3 +88,11 @@ assurance and never designs without a task-specific `OPERATOR_OVERRIDE`. On
 seat `codex-primary` the first line serves, then the second line's versions,
 newest first, the oldest being fallback-only. Fallbacks are catalog data that
 `codeflow models resolve` reads, not prose. Seat effort follows ADR-0056.
+
+## Note (2026-10-03)
+
+Item 4's last two sentences on the Claude Code to Codex lane are superseded
+by ADR-0077: that lane is the interactive Codex CLI in a Herdr tab, on the
+app-server when it runs, the plugin an optional fallback and tmux the last
+fallback. Item 3's production modes stand and are stated once in
+`cf-model-orchestrator/resources/routing/transport.md`.

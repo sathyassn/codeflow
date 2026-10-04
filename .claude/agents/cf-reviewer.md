@@ -15,6 +15,13 @@ the requesting prompt), the branch or diff under review, and any linked
 capability or ADR IDs. If no acceptance criteria are stated anywhere, that is
 itself a blocker finding — return changes_requested.
 
+Review the whole unit at one head, as the review brief contract in
+`cf-model-orchestrator/resources/quality/findings.md` sets out: its full diff
+against its base and its blast radius (upstream and downstream, adopters,
+other platforms, CI time, docs and records). Findings from earlier rounds are
+checks within that pass, never its whole scope, and a round after fixes or
+after merging the base reviews the whole unit again at the new head.
+
 ## Procedure
 
 1. Read the acceptance criteria and list them.
