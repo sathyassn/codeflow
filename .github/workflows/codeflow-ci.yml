@@ -11,6 +11,12 @@ on:
   pull_request:
   push:
     branches: [main, master, "integration/**"]
+  # The weekly and manual runs scan the full history of the default branch
+  # for secrets and audit dependencies; every other job keeps to pull
+  # requests and pushes through its own `if:`.
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -374,14 +380,20 @@ jobs:
       # diff.noprefix, for one, gitleaks would drop each path's first
       # directory, and an exemption for leak.txt would cover dir/leak.txt.
       #
-      # gitleaks reads the whole history of HEAD, the trusted commit's
-      # ancestors included: on a pull request, the pull request merged into
-      # its base; on a push, the pushed commit. That is narrower, on purpose,
-      # than a scan of every fetched branch and tag: a branch with no pull
-      # request, or a tag, is not scanned by this workflow until its commits
-      # become reachable from a scanned HEAD, so an unrelated ref can neither
-      # fail this scan nor hide a leak from it. A repository-wide audit needs
-      # a scan of its own. Before gitleaks runs, the step checks only the
+      # gitleaks reads only the commits the event brings (SCAN_FROM..HEAD):
+      # on a pull request, what the pull request merged into its base holds
+      # and the base does not; on a push, what the pushed commit holds and
+      # the previous tip did not. A finding already in the base, or on a
+      # branch the pull request does not bring, is not this change's to fix
+      # and does not fail it. The weekly and manual runs, a push that
+      # creates the branch and a push whose previous tip is not in the
+      # checkout (a force push) read the whole history of HEAD instead, so
+      # every commit on the default branch is scanned once as it arrives
+      # and again each week. No run reads a branch or tag that HEAD does
+      # not reach, so an unrelated ref can neither fail this scan nor hide a
+      # leak from it. The step prints which history it read. A range that
+      # changes no file has nothing to scan and passes. Before gitleaks
+      # runs, the step checks only the
       # history the pull request brings, the commits HEAD holds and the
       # trusted commit does not, for what gitleaks cannot read reliably, and
       # names the commit and the refs that hold it. On a push that range is
@@ -417,6 +429,7 @@ jobs:
       - name: gitleaks
         env:
           TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
         run: |
           case ${TRUSTED_SHA:-} in
             '' | *[!0-9a-f]*)
@@ -425,6 +438,23 @@ jobs:
           if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
             echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
           fi
+          # The history the scan reads: the event's own commits when it
+          # names a start the checkout holds, else all of HEAD's.
+          scan=HEAD
+          case ${SCAN_FROM:-} in
+            '') scope="the full history of HEAD (a scheduled or manual run)" ;;
+            *[!0-9a-f]*)
+              echo "::error::scan start ${SCAN_FROM} is not a commit id; refusing to scan"; exit 1 ;;
+            *[!0]*)
+              if git cat-file -e "${SCAN_FROM}^{commit}" 2>/dev/null; then
+                scan="${SCAN_FROM}..HEAD"
+                scope="the $(git rev-list --count HEAD --not "$SCAN_FROM") commit(s) HEAD holds and ${SCAN_FROM} does not"
+              else
+                scope="the full history of HEAD (the previous tip ${SCAN_FROM} is not in the checkout)"
+              fi ;;
+            *) scope="the full history of HEAD (the push created the branch)" ;;
+          esac
+          echo "Secret scan reads ${scope}."
           if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
             echo "::error::$(git version) cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"; exit 1
           fi
@@ -658,13 +688,23 @@ jobs:
           PY
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
+          if [ "$scan" != HEAD ]; then
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan"); then
+              echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
+            fi
+            changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
+            if [ "$changed" -eq 0 ]; then
+              echo "No file changes in ${scope}; nothing to scan."
+              exit 0
+            fi
+          fi
           # The report stays in the runner's temp directory; the log names
           # each finding's rule, file, line and commit, never its value.
           report="$RUNNER_TEMP/gitleaks-report.json"
           log="$RUNNER_TEMP/gitleaks.log"
           rc=0
           (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
-            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv HEAD" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv ${scan}" \
             --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
             --no-banner --log-level debug --exit-code 0 \
             --report-format json --report-path "$report") 2>"$log" || rc=$?
