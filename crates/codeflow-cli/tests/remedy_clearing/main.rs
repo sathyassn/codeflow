@@ -197,6 +197,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_CI_PIN_TARGET", Runs),
     ("DOCTOR_CI_PIN_LOWERED", Runs),
     ("DOCTOR_CI_PIN_ORDER", Runs),
+    ("DOCTOR_CI_DIGEST", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
@@ -2640,6 +2641,64 @@ fn clears_doctor_ci_pin_order() {
             );
             assert_eq!(read(&root, STATE), raised);
             write(&root, policy_path, &updated);
+        },
+    );
+}
+
+/// A local release of `version` under `dir`: an archive per published
+/// triple and a `sha256.sum` that lists them. Returns its base URL.
+fn local_release(dir: &Path, version: &str) -> String {
+    let release = dir.join(format!("releases/v{version}"));
+    std::fs::create_dir_all(&release).unwrap();
+    let mut sums = String::new();
+    for triple in codeflow_core::scaffold::release_pin::TRIPLES {
+        let asset = format!("codeflow-cli-{triple}.tar.xz");
+        let bytes = format!("{triple} {version}\n").into_bytes();
+        sums.push_str(&format!(
+            "{} *{asset}\n",
+            codeflow_core::scaffold::sha256_hex(&bytes)
+        ));
+        std::fs::write(release.join(&asset), bytes).unwrap();
+    }
+    std::fs::write(release.join("sha256.sum"), sums).unwrap();
+    format!("file://{}", dir.join("releases").display())
+}
+
+/// sathyassn/codeflow#47: a digest table left from another version, as a
+/// hand-raised pin leaves it, fails the CI install closed; the printed
+/// `codeflow update --pin` writes the pinned release's digests.
+#[test]
+fn clears_doctor_ci_digest() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    let pinned = pin_line(&state).split('"').nth(1).unwrap().to_string();
+    write(
+        &root,
+        STATE,
+        &format!("{state}\n[scaffold_sha256]\nversion = \"0.0.1\"\n"),
+    );
+    let url = local_release(dir.path(), &pinned);
+    prove(
+        "DOCTOR_CI_DIGEST",
+        "so the CI install fails closed",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_CI_DIGEST", None);
+            assert_eq!(step, format!("codeflow update --pin {pinned}"));
+            let parts = words(&step);
+            let out = command(exe().to_str().unwrap(), &root)
+                .args(&parts[1..])
+                .env("CODEFLOW_RELEASE_URL", &url)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "`{step}` failed:\n{}", text(&out));
+            let after = doctor(&root, "ci-perimeter");
+            assert!(
+                after.contains("verified against the release digests pinned"),
+                "{after}"
+            );
         },
     );
 }

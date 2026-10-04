@@ -1059,7 +1059,7 @@ pub fn upgrade_order_hint(errors: &[PolicyError], binary_version: &str) -> Optio
         .any(|e| e.message.starts_with("unknown key"))
         .then(|| {
             format!(
-                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
+                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary; `codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
             )
         })
 }
