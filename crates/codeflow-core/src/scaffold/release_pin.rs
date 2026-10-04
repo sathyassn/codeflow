@@ -471,7 +471,7 @@ mod tests {
             format!("scaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.x86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
             format!("[\"scaffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
             format!("[scaffold_sha256]\nversion = \"1.2.3\"\n[scaffold_sha256.extra]\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
-            format!("[tool]\nscaffold_sha256 = {{ version = \"1.2.3\" }}\n"),
+            "[tool]\nscaffold_sha256 = { version = \"1.2.3\" }\n".to_string(),
         ] {
             assert_eq!(
                 pinned_digests(&unread),

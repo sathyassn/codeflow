@@ -2694,9 +2694,11 @@ fn clears_doctor_ci_digest() {
                 .output()
                 .unwrap();
             assert!(out.status.success(), "`{step}` failed:\n{}", text(&out));
+            // The target pins no table yet, so the checkout's applies once
+            // it lands.
             let after = doctor(&root, "ci-perimeter");
             assert!(
-                after.contains("verified against the release digests pinned"),
+                after.contains("(then: the release digests pinned"),
                 "{after}"
             );
         },

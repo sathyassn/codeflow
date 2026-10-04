@@ -167,35 +167,13 @@ pub(super) fn report(root: &Path) -> PinReport {
         };
     };
     if target_pin == head_pin {
-        // CI reads the digests from the target, so the target's table is
-        // what protects this install; the checkout's applies once it lands.
-        let target_state = show(STATE).unwrap_or_default();
-        let target_verified = match digest_mode(&target_state, &target_pin) {
-            Ok(verified) => verified,
-            Err(problem) => {
-                return PinReport {
-                    status: Status::Warn(
-                        remedy::DOCTOR_CI_DIGEST.with(&[("version", target_pin.as_str())]),
-                    ),
-                    message: format!("on {target}, {problem}"),
-                }
-            }
-        };
-        let changed = if table_lines(&target_state)
-            == table_lines(head_state.as_deref().unwrap_or_default())
-        {
-            String::new()
-        } else {
-            format!(
-                "; this checkout changes the [{TABLE}] table, which CI checks once it lands on {target} (then: {verified})"
-            )
-        };
-        return PinReport {
-            status: Status::Pass,
-            message: format!(
-                "CI installs codeflow {target_pin}, the version {target} pins, verified against {target_verified}{changed}"
-            ),
-        };
+        return same_pin(
+            &target,
+            &target_pin,
+            &show(STATE).unwrap_or_default(),
+            head_state.as_deref().unwrap_or_default(),
+            &verified,
+        );
     }
     if is_older(&head_pin, &target_pin) {
         return PinReport {
@@ -257,6 +235,40 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
         PinnedDigests::Table { .. } => Ok(format!(
             "the release digests pinned in {STATE} and its sha256.sum"
         )),
+    }
+}
+
+/// The report when the checkout keeps the target's pin. CI reads the digests
+/// from the target, so the target's table is what protects the install; the
+/// checkout's (`head_verified`) applies once it lands.
+fn same_pin(
+    target: &str,
+    pin: &str,
+    target_state: &str,
+    head_state: &str,
+    head_verified: &str,
+) -> PinReport {
+    let target_verified = match digest_mode(target_state, pin) {
+        Ok(verified) => verified,
+        Err(problem) => {
+            return PinReport {
+                status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", pin)])),
+                message: format!("on {target}, {problem}"),
+            }
+        }
+    };
+    let changed = if table_lines(target_state) == table_lines(head_state) {
+        String::new()
+    } else {
+        format!(
+            "; this checkout changes the [{TABLE}] table, which CI checks once it lands on {target} (then: {head_verified})"
+        )
+    };
+    PinReport {
+        status: Status::Pass,
+        message: format!(
+            "CI installs codeflow {pin}, the version {target} pins, verified against {target_verified}{changed}"
+        ),
     }
 }
 

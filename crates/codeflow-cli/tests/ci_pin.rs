@@ -389,10 +389,30 @@ fn a_pinned_release_digest_is_required_whatever_sha256_sum_says() {
             missing.stderr()
         );
         assert!(missing.installed_version().is_none());
+    }
+}
 
-        // A table written in a form the installers do not read, or declared
-        // or keyed twice, fails closed, even with a replaced archive and a
-        // matching replaced sha256.sum: it never reads as absent.
+/// A digest table written in a form the installers do not read, or declared
+/// or keyed twice, fails closed, even with a replaced archive and a matching
+/// replaced `sha256.sum`: it never reads as absent.
+#[test]
+fn an_unread_digest_table_fails_closed_against_a_replaced_release() {
+    for (workflow, prefix) in [
+        (POLICY, "Install codeflow"),
+        (CI, "Install codeflow"),
+        (CI, "Install candidate codeflow"),
+    ] {
+        let script = run_blocks(workflow, prefix).remove(0);
+        let dir = tempfile::tempdir().unwrap();
+        let releases = dir.path().join("releases");
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        repo(&work, "1.2.3");
+        let release = publish(&releases, "1.2.3");
+        let archive = release.join(format!("{ASSET}.tar.xz"));
+        let reviewed = sha256(&archive);
+        let mut replaced = std::fs::read(&archive).unwrap();
+        replaced.extend_from_slice(b"replaced");
         std::fs::write(&archive, &replaced).unwrap();
         std::fs::write(
             release.join("sha256.sum"),

@@ -713,10 +713,22 @@ fn the_shared_run_requires_the_pinned_release_digest() {
             text(&partial)
         );
         assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+    }
+}
 
-        // A table written another way, or declared or keyed twice, fails
-        // closed even against a replaced archive and sha256.sum; it never
-        // reads as absent.
+/// A table written another way, or declared or keyed twice, fails the shared
+/// run closed even against a replaced archive and `sha256.sum`; it never
+/// reads as absent.
+#[test]
+fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        fx.project("1.2.3");
+        let release = fx.publish("1.2.3", &Binary::Real);
+        let asset = release.join(format!("codeflow-cli-{}.tar.xz", triple()));
+        let reviewed = sha256(&asset);
+        let mut replaced = std::fs::read(&asset).unwrap();
+        replaced.extend_from_slice(b"replaced");
         std::fs::write(&asset, &replaced).unwrap();
         std::fs::write(
             release.join("sha256.sum"),
