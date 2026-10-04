@@ -64,7 +64,7 @@ jobs:
           # missing checksum file, a missing entry or a mismatch fails closed.
           # Nothing unverified is installed.
           set -euo pipefail
-          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null | LC_ALL=C tr '\000' '\001') || {
             echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
           version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
           if [ -z "$version" ]; then
@@ -76,6 +76,7 @@ jobs:
           # with "-" for a missing value, or nothing when no table is pinned.
           pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
+            /\r[^\n]/ { fail("may be hidden by a carriage return inside a line, which the CI installers do not read as a line break"); next }
             /^[[:space:]]*#/ { next }
             /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
             index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
@@ -212,7 +213,7 @@ jobs:
           # missing checksum file, a missing entry or a mismatch fails closed.
           # Nothing unverified is installed.
           set -euo pipefail
-          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null | LC_ALL=C tr '\000' '\001') || {
             echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
           version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
           if [ -z "$version" ]; then
@@ -224,6 +225,7 @@ jobs:
           # with "-" for a missing value, or nothing when no table is pinned.
           pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
+            /\r[^\n]/ { fail("may be hidden by a carriage return inside a line, which the CI installers do not read as a line break"); next }
             /^[[:space:]]*#/ { next }
             /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
             index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }

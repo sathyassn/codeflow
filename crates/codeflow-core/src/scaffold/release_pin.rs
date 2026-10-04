@@ -129,6 +129,11 @@ pub const MULTILINE: &str =
 pub const UNREAD_START: &str =
     "may be hidden by a line that starts with a character the CI installers do not read";
 
+/// Why the installers refuse a carriage return anywhere but at a line's
+/// end: awk reads only a line feed as a line break, so bare carriage
+/// returns fold the file into one line it would read as holding no table.
+pub const UNREAD_CR: &str = "may be hidden by a carriage return inside a line, which the CI installers do not read as a line break";
+
 /// Why the installers refuse a table holding anything but plain entries.
 pub const STRAY: &str =
     "holds a line other than key = \"value\", which the CI installers do not read";
@@ -147,6 +152,30 @@ static HEADER: LazyLock<Regex> = LazyLock::new(|| {
 #[must_use]
 pub fn is_table_header(line: &str) -> bool {
     HEADER.is_match(line)
+}
+
+/// The first checks the installers' byte reader makes on a line: a refusal
+/// reason, `None` for a full-line comment, or the line without its leading
+/// POSIX `[[:space:]]` (the C locale the installers run awk in).
+fn byte_line(line: &str) -> Result<Option<&str>, &'static str> {
+    // `lines` drops a carriage return before the line feed, as the awk rule
+    // `/\r[^\n]/` allows one at the end.
+    if line.strip_suffix('\r').unwrap_or(line).contains('\r') {
+        return Err(UNREAD_CR);
+    }
+    let trimmed = line.trim_start_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r']);
+    if trimmed.starts_with('#') {
+        return Ok(None);
+    }
+    // A NUL reaches awk as byte 1, which this rule refuses too.
+    if trimmed
+        .chars()
+        .next()
+        .is_some_and(|c| !c.is_ascii_graphic())
+    {
+        return Err(UNREAD_START);
+    }
+    Ok(Some(trimmed))
 }
 
 /// Reads the `[scaffold_sha256]` table from a project state's text exactly
@@ -179,19 +208,14 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
         bad.get_or_insert(reason);
     };
     for line in state.lines() {
-        // POSIX `[[:space:]]` in the C locale the installers run awk in.
-        let trimmed = line.trim_start_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r']);
-        if trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed
-            .chars()
-            .next()
-            .is_some_and(|c| !c.is_ascii_graphic())
-        {
-            flag(UNREAD_START.to_string());
-            continue;
-        }
+        let trimmed = match byte_line(line) {
+            Err(reason) => {
+                flag(reason.to_string());
+                continue;
+            }
+            Ok(None) => continue,
+            Ok(Some(trimmed)) => trimmed,
+        };
         if line.contains("\"\"\"") || line.contains("'''") {
             flag(MULTILINE.to_string());
         }
@@ -555,7 +579,7 @@ mod tests {
         // A first character a byte reader does not read (a byte-order mark,
         // a no-break or em space, a control character) could hide the
         // header, so any is refused; one inside a value is read.
-        for start in ["\u{feff}", "\u{a0}", "\u{2003}", "\u{1}"] {
+        for start in ["\u{feff}", "\u{a0}", "\u{2003}", "\u{1}", "\0"] {
             assert_eq!(
                 pinned_digests(&format!(
                     "{start}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
@@ -568,6 +592,25 @@ mod tests {
             pinned_digests(&format!(
                 "note = \"caf\u{e9} \u{2014} \u{a0}x\"\n[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
             )),
+            PinnedDigests::Table { .. }
+        ));
+        // Bare carriage returns fold the file into one awk line, so one
+        // inside a line is refused; one before each line feed is read.
+        let table = format!(
+            "[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+        );
+        for folded in [
+            table.replace('\n', "\r"),
+            format!("# note\r{}", table.replace('\n', "\r")),
+        ] {
+            assert_eq!(
+                pinned_digests(&folded),
+                PinnedDigests::Unreadable(UNREAD_CR.into()),
+                "{folded:?}"
+            );
+        }
+        assert!(matches!(
+            pinned_digests(&table.replace('\n', "\r\n")),
             PinnedDigests::Table { .. }
         ));
     }

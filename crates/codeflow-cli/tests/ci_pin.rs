@@ -493,6 +493,14 @@ fn unread_tables(digest: &str) -> Vec<(String, String)> {
             start.clone(),
         ),
         (
+            format!("{base}\n\0[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            start.clone(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha256]\rversion = \"1.2.3\"\rx86_64-unknown-linux-gnu = \"{digest}\"\r"),
+            "may be hidden by a carriage return inside a line".to_string(),
+        ),
+        (
             format!("\u{feff}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n{base}"),
             start,
         ),

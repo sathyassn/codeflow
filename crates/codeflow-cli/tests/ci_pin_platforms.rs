@@ -768,6 +768,14 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
                 start.to_string(),
             ),
             (
+                format!("{base}\n\n\0[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
+                start.to_string(),
+            ),
+            (
+                format!("{base}\n\n[scaffold_sha256]\rversion = \"1.2.3\"\r{t} = \"{reviewed}\"\r"),
+                "may be hidden by a carriage return inside a line".to_string(),
+            ),
+            (
                 format!("\u{feff}[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n{base}\n"),
                 start.to_string(),
             ),
