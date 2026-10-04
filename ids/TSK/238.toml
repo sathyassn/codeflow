@@ -1,0 +1,11 @@
+id = "TSK-238"
+uid = "947467b9-3596-4beb-bfff-eb73b086276e"
+kind = "TSK"
+title = "Text that is not UTF-8 no longer stops present or the test gate"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T18:56:41Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
