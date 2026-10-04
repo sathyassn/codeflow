@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 pub mod ci;
 pub mod conflict;
 pub mod remote_query;
+mod stdin;
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
 /// whose command started git, instead of the `codeflow` first on PATH
@@ -59,66 +60,9 @@ fn runs_git(program: &std::ffi::OsStr) -> bool {
         .is_some_and(|stem| stem.eq_ignore_ascii_case("git"))
 }
 
-/// Run `command` with `input` on its stdin and capture its output.
-///
-/// The child's stdin is written from its own thread while stdout and stderr
-/// are drained here, and stdin is closed when the input is written, so a
-/// child that answers before it has read everything (`git check-ignore -v
-/// --stdin` writes a record per path it reads) cannot fill an output pipe
-/// and deadlock against this process's write. The command's stdout and stderr
-/// are captured whatever the caller set.
-///
-/// A child that exits without reading all of `input` closes the pipe; the
-/// resulting broken pipe is not itself the verdict, so the caller reads the
-/// exit status. Any other write error, or a panicked writer, is returned.
-///
-/// # Errors
-///
-/// Returns the error when the child cannot start, its output cannot be read,
-/// or its stdin cannot be written for a reason other than the child closing
-/// it.
-pub fn output_with_input(
-    command: &mut std::process::Command,
-    input: &[u8],
-) -> std::io::Result<std::process::Output> {
-    use std::io::Write as _;
-    use std::process::Stdio;
-
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| std::io::Error::other("child stdin was not piped"))?;
-    let input = input.to_vec();
-    // `stdin` drops with the thread, which closes the pipe and ends the input.
-    // A thread that cannot be created is an error, not a panic: the child is
-    // stopped and reaped first, so none is left running.
-    let writer = match std::thread::Builder::new().spawn(move || stdin.write_all(&input)) {
-        Ok(writer) => writer,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
-    let output = child.wait_with_output();
-    let written = writer
-        .join()
-        .map_err(|_| std::io::Error::other("stdin writer panicked"))?;
-    let output = output?;
-    match written {
-        Ok(()) => Ok(output),
-        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(output),
-        Err(error) => Err(error),
-    }
-}
-
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
+pub use stdin::{output_with_input, spawn_with_input, InputWriter};
 
 #[cfg(test)]
 mod tests {
@@ -189,5 +133,22 @@ mod tests {
     fn a_program_that_cannot_start_is_an_error() {
         let mut command = std::process::Command::new("/nonexistent/codeflow-test-program");
         assert!(output_with_input(&mut command, b"x").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_on_both_pipes_does_not_block_the_input() {
+        // The child fills stderr with 2 MiB before it reads any stdin, then
+        // echoes stdin: a caller that reads stdout alone, or writes first,
+        // blocks with a pipe full.
+        let input = vec![b'y'; 4 * 1024 * 1024];
+        let out = bounded(move || {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "head -c 2097152 /dev/zero >&2 && cat"]);
+            output_with_input(&mut command, &input).unwrap()
+        });
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 4 * 1024 * 1024);
+        assert_eq!(out.stderr.len(), 2 * 1024 * 1024);
     }
 }

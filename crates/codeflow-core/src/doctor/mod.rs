@@ -7,7 +7,7 @@
 //! `.codeflow/` config validity and writability, and network reachability.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -1792,9 +1792,6 @@ fn run_captured(
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -1803,30 +1800,22 @@ fn run_captured(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    // Written from its own thread, after the readers start, so an answer
-    // larger than a pipe cannot block the write and with it the timeout
-    // below. A child that exits without reading closes the pipe; its exit
-    // status, not this write, is the result, and a killed child ends the
+    // The input is written from its own thread (`git::spawn_with_input`),
+    // so an answer larger than a pipe cannot block the write and with it the
+    // timeout below. A child that exits without reading closes the pipe; its
+    // exit status, not this write, is the result, and a killed child ends the
     // write the same way. The write must also finish by the deadline: a
     // descendant that keeps the pipe open and never reads would leave it
     // blocked, so the tree is stopped and the run times out.
+    let (mut child, writer) = match stdin {
+        Some(text) => crate::git::spawn_with_input(&mut command, text.as_bytes().to_vec())
+            .map(|(child, writer)| (child, Some(writer)))
+            .map_err(|error| error.to_string())?,
+        // No input: the child inherits doctor's stdin, as documented above.
+        None => (command.spawn().map_err(|error| error.to_string())?, None),
+    };
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
-    let mut writer = None;
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        let text = text.to_string();
-        match std::thread::Builder::new().spawn(move || {
-            let _ = pipe.write_all(text.as_bytes());
-        }) {
-            Ok(handle) => writer = Some(handle),
-            Err(error) => {
-                terminate_process_tree(&mut child);
-                let _ = child.wait();
-                return Err(error.to_string());
-            }
-        }
-    }
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {

@@ -368,11 +368,7 @@ impl GithubProvider {
         let mut cmd = Command::new(&self.gh);
         cmd.args(args)
             .current_dir(&self.repo_dir)
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
