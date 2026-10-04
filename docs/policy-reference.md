@@ -95,7 +95,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ## Git hook stages
 
-`codeflow git-hook` dispatches five hook stages. Each shim in
+`codeflow git-hook` dispatches five hook stages and answers a `capabilities`
+query that the shims use to check the binary. Each shim in
 `.codeflow/git-hooks/` runs its stage against the policy above. The stage
 names are checked against the binary's dispatcher, and the descriptions are
 written by hand.

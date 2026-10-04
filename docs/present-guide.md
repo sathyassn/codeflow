@@ -66,6 +66,8 @@ repository's sessions.
 | `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped. For a closed session it prints the session record. `--no-launch` prints where to open it |
 | `codeflow present update <SESSION_ID> <DOCUMENT>` | Adds a validated, immutable revision to an active session |
 | `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines to whoever runs it, usually the agent. `--follow` keeps delivering until the session closes |
+| `codeflow present responses list <SESSION_ID>` | Lists stored events with their status without delivering them. `--revision`, `--form`, `--status` (`pending`, `delivered`, `acknowledged`) and `--kind` (`review`, `answer`, `amendment`, `reopen`, `tombstone`) combine with AND |
+| `codeflow present ack <SESSION_ID> <EVENT_ID>` | Acknowledges a delivered event. Acknowledging again changes nothing |
 | `codeflow present resolve <SESSION_ID> <EVENT_ID>` | Marks one delivered review as handled. Needs `--event-version <N>` and `--status addressed` or `--status dismissed` |
 | `codeflow present history <SESSION_ID>` | Prints the session's full feedback history as JSON |
 | `codeflow present reply <SESSION_ID> <EVENT_ID> [--note <NOTE_ID>] "text"` | Adds an agent reply to the rail; it is not delivered back to the agent |

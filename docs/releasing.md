@@ -482,9 +482,9 @@ A baseline advances automatically only from a stable public release with an
 exact-source marker and asset digests. A stable-looking prerelease, a draft, or
 a tag without a verified public release is never a baseline.
 
-Until 3.0.0 is published, the baseline is the bounded v2.1.0 bootstrap recorded
-in `.release/config.json`. It keeps v2.1.0's public source and tag mismatch as
-recorded facts.
+3.0.0 is published, but `.release/config.json` still records the bounded
+v2.1.0 bootstrap as the baseline. It keeps v2.1.0's public source and tag
+mismatch as recorded facts.
 
 | Fact | Value |
 |---|---|
@@ -502,8 +502,8 @@ recorded facts.
   to match the local tag, and the public release to carry `source.tar.gz` with
   the recorded SHA-256. A tag moved to other content still fails.
 - The bootstrap accepts the already-staged 3.0.0 pending section.
-- Once 3.0.0 is published, that verified public release replaces the bootstrap
-  record as the automatic baseline.
+- The verified public 3.0.0 release replaces the bootstrap record as the
+  automatic baseline.
 
 ### When publication stops
 
