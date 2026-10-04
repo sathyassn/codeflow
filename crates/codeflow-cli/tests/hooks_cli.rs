@@ -1915,6 +1915,8 @@ fn exec_guard_semicolon_launcher_check_stops_at_the_launcher_word() {
         "true; doas sh",
         "true; pkexec id",
         "true; runuser -u x id",
+        "touch sudo; su?? -n id",
+        "touch sudo; su[d]o -n id",
         "echo supersedes; su -",
         "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF\nls; sudo id",
     ] {

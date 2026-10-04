@@ -731,14 +731,14 @@ erratum below, never an edit of the section.
   semicolon in a heredoc or an `echo` was blocked as a chained `su`,
   `sudo`, `doas`, `pkexec` or `runuser` (sathyassn/codeflow#66). The check
   now also requires the launcher name to end at a word boundary: whitespace,
-  the end of the line, a control character, or a shell metacharacter or
-  expansion starter (`;`, `&`, `|`, `(`, `)`, `<`, `>`, a quote, a
-  backtick, `$`, a backslash, `{` or `*`). It still reads no quoting or heredoc
-  structure, so every launch the guard refused before is still refused, a
-  launcher inside a quoted string included: a pattern that ends exactly at
-  the launcher name, such as `grep '; su' file`, stays blocked, and
-  `grep '; supersedes' file` passes. The `&&`, `||` and pipe checks and the
-  `;su` form without a space are unchanged.
+  the end of the line, a control character, or a shell metacharacter,
+  expansion starter or glob character (`;`, `&`, `|`, `(`, `)`, `<`, `>`, a
+  quote, a backtick, `$`, a backslash, `{`, `*`, `?` or `[`). It still reads
+  no quoting or heredoc structure, so every launch the guard refused before
+  is still refused, a launcher inside a quoted string included: a pattern
+  that ends exactly at the launcher name, such as `grep '; su' file`, stays
+  blocked, and `grep '; supersedes' file` passes. The `&&`, `||` and pipe
+  checks and the `;su` form without a space are unchanged.
 
 ## [3.0.0]
 

@@ -169,15 +169,30 @@ fn semicolon_chains_launcher(cmd: &str, priv_cmd: &str) -> bool {
 
 /// A character after a launcher name that ends the word: whitespace, a
 /// control character, or a shell metacharacter or expansion starter that
-/// leaves the name as the program (`su;`, `su|`, `su$IFS`, `su{,}`, `su*`, or
-/// a quote, which can end the name as in an empty string `su` then two quotes).
+/// leaves the name as the program (`su;`, `su|`, `su$IFS`, `su{,}`, a glob such
+/// as `su*`, `su??` or `su[d]o` that can expand to a launcher file, or a quote,
+/// which can end the name as in an empty string `su` then two quotes).
 /// Any other character continues the word, as in `supersedes`.
 fn ends_launcher_word(c: char) -> bool {
     c.is_whitespace()
         || c.is_control()
         || matches!(
             c,
-            ';' | '&' | '|' | '(' | ')' | '<' | '>' | '"' | '\'' | '`' | '$' | '\\' | '{' | '*'
+            ';' | '&'
+                | '|'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | '"'
+                | '\''
+                | '`'
+                | '$'
+                | '\\'
+                | '{'
+                | '*'
+                | '?'
+                | '['
         )
 }
 
@@ -333,7 +348,7 @@ mod tests {
             for tail in [
                 "", " ", " -", " -i", " id", "\t-", "\t", "\n", "\r\n", ";", "&", "&&", "|", ")",
                 "(id)", "<in", ">out", "''", "\"\"", "'", "\"", "`", "$IFS-", "${IFS}-", "\\\n-",
-                "{,}", "*", "\u{b}-",
+                "{,}", "*", "?", "??", "[d]o", "[a]", "\u{b}-",
             ] {
                 for head in ["true", "ls -la", "cd /tmp", "echo ok && true", "(true"] {
                     let cmd = format!("{head}; {launcher}{tail}");
