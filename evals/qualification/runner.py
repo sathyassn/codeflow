@@ -922,6 +922,126 @@ def require_codex_remote_plugins_off(home: Path) -> dict:
     return found
 
 
+def claude_account_state(home: Path) -> dict:
+    """The dedicated Claude home's account-content settings and anything in it
+    that would add plugins, skills, commands, agents or MCP servers."""
+    try:
+        return {"settings": kit.claude_account_settings(home / "settings.json"),
+                **kit.claude_account_content(home)}
+    except (kit.EvalError, OSError, ValueError) as exc:
+        raise Refused(f"cannot read the account-content state of the dedicated Claude home: {exc}") from exc
+
+
+def require_claude_account_content_off(home: Path) -> dict:
+    """No account plugin, skill or connector, and no user extension, loads in
+    the dedicated Claude home."""
+    found = claude_account_state(home)
+    wrong = [name for name, value in kit.CLAUDE_ACCOUNT_SETTINGS.items() if found["settings"].get(name) is not value]
+    if wrong:
+        raise Refused(f"the dedicated Claude home {home} does not set "
+                      + " and ".join(f"{name}: {json.dumps(kit.CLAUDE_ACCOUNT_SETTINGS[name])}" for name in wrong)
+                      + " in settings.json: run prepare-eval-homes")
+    if found["synced"]:
+        raise Refused(f"the dedicated Claude home {home} holds synced account content "
+                      f"({', '.join(found['synced'])}): run prepare-eval-homes, which moves it out")
+    extra = kit.claude_extra_extensions(found)
+    if extra:
+        raise Refused(f"the dedicated Claude home {home} holds skills, commands, agents or plugins "
+                      f"that would reach the trial ({', '.join(extra)}): remove them, then run prepare-eval-homes")
+    return found
+
+
+# What a plugin, a synced claude.ai skill or an MCP server adds to a Claude
+# session, as Claude Code names it in its native transcript: plugin and synced
+# skills and agents carry a `<source>:<name>` namespace, and every MCP tool is
+# `mcp__<server>__<tool>`. The fixture's project skills and agents and the
+# harness's bundled skills carry no namespace; they are recorded, not flagged.
+# The only MCP servers a trial may load are those the fixture repository
+# declares in its own `.mcp.json`; claude.ai connectors, plugin servers and
+# user-scope servers all flag.
+CLAUDE_SKILL_LINE = re.compile(r"^- (\S+?)(?:: |:$|$)")
+CLAUDE_MCP_TOOL = re.compile(r"\bmcp__([A-Za-z0-9_.-]+?)__[A-Za-z0-9_.-]+")
+
+
+def mcp_server_key(name: str) -> str:
+    """Claude Code's tool-name form of an MCP server name."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name)
+
+
+def declared_mcp_servers(repository: Path) -> set[str]:
+    """Server names the fixture repository declares in `.mcp.json`."""
+    path = repository / ".mcp.json"
+    if not path.is_file() or path.is_symlink():
+        return set()
+    try:
+        servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+        return set()
+    return set(servers) if isinstance(servers, dict) else set()
+
+
+def claude_loaded_extensions(environment: dict[str, str], repository: Path | None = None) -> dict:
+    """Plugins, synced skills and MCP servers that reached any Claude session
+    of this trial, subject or peer, read from the native transcripts in the
+    trial's project folder. `loaded` lists each kind that flags the trial; an
+    unreadable transcript is an error, never a clean read."""
+    folder = Path(environment["CLAUDE_CONFIG_DIR"]) / "projects" / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
+    declared = declared_mcp_servers(repository) if repository is not None else set()
+    allowed = {mcp_server_key(name) for name in declared}
+    found = {"folder": str(folder), "transcripts": [], "skills": [], "agents": [], "mcp_servers": [],
+             "declared_mcp_servers": sorted(declared),
+             "loaded": {"skills": [], "agents": [], "tools": [], "mcp_servers": []}, "errors": []}
+    if not folder.exists():
+        return found
+    if folder.is_symlink() or not folder.is_dir():
+        found["errors"].append(f"transcript folder is not a real folder: {folder}")
+        return found
+    skills, agents, tools, servers = set(), set(), set(), set()
+    for path in sorted(folder.rglob("*.jsonl")):
+        if path.is_symlink():
+            found["errors"].append(f"transcript is a symlink: {path}")
+            continue
+        found["transcripts"].append(str(path.relative_to(folder)))
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as exc:
+            found["errors"].append(f"cannot read {path}: {exc}")
+            continue
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            attachment = record.get("attachment")
+            if isinstance(attachment, dict):
+                kind = attachment.get("type")
+                if kind == "skill_listing":
+                    for row in str(attachment.get("content", "")).splitlines():
+                        match = CLAUDE_SKILL_LINE.match(row)
+                        if match:
+                            skills.add(match.group(1))
+                elif kind == "agent_listing_delta":
+                    agents.update(str(name) for name in attachment.get("addedTypes") or [])
+                elif kind == "mcp_instructions_delta":
+                    servers.update(str(name) for name in attachment.get("addedNames") or [])
+                tools.update(match.group(0) for match in CLAUDE_MCP_TOOL.finditer(json.dumps(attachment)))
+            message = record.get("message")
+            if record.get("type") == "assistant" and isinstance(message, dict):
+                for block in message.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tools.update(match.group(0) for match in CLAUDE_MCP_TOOL.finditer(str(block.get("name", ""))))
+    found["skills"], found["agents"], found["mcp_servers"] = sorted(skills), sorted(agents), sorted(servers)
+    found["loaded"] = {
+        "skills": sorted(name for name in skills if ":" in name),
+        "agents": sorted(name for name in agents if ":" in name),
+        "tools": sorted(name for name in tools if CLAUDE_MCP_TOOL.match(name).group(1) not in allowed),
+        "mcp_servers": sorted(name for name in servers if mcp_server_key(name) not in allowed),
+    }
+    return found
+
+
 CONFIG_FILES = {
     "claude": ("settings.json", "settings.local.json", "CLAUDE.md", "CLAUDE.local.md", "rules"),
     "codex": ("config.toml", "AGENTS.md", "AGENTS.override.md", "hooks.json", "rules"),
@@ -968,6 +1088,8 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
         result[harness] = hashes
         if harness == "codex":
             result["codex_remote_plugins"] = codex_remote_plugin_state(root)
+        if harness == "claude":
+            result["claude_account_content"] = claude_account_state(root)
     if repository is not None:
         result["codex_trust"] = codex_trust_entry(Path(environment["CODEX_HOME"]) / "config.toml", repository)
     if plugin_repository is not None:
@@ -1158,6 +1280,34 @@ def darwin_procargs(pid: int) -> tuple[str, list[str], dict[str, str]]:
     return parse_procargs(buffer.raw[:size.value])
 
 
+# libproc's PROC_PIDVNODEPATHINFO: struct proc_vnodepathinfo holds the current
+# and root directories, each a struct vnode_info (152 bytes) followed by its
+# MAXPATHLEN (1024) path. Reading it is one kernel call; `lsof` walks every
+# process first and took 9 to 16 seconds for one pid on a loaded host, longer
+# than the watcher's 10-second poll gap.
+PROC_PIDVNODEPATHINFO = 9
+VNODE_INFO_SIZE = 152
+MAXPATHLEN = 1024
+
+
+def darwin_cwd(pid: int) -> str:
+    import ctypes
+    import ctypes.util
+    libproc = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
+    size = 2 * (VNODE_INFO_SIZE + MAXPATHLEN)
+    buffer = ctypes.create_string_buffer(size)
+    read = libproc.proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, ctypes.c_uint64(0), buffer, size)
+    if read != size:
+        error = ctypes.get_errno()
+        if error == 3:  # ESRCH
+            raise ProcessLookupError(f"process {pid} is gone")
+        raise OSError(error, f"cannot read the working directory of process {pid}")
+    path = buffer.raw[VNODE_INFO_SIZE:VNODE_INFO_SIZE + MAXPATHLEN].partition(b"\0")[0]
+    if not path.startswith(b"/"):
+        raise OSError(f"cannot read the working directory of process {pid}")
+    return decode(path)
+
+
 def process_start(pid: int) -> str:
     done = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
     if done.stderr.strip():
@@ -1172,9 +1322,7 @@ def live_process(pid: int) -> dict:
     start = process_start(pid)
     if sys.platform == "darwin":
         executable, argv, environment = darwin_procargs(pid)
-        done = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-                              capture_output=True, text=True, timeout=10)
-        cwd = next((line[1:] for line in done.stdout.splitlines() if line.startswith("n")), None)
+        cwd = darwin_cwd(pid)
     elif sys.platform.startswith("linux"):
         proc = Path(f"/proc/{pid}")
         executable, cwd = os.readlink(proc / "exe"), os.readlink(proc / "cwd")
@@ -1215,6 +1363,8 @@ def check_peer_state(run: dict, harness: str, args: list[str], cwd: str, environ
                                                    codex_hook_trust=option, peer=True)}
     if harness == "codex":
         require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
+    if harness == "claude":
+        require_claude_account_content_off(Path(environment["CLAUDE_CONFIG_DIR"]))
     if harness == "codex" and option == "bypass":
         checks = codex_hook_preflight(environment, repository)
         result["hook_trust"] = {key: checks[key] for key in ("evaluator_home", "hooks_sha256", "checks")}
@@ -1666,6 +1816,8 @@ def launch(args) -> None:
             dedicated_codex_home(environment)
         # Every trial can start Codex, as its seat or as a peer, in this home.
         remote_plugins = require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
+        # Every trial can start Claude too, as its seat or as a peer.
+        account_content = require_claude_account_content_off(Path(environment["CLAUDE_CONFIG_DIR"]))
         if args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
@@ -1695,6 +1847,7 @@ def launch(args) -> None:
            "repository": str(repository), "harness": args.harness, "workspace": args.workspace, "peers": peers,
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
+           "claude_account_content": account_content,
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
@@ -1763,6 +1916,10 @@ def launch(args) -> None:
             require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
         except Refused as exc:
             raise Refused(f"remote plugin recheck after readiness refused: {exc}") from exc
+        try:
+            require_claude_account_content_off(Path(environment["CLAUDE_CONFIG_DIR"]))
+        except Refused as exc:
+            raise Refused(f"Claude account-content recheck after readiness refused: {exc}") from exc
         try:
             run["config_start"] = config_snapshot(
                 environment, plugin_repository=repository if bypass else None, repository=repository)
@@ -1845,6 +2002,17 @@ def finish(args) -> None:
     if "peers" in run:
         flags, result["peers"] = peer_findings(run, peer_record, watched="peer_watch" in run)
         result["validity_flags"].extend(flags)
+    # Any plugin, synced skill or claude.ai connector that reached a Claude
+    # session, the subject's or a peer's, invalidates the trial. A launch
+    # refused before its environment was recorded started no session.
+    environment = run.get("environment") or {}
+    if {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PROJECT_DIR_NAME"} <= environment.keys():
+        extensions = claude_loaded_extensions(environment, Path(run["repository"]) if run.get("repository") else None)
+        result["claude_extensions"] = extensions
+        if any(extensions["loaded"].values()):
+            result["validity_flags"].append("extra_extension_loaded")
+        if extensions["errors"]:
+            result["validity_flags"].append("evaluator_config_unreadable")
     write(args.output / "after.json", after)
     if "pane" in run:
         try:

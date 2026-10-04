@@ -285,8 +285,21 @@ Accepted flags are `ambiguous_task`, `baseline_contamination`,
 `grader_false_negative`, `grader_false_positive`, `grader_material_exposed`,
 `harness_context_mismatch`, `missing_trace`, `refusal`, `reward_hacking`,
 `retry_contamination`, `reused_session`, `sandbagging`,
-`unavailable_fixture_tool`, and `unresolved_grader_disagreement`. Add a new
-flag to the protocol and validator together; an unknown spelling is invalid.
+`unavailable_fixture_tool`, and `unresolved_grader_disagreement`. A native
+launch also copies the observation flags it records: `declared_directory_changed`,
+`directory_observation_incomplete`, `directory_observation_entry_cap`,
+`directory_observation_time_cap`, `evaluator_config_drift`,
+`evaluator_config_unreadable`, `native_launch_not_confirmed` and
+`native_state_unavailable`; the peer flags `peer_launch_refused`,
+`peer_launch_unanswered`, `peer_launch_unrecorded`, `peer_launch_unverified`,
+`peer_launch_unobserved`, `peer_outside_trial_workspace`,
+`peer_startup_refused`, `peer_not_ready`, `peer_plugin_drift`,
+`peer_delivered_before_ready`, `peer_delivery_refused`,
+`peer_launcher_changed` and `peer_watch_incomplete`; and
+`extra_extension_loaded`, when a plugin, a skill synced from the harness
+account or an MCP server the fixture does not declare reached the session.
+Add a new flag to the protocol and validator together; an unknown spelling is
+invalid.
 
 The validator proves structural consistency and expected-vs-observed scoring;
 it cannot prove that a cited trace is genuine. That requires independent trace

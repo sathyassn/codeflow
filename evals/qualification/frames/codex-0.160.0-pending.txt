@@ -1,0 +1,48 @@
+
+  >_ OpenAI Codex (v0.160.0)
+     {path}
+  permissions: YOLO mode
+
+  Is this a plan day or a poke-around day?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Quick question from the operator: which branch does the customer search work land on?
+
+
+  GPT-6-Astra high · {path}
+                                                                                                                      ⚠ 2 warnings · f2 to view

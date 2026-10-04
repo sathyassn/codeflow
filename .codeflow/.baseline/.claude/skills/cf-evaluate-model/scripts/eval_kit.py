@@ -84,6 +84,23 @@ KNOWN_VALIDITY_FLAGS = {
     "directory_observation_time_cap",
     "native_launch_not_confirmed",
     "native_state_unavailable",
+    # Observation flags of the repository's qualification runner: peers the
+    # subject opens, and account plugins, skills or connectors that reached a
+    # Claude session. `finish` writes them; they are copied into the trial.
+    "peer_launch_refused",
+    "peer_launch_unanswered",
+    "peer_launch_unrecorded",
+    "peer_launch_unverified",
+    "peer_launch_unobserved",
+    "peer_outside_trial_workspace",
+    "peer_startup_refused",
+    "peer_not_ready",
+    "peer_plugin_drift",
+    "peer_delivered_before_ready",
+    "peer_delivery_refused",
+    "peer_launcher_changed",
+    "peer_watch_incomplete",
+    "extra_extension_loaded",
     "ambiguous_task",
     "baseline_contamination",
     "budget_exhaustion",
@@ -3162,6 +3179,8 @@ def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
         return [item for value in values for item in ["-c", value]]
     if harness == "grok":
         return ["--leader-socket", str(Path(environment["TMPDIR"]) / "grok-leader.sock")]
+    if harness == "claude":
+        return ["--settings", claude_settings_argument()]
     return []
 
 
@@ -3286,28 +3305,180 @@ def disable_codex_plugins(home: Path, moved_root: Path) -> list[str]:
         raise EvalError(f"could not verify the plugin settings in {config}")
     stale = codex_remote_plugin_cache(home)
     if stale:
-        # The destination is a kit-owned sibling of the home: never follow a
-        # link there, so a move cannot leave the evaluator folder.
-        parent = home.parent
-        if moved_root.parent != parent or parent.is_symlink() or moved_root.is_symlink() or (
-                moved_root.exists() and not moved_root.is_dir()):
-            raise EvalError(f"refusing the plugin move destination {moved_root}: it must be a real folder "
-                            f"directly inside {parent}")
-        moved_root.mkdir(mode=0o700, exist_ok=True)
-        target = moved_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4))
-        target.mkdir(mode=0o700)
-        if moved_root.is_symlink() or target.is_symlink() or target.resolve().parent != parent.resolve() / moved_root.name:
-            raise EvalError(f"refusing the plugin move destination {target}: it resolves outside {parent}")
-        for path in stale:
-            destination = target / path.relative_to(home)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            refuse_symlink_components(destination.parent, target)
-            os.rename(path, destination)
-            report.append(f"Codex: moved {path} to {destination}")
+        report.extend(_move_out_of_home(home, stale, moved_root, "Codex", "plugin"))
         report.append("Reason: account-managed plugins add the account's skills, apps and files "
                       "to every trial, so the dedicated Codex home never loads them. Delete the moved "
                       "folder once you no longer need it.")
     return report
+
+
+def _move_out_of_home(home: Path, paths: list[Path], moved_root: Path, harness: str, kind: str) -> list[str]:
+    """Move `paths`, each inside `home`, into a fresh timestamped folder under
+    `moved_root`, keeping their paths relative to the home. Returns one report
+    line per move. The destination is a kit-owned sibling of the home: never
+    follow a link there, so a move cannot leave the evaluator folder."""
+    parent = home.parent
+    if moved_root.parent != parent or parent.is_symlink() or moved_root.is_symlink() or (
+            moved_root.exists() and not moved_root.is_dir()):
+        raise EvalError(f"refusing the {kind} move destination {moved_root}: it must be a real folder "
+                        f"directly inside {parent}")
+    moved_root.mkdir(mode=0o700, exist_ok=True)
+    target = moved_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4))
+    target.mkdir(mode=0o700)
+    if moved_root.is_symlink() or target.is_symlink() or target.resolve().parent != parent.resolve() / moved_root.name:
+        raise EvalError(f"refusing the {kind} move destination {target}: it resolves outside {parent}")
+    report = []
+    for path in paths:
+        destination = target / path.relative_to(home)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        refuse_symlink_components(destination.parent, target)
+        os.rename(path, destination)
+        report.append(f"{harness}: moved {path} to {destination}")
+    return report
+
+
+# Account-managed Claude content: a Claude Code home signed in to a claude.ai
+# account downloads the plugins and skills enabled on that account into
+# `plugins/synced/` and `skills/synced/` and connects the account's claude.ai
+# MCP connectors. All three load into every session, so they would add the
+# account's skills, tools and remote services to every trial. Claude Code
+# 2.1.286 turns them off with these settings: `syncClaudeAiPlugins` and
+# `syncClaudeAiSkills` honour only false (in user settings they also hide and
+# trash what was synced; passed with --settings they hide it for that
+# invocation), and `disableClaudeAiConnectors` is honoured as true from any
+# settings source. The dedicated home sets them in its user settings and every
+# Claude start the kit builds passes them again with --settings.
+CLAUDE_ACCOUNT_SETTINGS = {"syncClaudeAiPlugins": False, "syncClaudeAiSkills": False,
+                           "disableClaudeAiConnectors": True}
+CLAUDE_SYNCED_FOLDERS = ("plugins/synced", "skills/synced")
+# Folders whose entries add skills, commands or agents to every session the
+# home starts; the dedicated home holds none. Claude keeps trashed synced
+# content in `.trash` and the synced copies in `synced`.
+CLAUDE_USER_EXTENSION_FOLDERS = ("skills", "commands", "agents")
+CLAUDE_KIT_ENTRIES = {"synced", ".trash"}
+
+
+def _claude_settings_document(settings: Path) -> dict:
+    if not settings.exists() and not settings.is_symlink():
+        return {}
+    if settings.is_symlink() or not settings.is_file() or settings.stat().st_size > MAX_SETTINGS_BYTES:
+        raise EvalError(f"evaluator settings must be a regular file: {settings}")
+    try:
+        document = json.loads(settings.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EvalError(f"cannot read {settings}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise EvalError(f"{settings} is not a JSON object")
+    return document
+
+
+def claude_account_settings(settings: Path) -> dict:
+    """The account-content settings in the dedicated Claude user settings,
+    None when unset. Reads only that settings file."""
+    document = _claude_settings_document(settings)
+    return {name: document.get(name) for name in CLAUDE_ACCOUNT_SETTINGS}
+
+
+def claude_account_content(home: Path) -> dict:
+    """What in the dedicated Claude home would add plugins, skills, commands
+    or agents to a session: non-empty synced folders, entries in the user
+    extension folders, installed plugins and enabled plugins. Paths are
+    relative to the home."""
+    found = {"synced": [], "user_extensions": [], "installed_plugins": [], "enabled_plugins": []}
+    for relative in CLAUDE_SYNCED_FOLDERS:
+        path = home / relative
+        if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
+            found["synced"].append(relative)
+    for folder in CLAUDE_USER_EXTENSION_FOLDERS:
+        path = home / folder
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            found["user_extensions"].append(folder)
+        elif path.is_dir():
+            found["user_extensions"].extend(f"{folder}/{entry.name}" for entry in sorted(path.iterdir())
+                                            if entry.name not in CLAUDE_KIT_ENTRIES)
+    installed = home / "plugins/installed_plugins.json"
+    if installed.is_symlink() or (installed.exists() and not installed.is_file()):
+        found["installed_plugins"].append("plugins/installed_plugins.json")
+    elif installed.is_file():
+        try:
+            plugins = json.loads(installed.read_text(encoding="utf-8")).get("plugins", {})
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError) as exc:
+            raise EvalError(f"cannot read {installed}: {exc}") from exc
+        found["installed_plugins"].extend(sorted(plugins) if isinstance(plugins, dict) else ["plugins/installed_plugins.json"])
+    enabled = _claude_settings_document(home / "settings.json").get("enabledPlugins", {})
+    if isinstance(enabled, dict):
+        found["enabled_plugins"].extend(sorted(name for name, value in enabled.items() if value is not False))
+    else:
+        found["enabled_plugins"].append("enabledPlugins")
+    # User-scope MCP servers live in .claude.json beside account state, which
+    # the kit never parses; the runner finds any that reach a session in its
+    # native transcript instead.
+    return found
+
+
+def _write_claude_account_settings(settings: Path) -> list[str]:
+    """Add the missing account-content settings to the dedicated Claude user
+    settings. Returns the names it added. Refuses a value set to anything else;
+    every other key is verified unchanged before the file is replaced."""
+    document = _claude_settings_document(settings)
+    # Identity, not equality: 0 equals False in Python but is not a JSON boolean.
+    wrong = [name for name, value in CLAUDE_ACCOUNT_SETTINGS.items()
+             if name in document and document[name] is not value]
+    if wrong:
+        raise EvalError(f"{settings} sets {', '.join(wrong)} to another value than "
+                        + " and ".join(f"{name}: {json.dumps(CLAUDE_ACCOUNT_SETTINGS[name])}" for name in wrong)
+                        + "; set it and rerun prepare-eval-homes")
+    missing = [name for name in CLAUDE_ACCOUNT_SETTINGS if name not in document]
+    if not missing:
+        return []
+    updated = {**document, **{name: CLAUDE_ACCOUNT_SETTINGS[name] for name in missing}}
+    text = json.dumps(updated, indent=2) + "\n"
+    if {key: value for key, value in json.loads(text).items() if key not in missing} != document:
+        raise EvalError(f"could not add the account-content settings to {settings} without changing anything else")
+    temporary = settings.with_name(f".settings.json.{secrets.token_hex(8)}.tmp")
+    with temporary.open("x", encoding="utf-8") as stream:
+        stream.write(text)
+    temporary.chmod(0o600)
+    os.replace(temporary, settings)
+    return missing
+
+
+def disable_claude_account_content(home: Path, moved_root: Path) -> list[str]:
+    """Turn off account plugins, skills and connectors in the dedicated Claude
+    user settings and move synced content out of the home. Refuses user
+    extensions and installed or enabled plugins, which the operator removes.
+    Returns the report lines."""
+    settings = home / "settings.json"
+    report = []
+    added = _write_claude_account_settings(settings)
+    if added:
+        report.append(f"Claude: wrote {', '.join(f'{name}: {json.dumps(CLAUDE_ACCOUNT_SETTINGS[name])}' for name in added)} "
+                      f"in {settings}")
+    if claude_account_settings(settings) != CLAUDE_ACCOUNT_SETTINGS:
+        raise EvalError(f"could not verify the account-content settings in {settings}")
+    found = claude_account_content(home)
+    if found["synced"]:
+        report.extend(_move_out_of_home(home, [home / relative for relative in found["synced"]],
+                                        moved_root, "Claude", "synced content"))
+        report.append("Reason: plugins and skills synced from the claude.ai account add the account's skills, "
+                      "tools and services to every trial, so the dedicated Claude home never loads them. "
+                      "Delete the moved folder once you no longer need it.")
+    extra = claude_extra_extensions(found)
+    if extra:
+        raise EvalError(f"the dedicated Claude home {home} holds skills, commands, agents or plugins that would "
+                        f"reach every trial ({', '.join(extra)}); remove them yourself and rerun prepare-eval-homes")
+    return report
+
+
+def claude_extra_extensions(found: dict) -> list[str]:
+    """Operator-installed content that `disable_claude_account_content` never
+    moves: user skills, commands and agents and installed or enabled plugins."""
+    return [*found["user_extensions"], *found["installed_plugins"], *found["enabled_plugins"]]
+
+
+def claude_settings_argument() -> str:
+    """The account-content settings as the compact JSON that --settings takes."""
+    return json.dumps(CLAUDE_ACCOUNT_SETTINGS, separators=(",", ":"))
 
 
 def prepare_eval_homes() -> str:
@@ -3324,6 +3495,7 @@ def prepare_eval_homes() -> str:
         if not evaluator_directory(path):
             raise EvalError("evaluator home contains a symlink or cannot be inspected")
     seeds = {homes["claude"] / ".claude.json": json.dumps({"theme": "dark", "hasCompletedOnboarding": True}) + "\n",
+             homes["claude"] / "settings.json": json.dumps(CLAUDE_ACCOUNT_SETTINGS, indent=2) + "\n",
              homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n' + CODEX_FEATURES_SEED}
     for path, value in seeds.items():
         # Exclusive creation preserves existing config without reading it.
@@ -3335,6 +3507,7 @@ def prepare_eval_homes() -> str:
             if path.is_symlink() or not path.is_file():
                 raise EvalError("evaluator settings must be a regular file")
     codex_report = disable_codex_plugins(homes["codex"], root / "removed-remote-plugins")
+    claude_report = disable_claude_account_content(homes["claude"], root / "removed-synced-content")
     env = subject_environment(Path("/SETUP"), Path("/usr/bin/codeflow"), [])
     retained = {key: value for key, value in env.items()
                 if key not in {"HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "PATH",
@@ -3345,7 +3518,7 @@ def prepare_eval_homes() -> str:
         target = shlex.quote(str(Path.home() / "Library/Keychains"))
         keychain_setup = (f'  mkdir -p "$eval_setup/home/Library" && '
                           f'ln -s {target} "$eval_setup/home/Library/Keychains" || return\n')
-    moved = "".join(line + "\n" for line in codex_report)
+    moved = "".join(line + "\n" for line in [*claude_report, *codex_report])
     return f'''Prepared dedicated evaluator folders (no sign-in performed):
 {chr(10).join(str(path) for path in homes.values())}
 {moved}Run this shell function and the three commands yourself, one at a time:
@@ -3357,7 +3530,7 @@ eval_home_launch() {{
 {keychain_setup}  if [ "$1" = grok ]; then set -- "$@" --leader-socket "$eval_setup/tmp/grok-leader.sock"; fi
   (cd "$eval_setup" && env -i TERM="${{TERM:-xterm-256color}}" PATH={shlex.quote(env["PATH"])} {assignments} HOME="$eval_setup/home" TMPDIR="$eval_setup/tmp" CODEFLOW_HOME="$eval_setup/home/.codeflow" XDG_CONFIG_HOME="$eval_setup/home/.config" GROK_LOG_FILE="$eval_setup/grok.log" "$@")
 }}
-eval_home_launch claude
+eval_home_launch claude --settings {shlex.quote(claude_settings_argument())}
 eval_home_launch codex -c 'cli_auth_credentials_store="file"' {" ".join("-c " + value for value in CODEX_PLUGIN_OVERRIDES)}
 eval_home_launch grok
 

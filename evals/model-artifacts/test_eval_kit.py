@@ -5968,8 +5968,11 @@ class ProcessRepairTests(unittest.TestCase):
             runner.kit.prepare_eval_homes()
             env = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
             folder = Path(env["CLAUDE_CONFIG_DIR"])
+            seeded = (folder / "settings.json").read_bytes()
             for name in ["settings.json", "unrelated/link", "rules"]:
                 link = folder / name; link.parent.mkdir(exist_ok=True)
+                if name == "settings.json":
+                    link.unlink()  # prepare-eval-homes seeds it; replace it with a link
                 link.symlink_to(Path(temp) / "must-not-follow")
                 self.assertFalse(runner.kit.evaluator_directory(folder))
                 with self.assertRaises(runner.kit.EvalError):
@@ -5977,6 +5980,8 @@ class ProcessRepairTests(unittest.TestCase):
                 with self.assertRaises(runner.Refused):
                     runner.config_snapshot(env)
                 link.unlink()
+                if name == "settings.json":
+                    link.write_bytes(seeded)
 
     def test_grok_login_substring_in_path_is_not_a_login_dialog(self):
         runner = self.runner()
@@ -6969,7 +6974,11 @@ class ProcessRepairTests(unittest.TestCase):
             args.output = evidence_root / "evidence"
             saved = json.loads((args.output / "launch.json").read_text())
             self.assertEqual("started", saved["status"])
-            self.assertEqual(native, saved["native_args"])
+            # The kit appends the account-content settings to every Claude start.
+            expected = [*native, "--settings", runner.kit.claude_settings_argument()]
+            self.assertEqual(expected, saved["native_args"])
+            self.assertEqual({"syncClaudeAiPlugins": False, "syncClaudeAiSkills": False, "disableClaudeAiConnectors": True},
+                             json.loads(saved["native_args"][-1]))
             self.assertNotIn("--dangerously-bypass-hook-trust", saved["native_args"])
             self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
             self.assertEqual([str(root / "watched")], saved["declared_directories"])
@@ -6980,7 +6989,7 @@ class ProcessRepairTests(unittest.TestCase):
             create = next(c for c in calls if c[:2] == ("tab", "create"))
             for key in ["HOME", "TMPDIR", "CODEFLOW_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"]:
                 self.assertIn(f"{key}={environment[key]}", create)
-            self.assertEqual(native, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(native):]))
+            self.assertEqual(expected, list(next(c for c in calls if c[:2] == ("agent", "start"))[-len(expected):]))
             args.output = evidence_root / "native-start-trust"
             starts = []
             trust = self.trust_screen("claude", repository)
@@ -8569,6 +8578,311 @@ class ProcessRepairTests(unittest.TestCase):
                                    str(controls_path), "--judgements", str(answers)], capture_output=True, text=True)
             self.assertNotEqual(0, done.returncode)
             self.assertIn("not qualified", done.stdout)
+
+
+class EvaluatorHomeExtensionTests(unittest.TestCase):
+    """TSK-194: no account plugin, synced skill or claude.ai connector, and no
+    user extension, reaches a Claude trial; a session that loaded one fails as
+    invalid. Also the Codex 0.160.0 frames and the libproc working-directory
+    read the runner needs on a loaded host."""
+
+    SETTINGS = {"syncClaudeAiPlugins": False, "syncClaudeAiSkills": False, "disableClaudeAiConnectors": True}
+
+    def runner(self):
+        spec = importlib.util.spec_from_file_location("qualification_runner_ext", ROOT / "evals/qualification/runner.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.start_peer_watch = lambda output: {"pid": None, "log": str(output / "peers.log")}
+        return module
+
+    @contextlib.contextmanager
+    def home(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)), \
+             patch.object(eval_kit.subprocess, "run") as run:
+            yield Path(temp) / ".codeflow-eval"
+            run.assert_not_called()
+
+    def test_prepare_seeds_and_extends_the_claude_account_settings(self):
+        with self.home() as root:
+            output = eval_kit.prepare_eval_homes()
+            settings = root / "claude/settings.json"
+            self.assertEqual(self.SETTINGS, json.loads(settings.read_text()))
+            self.assertEqual(0o600, stat.S_IMODE(settings.stat().st_mode))
+            self.assertIn("--settings " + "'" + eval_kit.claude_settings_argument() + "'", output)
+            # Other keys stay; only the missing settings are added.
+            settings.write_text(json.dumps({"theme": "light", "syncClaudeAiSkills": False}))
+            eval_kit.prepare_eval_homes()
+            self.assertEqual({"theme": "light", **self.SETTINGS}, json.loads(settings.read_text()))
+            for wrong in [{"syncClaudeAiPlugins": True}, {"syncClaudeAiPlugins": 0},
+                          {"disableClaudeAiConnectors": 1}, {"disableClaudeAiConnectors": False}]:
+                with self.subTest(wrong=wrong):
+                    settings.write_text(json.dumps(wrong))
+                    with self.assertRaisesRegex(eval_kit.EvalError, "another value"):
+                        eval_kit.prepare_eval_homes()
+                    self.assertEqual(wrong, json.loads(settings.read_text()))
+            for bad in ["[]", "not json"]:
+                with self.subTest(bad=bad):
+                    settings.write_text(bad)
+                    with self.assertRaises(eval_kit.EvalError):
+                        eval_kit.prepare_eval_homes()
+                    self.assertEqual(bad, settings.read_text())
+
+    def test_prepare_moves_synced_content_and_refuses_user_extensions(self):
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            claude = root / "claude"
+            plugin = claude / "plugins/synced/org_user/pdf-viewer/skills/view"
+            plugin.mkdir(parents=True); (plugin / "SKILL.md").write_text("synced skill")
+            (claude / "skills/synced/org_user").mkdir(parents=True)
+            (claude / "skills/synced/org_user/notes.md").write_text("synced")
+            (claude / "skills/.trash").mkdir()
+            output = eval_kit.prepare_eval_homes()
+            self.assertFalse((claude / "plugins/synced").exists())
+            self.assertFalse((claude / "skills/synced").exists())
+            moved = sorted((root / "removed-synced-content").iterdir())
+            self.assertEqual(1, len(moved))
+            self.assertEqual("synced skill", (moved[0] / "plugins/synced/org_user/pdf-viewer/skills/view/SKILL.md").read_text())
+            self.assertTrue((moved[0] / "skills/synced/org_user/notes.md").is_file())
+            self.assertIn("Claude: moved", output)
+            self.assertIn("claude.ai account", output)
+            # An empty synced folder is not account content.
+            (claude / "plugins/synced").mkdir()
+            eval_kit.prepare_eval_homes()
+            self.assertEqual(1, len(list((root / "removed-synced-content").iterdir())))
+            cases = {
+                "user skill": lambda: (claude / "skills/my-skill").mkdir(),
+                "user command": lambda: (claude / "commands").mkdir() or (claude / "commands/x.md").write_text("x"),
+                "user agent": lambda: (claude / "agents").mkdir() or (claude / "agents/a.md").write_text("a"),
+                "installed plugin": lambda: (claude / "plugins/installed_plugins.json").write_text(
+                    json.dumps({"plugins": {"tool@market": []}})),
+                "enabled plugin": lambda: (claude / "settings.json").write_text(
+                    json.dumps({**self.SETTINGS, "enabledPlugins": {"tool@market": True}})),
+            }
+            for name, plant in cases.items():
+                with self.subTest(name):
+                    before = (claude / "settings.json").read_text()
+                    plant()
+                    with self.assertRaisesRegex(eval_kit.EvalError, "remove them yourself"):
+                        eval_kit.prepare_eval_homes()
+                    for path in [claude / "skills/my-skill", claude / "commands", claude / "agents",
+                                 claude / "plugins/installed_plugins.json"]:
+                        if path.is_dir():
+                            shutil.rmtree(path)
+                        elif path.exists():
+                            path.unlink()
+                    (claude / "settings.json").write_text(before)
+            # A disabled plugin entry is not loaded content.
+            (claude / "settings.json").write_text(json.dumps({**self.SETTINGS, "enabledPlugins": {"tool@market": False}}))
+            eval_kit.prepare_eval_homes()
+
+    def test_runner_refuses_a_claude_home_that_would_load_extensions(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            claude = root / "claude"
+            self.assertEqual([], runner.require_claude_account_content_off(claude)["synced"])
+            settings = json.loads((claude / "settings.json").read_text())
+            for name in self.SETTINGS:
+                with self.subTest(missing=name):
+                    (claude / "settings.json").write_text(json.dumps({k: v for k, v in settings.items() if k != name}))
+                    with self.assertRaisesRegex(runner.Refused, "run prepare-eval-homes"):
+                        runner.require_claude_account_content_off(claude)
+            (claude / "settings.json").write_text(json.dumps(settings))
+            (claude / "skills/synced/org").mkdir(parents=True)
+            with self.assertRaisesRegex(runner.Refused, "synced account content"):
+                runner.require_claude_account_content_off(claude)
+            shutil.rmtree(claude / "skills/synced")
+            (claude / "skills/mine").mkdir()
+            with self.assertRaisesRegex(runner.Refused, "skills/mine"):
+                runner.require_claude_account_content_off(claude)
+
+    def test_claude_peer_start_is_refused_while_the_home_holds_extensions(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            env = eval_kit.subject_environment(root.parent / "trial", root.parent / "bin/codeflow", [])
+            repository = root.parent / "repository"; repository.mkdir()
+            run = {"repository": str(repository), "hook_trust": {"option": "review", "plugins": []}, "environment": env}
+            args = ["--model", "claude-opus-5-5", "--permission-mode", "auto"]
+            self.assertIn("permission_flags", runner.check_peer_state(run, "claude", args, str(repository), env))
+            (root / "claude/plugins/synced/org/p").mkdir(parents=True)
+            with self.assertRaisesRegex(runner.Refused, "synced account content"):
+                runner.check_peer_state(run, "claude", args, str(repository), env)
+
+    def test_launch_refuses_before_any_seat_when_the_claude_home_holds_extensions(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            (root / "claude/skills/synced/org").mkdir(parents=True)
+            subject = root.parent / "subjects"
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            with patch.object(runner, "herdr") as transport, \
+                 patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
+                                                                    subject / "t/repository", [])), \
+                 patch.object(runner, "watch_directories", return_value=[]):
+                output = root.parent / "evidence"
+                args = type("A", (), {"record": root.parent / "r.json", "output": output, "workspace": "w",
+                                      "harness": "codex", "codex_hook_trust": "review", "watch_dir": [],
+                                      "max_entries": 10, "snapshot_seconds": 1, "start_timeout": 1,
+                                      "native": ["--", "--model", "gpt-6-astra", "--ask-for-approval", "never",
+                                                 "--sandbox", "danger-full-access"]})()
+                with self.assertRaisesRegex(runner.Refused, "synced account content"):
+                    runner.launch(args)
+                transport.assert_not_called()
+            saved = json.loads((output / "launch.json").read_text())
+            self.assertEqual("refused", saved["status"])
+
+    @staticmethod
+    def transcript_lines(skills, agents=(), servers=(), tools=(), used=()):
+        return [
+            {"type": "attachment", "attachment": {"type": "skill_listing",
+                                                  "content": "\n".join(f"- {name}: does a thing" for name in skills)}},
+            {"type": "attachment", "attachment": {"type": "agent_listing_delta", "addedTypes": list(agents)}},
+            {"type": "attachment", "attachment": {"type": "mcp_instructions_delta", "addedNames": list(servers),
+                                                  "addedBlocks": []}},
+            {"type": "attachment", "attachment": {"type": "deferred_tools_delta", "addedNames": list(tools)}},
+            {"type": "assistant", "message": {"stop_reason": "end_turn",
+                                              "content": [{"type": "tool_use", "name": name, "input": {}} for name in used]}},
+        ]
+
+    def write_transcript(self, env, lines, name="session.jsonl"):
+        folder = Path(env["CLAUDE_CONFIG_DIR"]) / "projects" / env["CLAUDE_CODE_PROJECT_DIR_NAME"]
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text("\n".join(json.dumps(line) for line in lines) + "\nnot json\n")
+        return folder
+
+    def test_transcript_scan_flags_account_and_undeclared_extensions_only(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            repository = root / "repository"; repository.mkdir()
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
+                             runner.claude_loaded_extensions(env, repository)["loaded"])
+            clean = self.transcript_lines(["cf-plan", "cf-ship", "code-review", "dataviz"],
+                                          agents=["cf-reviewer", "Explore", "general-purpose"])
+            self.write_transcript(env, clean)
+            found = runner.claude_loaded_extensions(env, repository)
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []}, found["loaded"])
+            self.assertEqual(["cf-plan", "cf-ship", "code-review", "dataviz"], found["skills"])
+            (repository / ".mcp.json").write_text(json.dumps({"mcpServers": {"playwright": {"command": "x"}}}))
+            loaded = self.transcript_lines(
+                ["cf-plan", "pdf-viewer:view", "anthropic-skills:pdf"], agents=["cf-reviewer", "design:critic"],
+                servers=["claude.ai Atlassian MCP", "playwright", "personal"],
+                tools=["mcp__claude_ai_Slack__send", "mcp__plugin_design_figma__get", "mcp__playwright__click"],
+                used=["mcp__personal__read", "Bash", "mcp__playwright__click"])
+            self.write_transcript(env, loaded, "peer.jsonl")
+            found = runner.claude_loaded_extensions(env, repository)
+            self.assertEqual(["playwright"], found["declared_mcp_servers"])
+            self.assertEqual({"skills": ["anthropic-skills:pdf", "pdf-viewer:view"], "agents": ["design:critic"],
+                              "tools": ["mcp__claude_ai_Slack__send", "mcp__personal__read", "mcp__plugin_design_figma__get"],
+                              "mcp_servers": ["claude.ai Atlassian MCP", "personal"]}, found["loaded"])
+            self.assertEqual(["peer.jsonl", "session.jsonl"], found["transcripts"])
+            # Without a repository nothing is declared, so every MCP server flags.
+            self.assertIn("mcp__playwright__click", runner.claude_loaded_extensions(env)["loaded"]["tools"])
+
+    def test_transcript_scan_never_reads_through_a_link(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            folder = self.write_transcript(env, self.transcript_lines(["cf-plan"]))
+            outside = root / "outside.jsonl"
+            outside.write_text(json.dumps(self.transcript_lines(["pdf-viewer:view"])[0]) + "\n")
+            (folder / "linked.jsonl").symlink_to(outside)
+            found = runner.claude_loaded_extensions(env)
+            self.assertEqual([], found["loaded"]["skills"])
+            self.assertTrue(any("symlink" in error for error in found["errors"]))
+            shutil.rmtree(folder)
+            (root / "claude/projects").mkdir(parents=True, exist_ok=True)
+            (root / "claude/projects/eval-abc").symlink_to(root, target_is_directory=True)
+            self.assertTrue(runner.claude_loaded_extensions(env)["errors"])
+
+    def test_finish_fails_a_trial_whose_claude_session_loaded_an_extension(self):
+        import argparse
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            repository = root / "repository"; repository.mkdir()
+            output = root / "evidence"; output.mkdir()
+            runner.write(output / "launch.json", {"declared_directories": [], "observation": {}, "status": "started",
+                                                  "environment": env, "repository": str(repository)})
+            with patch.object(runner, "snapshot", return_value={"validity_flags": []}), \
+                 patch.object(runner, "compare", return_value={"validity_flags": []}), \
+                 patch.object(runner, "config_snapshot", return_value={}), patch("builtins.print"):
+                self.write_transcript(env, self.transcript_lines(["cf-plan", "code-review"]))
+                (output / "before.json").write_text("{}")
+                runner.finish(argparse.Namespace(output=output))
+                clean = json.loads((output / "observation.json").read_text())
+                self.write_transcript(env, self.transcript_lines(["cf-plan", "finance:close"]), "later.jsonl")
+                runner.finish(argparse.Namespace(output=output))
+                flagged = json.loads((output / "observation.json").read_text())
+            self.assertNotIn("extra_extension_loaded", clean["validity_flags"])
+            self.assertIn("extra_extension_loaded", flagged["validity_flags"])
+            self.assertEqual(["finance:close"], flagged["claude_extensions"]["loaded"]["skills"])
+            self.assertIn("extra_extension_loaded", eval_kit.KNOWN_VALIDITY_FLAGS)
+
+    def test_every_runner_flag_is_in_the_kit_vocabulary(self):
+        runner = self.runner()
+        flags = {*runner.PEER_FLAGS.values(), "extra_extension_loaded", "evaluator_config_drift",
+                 "evaluator_config_unreadable", "native_launch_not_confirmed", "native_state_unavailable",
+                 "directory_observation_incomplete", "directory_observation_entry_cap",
+                 "directory_observation_time_cap", "declared_directory_changed"}
+        self.assertEqual(set(), flags - eval_kit.KNOWN_VALIDITY_FLAGS)
+
+    FRAMES = ROOT / "evals/qualification/frames"
+
+    def test_codex_0_160_0_captured_frames_are_ready_and_take_one_prompt(self):
+        runner = self.runner()
+        path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
+        idle = (self.FRAMES / "codex-0.160.0-idle.txt").read_text().replace("{path}", str(path))
+        pending = (self.FRAMES / "codex-0.160.0-pending.txt").read_text().replace("{path}", str(path))
+        prompt = "Quick question from the operator: which branch does the customer search work land on?\n"
+        expect = {"model": "gpt-6-astra", "effort": "high", "repository": path}
+        self.assertEqual("", runner.codex_composer(idle, **expect))
+        self.assertTrue(runner.codex_holds(runner.codex_composer(pending, **expect), prompt))
+        frames = []
+        with patch.object(runner, "herdr", return_value=idle), \
+             patch.object(runner, "state", return_value={"agent_status": "idle"}), patch.object(runner.time, "sleep"):
+            runner.wait_ready("owned", 1, "codex", path, [], [], codex=expect, frames=frames)
+        self.assertEqual(["ready"], [frame["stage"] for frame in frames])
+        with patch.object(runner, "herdr", side_effect=[idle, "sent", pending, "sent"]) as transport, \
+             patch.object(runner, "started", return_value=True), patch.object(runner.time, "sleep"):
+            self.assertEqual(1, runner.deliver_codex("owned", prompt, {}, 1, expect, []))
+        self.assertEqual(1, sum(c.args[:2] == ("pane", "send-keys") for c in transport.call_args_list))
+        for other in [idle.replace("GPT-6-Astra high", "GPT-6-Astra medium"),
+                      idle.replace(str(path), str(path) + "-other"),
+                      idle.replace("› Ask Codex to do anything", "› leftover draft")]:
+            with self.subTest(other=other[-200:]):
+                self.assertNotEqual("", runner.codex_composer(other, **expect))
+
+    @unittest.skipUnless(sys.platform == "darwin", "libproc is macOS only")
+    def test_working_directory_comes_from_libproc_without_lsof(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            child = subprocess.Popen([sys.executable, "-c", "import sys, time; print(flush=True); time.sleep(30)"],
+                                     cwd=temp, stdout=subprocess.PIPE, env={"PATH": "/bin"})
+            try:
+                child.stdout.readline()
+                self.assertEqual(os.path.realpath(temp), os.path.realpath(runner.darwin_cwd(child.pid)))
+                real = subprocess.run
+                def no_lsof(argv, *args, **kwargs):
+                    self.assertNotEqual("lsof", argv[0])
+                    return real(argv, *args, **kwargs)
+                with patch.object(runner.subprocess, "run", side_effect=no_lsof):
+                    started = time.monotonic()
+                    try:
+                        live = runner.live_process(child.pid)
+                    except PermissionError as exc:
+                        self.skipTest(f"ps unavailable here (sandbox): {exc}")
+                    self.assertLess(time.monotonic() - started, 5)
+                self.assertEqual(os.path.realpath(temp), os.path.realpath(live["cwd"]))
+            finally:
+                child.kill()
+                child.wait()
+            with self.assertRaises(ProcessLookupError):
+                runner.darwin_cwd(child.pid)
 
 if __name__ == "__main__":
     unittest.main()

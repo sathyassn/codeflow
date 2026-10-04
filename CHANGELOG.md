@@ -242,6 +242,29 @@ erratum below, never an edit of the section.
   home not signed in" for a visible sign-in screen.
 
 <!-- codeflow:release-impact patch -->
+- **Claude evaluation trials no longer load the account's plugins, skills
+  and connectors.** A dedicated Claude home signed in to a claude.ai account
+  loaded the account's synced plugins and skills and its claude.ai
+  connectors into every trial: each Claude trial of the 2026-10-01 first
+  batch listed about 100 account skills. `cf-evaluate-model`'s
+  `eval_kit.py prepare-eval-homes` now writes `syncClaudeAiPlugins: false`,
+  `syncClaudeAiSkills: false` and `disableClaudeAiConnectors: true` into
+  the dedicated Claude home's `settings.json`, adding only what is missing,
+  moves synced content out of that home into
+  `~/.codeflow-eval/removed-synced-content/`, printing each move, and
+  refuses user skills, commands, agents and installed plugins there. Every
+  Claude start the kit builds passes the same settings through
+  `--settings`. Run it again once after updating. The repository's
+  qualification runner refuses a launch whose Claude home lacks the
+  settings or holds such content, checks again after readiness and for
+  each Claude peer, and at `finish` flags a trial invalid
+  (`extra_extension_loaded`) when its transcripts show a plugin or account
+  skill, agent or MCP tool the fixture does not declare. The runner also
+  reads a process's working directory on macOS through libproc instead of
+  `lsof`, which took longer than the watcher's poll gap on a loaded host,
+  and pins Codex 0.160.0's idle and pending screens in its frame tests.
+
+<!-- codeflow:release-impact patch -->
 - **The full gate runs inside CodeFlow's own Claude sandbox.** The full
   gate takes a machine-wide lock under `~/.codeflow/locks` and keeps its
   evidence under `~/.codeflow/gate-runs`, which the shipped Claude settings

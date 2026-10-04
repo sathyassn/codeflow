@@ -80,6 +80,39 @@ setting, or a remote plugin cache, refuses with `run prepare-eval-homes`. The
 check runs again after readiness, before the prompt, and for every Codex peer
 start; `config_finish` records the same state, so a change flags
 `evaluator_config_drift`. `launch.json` records it as `codex_remote_plugins`.
+
+No account plugin, synced skill or claude.ai connector loads in the dedicated
+Claude home either. A Claude Code home signed in to a claude.ai account
+downloads the plugins and skills enabled on that account into
+`plugins/synced/` and `skills/synced/` and connects the account's claude.ai
+MCP connectors; all of them load into every session. The 2026-10-01 first
+batch shows it: each Claude trial listed about 100 account skills and up to
+148 claude.ai and plugin MCP tools. `prepare-eval-homes` therefore writes
+`syncClaudeAiPlugins: false`, `syncClaudeAiSkills: false` and
+`disableClaudeAiConnectors: true` into that home's `settings.json`, adding
+only what is missing and refusing a key set to anything else, and moves
+non-empty synced folders into `~/.codeflow-eval/removed-synced-content/<time>/`,
+printing each move. It refuses, without changing them, user skills, commands
+and agents and installed or enabled plugins in that home; remove those
+yourself. Every Claude start the kit builds, the trial seat and a peer's
+answer, also passes `--settings` with the same three keys. Every launch checks
+the home before any seat starts, again after readiness and for every Claude
+peer, and refuses with `run prepare-eval-homes`; `launch.json` records the
+state as `claude_account_content` and `config_finish` as part of the drift
+check. The home's `.claude.json` holds account state and is never parsed.
+
+At `finish` the runner reads every native Claude transcript of the trial, the
+subject's and its peers', from the trial's project folder in that home. A
+namespaced skill or agent (`<plugin>:<name>`, the form plugin and synced
+content takes), a claude.ai or plugin connector, or any MCP tool or server
+that the fixture repository does not declare in its own `.mcp.json` adds
+`extra_extension_loaded` to the trial's validity flags, so the trial is
+invalid, never a model result. `observation.json` lists what was found under
+`claude_extensions`, including the unnamespaced skills and agents the session
+listed (the fixture's own and the harness's bundled ones), which are recorded
+but not flagged. A transcript reached through a link, or one that cannot be
+read, adds `evaluator_config_unreadable`. Claude Code 2.1.286 documents the
+three settings; a live Claude trial is the proof that they take effect.
 For an operator's own interactive Codex hook review, materialize a fresh
 fixture with the current binary, then print the operator command:
 
@@ -331,7 +364,9 @@ title, branch and warning count are not required. Codex trials must pass
 cwd or model, or a changed placeholder. The runner re-reads that frame just
 before pasting, then sends one Enter only when the composer holds this
 prompt, as text or as `[Pasted Content N chars]` with this prompt's length.
-The footer under pending input was not captured and is not checked. The
+The footer under pending input is not checked: Codex 0.160.0 shows only the
+warning count there. Codex 0.160.0's idle and pending frames, captured in
+TSK-194's dry trial of 2026-10-04, are kept under `frames/` and tested. The
 ready, before-paste and pending frame digests and times are recorded in
 `verified_frames` in `launch.json`, with the screens in the evidence folder.
 There is no second Enter. Grok keeps the managed helper's one-Enter refusal
@@ -499,8 +534,10 @@ at launch running `-B` and the launcher file, exactly as its first line
 starts it. For
 each launch the watcher reads the live process from the OS: on macOS the
 executable, argv and environment through `sysctl` (`KERN_PROCARGS2`), the
-start time through `ps` and the working directory through `lsof`; on Linux
-from `/proc`. A launch counts only when:
+start time through `ps` and the working directory through libproc's
+`proc_pidinfo` (`PROC_PIDVNODEPATHINFO`); on Linux from `/proc`. `lsof` is not
+used: it took 9 to 16 seconds for one process on a loaded host, longer than
+the watcher's 10-second poll gap. A launch counts only when:
 
 - an answer for that pane is bound to it: the request's pid and the answer's
   argv equal the live process's, and each answer binds once;
@@ -562,7 +599,7 @@ sandboxed shell that cannot write it, leaves no logged delivery. A process whose
 verification; macOS hides it for its own platform binaries, such as
 `/bin/sleep`. A subject that edits the launcher files is flagged, not
 stopped. A peer working outside the trial's folders in the trial workspace
-is not attributed. The watcher needs `ps` and `lsof`; the runner runs outside
+is not attributed. The watcher needs `ps` and, on macOS, libproc; the runner runs outside
 the harness sandbox. Native dry runs by the primary are the evidence that
 Herdr's real launch route reaches the trial PATH; the unit tests use fake
 executables, a scripted Herdr and a scripted process table, plus one real
