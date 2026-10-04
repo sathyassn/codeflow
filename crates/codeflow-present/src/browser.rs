@@ -1391,7 +1391,7 @@ fn arguments_prove_identity<A: AsRef<[u8]>>(
 /// Whether `expected` is one whole argument of a `ps` rendering, which joins
 /// the arguments with spaces. Bytes, not text (issue 79): see
 /// [`rendered_process_identity`].
-#[cfg(any(target_os = "macos", windows, test))]
+#[cfg(any(target_os = "macos", test))]
 fn rendered_command_line_contains_argument(command: &[u8], expected: &str) -> bool {
     let expected = expected.as_bytes();
     if expected.is_empty() || command.len() < expected.len() {
