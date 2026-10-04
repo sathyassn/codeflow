@@ -30,7 +30,10 @@
 # scaffolds the GitHub workflow today; a platform picker is a follow-up.
 #
 # Optional external add-ons (as in the GitHub template), added as extra jobs:
-#   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan
+#   gitleaks detect --source . --redact --no-banner --exit-code 1 \
+#     --log-opts "$CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD"   # secret scan of the
+#     merge request's own commits; a scheduled pipeline drops --log-opts to
+#     scan the full history, as the GitHub workflow does weekly
 #   osv-scanner scan -r .                                           # dep audit
 
 stages: [verify]

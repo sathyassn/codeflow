@@ -183,6 +183,13 @@ with a message naming that order. A hand-raised `scaffold_version` that
 leaves an older table behind fails closed in the candidate job, which
 names the `codeflow update --pin` that fixes it.
 
+The 3.1.0 secret scan reads only a pull request's own commits, so a
+finding already on another branch no longer fails it; the weekly
+full-history scan reports it instead, and GitHub runs that schedule only
+from the default branch. To adopt it, run `codeflow update`, review the
+workflow it merges with your own edits, land it on the default branch, and
+check that the scheduled run appears in the Actions tab.
+
 A Bitbucket pull request pipeline "merges the destination branch into your
 working branch before it runs"
 ([pipeline start conditions](https://support.atlassian.com/bitbucket-cloud/docs/pipeline-start-conditions/)),
@@ -232,7 +239,9 @@ API — see CodeFlow ADR-0017.
 The GitHub workflow also runs two pinned external tools; add them to any wrapper
 as extra steps when your stack warrants:
 
-- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1`.
+- **gitleaks** — secret scan: `gitleaks detect --source . --redact --no-banner --exit-code 1 --log-opts "<target>..HEAD"`
+  on a change, so it reads only the change's own commits, and without
+  `--log-opts` on a schedule, which reads the full history.
   The GitHub workflow reads every exemption from the trusted commit: the
   pull request's base, or the pushed commit on a push. A pull request
   cannot exempt the leak it adds, so a new exemption takes effect once its

@@ -44,7 +44,10 @@
 # scaffolds the GitHub workflow today; a platform picker is a follow-up.
 #
 # Optional external add-ons, added as extra script steps:
-#   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan
+#   gitleaks detect --source . --redact --no-banner --exit-code 1 \
+#     --log-opts "$BITBUCKET_PR_DESTINATION_COMMIT..HEAD"   # secret scan of the
+#     pull request's own commits; a scheduled pipeline drops --log-opts to
+#     scan the full history, as the GitHub workflow does weekly
 #   osv-scanner scan -r .                                           # dep audit
 
 image: debian:stable-slim

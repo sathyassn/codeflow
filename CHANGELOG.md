@@ -267,6 +267,12 @@ erratum below, never an edit of the section.
   the default branch goes unscanned; the gates job stays off the schedule.
   Each run prints which history it read, and exemptions are still read only
   from the trusted commit.
+  This changes what a pull request's scan means: a finding already on
+  another branch no longer fails it, and only the weekly scan reports it.
+  That schedule runs only once the workflow is on the default branch. To
+  adopt, run `codeflow update`, review the workflow it merges with your
+  edits, land it on the default branch, and check that the scheduled run
+  appears there.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A

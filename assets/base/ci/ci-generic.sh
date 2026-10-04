@@ -218,5 +218,8 @@ codeflow validate --docs
 # <<< codeflow pinned run
 
 # Optional external add-ons (uncomment once the tools are on PATH):
-#   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan
+#   gitleaks detect --source . --redact --no-banner --exit-code 1 \
+#     --log-opts "$target..HEAD"   # secret scan of the change's own commits;
+#     a scheduled run drops --log-opts to scan the full history, as the
+#     GitHub workflow does weekly
 #   osv-scanner scan -r .                                           # dep audit
