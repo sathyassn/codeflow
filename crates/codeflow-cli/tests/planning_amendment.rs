@@ -639,5 +639,38 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
             "a document behind a link on push",
             &["work.criteria_frozen", "TSK-001 changes its criteria"],
         );
+
+        // Review round 2: a link whose target differs only in letter case,
+        // as a case-insensitive checkout resolves it, and an absolute link
+        // into the checkout reach the document as well.
+        git(root, &["switch", "main"]);
+        write(root, "docs/guide.md", &agents("guide"));
+        write(root, "docs/absolute.md", &agents("absolute"));
+        std::os::unix::fs::symlink("DOCS/Guide.md", root.join("GEMINI.md")).unwrap();
+        std::os::unix::fs::symlink(root.join("docs/absolute.md"), root.join("absolute-link"))
+            .unwrap();
+        commit(root, "docs: link two more instruction files");
+        for (doc, link) in [
+            ("docs/guide.md", "GEMINI.md"),
+            ("docs/absolute.md", "absolute-link"),
+        ] {
+            let branch = format!("plan/through-{link}");
+            git(root, &["switch", "-C", &branch, "main"]);
+            let text = std::fs::read_to_string(root.join(doc)).unwrap();
+            write(root, doc, &text.replace("managed rules", "other rules"));
+            commit(root, "docs: change the linked instructions");
+            assert_blocks(
+                &ci(root, &branch, "Task: EPC-001"),
+                doc,
+                &[&format!("which the symbolic link {link} reaches")],
+            );
+            loosen(root, "TSK-001", Some("EPC-001"), "main");
+            commit(root, "docs(records): loosen AC-1 behind the link");
+            assert_blocks(
+                &ci_push(root, &branch),
+                doc,
+                &["work.criteria_frozen", "TSK-001 changes its criteria"],
+            );
+        }
     }
 }

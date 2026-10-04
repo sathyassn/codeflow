@@ -34,7 +34,8 @@ while its managed block stays byte-identical to the target's. `CLAUDE.md`,
 harness and skill trees, `.codeflow/`, record templates, policy, hooks and
 CI still keep a range out of the planning class, and so do, in any folder,
 a hidden path, a harness instruction file, an adopter-facing path in any
-letter case, a symbolic link, and a path a link reaches. The project's
+letter case, a symbolic link, and a path a link may reach, judged in any
+case and for absolute targets too. The project's
 product and watched paths are read from the target's policy. CI prints
 the class as an amendment of the named epics and reports per epic each task whose criteria
 change with its delta, the records added or removed, the status

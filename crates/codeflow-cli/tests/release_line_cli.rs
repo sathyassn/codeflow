@@ -555,12 +555,19 @@ fn a_reopened_task_brought_with_changed_criteria_is_frozen() {
     );
 }
 
-/// TSK-229 review round 1: a planning amendment that also carries a doc
-/// (ADR-0078) brings its criteria change into a release as a planning
-/// landing; the same landing with `CLAUDE.md` stays frozen.
+/// TSK-229 review rounds 1 and 2: a planning amendment that also carries a
+/// doc (ADR-0078) brings its criteria change into a release as a planning
+/// landing; the same landing with `CLAUDE.md`, or with an instruction or
+/// harness file inside a planning folder, stays frozen.
 #[test]
 fn an_amendment_carrying_a_doc_is_brought_into_a_release() {
-    for (file, admitted) in [("docs/reading.md", true), ("CLAUDE.md", false)] {
+    for (file, admitted) in [
+        ("docs/reading.md", true),
+        ("CLAUDE.md", false),
+        ("docs/plan/AGENTS.md", false),
+        ("project-management/AGENTS.md", false),
+        ("docs/plan/.claude/settings.json", false),
+    ] {
         let fx = Fx::new(false);
         fx.git(&["switch", "-q", "-C", "plan/amend-with-doc", LINE_A]);
         let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();

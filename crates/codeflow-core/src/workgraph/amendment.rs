@@ -306,9 +306,10 @@ pub fn range_problem_at(
 /// project's product and watched paths come from the policy at `base`, the
 /// target's, never from a working copy. Every path must be one
 /// [`amendment_path`] admits; no changed path may be a symbolic link on
-/// either side, or lie at or under the target of one, so a link cannot
-/// carry instruction text in through a document; and `AGENTS.md` keeps the
-/// target's managed block byte for byte.
+/// either side, or be one a link may reach in any letter case or through an
+/// absolute target, so a link cannot carry instruction text in through a
+/// document; and `AGENTS.md` keeps the target's managed block byte for
+/// byte.
 #[must_use]
 pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) -> Option<String> {
     let project = match project_at(repo, base) {
@@ -340,11 +341,8 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     for at in [base, head] {
-        for (link, target) in links(repo, at) {
-            if let Some(path) = paths
-                .iter()
-                .find(|path| **path == target || path.starts_with(&format!("{target}/")))
-            {
+        for (link, reach) in links(repo, at) {
+            if let Some(path) = paths.iter().find(|path| reach.covers(path)) {
                 return Some(format!(
                     "a planning-only pull request changes {path}, which the symbolic link {link} reaches; a planning amendment does not change what a link carries"
                 ));
@@ -370,10 +368,38 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)
     Some((entry.filemode(), blob.content().to_vec()))
 }
 
-/// Every symbolic link in the tree of `commit` with the repository path it
-/// points to; a target that is absolute or leaves the repository is left
-/// out.
-fn links(repo: &Repository, commit: Oid) -> Vec<(String, String)> {
+/// What a symbolic link may reach, judged without the case of its letters,
+/// since a checkout on a case-insensitive file system resolves `DOCS/` and
+/// `docs/` alike.
+#[derive(Debug, PartialEq)]
+enum Reach {
+    /// The repository path the link names; empty for the repository root,
+    /// which covers every path.
+    Inside(String),
+    /// A target that is absolute or leaves the repository, as its
+    /// normalized components. Where the checkout lives is not known here,
+    /// so the link may reach any repository path that one of their
+    /// non-empty tails names; with no components it names `/` or a folder
+    /// above the repository, which covers every path.
+    Outside(Vec<String>),
+}
+
+impl Reach {
+    /// Whether the link may reach `path` or a folder holding it.
+    fn covers(&self, path: &str) -> bool {
+        let path = path.to_lowercase();
+        let under = |target: &str| path == target || path.starts_with(&format!("{target}/"));
+        match self {
+            Self::Inside(target) => target.is_empty() || under(target),
+            Self::Outside(parts) => {
+                parts.is_empty() || (0..parts.len()).any(|at| under(&parts[at..].join("/")))
+            }
+        }
+    }
+}
+
+/// Every symbolic link in the tree of `commit` with what it may reach.
+fn links(repo: &Repository, commit: Oid) -> Vec<(String, Reach)> {
     let Ok(tree) = repo.find_commit(commit).and_then(|commit| commit.tree()) else {
         return Vec::new();
     };
@@ -381,10 +407,8 @@ fn links(repo: &Repository, commit: Oid) -> Vec<(String, String)> {
     let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
         if entry.filemode() == LINK_MODE {
             if let (Ok(name), Ok(blob)) = (entry.name(), repo.find_blob(entry.id())) {
-                let target = String::from_utf8_lossy(blob.content()).into_owned();
-                if let Some(resolved) = resolve(dir, &target) {
-                    found.push((format!("{dir}{name}"), resolved));
-                }
+                let target = String::from_utf8_lossy(blob.content());
+                found.push((format!("{dir}{name}"), resolve(dir, &target)));
             }
         }
         git2::TreeWalkResult::Ok
@@ -392,23 +416,36 @@ fn links(repo: &Repository, commit: Oid) -> Vec<(String, String)> {
     found
 }
 
-/// `target` read from the folder `dir` (with its trailing `/`), as a
-/// repository path, or `None` when it is absolute or leaves the repository.
-fn resolve(dir: &str, target: &str) -> Option<String> {
-    if target.starts_with('/') {
-        return None;
-    }
-    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+/// What `target`, read from the folder `dir` (with its trailing `/`), may
+/// reach, in lower case.
+fn resolve(dir: &str, target: &str) -> Reach {
+    let target = target.replace('\\', "/").to_lowercase();
+    let absolute = target.starts_with('/') || target.as_bytes().get(1) == Some(&b':');
+    let mut parts: Vec<String> = if absolute {
+        Vec::new()
+    } else {
+        dir.split('/')
+            .filter(|part| !part.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let mut escaped = absolute;
     for part in target.split('/') {
         match part {
             "" | "." => {}
             ".." => {
-                parts.pop()?;
+                if parts.pop().is_none() {
+                    escaped = true;
+                }
             }
-            part => parts.push(part),
+            part => parts.push(part.to_string()),
         }
     }
-    Some(parts.join("/"))
+    if escaped {
+        Reach::Outside(parts)
+    } else {
+        Reach::Inside(parts.join("/"))
+    }
 }
 
 /// The project's product and watched paths from the policy at `commit`: its
@@ -455,10 +492,11 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     })
 }
 
-/// What keeps a criteria change landed by `landing` (on top of `parent`)
-/// from being a planning change, or `None` when it is one: records and
-/// plans only, or a planning amendment that [`range_problem`] admits
-/// (ADR-0078).
+/// The path that keeps a criteria change landed by `landing` (on top of
+/// `parent`) from being a planning change, or `None` when it is one: a
+/// range that [`range_problem`] admits as a planning amendment (ADR-0078),
+/// records-only ranges included, so a release imports nothing its
+/// planning pull request would have refused.
 ///
 /// # Errors
 ///
@@ -468,11 +506,8 @@ pub(super) fn landing_problem(
     parent: Option<Oid>,
     landing: Oid,
 ) -> Result<Option<String>, git2::Error> {
-    let Some(changed) = super::acceptance::non_planning_change(repo, parent, landing)? else {
-        return Ok(None);
-    };
     let Some(parent) = parent else {
-        return Ok(Some(changed));
+        return super::acceptance::non_planning_change(repo, None, landing);
     };
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = repo.diff_tree_to_tree(Some(&tree(parent)?), Some(&tree(landing)?), None)?;
@@ -484,5 +519,48 @@ pub(super) fn landing_problem(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    Ok(range_problem(repo, parent, landing, &paths).map(|_| changed))
+    if range_problem(repo, parent, landing, &paths).is_none() {
+        return Ok(None);
+    }
+    // Name the path at fault; a problem no single path shows (the policy
+    // cannot be read) names the first.
+    let single = |path: &String| range_problem(repo, parent, landing, std::slice::from_ref(path));
+    Ok(paths
+        .iter()
+        .find(|path| single(path).is_some())
+        .or_else(|| paths.first())
+        .cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve, Reach};
+
+    #[test]
+    fn a_link_reaches_its_target_in_any_case_and_from_outside() {
+        // Relative, with the case of a case-insensitive checkout.
+        let upper = resolve("", "DOCS/instructions.md");
+        assert_eq!(upper, Reach::Inside("docs/instructions.md".to_string()));
+        assert!(upper.covers("docs/instructions.md"));
+        assert!(upper.covers("Docs/Instructions.md"));
+        assert!(!upper.covers("docs/other.md"));
+        // A folder covers what it holds; `..` stays inside while it can.
+        let folder = resolve("docs/plan/", "../reading");
+        assert!(folder.covers("docs/reading/a.md"));
+        assert!(!folder.covers("docs/readings.md"));
+        // The repository root covers every path.
+        assert!(resolve("docs/", "..").covers("src/lib.rs"));
+        assert!(resolve("", ".").covers("AGENTS.md"));
+        // Absolute, or leaving the repository: any tail may be the checkout.
+        let absolute = resolve("", "/home/me/repo/docs/instructions.md");
+        assert!(absolute.covers("docs/instructions.md"));
+        assert!(absolute.covers("instructions.md"));
+        assert!(!absolute.covers("docs/other.md"));
+        let escaped = resolve("", "../repo/DOCS");
+        assert!(escaped.covers("docs/instructions.md"));
+        assert!(resolve("", "C:\\work\\repo\\docs\\a.md").covers("docs/a.md"));
+        // `/` or a folder above the repository covers every path.
+        assert!(resolve("", "/").covers("docs/a.md"));
+        assert!(resolve("", "..").covers("docs/a.md"));
+    }
 }
