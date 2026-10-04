@@ -2128,9 +2128,12 @@ pub(super) fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String
     if !repo.is_shallow() {
         return Ok(HashSet::new());
     }
-    let listed = std::fs::read_to_string(repo.path().join("shallow")).map_err(|error| {
-        format!("this clone is shallow and its boundary cannot be read: {error}")
-    })?;
+    // A linked worktree shares the list with its main checkout.
+    let listed = std::fs::read_to_string(repo.path().join("shallow"))
+        .or_else(|_| std::fs::read_to_string(repo.commondir().join("shallow")))
+        .map_err(|error| {
+            format!("this clone is shallow and its boundary cannot be read: {error}")
+        })?;
     listed
         .lines()
         .map(str::trim)

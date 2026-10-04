@@ -4297,3 +4297,184 @@ fn a_quoted_follow_ups_completes_by_the_verb_and_in_ci() {
         assert_passes(&ci(root, BRANCH, "TSK-001"), follow_ups);
     }
 }
+
+/// TSK-234 review round 5: `src/lib.rs` and a file literally named
+/// `src\lib.rs` are two paths. A merge that changes the first beyond the
+/// automatic remerge is the range's own work, which the review never saw,
+/// however the two paths read once converted.
+#[cfg(unix)]
+#[test]
+fn a_merge_edit_is_not_hidden_by_a_path_that_reads_alike() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    write(root, r"src\lib.rs", "shadow\n");
+    commit(root, "docs: add a path that reads alike");
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    git(root, &["switch", "main"]);
+    write(root, "src/line.rs", "pub fn line() {}\n");
+    commit(root, "feat: advance the target");
+    git(root, &["switch", BRANCH]);
+    git(root, &["merge", "--no-ff", "--no-commit", "main"]);
+    write(root, "src/lib.rs", "pub fn unreviewed() {}\n");
+    commit(root, "chore: merge the target with an extra edit");
+    complete(root, "TSK-001", OWN_JOURNEY, &valid_block(&reviewed));
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "an unreviewed merge edit beside a path that reads alike",
+        &["work.acceptance_binding"],
+    );
+}
+
+/// TSK-234 review round 5: a landed completion whose task directory object
+/// cannot be read is no proof that the task never landed, so the task's
+/// own pull request cannot change its criteria.
+#[test]
+fn an_unreadable_historical_record_tree_never_proves_a_planned_task() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "complete", OWN_JOURNEY, &valid_block(&reviewed)),
+    );
+    let landed = commit(root, "docs: land a completion");
+    let tree = git_out(
+        root,
+        &["rev-parse", &format!("{landed}:project-management/tasks")],
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs: reopen and clear the evidence");
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: loosen its criteria");
+    std::fs::remove_file(root.join(".git/objects").join(&tree[..2]).join(&tree[2..])).unwrap();
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "an unreadable historical record tree",
+        &["work.criteria_frozen", "cannot be read"],
+    );
+}
+
+/// TSK-234 review round 5: an id the target's history carried with two
+/// uids is ambiguous even after its newest version drops its uid, so it
+/// proves no planned task.
+#[test]
+fn a_dropped_uid_does_not_hide_an_ambiguous_history() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    for uid in [
+        "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d",
+        "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    ] {
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")
+                .replace("id: TSK-001\n", &format!("id: TSK-001\nuid: {uid}\n")),
+        );
+        commit(root, "docs: set its identity");
+    }
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs: drop the uid on the target");
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: loosen its criteria");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "one id with two uids in the history",
+        &["work.criteria_frozen", "another uid"],
+    );
+}
+
+/// TSK-234 review round 5: two identical records of one task in one
+/// historical commit are two records, so the history proves no planned
+/// task.
+#[test]
+fn identical_duplicate_records_are_ambiguous() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let copy = "project-management/epics/EPC-001/tasks/TSK-001.md";
+    write(
+        root,
+        copy,
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs: copy the task record");
+    git(root, &["rm", "-q", copy]);
+    commit(root, "docs: remove the copy");
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: loosen its criteria");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "two records of one task in one commit",
+        &["work.criteria_frozen", "holds 2 records"],
+    );
+}
+
+/// TSK-234 review round 5: two judged lines each completed the task with
+/// different criteria and then deleted it. Neither line contains the
+/// other, so neither version is the target's authority, and recreating the
+/// task with either set of criteria is refused.
+#[test]
+fn deleted_histories_that_disagree_give_no_authority() {
+    use codeflow_core::workgraph::acceptance::{pull_request_findings_judged, Criteria};
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let origin = head(root);
+    for (branch, criteria) in [("base-a", OWN_JOURNEY), ("base-b", REOPEN_ADDS)] {
+        git(root, &["switch", "-c", branch, &origin]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "complete", criteria, "Pending.\n"),
+        );
+        commit(root, "docs: complete the task on a target");
+        git(root, &["rm", "-q", &record_path("TSK-001")]);
+        commit(root, "docs: delete the task on a target");
+    }
+    git(root, &["switch", "-c", BRANCH, &origin]);
+    for criteria in [OWN_JOURNEY, REOPEN_ADDS] {
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", criteria, "Pending.\n"),
+        );
+        commit(root, "docs: recreate the task");
+        let findings = pull_request_findings_judged(
+            root,
+            "base-a",
+            "HEAD",
+            &Criteria::OwnTask("TSK-001".into()),
+            Some("base-b"),
+            Some(BRANCH),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            findings.iter().any(|found| !found.note),
+            "recreated with {criteria:?}: {findings:?}"
+        );
+    }
+}

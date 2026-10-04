@@ -13,19 +13,21 @@
 //!   records a reopen. The whole history of the judged points is read,
 //!   never only their trees, so a later edit or deletion on the target
 //!   never hides a landing. `Planned` needs proof of absence: a complete,
-//!   readable history with no overlay, records that parse and one identity.
+//!   readable history with no overlay, records and trees that read and
+//!   parse, and one identity (one id never carried with two uids, and one
+//!   record of the task per commit).
 //!   A branch or remote-tracking ref outside the range that adds a
 //!   completing version only makes the answer unknown.
 //! - **Criteria** are authority. They come from the newest version of the
 //!   record at the judged points themselves, which a later reviewed
 //!   planning amendment may have changed; when the points no longer hold
-//!   the record, from the newest version in their history. A landing
-//!   witness never supplies criteria.
+//!   the record, from the newest version on every line of their history,
+//!   which must agree. A landing witness never supplies criteria.
 //!
 //! Readiness (whether a predecessor is complete now) is not decided here:
 //! it reads the current status at the execution base (D3a).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use git2::{Oid, Repository};
 
@@ -141,11 +143,25 @@ pub(super) struct Outside<'a> {
 /// What one tree holds of one task.
 #[derive(Clone, Default)]
 struct Held {
-    /// Each record that is the task, as its blob and parsed record.
+    /// Each record that is the task, as its blob and parsed record: one
+    /// per path, so two copies of one record count as two.
     records: Vec<(Oid, RecordView)>,
+    /// The uids the records carrying the task's id hold.
+    uids: BTreeSet<String>,
     /// Why the tree's answer cannot be trusted, when it cannot: a record
     /// that may be the task does not parse, or the identity is ambiguous.
     doubt: Option<String>,
+}
+
+/// One task file as the store read it.
+#[derive(Clone)]
+enum Read {
+    /// It parses as a task record.
+    Parsed(Box<RecordView>),
+    /// It does not parse: its text, to tell whether it may be the task.
+    Broken(String),
+    /// Its object cannot be read.
+    Missing,
 }
 
 /// One run's reading of record history: trees, task entries and parsed
@@ -154,8 +170,10 @@ pub(super) struct RecordStore<'r> {
     repo: &'r Repository,
     /// Task entries (path, blob) per `project-management` tree.
     entries: HashMap<Oid, Vec<(String, Oid)>>,
-    /// What each `project-management` tree holds of each task id.
-    held: HashMap<(Oid, String), Held>,
+    /// Each task file read, by path and blob.
+    read: HashMap<(String, Oid), Read>,
+    /// What each `project-management` tree holds of each task identity.
+    held: HashMap<(Oid, String, Option<String>), Held>,
     /// Why no history read here is complete, when it is not.
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
@@ -163,30 +181,31 @@ pub(super) struct RecordStore<'r> {
 }
 
 impl<'r> RecordStore<'r> {
-    /// A store over `repo`. A shallow boundary that cannot be read, a graft
-    /// file or a replace ref makes every proof of absence unknown.
+    /// A store over `repo`. A shallow boundary that cannot be read, or a
+    /// history overlay (a graft file or a replace ref, wherever git reads
+    /// them), makes every proof of absence unknown.
     pub(super) fn new(repo: &'r Repository) -> Self {
         let (boundary, mut overlay) = match super::release_line::shallow_boundary(repo) {
             Ok(boundary) => (boundary, None),
             Err(reason) => (HashSet::new(), Some(reason)),
         };
-        if repo.path().join("info/grafts").exists() {
-            overlay.get_or_insert_with(|| {
-                "this clone has a graft file (`.git/info/grafts`), so its history may not be the history the target holds".to_string()
-            });
-        }
-        let replaced = repo
-            .references_glob("refs/replace/*")
-            .map(|mut refs| refs.next().is_some())
-            .unwrap_or(true);
-        if replaced {
-            overlay.get_or_insert_with(|| {
-                "this clone has replace refs (`refs/replace/`), so its history may not be the history the target holds".to_string()
-            });
+        match super::release_line::history_overlay(repo) {
+            Ok(None) => {}
+            Ok(Some(found)) => {
+                overlay.get_or_insert_with(|| {
+                    format!("this clone has {found}, so its history may not be the history the target holds")
+                });
+            }
+            Err(reason) => {
+                overlay.get_or_insert_with(|| {
+                    format!("whether this clone overlays its history cannot be told: {reason}")
+                });
+            }
         }
         Self {
             repo,
             entries: HashMap::new(),
+            read: HashMap::new(),
             held: HashMap::new(),
             overlay,
             boundary,
@@ -211,7 +230,7 @@ impl<'r> RecordStore<'r> {
         else {
             return Ok(Held::default());
         };
-        let key = (records, task.id.clone());
+        let key = (records, task.id.clone(), task.uid.clone());
         if let Some(held) = self.held.get(&key) {
             return Ok(held.clone());
         }
@@ -219,7 +238,8 @@ impl<'r> RecordStore<'r> {
             let tree = self.repo.find_tree(records).map_err(|error| {
                 format!("cannot read the records at {commit}: {}", error.message())
             })?;
-            let found = super::acceptance::task_entries_in(self.repo, &tree);
+            let found = super::acceptance::task_entries_in(self.repo, &tree)
+                .map_err(|reason| format!("cannot read the records at {commit}: {reason}"))?;
             self.entries.insert(records, found);
         }
         let entries = self.entries.get(&records).cloned().unwrap_or_default();
@@ -229,45 +249,37 @@ impl<'r> RecordStore<'r> {
                 .rsplit('/')
                 .next()
                 .is_some_and(|name| name.eq_ignore_ascii_case(&task.own_file));
-            let Ok(object) = self.repo.find_blob(blob) else {
-                if own {
-                    held.doubt
-                        .get_or_insert(format!("cannot read {path} at {commit}"));
-                }
-                continue;
-            };
-            let content = String::from_utf8_lossy(object.content());
-            let literal = content.contains(task.id.as_str())
-                || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
-            // A double-quoted YAML value can spell the id or uid with `\x`
-            // escapes, so such a file is parsed too.
-            if !(own || literal || content.contains('\\')) {
-                continue;
-            }
-            match RecordView::parse(RecordKind::Task, &path, &content) {
-                Ok(record)
+            match self.read(&path, blob) {
+                Read::Parsed(record)
                     if super::acceptance::is_same_task(&record, &task.id, task.uid.as_deref()) =>
                 {
                     let uid = super::acceptance::record_uid(&record.content);
-                    if record.id == task.id
-                        && uid.is_some()
-                        && task.uid.is_some()
-                        && uid != task.uid
-                    {
-                        held.doubt.get_or_insert(format!(
-                            "{path} at {commit} carries the id {} with another uid, so which task it is cannot be told",
-                            task.id
-                        ));
+                    if record.id == task.id {
+                        if uid.is_some() && task.uid.is_some() && uid != task.uid {
+                            held.doubt.get_or_insert(format!(
+                                "{path} at {commit} carries the id {} with another uid, so which task it is cannot be told",
+                                task.id
+                            ));
+                        }
+                        held.uids.extend(uid);
                     }
-                    if !held.records.iter().any(|(known, _)| *known == blob) {
-                        held.records.push((blob, record));
+                    held.records.push((blob, *record));
+                }
+                Read::Parsed(_) => {}
+                Read::Broken(content) => {
+                    let literal = content.contains(task.id.as_str())
+                        || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
+                    if own || literal {
+                        held.doubt
+                            .get_or_insert(format!("{path} at {commit} does not parse"));
                     }
                 }
-                Err(_) if own || literal => {
-                    held.doubt
-                        .get_or_insert(format!("{path} at {commit} does not parse"));
+                // Any task file may be this task under another name.
+                Read::Missing => {
+                    held.doubt.get_or_insert(format!(
+                        "{path} at {commit} cannot be read, so whether it is this task cannot be told"
+                    ));
                 }
-                Ok(_) | Err(_) => {}
             }
         }
         if held.records.len() > 1 {
@@ -279,6 +291,26 @@ impl<'r> RecordStore<'r> {
         }
         self.held.insert(key, held.clone());
         Ok(held)
+    }
+
+    /// The task file at `path` with `blob`, read and parsed once per run.
+    fn read(&mut self, path: &str, blob: Oid) -> Read {
+        let key = (path.to_string(), blob);
+        if let Some(read) = self.read.get(&key) {
+            return read.clone();
+        }
+        let read = match self.repo.find_blob(blob) {
+            Err(_) => Read::Missing,
+            Ok(object) => {
+                let content = String::from_utf8_lossy(object.content()).into_owned();
+                match RecordView::parse(RecordKind::Task, path, &content) {
+                    Ok(record) => Read::Parsed(Box::new(record)),
+                    Err(_) => Read::Broken(content),
+                }
+            }
+        };
+        self.read.insert(key, read.clone());
+        read
     }
 
     /// The records of the task the tree at `commit` holds.
@@ -300,9 +332,8 @@ impl<'r> RecordStore<'r> {
     }
 
     /// Walk the history `push` reaches and `hide` does not, newest first:
-    /// the newest version of the task's record, the first commit whose
-    /// version shows a completion (the walk stops there), and why the walk
-    /// proves no absence, when it does not.
+    /// the first commit whose version shows a completion (the walk stops
+    /// there), and why the walk proves no absence, when it does not.
     fn walk(&mut self, task: &Identity, push: &[Oid], hide: &[Oid]) -> Walk {
         let mut found = Walk::default();
         if push.is_empty() {
@@ -333,6 +364,7 @@ impl<'r> RecordStore<'r> {
                 return found;
             }
         };
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
         for commit in walk {
             let commit = match commit {
                 Ok(commit) => commit,
@@ -356,8 +388,9 @@ impl<'r> RecordStore<'r> {
             if let Some(doubt) = held.doubt {
                 found.doubt.get_or_insert(doubt);
             }
-            if found.newest.is_none() {
-                found.newest = held.records.first().map(|(_, record)| record.clone());
+            uids.extend(held.uids);
+            if let Some(doubt) = two_uids(task, &uids) {
+                found.doubt.get_or_insert(doubt);
             }
             if held
                 .records
@@ -419,19 +452,16 @@ impl<'r> RecordStore<'r> {
                 Err("the judged points hold different versions of this task, and none of them is newer than the others".to_string())
             }
         };
-        let history = self.walk(task, judged, &[]);
         let criteria = match at_points {
             Ok(Some(record)) => Authority::Held(Box::new(record)),
             Err(reason) => Authority::Unknown(reason),
-            Ok(None) => match (&history.newest, &history.doubt) {
-                (Some(record), _) if history.witness.is_some() || history.doubt.is_none() => {
-                    Authority::Held(Box::new(record.clone()))
-                }
-                (_, Some(doubt)) => Authority::Unknown(doubt.clone()),
-                (Some(record), None) => Authority::Held(Box::new(record.clone())),
-                (None, None) => Authority::Absent,
+            Ok(None) => match self.recovered(task, judged) {
+                Ok(Some(record)) => Authority::Held(Box::new(record)),
+                Ok(None) => Authority::Absent,
+                Err(reason) => Authority::Unknown(reason),
             },
         };
+        let history = self.walk(task, judged, &[]);
         if let Some(witness) = history.witness {
             return TaskJudgement {
                 landing: Landing::Landed { witness },
@@ -443,6 +473,125 @@ impl<'r> RecordStore<'r> {
             None => self.outside(task, judged, outside),
         };
         TaskJudgement { landing, criteria }
+    }
+
+    /// The newest version of the task's record in the history of `judged`,
+    /// for a task the judged points no longer hold: the newest version on
+    /// every line of that history. A line's version that another line's
+    /// history already held is older there, so it never competes; lines
+    /// that hold different versions otherwise give no answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason when the history cannot prove which version is
+    /// the newest: an overlay, a shallow cut, an unreadable or ambiguous
+    /// record, or lines that disagree.
+    pub(super) fn recovered(
+        &mut self,
+        task: &Identity,
+        judged: &[Oid],
+    ) -> Result<Option<RecordView>, String> {
+        if let Some(overlay) = &self.overlay {
+            return Err(overlay.clone());
+        }
+        // Each walk hides the newest holders found so far with their
+        // history, so the next holder it meets is on another line.
+        let mut hidden: Vec<Oid> = Vec::new();
+        // The newest version so far, its blob, and the holders that have it.
+        let mut found: Option<(Oid, RecordView, Vec<Oid>)> = None;
+        while let Some((commit, blob, record)) = self.first_holder(task, judged, &hidden)? {
+            hidden.push(commit);
+            let Some((kept, version, holders)) = &mut found else {
+                found = Some((blob, record, vec![commit]));
+                continue;
+            };
+            if *kept == blob || same_version(version, &record) {
+                holders.push(commit);
+                continue;
+            }
+            let mut older = false;
+            for holder in holders.clone() {
+                if self.held_in_history(task, holder, blob)? {
+                    older = true;
+                    break;
+                }
+            }
+            if older {
+                continue;
+            }
+            if self.held_in_history(task, commit, *kept)? {
+                found = Some((blob, record, vec![commit]));
+                continue;
+            }
+            return Err(format!(
+                "the target no longer holds this task, and lines of its history hold different versions of it (one at {commit:.9}), so which one it keeps cannot be told"
+            ));
+        }
+        Ok(found.map(|(_, record, _)| record))
+    }
+
+    /// Whether some commit in the history of `from` holds the task's record
+    /// as `blob`.
+    fn held_in_history(&mut self, task: &Identity, from: Oid, blob: Oid) -> Result<bool, String> {
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        walk.push(from).map_err(unreadable)?;
+        for commit in walk {
+            let commit = commit.map_err(unreadable)?;
+            if self
+                .held_at(commit, task)?
+                .records
+                .iter()
+                .any(|(held, _)| *held == blob)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The first commit, newest first, that `judged` reaches and `hide`
+    /// does not and that holds a record of the task, with that record's
+    /// blob and parsed record.
+    fn first_holder(
+        &mut self,
+        task: &Identity,
+        judged: &[Oid],
+        hide: &[Oid],
+    ) -> Result<Option<(Oid, Oid, RecordView)>, String> {
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL)
+            .map_err(unreadable)?;
+        for point in judged {
+            walk.push(*point).map_err(unreadable)?;
+        }
+        for point in hide {
+            walk.hide(*point).map_err(unreadable)?;
+        }
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
+        for commit in walk {
+            let commit = commit.map_err(unreadable)?;
+            if self.boundary.contains(&commit) {
+                return Err(format!(
+                    "this clone is shallow at {commit}, so the history before it cannot be read; fetch it in full (`git fetch --unshallow`)"
+                ));
+            }
+            let held = self.held_at(commit, task)?;
+            if let Some(doubt) = held.doubt {
+                return Err(doubt);
+            }
+            uids.extend(held.uids);
+            if let Some(doubt) = two_uids(task, &uids) {
+                return Err(doubt);
+            }
+            if let Some((blob, record)) = held.records.into_iter().next() {
+                return Ok(Some((commit, blob, record)));
+            }
+        }
+        Ok(None)
     }
 
     /// The refs outside the judged points that make the answer unknown: a
@@ -585,11 +734,31 @@ impl<'r> RecordStore<'r> {
     }
 }
 
+/// Whether two versions of a task's record keep the same authority: the
+/// same criteria, status and epic.
+fn same_version(one: &RecordView, other: &RecordView) -> bool {
+    one.criteria.signature() == other.criteria.signature()
+        && one.status == other.status
+        && one.epic_id == other.epic_id
+}
+
+/// Why the uids `seen` with the task's id make its identity ambiguous:
+/// one id carried with two uids is reuse, so no version can be told to be
+/// this task's. Successive versions and records without a uid are one task.
+fn two_uids(task: &Identity, seen: &BTreeSet<String>) -> Option<String> {
+    (seen.len() > 1).then(|| {
+        let uids: Vec<&str> = seen.iter().map(String::as_str).collect();
+        format!(
+            "the history carries the id {} with another uid ({}), so which task each version is cannot be told",
+            task.id,
+            uids.join(" and ")
+        )
+    })
+}
+
 /// What a walk of one task's history found ([`RecordStore::walk`]).
 #[derive(Default)]
 struct Walk {
-    /// The newest version of the record the walk reached.
-    newest: Option<RecordView>,
     /// The first commit, newest first, whose version shows a completion.
     witness: Option<Oid>,
     /// Why the walk proves no absence, when it does not.
@@ -706,6 +875,48 @@ mod tests {
         match judgement.landing {
             Landing::Unreadable(reason) => assert!(reason.contains("another uid"), "{reason}"),
             _ => panic!("an ambiguous identity proved an answer"),
+        }
+    }
+
+    /// A line forked before the target completed and deleted the task, and
+    /// merged after, still holds the older planned version. That version is
+    /// older on the target's own line, so the completed version is the
+    /// authority (TSK-234 review round 5).
+    #[test]
+    fn a_stale_line_does_not_compete_with_the_newest_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let path = root.join("project-management/tasks/TSK-001.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, record(UID)).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "plan"]);
+        git(root, &["switch", "-q", "-c", "stale"]);
+        std::fs::write(root.join("note.txt"), "note\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "stale work"]);
+        git(root, &["switch", "-q", "main"]);
+        std::fs::write(
+            &path,
+            record(UID).replace("status: todo", "status: complete"),
+        )
+        .unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "complete"]);
+        std::fs::remove_file(&path).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "delete"]);
+        git(root, &["merge", "-q", "--no-ff", "--no-edit", "stale"]);
+        assert!(!path.exists(), "the merge keeps the deletion");
+        let judgement = judge(root, UID);
+        assert!(matches!(judgement.landing, Landing::Landed { .. }));
+        match judgement.criteria {
+            Authority::Held(record) => assert_eq!(record.status, "complete"),
+            Authority::Absent => panic!("absent"),
+            Authority::Unknown(reason) => panic!("unknown: {reason}"),
         }
     }
 }

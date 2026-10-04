@@ -846,8 +846,9 @@ fn entries_are_judged_whatever_their_names() {
 /// TSK-234 (design D3): a task record the target deleted after its
 /// completion landed is judged against its newest judged version when an
 /// amendment adds it again. That version names its epic, so re-adding it
-/// as a standalone task still needs that epic named, and a criteria change
-/// is flagged as a landed task's.
+/// as a standalone task still needs that epic named. A re-added complete
+/// record would be a new completion, which the binding judges, so it is
+/// added back as planned with its criteria unchanged.
 #[test]
 fn an_amendment_that_readds_a_deleted_landed_record_keeps_its_epic() {
     let dir = repo();
@@ -865,7 +866,7 @@ fn an_amendment_that_readds_a_deleted_landed_record_keeps_its_epic() {
     write(
         root,
         &record_path("TSK-002"),
-        &task("TSK-002", None, "main", "todo", LOOSER),
+        &task("TSK-002", None, "main", "todo", CRITERIA),
     );
     commit(root, "docs(records): add TSK-002 again, standalone");
     // A maintainer registers the ids, so the added record is not refused.
@@ -880,8 +881,98 @@ fn an_amendment_that_readds_a_deleted_landed_record_keeps_its_epic() {
         "a deleted landed record added again, its epic named",
         &[
             "EPC-002: TSK-002 is added again",
+            "EPC-002: TSK-002 moves from epic EPC-002 to none",
+        ],
+    );
+}
+
+/// TSK-234 (SPC-013 R-119): an amendment may change the criteria of a task
+/// the target reopened after its completion landed; CI flags it as a
+/// landed task, so the reviewer confirms the criteria its next completion
+/// is held to.
+#[test]
+fn an_amendment_flags_a_landed_task_reopened_on_the_target() {
+    let dir = repo();
+    let root = dir.path();
+    let reviewed = git_out(root, &["rev-parse", "HEAD"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &completed("TSK-002", CRITERIA, &reviewed),
+    );
+    commit(root, "docs: complete TSK-002");
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", Some("EPC-002"), "main", "todo", CRITERIA),
+    );
+    commit(root, "docs: reopen TSK-002 on the target");
+    git(root, &["switch", "-c", PLAN]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", Some("EPC-002"), "main", "todo", LOOSER),
+    );
+    commit(root, "docs(records): loosen TSK-002");
+    assert_passes(
+        &ci(root, PLAN, BOTH),
+        "an amendment to a landed task reopened on the target",
+        &[
             "EPC-002: TSK-002 criteria delta: AC-1 changed",
             "EPC-002: TSK-002 landed a completion earlier",
+        ],
+    );
+}
+
+/// TSK-234 review round 5: an amendment that restores a deleted landed
+/// record and then reopens it with changed criteria reopens a landed task,
+/// which the reopen freeze refuses whatever the range's class.
+#[test]
+fn an_amendment_cannot_reopen_a_deleted_landed_task_with_new_criteria() {
+    let dir = repo();
+    let root = dir.path();
+    let reviewed = git_out(root, &["rev-parse", "HEAD"]);
+    let original = completed("TSK-002", CRITERIA, &reviewed);
+    write(root, &record_path("TSK-002"), &original);
+    commit(root, "docs: complete TSK-002");
+    std::fs::remove_file(root.join(record_path("TSK-002"))).unwrap();
+    commit(root, "docs: remove the TSK-002 record");
+    git(root, &["switch", "-c", PLAN]);
+    write(root, &record_path("TSK-002"), &original);
+    commit(root, "docs: restore the completed record");
+    let reopened = original
+        .replace("status: complete", "status: todo")
+        .replace(CRITERIA, LOOSER)
+        .replace(
+            "acceptance:\n",
+            "acceptance_superseded:\n  reason: fix the task\n",
+        );
+    write(root, &record_path("TSK-002"), &reopened);
+    commit(root, "docs: reopen TSK-002 with changed criteria");
+    assert!(run(root, &["ids", "seed"]).0, "ids seed");
+    assert_blocks(
+        &ci(root, PLAN, BOTH),
+        "an amendment that reopens a deleted landed task",
+        &[
+            "work.criteria_frozen",
+            "TSK-002: a reopened task keeps its criteria",
+        ],
+    );
+    // Added again in one step, reopened, the record is refused the same way.
+    git(root, &["switch", "-c", "plan/readd-reopened", "main"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", Some("EPC-002"), "main", "todo", LOOSER),
+    );
+    commit(root, "docs: add TSK-002 again, reopened");
+    assert!(run(root, &["ids", "seed"]).0, "ids seed");
+    assert_blocks(
+        &ci(root, "plan/readd-reopened", BOTH),
+        "a deleted landed task added again reopened",
+        &[
+            "work.criteria_frozen",
+            "TSK-002: a reopened task keeps its criteria",
         ],
     );
 }

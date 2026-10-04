@@ -1039,25 +1039,27 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
     if let Err(error) = merge.tree().and_then(|tree| recorded.read_tree(&tree)) {
         return unreadable(error);
     }
+    // Entries compare by their raw path bytes, so two paths that read alike
+    // once converted stay two; a path converts only to be reported.
     let path = |raw: &[u8]| String::from_utf8_lossy(raw).replace('\\', "/");
     // Stage 0 holds a merged entry; stages 1 to 3 hold a conflict's sides.
     let entries = |index: &git2::Index| {
         index
             .iter()
             .filter(|entry| entry.flags & STAGE == 0)
-            .map(|entry| (path(&entry.path), (entry.id, entry.mode)))
-            .collect::<std::collections::BTreeMap<String, (Oid, u32)>>()
+            .map(|entry| (entry.path.clone(), (entry.id, entry.mode)))
+            .collect::<std::collections::BTreeMap<Vec<u8>, (Oid, u32)>>()
     };
     let remerged = entries(&merged);
     let ours = entries(&recorded);
     let mut changed: std::collections::BTreeSet<String> = remerged
         .iter()
         .filter(|(name, entry)| ours.get(*name) != Some(*entry))
-        .map(|(name, _)| name.clone())
+        .map(|(name, _)| path(name))
         .chain(
             ours.keys()
                 .filter(|name| !remerged.contains_key(*name))
-                .cloned(),
+                .map(|name| path(name)),
         )
         .collect();
     if merged.has_conflicts() {
@@ -1564,27 +1566,41 @@ fn task_entries(repo: &Repository, at: Oid) -> Option<Vec<(String, Oid)>> {
     else {
         return Some(Vec::new());
     };
-    Some(task_entries_in(repo, &records))
+    task_entries_in(repo, &records).ok()
 }
 
 /// The task records under one `project-management` tree, as path and blob.
-pub(super) fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Vec<(String, Oid)> {
-    let subtree = |tree: &git2::Tree<'_>, name: &str| {
-        tree.get_name(name)
+///
+/// # Errors
+///
+/// Returns a message when a task directory the tree names cannot be read:
+/// a missing directory is no record, an unreadable one is no answer.
+pub(super) fn task_entries_in(
+    repo: &Repository,
+    records: &git2::Tree<'_>,
+) -> Result<Vec<(String, Oid)>, String> {
+    let subtree = |tree: &git2::Tree<'_>, name: &str| -> Result<Option<git2::Tree<'_>>, String> {
+        let Some(entry) = tree
+            .get_name(name)
             .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-            .and_then(|entry| repo.find_tree(entry.id()).ok())
+        else {
+            return Ok(None);
+        };
+        repo.find_tree(entry.id())
+            .map(Some)
+            .map_err(|error| format!("the directory {name} cannot be read: {}", error.message()))
     };
     let mut directories = Vec::new();
-    if let Some(tasks) = subtree(records, "tasks") {
+    if let Some(tasks) = subtree(records, "tasks")? {
         directories.push(("project-management/tasks".to_string(), tasks));
     }
-    if let Some(epics) = subtree(records, "epics") {
+    if let Some(epics) = subtree(records, "epics")? {
         for epic in &epics {
             let Ok(name) = epic.name() else { continue };
-            let Some(epic_tree) = subtree(&epics, name) else {
+            let Some(epic_tree) = subtree(&epics, name)? else {
                 continue;
             };
-            if let Some(tasks) = subtree(&epic_tree, "tasks") {
+            if let Some(tasks) = subtree(&epic_tree, "tasks")? {
                 directories.push((format!("project-management/epics/{name}/tasks"), tasks));
             }
         }
@@ -1599,7 +1615,7 @@ pub(super) fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Ve
             }
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// Whether `record` is the task with `id` or `uid`, by parsed identity.
@@ -2046,9 +2062,18 @@ pub fn reopened_criteria(
     head: &str,
     after: &Graph,
 ) -> Result<Vec<Finding>, String> {
-    Ok(reopened_ids(repo, base, head, after)?
+    let (reopened, unknown) = reopened_judged(repo, base, head, after)?;
+    Ok(reopened
         .into_iter()
         .map(|id| finding(FROZEN_RULE, reopened_message(&id)))
+        .chain(unknown.into_iter().map(|(id, reason)| {
+            finding(
+                FROZEN_RULE,
+                format!(
+                    "{id}: the target does not hold this task, and whether a completion of it landed before cannot be told ({reason}); {REOPENED_CRITERIA}"
+                ),
+            )
+        }))
         .collect())
 }
 
@@ -2063,7 +2088,10 @@ pub(super) fn reopened_message(id: &str) -> String {
 
 /// The tasks complete at `base` whose criteria differ at `head` and which
 /// the range reopened: no longer complete, a block superseded, or a commit
-/// of the range moving them from complete.
+/// of the range moving them from complete. A task `base` no longer holds is
+/// judged against the newest version in its history, so deleting a landed
+/// record and adding it again reopened is still a reopen; when that
+/// history cannot tell, such a task counts as reopened too.
 ///
 /// # Errors
 /// Returns an error if the range cannot be read.
@@ -2073,32 +2101,71 @@ pub(super) fn reopened_ids(
     head: &str,
     after: &Graph,
 ) -> Result<std::collections::BTreeSet<String>, String> {
+    let (reopened, unknown) = reopened_judged(repo, base, head, after)?;
+    Ok(reopened.into_iter().chain(unknown.into_keys()).collect())
+}
+
+/// The tasks the range reopened with changed criteria, and the tasks
+/// `base` no longer holds whose history cannot tell, with the reason
+/// ([`reopened_ids`]).
+fn reopened_judged(
+    repo: &Repository,
+    base: &str,
+    head: &str,
+    after: &Graph,
+) -> Result<
+    (
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeMap<String, String>,
+    ),
+    String,
+> {
     let target = Graph::from_revision(repo, base)?;
-    let candidates: Vec<_> = after
-        .records
-        .values()
-        .filter(|record| record.kind == RecordKind::Task)
-        .filter(|record| {
-            target.records.get(&record.id).is_some_and(|old| {
-                old.status == "complete" && old.criteria.signature() != record.criteria.signature()
-            })
-        })
-        .collect();
-    if candidates.is_empty() {
-        return Ok(std::collections::BTreeSet::new());
-    }
     let oid = |rev: &str| {
         repo.revparse_single(rev)
             .and_then(|o| o.peel_to_commit())
             .map(|c| c.id())
             .map_err(|e| e.to_string())
     };
+    let base_oid = oid(base)?;
+    let mut store = super::landing::RecordStore::new(repo);
+    let mut unknown = std::collections::BTreeMap::new();
+    let mut candidates: Vec<(&RecordView, RecordView)> = Vec::new();
+    for record in after
+        .records
+        .values()
+        .filter(|record| record.kind == RecordKind::Task)
+    {
+        let old = match target.records.get(&record.id) {
+            Some(old) => old.clone(),
+            None => match store.recovered(&super::landing::Identity::of(record), &[base_oid]) {
+                Ok(Some(old)) => old,
+                Ok(None) => continue,
+                Err(reason) => {
+                    // Only a record shaped like a reopen can be one.
+                    let reopen_shaped = record.status != "complete"
+                        || acceptance_blocks(&record.body)
+                            .iter()
+                            .any(super::record_text::FencedAcceptance::is_superseded);
+                    if reopen_shaped {
+                        unknown.insert(record.id.clone(), reason);
+                    }
+                    continue;
+                }
+            },
+        };
+        if old.status == "complete" && old.criteria.signature() != record.criteria.signature() {
+            candidates.push((record, old));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok((std::collections::BTreeSet::new(), unknown));
+    }
     let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
     walk.push(oid(head)?).map_err(|e| e.to_string())?;
-    walk.hide(oid(base)?).map_err(|e| e.to_string())?;
+    walk.hide(base_oid).map_err(|e| e.to_string())?;
     let mut reopened = std::collections::BTreeSet::new();
-    for record in &candidates {
-        let old = &target.records[&record.id];
+    for (record, old) in &candidates {
         if record.status != "complete"
             || acceptance_blocks(&record.body)
                 .iter()
@@ -2114,7 +2181,7 @@ pub(super) fn reopened_ids(
     }
     for oid in walk {
         let oid = oid.map_err(|e| e.to_string())?;
-        for record in &candidates {
+        for (record, _) in &candidates {
             if let Some(content) = blob_at(repo, oid, &record.path) {
                 let then = RecordView::parse(RecordKind::Task, &record.path, &content)?;
                 if then.status != "complete" {
@@ -2133,7 +2200,7 @@ pub(super) fn reopened_ids(
             }
         }
     }
-    Ok(reopened)
+    Ok((reopened, unknown))
 }
 
 /// The binding findings of a range: every task record it completes, or
