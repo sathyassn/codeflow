@@ -618,7 +618,7 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
     Ok(repo
         .statuses(Some(&mut options))?
         .iter()
-        .map(|entry| String::from_utf8_lossy(entry.path_bytes()).replace('\\', "/"))
+        .map(|entry| String::from_utf8_lossy(entry.path_bytes()).into_owned())
         .collect())
 }
 
@@ -1040,8 +1040,9 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
         return unreadable(error);
     }
     // Entries compare by their raw path bytes, so two paths that read alike
-    // once converted stay two; a path converts only to be reported.
-    let path = |raw: &[u8]| String::from_utf8_lossy(raw).replace('\\', "/");
+    // once converted stay two. Git separates directories with `/`, so a
+    // backslash stays part of a name.
+    let path = |raw: &[u8]| String::from_utf8_lossy(raw).into_owned();
     // Stage 0 holds a merged entry; stages 1 to 3 hold a conflict's sides.
     let entries = |index: &git2::Index| {
         index
@@ -1141,7 +1142,7 @@ pub fn owned_paths(
                 .into_iter()
                 .flatten()
             {
-                paths.insert(file.to_string_lossy().replace('\\', "/"));
+                paths.insert(file.to_string_lossy().into_owned());
             }
         }
     }

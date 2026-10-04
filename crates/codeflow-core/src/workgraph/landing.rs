@@ -573,11 +573,29 @@ impl<'r> RecordStore<'r> {
                 .parent_ids()
                 .collect();
             let mut from_parent = false;
-            for parent in parents {
-                if holds(self, parent)? {
+            for parent in &parents {
+                if holds(self, *parent)? {
                     from_parent = true;
                     break;
                 }
+            }
+            // A merge that resolves the record to one parent's version
+            // against the automatic remerge chose that version: it
+            // introduces it there, however its bytes match.
+            if from_parent && parents.len() > 1 {
+                let path = self
+                    .held_at(commit, task)?
+                    .records
+                    .iter()
+                    .find(|(held, _)| *held == blob)
+                    .map(|(_, record)| record.path.clone())
+                    .unwrap_or_default();
+                let merge = self.repo.find_commit(commit).map_err(unreadable)?;
+                from_parent = match super::acceptance::read_merge(self.repo, &merge) {
+                    super::acceptance::MergeReading::Clean => true,
+                    super::acceptance::MergeReading::Changed(paths) => !paths.contains(&path),
+                    super::acceptance::MergeReading::Unknown(_) => false,
+                };
             }
             if from_parent {
                 continue;
@@ -778,25 +796,15 @@ impl<'r> RecordStore<'r> {
 }
 
 /// Whether a task file that does not parse may still name `task`: its
-/// text holds the task's id or uid, or its frontmatter holds a backslash,
-/// with which a double-quoted YAML value can spell either by escapes. YAML
-/// has no other way to build a value from text that does not hold it, so
-/// a file with none of these is another task's (TSK-234 review round 6).
+/// text holds the task's id or uid, or the text the frontmatter parser
+/// reads as YAML holds a backslash, with which a double-quoted value can
+/// spell either by escapes. YAML has no other way to build a value from
+/// text that does not hold it, so a file with none of these is another
+/// task's (TSK-234 review rounds 6 and 7).
 fn may_spell(content: &str, task: &Identity) -> bool {
     let literal = content.contains(task.id.as_str())
         || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
-    literal || frontmatter_text(content).contains('\\')
-}
-
-/// The frontmatter of a file that may not parse: from its opening `---`
-/// to the closing one, or to the end when it never closes; the whole text
-/// when it does not open with one.
-fn frontmatter_text(content: &str) -> &str {
-    let text = content.trim_start_matches('\u{feff}').trim_start();
-    let Some(rest) = text.strip_prefix("---") else {
-        return content;
-    };
-    rest.find("\n---").map_or(rest, |end| &rest[..end])
+    literal || crate::validate::frontmatter_scope(content).contains('\\')
 }
 
 /// Whether two versions of a task's record keep the same authority: the

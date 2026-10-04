@@ -1290,3 +1290,68 @@ fn a_pin_cannot_add_a_path_that_reads_like_the_record() {
         text(&out)
     );
 }
+
+/// TSK-234 review round 7: the journey rule matches the name git records.
+/// With the product pattern `src/a[\]b.rs`, the file `src/a\b.rs` is a
+/// product path; a stacked successor without a journey criterion that adds
+/// it is refused, since no conversion maps it to `src/a/b.rs`.
+#[cfg(unix)]
+#[test]
+fn the_journey_rule_matches_the_name_git_records() {
+    use codeflow_core::workgraph::classify::{path_sets, ProjectPaths};
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let pattern = r"src/a[\]b.rs";
+    let actual = r"src/a\b.rs";
+    let project = ProjectPaths {
+        product: vec![pattern.into()],
+        watched: vec![],
+    };
+    assert!(path_sets()
+        .adopter_facing_member(actual, &project)
+        .is_some());
+    assert!(path_sets()
+        .adopter_facing_member("src/a/b.rs", &project)
+        .is_none());
+    write(
+        root,
+        ".codeflow/policy.json",
+        &serde_json::json!({"schema_version": 1, "git": {"product_paths": [pattern]}}).to_string(),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[TSK-001]").replace(" (journey)", ""),
+    );
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: plan a successor without a journey"],
+    );
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", child]);
+    write(root, actual, "pub fn unreviewed() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: its own product change"]);
+    let out = push_check(root, child, "HEAD", bin.path());
+    assert!(
+        !out.status.success(),
+        "an own product change needs a journey:\n{}",
+        text(&out)
+    );
+}

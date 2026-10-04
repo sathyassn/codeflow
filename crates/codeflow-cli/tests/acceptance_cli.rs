@@ -4626,3 +4626,147 @@ fn a_newer_run_base_holds_the_criteria_to_keep() {
     assert!(!out.status.success(), "CI accepted it:\n{text}");
     assert!(text.contains("work.criteria_frozen"), "{text}");
 }
+
+/// TSK-234 review round 7: the frontmatter of a task file that does not
+/// parse is found by the parser's own delimiter rules, so a line that only
+/// starts with `---` does not end it early and hide an escaped id.
+#[test]
+fn a_broken_file_is_read_to_the_parsers_own_delimiter() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let broken =
+        "---\n---note: an ordinary key\nid: \"\\x54SK-001\"\nstatus: complete\nbroken: [\n---\n";
+    let parsed = codeflow_core::workgraph::lifecycle::RecordView::parse(
+        codeflow_core::workgraph::work_start::RecordKind::Task,
+        "project-management/tasks/TSK-999.md",
+        &broken.replace("broken: [\n", ""),
+    )
+    .unwrap();
+    assert_eq!(parsed.id, "TSK-001", "the parser reads the escaped id");
+    write(root, "project-management/tasks/TSK-999.md", broken);
+    commit(root, "docs: a task file that does not parse");
+    git(root, &["rm", "-q", "project-management/tasks/TSK-999.md"]);
+    commit(root, "docs: drop it");
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: loosen its criteria");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "an escaped id after a line that starts with ---",
+        &["work.criteria_frozen", "does not parse"],
+    );
+}
+
+/// TSK-234 review round 7: an uncommitted file literally named
+/// `project-management\tasks\TSK-001.md` is not the record, so completing
+/// the task with it in the working tree changes more than the record's
+/// status and Closeout, and the verb refuses.
+#[cfg(unix)]
+#[test]
+fn the_verb_does_not_take_a_path_that_reads_like_the_record_for_it() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn reviewed() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &valid_block(&reviewed)),
+    );
+    write(
+        root,
+        r"project-management\tasks\TSK-001.md",
+        "an unreviewed file\n",
+    );
+    let out = status_complete(root, "TSK-001");
+    assert_ne!(
+        out.0, 0,
+        "an unreviewed file is not status and Closeout:\n{}",
+        out.1
+    );
+}
+
+/// TSK-234 review round 7: a merge that resolves a record to an older
+/// version against the automatic remerge chose that version, so it is that
+/// line's own newest version, not one inherited unchanged. Two lines whose
+/// newest versions then disagree give no authority.
+#[test]
+fn a_merge_resolution_is_a_lines_own_version() {
+    use codeflow_core::workgraph::acceptance::{
+        owned_paths, pull_request_findings_judged, Criteria,
+    };
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let empty = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, LANDED),
+    );
+    commit(root, "docs: a landed and reopened task");
+    let origin = head(root);
+    git(root, &["switch", "-c", "stale"]);
+    write(root, "docs/note.md", "older side work\n");
+    commit(root, "docs: work on an older line");
+    git(root, &["switch", "-c", "base-a", &origin]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, LANDED),
+    );
+    commit(root, "docs: amend its criteria to B");
+    git(root, &["rm", "-q", &record_path("TSK-001")]);
+    commit(root, "docs: delete the record");
+    git(root, &["switch", "-c", "base-b", &origin]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "todo",
+            &format!("{REOPEN_ADDS}- AC-4 When tested, it shall work.\n"),
+            LANDED,
+        ),
+    );
+    commit(root, "docs: amend its criteria to C");
+    git(root, &["merge", "--no-ff", "--no-commit", "stale"]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, LANDED),
+    );
+    commit(root, "docs: resolve the merge by restoring A");
+    let owned = owned_paths(root, "HEAD", &["HEAD^1", "HEAD^2"]).unwrap();
+    assert!(
+        owned.contains(&record_path("TSK-001")),
+        "the merge reading counts the resolution: {owned:?}"
+    );
+    git(root, &["rm", "-q", &record_path("TSK-001")]);
+    commit(root, "docs: delete the record");
+    git(root, &["switch", "-c", BRANCH, &empty]);
+    for criteria in [OWN_JOURNEY, REOPEN_ADDS] {
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", criteria, "Pending.\n"),
+        );
+        commit(root, "docs: add the record again");
+        let findings = pull_request_findings_judged(
+            root,
+            "base-a",
+            "HEAD",
+            &Criteria::OwnTask("TSK-001".into()),
+            Some("base-b"),
+            Some(BRANCH),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            findings.iter().any(|found| !found.note),
+            "added again with {criteria:?}: {findings:?}"
+        );
+    }
+}
