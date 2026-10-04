@@ -116,9 +116,10 @@ fn restore_paths(
         let text = portable(&rel)?;
         let directory = rel.as_os_str().is_empty()
             || root.join(&rel).symlink_metadata().is_ok_and(|m| m.is_dir())
-            || index
-                .iter()
-                .any(|e| std::str::from_utf8(&e.path).is_ok_and(|p| under(p, &text) && p != text));
+            || index.iter().any(|e| {
+                let p = lossy(&e.path);
+                under(&p, &text) && p != text
+            });
         // An explicit file restore is the accepted recoverable route.
         if directory && dirty.iter().any(|p| under(p, &text)) {
             return Ok(Some(format!(
@@ -163,8 +164,10 @@ fn delete_branches(repo: &Repository, names: &[String]) -> Result<Option<String>
     let mut kept = Vec::new();
     for reference in repo.references().map_err(|e| e.to_string())? {
         let reference = reference.map_err(|e| e.to_string())?;
-        let name = reference.name().map_err(|e| e.to_string())?;
-        if !removed.contains(name) {
+        // Only compared with the branches named for deletion, so a ref name
+        // that is not valid UTF-8 is read lossily and can never match one.
+        let name = String::from_utf8_lossy(reference.name_bytes());
+        if !removed.contains(name.as_ref()) {
             // Only commit-bearing refs establish another live reachability path.
             if let Ok(commit) = reference.peel_to_commit() {
                 kept.push(commit.id());
@@ -207,6 +210,9 @@ fn remove_worktree(repo: &Repository, at: &Path, path: &str) -> Result<Option<St
     let wanted = wanted.canonicalize().map_err(|e| e.to_string())?;
     let mut matched = None;
     for name in &repo.worktrees().map_err(|e| e.to_string())? {
+        // Kept strict (issue 79): the name picks the worktree whose dirty
+        // work is judged. Skipping one that is not valid UTF-8 would let a
+        // force removal of it pass unchecked, so it stays uncertainty.
         let name = name
             .map_err(|e| e.to_string())?
             .ok_or("non-UTF8 worktree name")?;
@@ -230,18 +236,28 @@ fn remove_worktree(repo: &Repository, at: &Path, path: &str) -> Result<Option<St
         .then(|| format!("force-removing worktree '{path}' would discard its dirty work")))
 }
 
+// OS text rule (issue 79, `docs/architecture.md`): a dirty or untracked name
+// is the work the guard protects, so it must be counted, not refused as
+// uncertainty. The paths are only compared by prefix with a pathspec that is
+// valid text and shown in the refusal, so they are read lossily. A name that
+// is not valid UTF-8 can then only add a refusal, never remove one.
+fn lossy(path: &[u8]) -> String {
+    String::from_utf8_lossy(path).into_owned()
+}
+
 fn status_paths(repo: &Repository, untracked: bool) -> Result<Vec<String>, String> {
     let mut options = StatusOptions::new();
     options
         .include_untracked(untracked)
         .recurse_untracked_dirs(true)
         .include_ignored(false);
-    repo.statuses(Some(&mut options))
+    Ok(repo
+        .statuses(Some(&mut options))
         .map_err(|e| e.to_string())?
         .iter()
         .filter(|e| !e.status().is_empty() && !e.status().contains(Status::IGNORED))
-        .map(|e| e.path().map(str::to_owned).map_err(|e| e.to_string()))
-        .collect()
+        .map(|e| lossy(e.path_bytes()))
+        .collect())
 }
 fn untracked_paths(repo: &Repository, recurse: bool) -> Result<Vec<String>, String> {
     let mut options = StatusOptions::new();
@@ -249,13 +265,17 @@ fn untracked_paths(repo: &Repository, recurse: bool) -> Result<Vec<String>, Stri
         .include_untracked(true)
         .recurse_untracked_dirs(recurse)
         .include_ignored(false);
-    repo.statuses(Some(&mut options))
+    Ok(repo
+        .statuses(Some(&mut options))
         .map_err(|e| e.to_string())?
         .iter()
         .filter(|e| e.status().contains(Status::WT_NEW))
-        .map(|e| e.path().map(str::to_owned).map_err(|e| e.to_string()))
-        .collect()
+        .map(|e| lossy(e.path_bytes()))
+        .collect())
 }
+// Kept strict (issue 79): a pathspec comes from the command text the guard
+// parsed, which is UTF-8, so this fails only for a path built from other
+// state, and a wrong text would pick the wrong directory to protect.
 fn portable(path: &Path) -> Result<String, String> {
     path.to_str()
         .map(|p| p.replace('\\', "/"))
@@ -383,6 +403,86 @@ mod tests {
             .unwrap()
             .is_none());
     }
+    /// Stage a change to `d/caf\xe9`, a name that is not valid UTF-8, and
+    /// leave the file out of the work tree: the index and `HEAD` differ, so
+    /// the repository reports it as dirty without the file system holding a
+    /// name that some of them refuse.
+    fn dirty_non_utf8_name() -> (tempfile::TempDir, Repository) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let name = b"d/caf\xe9".to_vec();
+        let mut index = repo.index().unwrap();
+        let entry = |id| git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100_644,
+            uid: 0,
+            gid: 0,
+            file_size: 4,
+            id,
+            flags: 0,
+            flags_extended: 0,
+            path: name.clone(),
+        };
+        index.add(&entry(repo.blob(b"base").unwrap())).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
+            .unwrap();
+        drop(tree);
+        index.add(&entry(repo.blob(b"edit").unwrap())).unwrap();
+        index.write().unwrap();
+        drop(index);
+        (dir, repo)
+    }
+
+    /// Issue 79: a dirty name that is not valid UTF-8 is work at risk. It
+    /// used to turn the check into uncertainty, which refused every discard
+    /// in the repository for the encoding and named no work.
+    #[test]
+    fn a_dirty_name_that_is_not_utf8_is_counted_not_refused_as_uncertainty() {
+        let (dir, _repo) = dirty_non_utf8_name();
+        let reset = inspect(dir.path(), None, &Intent::HardReset)
+            .unwrap()
+            .expect("the dirty name is work the reset would discard");
+        assert!(reset.contains("d/caf"), "{reset}");
+        let restore = inspect(dir.path(), None, &Intent::RestorePaths(vec!["d".into()]))
+            .unwrap()
+            .expect("restoring the directory would discard the dirty name");
+        assert!(
+            restore.contains("would discard tracked changes"),
+            "{restore}"
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_is_read_lossily() {
+        assert_eq!(lossy(b"d/caf\xe9"), "d/caf\u{fffd}");
+        let (dir, repo) = dirty_non_utf8_name();
+        let names = status_paths(&repo, true).unwrap();
+        assert_eq!(names, ["d/caf\u{fffd}"]);
+        drop(dir);
+    }
+
+    /// Issue 79: a ref whose name is not valid UTF-8 is a live ref. It used to
+    /// fail the branch-deletion check for the encoding.
+    #[test]
+    fn a_ref_name_that_is_not_utf8_still_backs_a_deleted_branch() {
+        let (dir, repo) = fixture();
+        let branch = repo.head().unwrap().shorthand().unwrap().to_string();
+        let tip = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let delete = Intent::ForceDeleteBranches(vec![branch]);
+        assert!(inspect(dir.path(), None, &delete).unwrap().is_some());
+        let mut packed = b"# pack-refs with: peeled fully-peeled sorted \n".to_vec();
+        packed.extend_from_slice(format!("{tip} refs/heads/").as_bytes());
+        packed.extend_from_slice(b"caf\xe9\n");
+        std::fs::write(dir.path().join(".git/packed-refs"), packed).unwrap();
+        assert!(inspect(dir.path(), None, &delete).unwrap().is_none());
+    }
+
     #[test]
     fn deleting_all_backing_branches_is_not_backed_by_each_other() {
         let (dir, repo) = fixture();

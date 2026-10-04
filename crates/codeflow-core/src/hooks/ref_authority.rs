@@ -157,8 +157,13 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     if !config.status.success() {
         return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
     }
-    let text = String::from_utf8(config.stdout)
-        .map_err(|_| "cannot decode remote update configuration".to_string())?;
+    // OS text rule (issue 79, `docs/architecture.md`): the listing holds every
+    // value in the user's effective git configuration, such as a name or an
+    // alias in another encoding, and this check reads only `remotes.*` and
+    // `remote.<name>.skip*` keys and boolean values. The listing is decoded
+    // lossily, so a value that is not valid UTF-8 cannot refuse the command,
+    // and an invalid byte cannot make a key match one it does not.
+    let text = String::from_utf8_lossy(&config.stdout);
     let entries: Vec<_> = text
         .split_terminator('\0')
         .map(|entry| entry.split_once('\n').unwrap_or((entry, "true")))
@@ -195,7 +200,7 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
         let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
         let remotes = repo.remotes().map_err(|error| error.to_string())?;
         let mut names = Vec::new();
-        for name in remotes.iter().flatten().flatten() {
+        for name in utf8_remote_names(&remotes)? {
             let skip_key = format!("remote.{name}.skipdefaultupdate");
             let alias_key = format!("remote.{name}.skipfetchall");
             let skip = entries
@@ -203,7 +208,7 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 .rev()
                 .find(|(key, _)| *key == skip_key || *key == alias_key);
             if !skip.is_some_and(|(_, value)| git2::Config::parse_bool(*value).unwrap_or(false)) {
-                names.push(name.to_string());
+                names.push(name.clone());
             }
         }
         return Ok(names);
@@ -219,6 +224,24 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
             }
         })
         .collect())
+}
+
+/// The configured remote names as text.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): kept strict, and
+/// refusing. A remote name picks the fetch mapping the guard proves does not
+/// write policy authority, and a name it cannot read is a remote it cannot
+/// prove, so skipping it would let `git fetch` or `git remote update` run an
+/// unchecked mapping. The operator reads the remote with `git remote -v`.
+fn utf8_remote_names(remotes: &git2::string_array::StringArray) -> Result<Vec<String>, String> {
+    remotes
+        .iter_bytes()
+        .map(|name| {
+            std::str::from_utf8(name).map(str::to_owned).map_err(|_| {
+                "a configured remote name is not valid UTF-8, so its fetch mapping cannot be checked; the operator inspects git remote -v".to_string()
+            })
+        })
+        .collect()
 }
 
 fn operands(args: &[String], pull: bool) -> Vec<String> {
@@ -267,7 +290,11 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     let repo = git2::Repository::discover(root).ok()?;
     let operands = operands(args, pull);
     let names = repo.remotes().ok()?;
-    let names: Vec<_> = names.iter().flatten().flatten().collect();
+    let names = match utf8_remote_names(&names) {
+        Ok(names) => names,
+        Err(reason) => return Some(reason),
+    };
+    let names: Vec<_> = names.iter().map(String::as_str).collect();
     let requested = operands.first().map(String::as_str);
     let selected = requested.or_else(|| {
         if names.contains(&"origin") {
@@ -325,4 +352,58 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
             git2::Repository::discover(root).is_ok_and(|r| r.find_remote(s).is_ok())
         })
         && check(root, &words[1..]).is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository with the remote `origin` and `extra` lines appended to its
+    /// configuration, written as bytes so the lines can hold text that is not
+    /// valid UTF-8.
+    fn repository_with_config(extra: &[u8]) -> tempfile::TempDir {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "https://example.invalid/origin.git")
+            .unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config.write_all(extra).unwrap();
+        dir
+    }
+
+    /// Issue 79: one value in the user's git configuration that is not valid
+    /// UTF-8 used to refuse every `git remote update`.
+    #[test]
+    fn a_config_value_that_is_not_utf8_does_not_refuse_the_remote_update() {
+        let dir = repository_with_config(b"[user]\n\tname = caf\xe9\n");
+        assert_eq!(update_remotes(dir.path(), &[]).unwrap(), ["origin"]);
+        assert!(check_remote_transport(dir.path(), ("update", &[])).is_none());
+    }
+
+    #[test]
+    fn a_remote_group_is_still_read_beside_a_value_that_is_not_utf8() {
+        let dir =
+            repository_with_config(b"[user]\n\tname = caf\xe9\n[remotes]\n\tgroup = origin\n");
+        assert_eq!(
+            update_remotes(dir.path(), &["group".to_string()]).unwrap(),
+            ["origin"]
+        );
+    }
+
+    /// Kept strict: a remote name the guard cannot read is a mapping it cannot
+    /// prove, so the command is refused rather than skipped.
+    #[test]
+    fn a_remote_name_that_is_not_utf8_refuses_the_command() {
+        let dir = repository_with_config(
+            b"[remote \"caf\xe9\"]\n\turl = https://example.invalid/other.git\n",
+        );
+        let reason = update_remotes(dir.path(), &[]).unwrap_err();
+        assert!(reason.contains("not valid UTF-8"), "{reason}");
+        let refusal = fetch(dir.path(), &[], false).expect("a fetch is refused");
+        assert!(refusal.contains("not valid UTF-8"), "{refusal}");
+    }
 }
