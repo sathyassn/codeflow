@@ -20,7 +20,7 @@
   ],
   "records": {
     "enabled": false,
-    "layer": "system",
+    "layer": "reference",
     "pointers": [
       { "folder": "docs/decisions", "id_prefix": "ADR", "purpose": "Accepted architecture decisions, appended and superseded, never rewritten." },
       { "folder": "project-management/epics", "id_prefix": "EPC", "purpose": "Bodies of work that group the tasks shipping one outcome." },
