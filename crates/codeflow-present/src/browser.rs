@@ -726,16 +726,31 @@ fn owned_process_candidates_from_proc(
             continue;
         }
         let cmdline = process_dir.join("cmdline");
-        let bytes = match fs::read(&cmdline) {
-            Ok(bytes) if bytes.len() <= 64 * 1024 => bytes,
-            Ok(_) => {
-                return Err(PresentError::BrowserUnavailable(
-                    "browser process identity exceeded its bound".to_string(),
-                ))
-            }
+        // Read at most one byte past the bound, so a process with a huge
+        // command line costs a bounded read and is still told apart.
+        let mut bytes = Vec::new();
+        let read_limit = u64::try_from(PROCESS_COMMAND_LINE_BOUND + 1)
+            .expect("64-KiB process command bound fits u64");
+        match fs::File::open(&cmdline).and_then(|file| {
+            std::io::Read::read_to_end(&mut std::io::Read::take(file, read_limit), &mut bytes)
+        }) {
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(PresentError::io(&cmdline, error)),
-        };
+        }
+        // Any other process of this user can have a command line that is not
+        // UTF-8 or is over the bound. It is not ours unless its bytes carry
+        // both identity arguments, and an owned argument is a byte-exact
+        // substring of them, so a process without both is skipped and a
+        // process that carries them keeps the strict checks below.
+        if !bytes_carry_identity_arguments(&bytes, instance_id, profile_dir) {
+            continue;
+        }
+        if bytes.len() > PROCESS_COMMAND_LINE_BOUND {
+            return Err(PresentError::BrowserUnavailable(
+                "browser process identity exceeded its bound".to_string(),
+            ));
+        }
         let arguments = linux_command_line_arguments(&bytes)?;
         if arguments_prove_identity(&arguments, instance_id, profile_dir) {
             candidates.push(pid);
@@ -747,6 +762,23 @@ fn owned_process_candidates_from_proc(
         }
     }
     Ok(candidates)
+}
+
+/// The most command-line bytes read from one process of the inventory.
+#[cfg(all(unix, not(target_os = "macos")))]
+const PROCESS_COMMAND_LINE_BOUND: usize = 64 * 1024;
+
+/// Whether raw command-line bytes hold both identity arguments as byte
+/// strings. A process whose arguments equal them always does, so one that
+/// does not is not ours, whatever else its bytes are. Holding them does not
+/// make a process ours: the exact argument check decides that.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn bytes_carry_identity_arguments(bytes: &[u8], instance_id: Uuid, profile_dir: &Path) -> bool {
+    let profile = format!("--user-data-dir={}", profile_dir.display());
+    let instance = format!("--cf-present-instance={instance_id}");
+    [profile.as_bytes(), instance.as_bytes()]
+        .iter()
+        .all(|marker| bytes.windows(marker.len()).any(|window| window == *marker))
 }
 
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
@@ -1528,16 +1560,67 @@ mod tests {
         );
     }
 
+    /// The command line of a fake `/proc/<pid>` entry for the inventory.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn fake_proc_entry(proc_root: &Path, pid: u32, cmdline: &[u8]) {
+        let dir = proc_root.join(pid.to_string());
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("cmdline"), cmdline).unwrap();
+    }
+
+    /// The command line of the owned browser, with its two identity
+    /// arguments as NUL-separated entries.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn owned_cmdline(instance: Uuid, profile: &Path) -> Vec<u8> {
+        format!(
+            "chrome\0--user-data-dir={}\0--cf-present-instance={instance}\0",
+            profile.display()
+        )
+        .into_bytes()
+    }
+
+    /// Issue 60: any other process of the same user can have a command line
+    /// that is not UTF-8 or is over 64 KiB. It cannot be ours, so the
+    /// inventory skips it and still finds the owned browser beside it.
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
-    fn linux_proc_inventory_rejects_oversize_and_invalid_identity() {
+    fn linux_proc_inventory_skips_unrelated_unreadable_command_lines() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let current_uid = unsafe { libc::geteuid() };
+        let proc_root = tempfile::tempdir().unwrap();
+
+        fake_proc_entry(proc_root.path(), 4, b"/bin/other\0\xff\xfe\0--flag\0");
+        fake_proc_entry(proc_root.path(), 5, &vec![b'x'; 64 * 1024 + 1]);
+        // A long command line far over the bound, and one holding only one
+        // of the two identity arguments, are not ours either.
+        fake_proc_entry(proc_root.path(), 6, &vec![b'y'; 4 * 1024 * 1024]);
+        let mut half = b"sh\0\xff\0".to_vec();
+        half.extend_from_slice(format!("--cf-present-instance={instance}\0").as_bytes());
+        fake_proc_entry(proc_root.path(), 7, &half);
+        fake_proc_entry(proc_root.path(), 9, &owned_cmdline(instance, profile));
+
+        assert_eq!(
+            owned_process_candidates_from_proc(proc_root.path(), current_uid, instance, profile)
+                .unwrap(),
+            [9]
+        );
+    }
+
+    /// A process that carries both identity arguments keeps the strict
+    /// checks: an unreadable or oversize command line of it is refused,
+    /// never skipped.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_proc_inventory_refuses_oversize_and_invalid_owned_identity() {
         let instance = Uuid::new_v4();
         let profile = Path::new("/state/browser-profile");
         let current_uid = unsafe { libc::geteuid() };
 
         let oversize = tempfile::tempdir().unwrap();
-        fs::create_dir(oversize.path().join("7")).unwrap();
-        fs::write(oversize.path().join("7/cmdline"), vec![b'x'; 64 * 1024 + 1]).unwrap();
+        let mut bytes = owned_cmdline(instance, profile);
+        bytes.extend(vec![b'x'; 64 * 1024]);
+        fake_proc_entry(oversize.path(), 7, &bytes);
         assert!(owned_process_candidates_from_proc(
             oversize.path(),
             current_uid,
@@ -1549,14 +1632,30 @@ mod tests {
         .contains("exceeded its bound"));
 
         let invalid = tempfile::tempdir().unwrap();
-        fs::create_dir(invalid.path().join("8")).unwrap();
-        fs::write(invalid.path().join("8/cmdline"), b"browser\0\xff\0").unwrap();
+        let mut bytes = owned_cmdline(instance, profile);
+        bytes.extend_from_slice(b"\xff\0");
+        fake_proc_entry(invalid.path(), 8, &bytes);
         assert!(
             owned_process_candidates_from_proc(invalid.path(), current_uid, instance, profile)
                 .unwrap_err()
                 .to_string()
                 .contains("not UTF-8")
         );
+    }
+
+    #[test]
+    fn identity_arguments_are_found_in_raw_bytes() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let mut both = b"x\0\xff\0--user-data-dir=/state/browser-profile\0".to_vec();
+        both.extend_from_slice(format!("--cf-present-instance={instance}").as_bytes());
+        assert!(bytes_carry_identity_arguments(&both, instance, profile));
+        assert!(!bytes_carry_identity_arguments(
+            b"--user-data-dir=/state/browser-profile",
+            instance,
+            profile
+        ));
+        assert!(!bytes_carry_identity_arguments(b"", instance, profile));
     }
 
     #[test]
