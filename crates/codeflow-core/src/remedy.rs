@@ -260,6 +260,10 @@ catalog! {
     /// A completion bound to its reviewed commit: evidence, not a refusal.
     ACCEPTANCE_BOUND = Step::Codeflow("codeflow ci"),
         "nothing to change: the completion is bound to its reviewed commit, which `codeflow ci` proves for binding only; a human reviewer confirms that the review the block names covers that commit";
+    /// What a planning amendment changes, per epic (ADR-0078): evidence,
+    /// not a refusal.
+    PLANNING_AMENDMENT = Step::Codeflow("codeflow ci"),
+        "nothing to change: `codeflow ci` lists what the planning amendment changes; a human reviewer of the amendment confirms each change before it lands, and a line takes it by merging the target";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";

@@ -2,8 +2,9 @@
 //!
 //! One embedded table, `path_sets.toml`, defines the adopter-facing path set
 //! used by the journey criterion and release contract (R-114). Every PR
-//! names its task or epic (R-70). The planning-only and spike
-//! path rules live here too, so every caller judges a range the same way.
+//! names its task or epic (R-70). The planning-only, planning amendment
+//! (ADR-0078) and spike path rules live here too, so every caller judges a
+//! range the same way.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -170,6 +171,61 @@ impl PathSets {
 pub fn is_planning_path(path: &str) -> bool {
     (path.starts_with("project-management/") && !path.starts_with("project-management/templates/"))
         || path.starts_with("docs/plan/")
+}
+
+/// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmendmentPath {
+    /// A record or a plan ([`is_planning_path`]).
+    Record,
+    /// A documentation file under `docs/` that is not adopter-facing.
+    Doc,
+    /// The root `AGENTS.md`, admitted only while its managed block is
+    /// byte-identical to the target's ([`instructions_block_unchanged`]).
+    Instructions,
+}
+
+/// The stems of the files a harness reads as instructions wherever they
+/// sit (`AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`,
+/// `GEMINI.md`), matched without case so a case-insensitive file system
+/// cannot slip one into a documentation folder.
+const INSTRUCTION_STEMS: &[&str] = &["agents.", "claude.", "gemini."];
+
+/// What a planning amendment may carry at `path`, or `None` when the path
+/// keeps the range out of the planning class: records and plans; files
+/// under `docs/` outside every adopter-facing member (so a shipped template
+/// such as `docs/decisions/template.md` or a product glob still refuses),
+/// with no hidden folder on the way and no instruction file name; and the
+/// root `AGENTS.md`, whose managed block the caller compares. `CLAUDE.md`,
+/// `.claude/`, `.agents/`, `.codeflow/`, record templates, policy, hooks and
+/// CI all stay out.
+#[must_use]
+pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPath> {
+    if is_planning_path(path) {
+        return Some(AmendmentPath::Record);
+    }
+    if path == "AGENTS.md" {
+        return Some(AmendmentPath::Instructions);
+    }
+    let rest = path.strip_prefix("docs/")?;
+    let hidden = rest.split('/').any(|part| part.starts_with('.'));
+    let instructions = rest
+        .rsplit('/')
+        .next()
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| INSTRUCTION_STEMS.iter().any(|stem| name.starts_with(stem)));
+    let adopter_facing = path_sets().adopter_facing_member(path, project).is_some();
+    (!hidden && !instructions && !adopter_facing).then_some(AmendmentPath::Doc)
+}
+
+/// Whether `AGENTS.md` keeps the target's managed block byte for byte:
+/// `target` and `head` are the file's text on each side, `None` where it is
+/// absent. Two files without a block, or no file on either side, keep it;
+/// adding, removing or editing the block, its markers included, does not.
+#[must_use]
+pub fn instructions_block_unchanged(target: Option<&str>, head: Option<&str>) -> bool {
+    let block = crate::scaffold::region::managed_span;
+    target.and_then(block) == head.and_then(block)
 }
 
 /// Whether a spike may land `path`: its findings under `docs/research/` or
@@ -412,6 +468,66 @@ mod tests {
         assert!(!is_planning_path("project-management/templates/task.md"));
         assert!(!is_planning_path("docs/guide.md"));
         assert!(!is_planning_path("src/lib.rs"));
+    }
+
+    /// TSK-229 AC-2, AC-4: a planning amendment carries records, plans,
+    /// non-adopter docs and `AGENTS.md`; instruction and enforcement paths
+    /// stay out, inside `docs/` too.
+    #[test]
+    fn an_amendment_carries_records_docs_and_the_project_section() {
+        let project = ProjectPaths {
+            product: vec!["src/**".to_string(), "**/*.py".to_string()],
+            watched: vec!["docs/api/schema.json".to_string()],
+        };
+        for (path, expected) in [
+            (
+                "project-management/tasks/TSK-001.md",
+                Some(AmendmentPath::Record),
+            ),
+            ("docs/plan/plan.md", Some(AmendmentPath::Record)),
+            ("docs/reading.md", Some(AmendmentPath::Doc)),
+            ("docs/decisions/ADR-0078-x.md", Some(AmendmentPath::Doc)),
+            ("AGENTS.md", Some(AmendmentPath::Instructions)),
+            ("docs/decisions/template.md", None),
+            ("docs/api/schema.json", None),
+            ("docs/tool.py", None),
+            ("docs/AGENTS.md", None),
+            ("docs/guide/CLAUDE.md", None),
+            ("docs/guide/claude.local.md", None),
+            ("docs/AGENTS.override.md", None),
+            ("docs/Gemini.md", None),
+            ("docs/agents-guide.md", Some(AmendmentPath::Doc)),
+            ("docs/.claude/settings.json", None),
+            ("docs/.github/workflows/x.yml", None),
+            ("CLAUDE.md", None),
+            (".claude/settings.json", None),
+            (".agents/skills/cf-plan/SKILL.md", None),
+            (".codeflow/policy.json", None),
+            (".codeflow/rules/git-rules.md", None),
+            (".github/workflows/codeflow-ci.yml", None),
+            ("project-management/templates/task.md", None),
+            ("src/lib.rs", None),
+            ("README.md", None),
+            ("crates/AGENTS.md", None),
+        ] {
+            assert_eq!(amendment_path(path, &project), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn the_instructions_block_is_compared_byte_for_byte() {
+        let block =
+            "<!-- codeflow:managed:begin scaffold=3.1.0 -->\nrules\n<!-- codeflow:managed:end -->";
+        let target = format!("# p\n\n{block}\n\n## Project\n\nmine\n");
+        let below = format!("# p\n\n{block}\n\n## Project\n\nmine, amended\n");
+        let inside = target.replace("rules", "rules!");
+        assert!(instructions_block_unchanged(Some(&target), Some(&below)));
+        assert!(!instructions_block_unchanged(Some(&target), Some(&inside)));
+        assert!(!instructions_block_unchanged(Some(&target), Some("# p\n")));
+        assert!(!instructions_block_unchanged(None, Some(&target)));
+        assert!(!instructions_block_unchanged(Some(&target), None));
+        assert!(instructions_block_unchanged(Some("# p\n"), Some("# q\n")));
+        assert!(instructions_block_unchanged(None, Some("# p\n")));
     }
 
     #[test]

@@ -5,7 +5,9 @@
 //! introduced otherwise), with waivers that name their amendment on the
 //! target.
 //! The journey criterion for adopter-facing ranges (R-53) runs with the
-//! classification of the pull request, which knows its task.
+//! classification of the pull request, which knows its task. A planning
+//! amendment (ADR-0078) may change criteria, and each change is reported per
+//! epic for its reviewer.
 
 use std::path::Path;
 
@@ -13,11 +15,12 @@ use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
     pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
-use codeflow_core::workgraph::classify::is_planning_path;
+use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
+use codeflow_core::workgraph::classify::{amendment_path, AmendmentPath, ProjectPaths};
 use codeflow_core::workgraph::release_line;
 use codeflow_core::workgraph::{check_epic_line, task_id_from_branch};
 
-use super::classification::{range_changes, root_branch_at, Class, Range};
+use super::classification::{instructions_unchanged, range_changes, root_branch_at, Class, Range};
 
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
@@ -59,6 +62,8 @@ pub(super) fn dispatch(
                 if found.note {
                     let remedy = if found.rule == FROZEN_RULE {
                         codeflow_core::remedy::CRITERIA_DELTA.remedy()
+                    } else if found.rule == AMENDMENT_RULE {
+                        codeflow_core::remedy::PLANNING_AMENDMENT.remedy()
                     } else {
                         codeflow_core::remedy::ACCEPTANCE_BOUND.remedy()
                     };
@@ -206,12 +211,14 @@ fn unscoped(error: &str) -> String {
     format!("whether this is a release range cannot be decided, so nothing is judged under the ordinary rules instead (SPC-013 R-120): {error}")
 }
 
-/// Criteria may change only in a planning-only change, on a validated epic
-/// line (R-52) or on the workspace root branch the target's policy names,
-/// decided from the validated class, never from the branch prefix alone.
-/// Without a class (no pull request body), the range must itself be
-/// planning-only on a branch that carries no task, the root branch, or a
-/// verified epic line.
+/// Criteria may change only in a planning amendment (ADR-0078), on a
+/// validated epic line (R-52) or on the workspace root branch the target's
+/// policy names, decided from the validated class, never from the branch
+/// prefix alone. Without a class (no pull request body, as the pre-push
+/// hook runs), the range must itself carry only what a planning amendment
+/// may, `AGENTS.md`'s managed block read from the target at the base, on a
+/// branch that carries no task; or be the root branch or a verified epic
+/// line. A push names no epics yet, so its pull request judges their scope.
 fn criteria(
     root: &Path,
     range: &Range<'_>,
@@ -231,17 +238,22 @@ fn criteria(
         }
     }
     let amendable = match class {
-        Some(Class::PlanningOnly | Class::EpicLine(_) | Class::RootBranch(_)) => true,
+        Some(Class::PlanningOnly { epics }) => return Ok(Criteria::Amendment(Some(epics.clone()))),
+        Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
-            let planning_only = task_id_from_branch(root, branch).is_none()
-                && range_changes(root, range.base, range.head)?
-                    .iter()
-                    .all(|(_, path)| is_planning_path(path));
-            planning_only
-                || root_branch_at(root, range.base).as_deref() == Some(branch)
+            if root_branch_at(root, range.base).as_deref() == Some(branch)
                 || (branch.starts_with("integration/")
                     && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
+            {
+                true
+            } else if task_id_from_branch(root, branch).is_none()
+                && planning_amendment_range(root, range)?
+            {
+                return Ok(Criteria::Amendment(None));
+            } else {
+                false
+            }
         }
     };
     Ok(if amendable {
@@ -251,14 +263,37 @@ fn criteria(
     })
 }
 
-/// Criteria frozen always blocks (R-80); the binding and journey rules take
-/// the `git.work_records` level.
+/// Whether every path of the range is one a planning amendment carries, with
+/// `AGENTS.md` keeping the target's managed block (ADR-0078): the push-side
+/// twin of the planning class.
+fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, String> {
+    let project = ProjectPaths::load(root);
+    let mut instructions = false;
+    for (_, path) in range_changes(root, range.base, range.head)? {
+        match amendment_path(&path, &project) {
+            None => return Ok(false),
+            Some(AmendmentPath::Instructions) => instructions = true,
+            Some(_) => {}
+        }
+    }
+    Ok(!instructions || instructions_unchanged(root, range.base, range.head))
+}
+
+/// Criteria frozen and a planning amendment's epic scope always block
+/// (R-80, ADR-0078); the binding and journey rules take the
+/// `git.work_records` level.
 fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
     let violation = if found.rule == FROZEN_RULE {
         Violation::always_blocking(
             found.rule,
             found.message,
-            "another task's criteria change by its own PR or the epic amendment; a reopened task keeps its criteria",
+            "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria",
+        )
+    } else if found.rule == AMENDMENT_RULE {
+        Violation::always_blocking(
+            found.rule,
+            found.message,
+            "name every epic the amendment changes on its one `Task:` line (`Task: EPC-001, EPC-002`), or move that change to its own epic's amendment",
         )
     } else {
         // An epic's own block has its own route: an epic is never reopened.

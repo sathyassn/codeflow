@@ -42,6 +42,26 @@ pub fn extract_block(content: &str, format: RegionFormat) -> Option<String> {
     Some(lines[begin..=end].join("\n"))
 }
 
+/// The managed block of a Markdown file as its exact bytes, from the start
+/// of the first begin marker line to the end of the first end marker line
+/// after it, line breaks included as written. The markers are the ones
+/// [`extract_block`] and `codeflow update` recognise, so two files have the
+/// same managed block exactly when these slices are equal. `None` when the
+/// text has no complete marker pair.
+#[must_use]
+pub fn managed_span(content: &str) -> Option<&str> {
+    let spans = line_spans(content);
+    let line = |span: &LineSpan| &content[span.start..span.text_end];
+    let begin = spans
+        .iter()
+        .position(|span| is_begin(line(span), RegionFormat::Markdown))?;
+    let end = spans[begin..]
+        .iter()
+        .position(|span| is_end(line(span), RegionFormat::Markdown))?
+        + begin;
+    Some(&content[spans[begin].start..spans[end].text_end])
+}
+
 /// Wraps `content` in fresh markers of the given format (used when an asset
 /// ships without markers of its own).
 #[must_use]
@@ -231,6 +251,27 @@ mod tests {
         "<!-- codeflow:managed:begin scaffold=1.0.0 -->\nrules v1\n<!-- codeflow:managed:end -->";
     const BLOCK_V2: &str =
         "<!-- codeflow:managed:begin scaffold=2.0.0 -->\nrules v2\n<!-- codeflow:managed:end -->";
+
+    #[test]
+    fn the_managed_span_is_the_block_as_written() {
+        let doc = format!(
+            "# Title\r\n\r\n{}\r\n\r\ntail\r\n",
+            BLOCK_V1.replace('\n', "\r\n")
+        );
+        assert_eq!(managed_span(&doc).unwrap(), BLOCK_V1.replace('\n', "\r\n"));
+        // Text around the block is not part of it; one byte inside is.
+        let edited = format!("# Other\n\n{BLOCK_V1}\n\nmore tail\n");
+        assert_eq!(managed_span(&edited), Some(BLOCK_V1));
+        let inside = BLOCK_V1.replace("rules v1", "rules v1 ");
+        assert_ne!(managed_span(&inside), Some(BLOCK_V1));
+        // The short markers count, as `codeflow update` reads them.
+        let short = "a\n<!-- codeflow:begin -->\nx\n<!-- codeflow:end -->\nb\n";
+        assert_eq!(
+            managed_span(short),
+            Some("<!-- codeflow:begin -->\nx\n<!-- codeflow:end -->")
+        );
+        assert_eq!(managed_span("no block\n"), None);
+    }
 
     #[test]
     fn extracts_block_inclusive_of_markers() {
