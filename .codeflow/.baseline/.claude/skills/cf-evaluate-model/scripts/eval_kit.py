@@ -3155,6 +3155,7 @@ def trial_native_args(harness: str, environment: dict[str, str]) -> list[str]:
     home = Path(environment["HOME"])
     if harness == "codex":
         values = ['cli_auth_credentials_store="file"', 'history.persistence="none"',
+                  *CODEX_PLUGIN_OVERRIDES,
                   'memories.generate_memories=false', 'memories.use_memories=false',
                   'sqlite_home=' + json.dumps(str(home / "codex-state")),
                   'log_dir=' + json.dumps(str(home / "codex-logs"))]
@@ -3173,6 +3174,142 @@ def prepare_subject_home(home: Path) -> None:
         (library / "Keychains").symlink_to(Path.home() / "Library/Keychains", target_is_directory=True)
 
 
+# Account-managed plugins: a signed-in Codex syncs the account's installed
+# remote plugins into its plugin cache at every start and loads them, which
+# adds the account's skills, apps and files to every trial. Codex 0.159.1 runs
+# that sync whenever its `plugins` feature is on and the home is signed in;
+# `remote_plugin` turns off only the remote catalog. The dedicated Codex home
+# turns both features off, in its config and on every command line the kit
+# builds, so no plugin loads there.
+CODEX_PLUGIN_FEATURES = ("plugins", "remote_plugin")
+CODEX_PLUGIN_OVERRIDES = tuple(f"features.{name}=false" for name in CODEX_PLUGIN_FEATURES)
+CODEX_FEATURES_SEED = "\n[features]\n" + "".join(f"{name} = false\n" for name in CODEX_PLUGIN_FEATURES)
+CODEX_REMOTE_STAGING = "plugins/.remote-plugin-install-staging"
+CODEX_REMOTE_INSTALL_MARKER = ".codex-remote-plugin-install.json"
+
+
+def _codex_config_document(config: Path) -> tuple[str, dict]:
+    if not config.exists() and not config.is_symlink():
+        return "", {}
+    if config.is_symlink() or not config.is_file() or config.stat().st_size > MAX_SETTINGS_BYTES:
+        raise EvalError(f"evaluator settings must be a regular file: {config}")
+    text = config.read_text(encoding="utf-8")
+    try:
+        import tomllib
+    except ModuleNotFoundError as exc:  # Python before 3.11
+        raise EvalError("reading the dedicated Codex config needs Python 3.11 or newer") from exc
+    try:
+        return text, tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise EvalError(f"cannot read {config}: {exc}") from exc
+
+
+def codex_plugin_features(config: Path) -> dict:
+    """`features.plugins` and `features.remote_plugin` in the dedicated Codex
+    config, None when unset. Reads only that config file."""
+    _text, document = _codex_config_document(config)
+    features = document.get("features", {})
+    if not isinstance(features, dict):
+        raise EvalError(f"cannot read the features table in {config}")
+    return {name: features.get(name) for name in CODEX_PLUGIN_FEATURES}
+
+
+def codex_remote_plugin_cache(home: Path) -> list[Path]:
+    """Account-managed plugin folders in the dedicated home's plugin cache: the
+    `openai-curated-remote` marketplace, any marketplace holding a plugin with
+    Codex's remote-install marker, and a non-empty install staging folder."""
+    found = []
+    cache = home / "plugins/cache"
+    if cache.is_dir() and not cache.is_symlink():
+        for market in sorted(cache.iterdir()):
+            remote = market.name == "openai-curated-remote" or market.is_symlink() or (
+                market.is_dir() and any((plugin / CODEX_REMOTE_INSTALL_MARKER).exists()
+                                        for plugin in market.iterdir() if not plugin.is_symlink()))
+            if remote:
+                found.append(market)
+    staging = home / CODEX_REMOTE_STAGING
+    if staging.is_symlink() or (staging.exists() and (not staging.is_dir() or any(staging.iterdir()))):
+        found.append(staging)
+    return found
+
+
+def _write_codex_plugin_features(config: Path) -> list[str]:
+    """Add `plugins = false` and `remote_plugin = false` under `[features]`.
+    Returns the settings it added. Refuses a value set to anything else and
+    a features table the kit cannot extend without guessing; the rest of the
+    file is verified unchanged before it is replaced."""
+    text, document = _codex_config_document(config)
+    values = codex_plugin_features(config)
+    # Identity, not equality: 0 and 0.0 equal False in Python but are not
+    # the boolean Codex reads.
+    wrong = [name for name, value in values.items() if value is not None and value is not False]
+    missing = [name for name, value in values.items() if value is None]
+    if wrong:
+        raise EvalError(f"{config} sets {', '.join(wrong)} under [features] to another value than false; "
+                        "set it to false and rerun prepare-eval-homes")
+    if not missing:
+        return []
+    lines = "".join(f"{name} = false\n" for name in missing)
+    if "features" not in document:
+        updated = text + ("" if not text or text.endswith("\n") else "\n") + "\n[features]\n" + lines
+    else:
+        headers = list(re.finditer(r"(?m)^[ \t]*\[[ \t]*features[ \t]*\][ \t]*(?:#[^\n]*)?$", text))
+        if len(headers) != 1:
+            raise EvalError(f"{config} defines [features] in a form the kit does not extend; add "
+                            + " and ".join(f"`{name} = false`" for name in missing)
+                            + " under [features] and rerun prepare-eval-homes")
+        at = headers[0].end()
+        updated = text[:at] + "\n" + lines.rstrip("\n") + text[at:]
+    import tomllib
+    expected = copy.deepcopy(document)
+    expected.setdefault("features", {}).update({name: False for name in missing})
+    if tomllib.loads(updated) != expected:
+        raise EvalError(f"could not add the plugin settings to {config} without changing anything else")
+    temporary = config.with_name(f".config.toml.{secrets.token_hex(8)}.tmp")
+    with temporary.open("x", encoding="utf-8") as stream:
+        stream.write(updated)
+    temporary.chmod(0o600)
+    os.replace(temporary, config)
+    return missing
+
+
+def disable_codex_plugins(home: Path, moved_root: Path) -> list[str]:
+    """Turn off plugins in the dedicated Codex config and move a stale remote
+    plugin cache out of the home. Returns the report lines. Touches only the
+    config file, the cache folders it moves and the destination folder."""
+    config = home / "config.toml"
+    report = []
+    added = _write_codex_plugin_features(config)
+    if added:
+        report.append(f"Codex: wrote {' and '.join(f'{name} = false' for name in added)} under [features] in {config}")
+    if any(value is not False for value in codex_plugin_features(config).values()):
+        raise EvalError(f"could not verify the plugin settings in {config}")
+    stale = codex_remote_plugin_cache(home)
+    if stale:
+        # The destination is a kit-owned sibling of the home: never follow a
+        # link there, so a move cannot leave the evaluator folder.
+        parent = home.parent
+        if moved_root.parent != parent or parent.is_symlink() or moved_root.is_symlink() or (
+                moved_root.exists() and not moved_root.is_dir()):
+            raise EvalError(f"refusing the plugin move destination {moved_root}: it must be a real folder "
+                            f"directly inside {parent}")
+        moved_root.mkdir(mode=0o700, exist_ok=True)
+        target = moved_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4))
+        target.mkdir(mode=0o700)
+        if moved_root.is_symlink() or target.is_symlink() or target.resolve().parent != parent.resolve() / moved_root.name:
+            raise EvalError(f"refusing the plugin move destination {target}: it resolves outside {parent}")
+        for path in stale:
+            destination = target / path.relative_to(home)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            refuse_symlink_components(destination.parent, target)
+            os.rename(path, destination)
+            report.append(f"Codex: moved {path} to {destination}")
+        report.append("Reason: account-managed plugins add the account's skills, apps and files "
+                      "to every trial, so the dedicated Codex home never loads them. Delete the moved "
+                      "folder once you no longer need it.")
+    return report
+
+
 def prepare_eval_homes() -> str:
     """Prepare config only. Never launch a harness, read credentials, or sign in."""
     homes = evaluator_homes()
@@ -3187,7 +3324,7 @@ def prepare_eval_homes() -> str:
         if not evaluator_directory(path):
             raise EvalError("evaluator home contains a symlink or cannot be inspected")
     seeds = {homes["claude"] / ".claude.json": json.dumps({"theme": "dark", "hasCompletedOnboarding": True}) + "\n",
-             homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n'}
+             homes["codex"] / "config.toml": 'cli_auth_credentials_store = "file"\n' + CODEX_FEATURES_SEED}
     for path, value in seeds.items():
         # Exclusive creation preserves existing config without reading it.
         try:
@@ -3197,6 +3334,7 @@ def prepare_eval_homes() -> str:
         except FileExistsError:
             if path.is_symlink() or not path.is_file():
                 raise EvalError("evaluator settings must be a regular file")
+    codex_report = disable_codex_plugins(homes["codex"], root / "removed-remote-plugins")
     env = subject_environment(Path("/SETUP"), Path("/usr/bin/codeflow"), [])
     retained = {key: value for key, value in env.items()
                 if key not in {"HOME", "TMPDIR", "CODEFLOW_HOME", "XDG_CONFIG_HOME", "PATH",
@@ -3207,9 +3345,10 @@ def prepare_eval_homes() -> str:
         target = shlex.quote(str(Path.home() / "Library/Keychains"))
         keychain_setup = (f'  mkdir -p "$eval_setup/home/Library" && '
                           f'ln -s {target} "$eval_setup/home/Library/Keychains" || return\n')
+    moved = "".join(line + "\n" for line in codex_report)
     return f'''Prepared dedicated evaluator folders (no sign-in performed):
 {chr(10).join(str(path) for path in homes.values())}
-Run this shell function and the three commands yourself, one at a time:
+{moved}Run this shell function and the three commands yourself, one at a time:
 
 eval_home_launch() {{
   eval_setup=$(mktemp -d {shlex.quote(str(root / "setup.XXXXXX"))}) || return
@@ -3219,7 +3358,7 @@ eval_home_launch() {{
   (cd "$eval_setup" && env -i TERM="${{TERM:-xterm-256color}}" PATH={shlex.quote(env["PATH"])} {assignments} HOME="$eval_setup/home" TMPDIR="$eval_setup/tmp" CODEFLOW_HOME="$eval_setup/home/.codeflow" XDG_CONFIG_HOME="$eval_setup/home/.config" GROK_LOG_FILE="$eval_setup/grok.log" "$@")
 }}
 eval_home_launch claude
-eval_home_launch codex -c 'cli_auth_credentials_store="file"'
+eval_home_launch codex -c 'cli_auth_credentials_store="file"' {" ".join("-c " + value for value in CODEX_PLUGIN_OVERRIDES)}
 eval_home_launch grok
 
 Claude: use /login and complete your browser sign-in; exit when signed in.
