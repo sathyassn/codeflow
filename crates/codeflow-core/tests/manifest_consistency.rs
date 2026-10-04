@@ -1195,6 +1195,191 @@ fn portal_mirror_drift(
     problems
 }
 
+/// `.codeflow/docs-portal.json` records what `codeflow update` last installed
+/// from the shipped starter: its version, each file's ownership, and for a
+/// managed file the hash of the starter bytes. `codeflow update` rewrites any
+/// of these that no longer matches the starter, so a starter edit that leaves
+/// the state stale dirties the next update on `main`, and no check of the
+/// portal bytes (`portal_dogfood_runtime_matches_the_shipped_starter`) sees
+/// it. A user-owned file's hash is frozen provenance that update keeps while
+/// the starter changes, so only its presence is checked.
+#[test]
+fn portal_state_matches_the_shipped_starter() {
+    let root = repo_root();
+    let state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join(".codeflow/docs-portal.json"))
+            .expect("the repository keeps its portal state"),
+    )
+    .expect("the portal state is valid JSON");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("assets/docs-portal/manifest.json"))
+            .expect("the portal manifest is readable"),
+    )
+    .expect("the portal manifest is valid JSON");
+    let problems = portal_pin_drift(&state, &manifest, &root.join("assets/docs-portal/starter"));
+    assert!(
+        problems.is_empty(),
+        "portal state drifted from the shipped starter; run `codeflow update` and commit \
+         .codeflow/docs-portal.json:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn portal_pin_drift_names_each_stale_missing_and_extra_pin() {
+    use codeflow_core::scaffold::sha256_hex;
+
+    let starter = tempfile::tempdir().expect("temporary directory");
+    let write = |relative: &str, bytes: &str| {
+        std::fs::write(starter.path().join(relative), bytes).expect("write starter file");
+    };
+    write("a.mjs", "a\n");
+    write("b.mjs", "b\n");
+    write("own.json", "own v1\n");
+    let manifest = serde_json::json!({
+        "version": "2.0.0",
+        "files": [
+            {"path": "a.mjs", "ownership": "managed"},
+            {"path": "b.mjs", "ownership": "managed"},
+            {"path": "own.json", "ownership": "user-owned"},
+        ]
+    });
+    let pin = |ownership: &str, bytes: &str| serde_json::json!({"ownership": ownership, "pristine_sha256": sha256_hex(bytes.as_bytes())});
+    let clean = serde_json::json!({
+        "starter_version": "2.0.0",
+        "generator": {"version": "2.0.0"},
+        "files": {
+            "a.mjs": pin("managed", "a\n"),
+            "b.mjs": pin("managed", "b\n"),
+            "own.json": pin("user-owned", "own v1\n"),
+        }
+    });
+    let drift = |state: &serde_json::Value| portal_pin_drift(state, &manifest, starter.path());
+    assert_eq!(drift(&clean), Vec::<String>::new());
+    // A managed starter file edited without re-pinning.
+    write("b.mjs", "b changed\n");
+    assert_eq!(drift(&clean), vec!["stale pin for b.mjs".to_owned()]);
+    write("b.mjs", "b\n");
+    // A user-owned starter default changes: update keeps the frozen hash.
+    write("own.json", "own v2\n");
+    assert_eq!(drift(&clean), Vec::<String>::new());
+    // A missing pin, a managed pin for a file the starter no longer ships,
+    // and a retired user-owned pin that update keeps.
+    let mut state = clean.clone();
+    state["files"]["gone.mjs"] = pin("managed", "gone\n");
+    state["files"]["retired.json"] = pin("user-owned", "retired\n");
+    state["files"]
+        .as_object_mut()
+        .expect("files object")
+        .remove("a.mjs");
+    assert_eq!(
+        drift(&state),
+        vec![
+            "missing pin for a.mjs".to_owned(),
+            "pin for gone.mjs is not in the shipped starter manifest".to_owned(),
+        ]
+    );
+    // Changed ownership, invalid frozen hashes, and version metadata.
+    let mut state = clean.clone();
+    state["files"]["retired.json"] = pin("user-owned", "retired\n");
+    state["files"]["retired.json"]["pristine_sha256"] = "short".into();
+    state["files"]["a.mjs"]["ownership"] = "user-owned".into();
+    state["files"]["own.json"]["pristine_sha256"] = "not-a-hash".into();
+    state["starter_version"] = "1.9.9".into();
+    state["generator"]["version"] = "1.9.9".into();
+    assert_eq!(
+        drift(&state),
+        vec![
+            "generator version 1.9.9 is not the shipped starter version 2.0.0".to_owned(),
+            "ownership of a.mjs is user-owned, the starter manifest says managed".to_owned(),
+            "starter_version 1.9.9 is not the shipped starter version 2.0.0".to_owned(),
+            "user-owned pin for own.json is not a sha256".to_owned(),
+            "user-owned pin for retired.json is not a sha256".to_owned(),
+        ]
+    );
+}
+
+/// Differences between the installed portal state and the shipped starter,
+/// limited to what `codeflow update` rewrites: the version metadata, a
+/// managed file's hash and the pin set. Update preserves an existing ownership
+/// designation, so ownership equal to the manifest's is a repository
+/// invariant this check holds, not something update repairs. A user-owned pin
+/// is frozen provenance and only has to be a sha256, a retired user-owned pin
+/// is kept by update, and any other extra pin is not.
+fn portal_pin_drift(
+    state: &serde_json::Value,
+    manifest: &serde_json::Value,
+    starter: &Path,
+) -> Vec<String> {
+    use codeflow_core::scaffold::sha256_hex;
+
+    let well_formed = |hash: &str| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let version = manifest["version"].as_str().expect("manifest version");
+    let mut problems = Vec::new();
+    for (label, found) in [
+        ("starter_version", &state["starter_version"]),
+        ("generator version", &state["generator"]["version"]),
+    ] {
+        if found.as_str() != Some(version) {
+            problems.push(format!(
+                "{label} {} is not the shipped starter version {version}",
+                found.as_str().unwrap_or("(missing)")
+            ));
+        }
+    }
+    let pins = state["files"].as_object().expect("state files object");
+    let entries = manifest["files"].as_array().expect("manifest files array");
+    let shipped: BTreeSet<&str> = entries
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("manifest path string"))
+        .collect();
+    for entry in entries {
+        let relative = entry["path"].as_str().expect("manifest path string");
+        let ownership = entry["ownership"].as_str().expect("manifest ownership");
+        let Some(pin) = pins.get(relative) else {
+            problems.push(format!("missing pin for {relative}"));
+            continue;
+        };
+        if pin["ownership"].as_str() != Some(ownership) {
+            problems.push(format!(
+                "ownership of {relative} is {}, the starter manifest says {ownership}",
+                pin["ownership"].as_str().unwrap_or("(missing)")
+            ));
+            continue;
+        }
+        let hash = pin["pristine_sha256"].as_str().unwrap_or_default();
+        if ownership == "user-owned" {
+            if !well_formed(hash) {
+                problems.push(format!("user-owned pin for {relative} is not a sha256"));
+            }
+        } else {
+            let bytes = std::fs::read(starter.join(relative)).expect("read starter file");
+            if hash != sha256_hex(&bytes) {
+                problems.push(format!("stale pin for {relative}"));
+            }
+        }
+    }
+    for (relative, pin) in pins {
+        if shipped.contains(relative.as_str()) {
+            continue;
+        }
+        if pin["ownership"].as_str() != Some("user-owned") {
+            problems.push(format!(
+                "pin for {relative} is not in the shipped starter manifest"
+            ));
+        } else if !well_formed(pin["pristine_sha256"].as_str().unwrap_or_default()) {
+            problems.push(format!("user-owned pin for {relative} is not a sha256"));
+        }
+    }
+    problems.sort();
+    problems
+}
+
 #[test]
 fn starter_portal_config_points_at_decisions_instead_of_publishing_them() {
     // ADR-0064: the guide has no per-record pages. The starter default keeps
