@@ -588,8 +588,8 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
 }
 
 /// An over-long body (TSK-228) draws one warning that names the count, the
-/// limit and the largest `##` sections, through `--pr-body` and
-/// `--pr-body-file`. It never fails the run, whatever `git.pr_sections`
+/// limit and the largest `##` sections, through `--pr-body`,
+/// `--pr-body-file` and `CODEFLOW_PR_BODY`. It never fails the run, whatever `git.pr_sections`
 /// says, and a project that turns the section check off hears nothing.
 #[test]
 fn ci_long_body_warns_without_blocking() {
@@ -634,6 +634,19 @@ fn ci_long_body_warns_without_blocking() {
             file.to_str().unwrap(),
         ],
     );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("-word limit"), "{stderr}");
+
+    // The environment channel hosted CI uses carries the body the same way.
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
+        .env("CODEFLOW_PR_BODY", format!("Task: TSK-001\n{long}"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains("-word limit"), "{stderr}");

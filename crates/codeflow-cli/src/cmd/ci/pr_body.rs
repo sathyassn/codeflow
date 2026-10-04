@@ -389,70 +389,234 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
 /// A body over this many words draws the length warning (TSK-228).
 const BODY_WORD_LIMIT: usize = 1000;
 
-/// The text of `source` as a reader sees it rendered, for counting words:
-/// headings, tables and fenced blocks count; HTML comments, tag markup and
-/// image alt text do not. A comment split across events is stripped whole,
-/// because the HTML of one run of events is stripped together.
-fn reader_text(source: &str) -> String {
-    fn flush(html: &mut String, text: &mut String) {
-        if !html.is_empty() {
-            text.push_str(&strip_markup(html));
-            html.clear();
+/// HTML elements that sit inside a line of text; any other tag, `<br>` and
+/// `<p>` included, separates the words around it.
+const INLINE_TAGS: &[&str] = &[
+    "a", "abbr", "b", "bdo", "big", "cite", "code", "del", "dfn", "em", "font", "i", "img", "ins",
+    "kbd", "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u",
+    "var",
+];
+
+/// The text a reader sees in raw HTML: comments and tags are gone, a tag
+/// that is not inline separates its neighbours, and entities are decoded.
+fn html_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some(after) = rest.strip_prefix("<!--") {
+            // An unterminated comment hides the rest of the block.
+            rest = after.find("-->").map_or("", |end| &after[end + 3..]);
+            continue;
+        }
+        let tag_like = rest[1..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '/');
+        if let Some(end) = rest.find('>').filter(|_| tag_like) {
+            let name = rest[1..end]
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if !INLINE_TAGS.contains(&name.as_str()) {
+                out.push('\n');
+            }
+            rest = &rest[end + 1..];
+        } else {
+            out.push('<');
+            rest = &rest[1..];
         }
     }
-    let mut text = String::new();
-    let mut html = String::new();
-    let mut image = 0usize;
-    for event in Parser::new_ext(source, github_options()) {
-        match event {
-            Event::Html(value) | Event::InlineHtml(value) => html.push_str(&value),
-            Event::SoftBreak | Event::HardBreak if !html.is_empty() => html.push('\n'),
-            event => {
-                flush(&mut html, &mut text);
-                if starts_block(&event) && !text.is_empty() && !text.ends_with('\n') {
-                    text.push('\n');
-                }
-                match event {
-                    Event::Start(Tag::Image { .. }) => image += 1,
-                    Event::End(TagEnd::Image) => image = image.saturating_sub(1),
-                    Event::Text(value) | Event::Code(value) if image == 0 => {
-                        text.push_str(&value);
+    out.push_str(rest);
+    decode_entities(&out)
+}
+
+/// Decode the character references an HTML block can carry. A reference
+/// this does not know stays as written.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let decoded = rest.find(';').filter(|end| *end <= 10).and_then(|end| {
+            let name = &rest[1..end];
+            let ch = match name {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some('\u{a0}'),
+                _ => name
+                    .strip_prefix('#')
+                    .and_then(|digits| match digits.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => digits.parse().ok(),
+                    })
+                    .and_then(char::from_u32),
+            };
+            ch.map(|ch| (ch, end))
+        });
+        if let Some((ch, end)) = decoded {
+            out.push(ch);
+            rest = &rest[end + 1..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The text of a body as a reader sees it rendered, with the source offset
+/// each stretch of it came from, so a section's words are read from the
+/// one parse of the whole body: a reference link or footnote defined in
+/// another section still resolves.
+struct ReaderText {
+    text: String,
+    /// `(source offset, text length so far)`, in order.
+    marks: Vec<(usize, usize)>,
+}
+
+impl ReaderText {
+    /// Headings, tables and fenced blocks count; HTML comments, tag markup,
+    /// image alt text and footnote definitions nothing refers to do not.
+    fn of(source: &str) -> Self {
+        let options = github_options();
+        let referenced: std::collections::HashSet<String> = Parser::new_ext(source, options)
+            .filter_map(|event| match event {
+                Event::FootnoteReference(label) => Some(label.into_string()),
+                _ => None,
+            })
+            .collect();
+        let mut reader = Self {
+            text: String::new(),
+            marks: Vec::new(),
+        };
+        let mut html = String::new();
+        let mut html_at = 0;
+        let mut image = 0usize;
+        let mut hidden_definition = false;
+        for (event, span) in Parser::new_ext(source, options).into_offset_iter() {
+            match event {
+                Event::Html(value) | Event::InlineHtml(value) => {
+                    if html.is_empty() {
+                        html_at = span.start;
                     }
-                    Event::End(
-                        TagEnd::Emphasis
-                        | TagEnd::Strong
-                        | TagEnd::Strikethrough
-                        | TagEnd::Superscript
-                        | TagEnd::Subscript
-                        | TagEnd::Link,
-                    ) => {}
-                    Event::SoftBreak | Event::HardBreak | Event::End(_) => text.push('\n'),
-                    _ => {}
+                    html.push_str(&value);
+                    continue;
+                }
+                Event::SoftBreak | Event::HardBreak if !html.is_empty() => {
+                    html.push('\n');
+                    continue;
+                }
+                _ => {}
+            }
+            if !html.is_empty() {
+                if !hidden_definition {
+                    reader.mark(html_at);
+                    reader.text.push_str(&html_text(&html));
+                }
+                html.clear();
+            }
+            match event {
+                Event::Start(Tag::FootnoteDefinition(label)) => {
+                    hidden_definition = !referenced.contains(label.as_ref());
+                }
+                Event::End(TagEnd::FootnoteDefinition) => hidden_definition = false,
+                _ if hidden_definition => {}
+                event => {
+                    // An End event spans its whole element; its end keeps
+                    // the offsets in order.
+                    reader.mark(if matches!(event, Event::End(_)) {
+                        span.end
+                    } else {
+                        span.start
+                    });
+                    reader.event(event, &mut image);
                 }
             }
         }
+        if !html.is_empty() && !hidden_definition {
+            reader.mark(html_at);
+            reader.text.push_str(&html_text(&html));
+        }
+        reader
     }
-    flush(&mut html, &mut text);
-    text
+
+    fn mark(&mut self, offset: usize) {
+        self.marks.push((offset, self.text.len()));
+    }
+
+    fn event(&mut self, event: Event<'_>, image: &mut usize) {
+        if starts_block(&event) && !self.text.is_empty() && !self.text.ends_with('\n') {
+            self.text.push('\n');
+        }
+        match event {
+            Event::Start(Tag::Image { .. }) => *image += 1,
+            Event::End(TagEnd::Image) => *image = image.saturating_sub(1),
+            Event::Text(value) | Event::Code(value) if *image == 0 => {
+                self.text.push_str(&value);
+            }
+            // Inline ends join the words either side of them; block and
+            // table ends and breaks separate them.
+            Event::End(
+                TagEnd::Emphasis
+                | TagEnd::Strong
+                | TagEnd::Strikethrough
+                | TagEnd::Superscript
+                | TagEnd::Subscript
+                | TagEnd::Link,
+            ) => {}
+            Event::SoftBreak | Event::HardBreak | Event::End(_) => self.text.push('\n'),
+            _ => {}
+        }
+    }
+
+    /// The words of the whole body.
+    fn words(&self) -> usize {
+        self.text.split_whitespace().count()
+    }
+
+    /// The words that came from source offsets `start..end`.
+    fn words_in(&self, start: usize, end: usize) -> usize {
+        let at = |offset: usize| {
+            let index = self.marks.partition_point(|mark| mark.0 < offset);
+            self.marks.get(index).map_or(self.text.len(), |mark| mark.1)
+        };
+        self.text[at(start)..at(end)].split_whitespace().count()
+    }
 }
 
 /// The words of `source` as a reader sees them.
+#[cfg(test)]
 fn word_count(source: &str) -> usize {
-    reader_text(source).split_whitespace().count()
+    ReaderText::of(source).words()
 }
 
 /// The length warning's message for an over-long body: the count, the limit
 /// and the three largest `##` sections with their word counts. `None` at or
 /// under the limit.
 fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
-    let total = word_count(body);
+    let reader = ReaderText::of(body);
+    let total = reader.words();
     if total <= BODY_WORD_LIMIT {
         return None;
     }
     let mut largest: Vec<(&str, usize)> = sections
         .iter()
         .filter(|section| section.depth == HeadingLevel::H2)
-        .map(|section| (section.name.trim(), word_count(section.content())))
+        .map(|section| {
+            (
+                section.name.trim(),
+                reader.words_in(section.start, section.end),
+            )
+        })
         .filter(|(_, words)| *words > 0)
         .collect();
     // Stable, so equal sections keep their order in the body.
@@ -1762,6 +1926,84 @@ mod tests {
         assert_eq!(word_count("- one\n- two\n- three"), 3);
         assert_eq!(word_count(""), 0);
         assert_eq!(word_count("<!-- only a comment -->"), 0);
+    }
+
+    /// Review round 1 (F1): raw HTML keeps its block, cell and line-break
+    /// boundaries, decodes entities and hides what GitHub hides.
+    #[test]
+    fn word_count_reads_raw_html_as_rendered() {
+        assert_eq!(word_count("<p>one</p><p>two</p><p>three</p>"), 3);
+        assert_eq!(word_count("one<br>two<br/>three"), 3);
+        assert_eq!(
+            word_count("<table><tr><td>a</td><td>b</td></tr></table>"),
+            2
+        );
+        assert_eq!(
+            word_count("<details><summary>Round</summary>one two</details>"),
+            3
+        );
+        assert_eq!(word_count("a&nbsp;b &amp; c"), 4);
+        assert_eq!(word_count("&nbsp; &#160; &#xA0;"), 0);
+        assert_eq!(word_count("<p>foo<b>bar</b>baz</p>"), 1, "inline tags join");
+        assert_eq!(word_count("<p>a < b</p>"), 3, "a bare < is text");
+        assert_eq!(
+            word_count("<!-- unterminated comment runs to the end\n\nhidden"),
+            0
+        );
+        let long = "<p>word</p>".repeat(BODY_WORD_LIMIT + 100);
+        assert!(
+            length_message(&long, &sections(&long)).is_some(),
+            "adjacent HTML elements are separate words and pass the limit"
+        );
+    }
+
+    #[test]
+    fn word_count_hides_footnote_definitions_nothing_refers_to() {
+        assert_eq!(word_count("text[^1]\n\n[^1]: used note words"), 4);
+        assert_eq!(word_count("text\n\n[^1]: unused note words here"), 1);
+        let at = format!(
+            "{}\n\n[^9]: unused four word note",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(
+            length_message(&at, &sections(&at)).is_none(),
+            "an unused definition does not push a body over the limit"
+        );
+    }
+
+    /// Review round 1 (F2): a section's words come from the one parse of
+    /// the whole body, so a reference defined in another section resolves.
+    #[test]
+    fn section_counts_keep_references_defined_elsewhere() {
+        let body = format!(
+            "## Images\n![alt text of an image][img] and [a link here][lnk]\n\n## Big\n{}\n## Links\n[img]: x.png\n[lnk]: https://example.com\n",
+            words(BODY_WORD_LIMIT + 100),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        let named = message.split("largest sections: ").nth(1).unwrap();
+        assert!(
+            named.starts_with("## Big (1100 words), ## Images (4 words)"),
+            "{message}"
+        );
+        assert!(!named.contains("## Links"), "{message}");
+        assert!(message.contains("is 1107 words"), "{message}");
+    }
+
+    /// Review round 1 (nit): equal sections keep their order in the body.
+    #[test]
+    fn length_message_keeps_body_order_between_equal_sections() {
+        let body = format!(
+            "## First\n{}\n## Second\n{}\n## Third\n{}\n## Fourth\n{}\n",
+            words(400),
+            words(400),
+            words(400),
+            words(400),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        assert!(
+            message.ends_with("## First (400 words), ## Second (400 words), ## Third (400 words)"),
+            "{message}"
+        );
     }
 
     #[test]
