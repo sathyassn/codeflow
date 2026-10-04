@@ -43,7 +43,7 @@
         "derive": "the standard row",
         "check": {
           "kind": "contains",
-          "text": "+ the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine"
+          "text": "plus the develop-loop method (`cf-*` skills, reviewer agents, the pipeline), the six-layer `docs/` spine"
         },
         "value": true
       },
@@ -53,7 +53,7 @@
         "derive": "the full row",
         "check": {
           "kind": "contains",
-          "text": "+ `project-management/` (epics, tasks, specs, templates)"
+          "text": "plus `project-management/` (epics, tasks, specs, templates)"
         },
         "value": true
       },
