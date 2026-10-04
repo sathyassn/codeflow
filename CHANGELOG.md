@@ -31,8 +31,9 @@ erratum below, never an edit of the section.
   target's; a byte inside that block is refused by name, and product code,
   `CLAUDE.md`, harness settings, skills, policy, hooks and CI still keep a
   range out of the planning class, as do a hidden path, an instruction
-  file, a symbolic link or a path a link reaches in any folder, judged
-  against the target's policy. A release brings such an amendment's
+  file, a symbolic link or a submodule entry in any folder, judged
+  against the target's policy; docs and `AGENTS.md` ride only in a
+  repository with no symbolic link or submodule. A release brings such an amendment's
   criteria change as a planning landing. `codeflow ci` prints the class as a
   planning-only amendment of the named epics and adds a
   `work.planning_amendment` note per change, grouped by epic: each task's

@@ -277,6 +277,9 @@ pub const MANAGED_BLOCK_CHANGED: &str = "a planning-only pull request changes th
 /// A Git tree entry's mode for a symbolic link.
 const LINK_MODE: i32 = 0o120_000;
 
+/// A Git tree entry's mode for a submodule (a gitlink).
+const GITLINK_MODE: i32 = 0o160_000;
+
 /// [`range_problem`] for revisions named as text, as `codeflow ci` holds
 /// them: the target (`base`) and the head of a range whose changed paths
 /// are `paths`.
@@ -305,11 +308,12 @@ pub fn range_problem_at(
 /// ride in a planning amendment (ADR-0078), or `None` when it can. The
 /// project's product and watched paths come from the policy at `base`, the
 /// target's, never from a working copy. Every path must be one
-/// [`amendment_path`] admits; no changed path may be a symbolic link on
-/// either side, or be one a link may reach in any letter case or through an
-/// absolute target, so a link cannot carry instruction text in through a
-/// document; and `AGENTS.md` keeps the target's managed block byte for
-/// byte.
+/// [`amendment_path`] admits, and none may be a symbolic link or a
+/// submodule on either side. A range that carries a doc or `AGENTS.md`
+/// needs trees with no symbolic link or submodule at all, since either
+/// could present that text at a path the amendment may not write; a range
+/// of records and plans only is judged as before. `AGENTS.md` keeps the
+/// target's managed block byte for byte.
 #[must_use]
 pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) -> Option<String> {
     let project = match project_at(repo, base) {
@@ -321,6 +325,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     };
     let mut instructions = false;
+    let mut text = None;
     for path in paths {
         match amendment_path(path, &project) {
             None => {
@@ -328,23 +333,26 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
                     "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
                 ))
             }
-            Some(AmendmentPath::Instructions) => instructions = true,
-            Some(_) => {}
+            Some(AmendmentPath::Record) => {}
+            Some(kind) => {
+                instructions |= kind == AmendmentPath::Instructions;
+                text.get_or_insert(path);
+            }
         }
-        if [base, head]
+        if let Some(kind) = [base, head]
             .iter()
-            .any(|at| entry_at(repo, *at, path).is_some_and(|(mode, _)| mode == LINK_MODE))
+            .find_map(|at| special(mode_at(repo, *at, path)?))
         {
             return Some(format!(
-                "a planning-only pull request changes the symbolic link {path}; a planning amendment carries regular files only"
+                "a planning-only pull request changes the {kind} {path}; a planning amendment carries regular files only"
             ));
         }
     }
-    for at in [base, head] {
-        for (link, reach) in links(repo, at, &project) {
-            if let Some(path) = paths.iter().find(|path| reach.covers(path)) {
+    if let Some(path) = text {
+        for (side, at) in [("target", base), ("head", head)] {
+            if let Some((kind, entry)) = first_special(repo, at) {
                 return Some(format!(
-                    "a planning-only pull request changes {path}, which the symbolic link {link} reaches; a planning amendment does not change what a link carries"
+                    "a planning-only pull request carries {path}, and the tree at the {side} holds the {kind} {entry}; a planning amendment carries docs and AGENTS.md only where the tree has no symbolic link or submodule, so carry records and plans only, or land {path} in a task pull request"
                 ));
             }
         }
@@ -357,6 +365,47 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     None
 }
 
+/// What an entry of `mode` is when it is not a regular file or folder.
+fn special(mode: i32) -> Option<&'static str> {
+    match mode {
+        LINK_MODE => Some("symbolic link"),
+        GITLINK_MODE => Some("submodule"),
+        _ => None,
+    }
+}
+
+/// The mode of the entry at `path` in the tree of `commit`, read from the
+/// tree alone, so a submodule, whose commit is not in this repository,
+/// still has one.
+fn mode_at(repo: &Repository, commit: Oid, path: &str) -> Option<i32> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
+    Some(entry.filemode())
+}
+
+/// The first symbolic link or submodule in the tree of `commit`, by kind
+/// and path.
+fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String)> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    let mut found = None;
+    let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        match (special(entry.filemode()), entry.name()) {
+            (Some(kind), Ok(name)) => {
+                found = Some((kind, format!("{dir}{name}")));
+                git2::TreeWalkResult::Abort
+            }
+            _ => git2::TreeWalkResult::Ok,
+        }
+    });
+    found
+}
+
 /// The mode and bytes of the entry at `path` in the tree of `commit`.
 fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)> {
     let tree = repo
@@ -366,141 +415,6 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)
     let entry = tree.get_path(std::path::Path::new(path)).ok()?;
     let blob = repo.find_blob(entry.id()).ok()?;
     Some((entry.filemode(), blob.content().to_vec()))
-}
-
-/// What a symbolic link may reach once every link on its way is followed,
-/// judged without the case of its letters, since a checkout on a
-/// case-insensitive file system resolves `DOCS/` and `docs/` alike.
-#[derive(Debug, PartialEq)]
-enum Reach {
-    /// The repository path the link resolves to, in lower case; empty for
-    /// the repository root, which covers every path.
-    Inside(String),
-    /// A link on the way is absolute, holds a backslash (a separator on
-    /// Windows, a letter elsewhere), leaves the repository or loops, so
-    /// what it reaches is not known here and it covers every path.
-    Unknown,
-}
-
-impl Reach {
-    /// Whether the link may reach `path` or a folder holding it.
-    fn covers(&self, path: &str) -> bool {
-        let path = path.to_lowercase();
-        match self {
-            Self::Inside(target) => {
-                target.is_empty() || path == *target || path.starts_with(&format!("{target}/"))
-            }
-            Self::Unknown => true,
-        }
-    }
-}
-
-/// How many links one resolution follows before it counts as a loop, as a
-/// POSIX system does.
-const MAX_HOPS: usize = 40;
-
-/// Every symbolic link in the tree of `commit` that sits where a planning
-/// amendment may not write, or at `AGENTS.md`, with what it may reach. A
-/// link that resolves to the root `AGENTS.md` is left out: the managed
-/// block of that file is compared on its own, so `CLAUDE.md -> AGENTS.md`
-/// carries only what `AGENTS.md` may.
-fn links(repo: &Repository, commit: Oid, project: &ProjectPaths) -> Vec<(String, Reach)> {
-    let Ok(tree) = repo.find_commit(commit).and_then(|commit| commit.tree()) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-        if entry.filemode() == LINK_MODE {
-            if let Ok(name) = entry.name() {
-                let path = format!("{dir}{name}");
-                if matches!(
-                    amendment_path(&path, project),
-                    None | Some(AmendmentPath::Instructions)
-                ) {
-                    let reach = resolve(repo, &tree, &path);
-                    if reach != Reach::Inside("agents.md".to_string()) {
-                        found.push((path, reach));
-                    }
-                }
-            }
-        }
-        git2::TreeWalkResult::Ok
-    });
-    found
-}
-
-/// What the link at `link` in `tree` resolves to: each component is looked
-/// up in the tree without regard to case, and a link met on the way is
-/// followed before any `..` after it, as the file system does.
-fn resolve(repo: &Repository, tree: &git2::Tree<'_>, link: &str) -> Reach {
-    let mut resolved: Vec<String> = link.split('/').map(str::to_string).collect();
-    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-    // Start from the link itself, so its own target is the first hop.
-    if let Some(last) = resolved.pop() {
-        pending.push_back(last);
-    }
-    let mut hops = 0;
-    while let Some(part) = pending.pop_front() {
-        match part.as_str() {
-            "" | "." => {}
-            ".." => {
-                if resolved.pop().is_none() {
-                    return Reach::Unknown;
-                }
-            }
-            name => match child(repo, tree, &resolved, name) {
-                Some((_, LINK_MODE, target)) => {
-                    hops += 1;
-                    if hops > MAX_HOPS
-                        || target.contains('\\')
-                        || target.starts_with('/')
-                        || target.as_bytes().get(1) == Some(&b':')
-                    {
-                        return Reach::Unknown;
-                    }
-                    for (at, piece) in target.split('/').enumerate() {
-                        pending.insert(at, piece.to_string());
-                    }
-                }
-                Some((actual, _, _)) => resolved.push(actual),
-                None => resolved.push(name.to_string()),
-            },
-        }
-    }
-    Reach::Inside(resolved.join("/").to_lowercase())
-}
-
-/// The entry named `name`, in any case, in the folder `dir` of `tree`: its
-/// actual name, its mode and, for a link, its target.
-fn child(
-    repo: &Repository,
-    tree: &git2::Tree<'_>,
-    dir: &[String],
-    name: &str,
-) -> Option<(String, i32, String)> {
-    let folder = if dir.is_empty() {
-        tree.clone()
-    } else {
-        tree.get_path(std::path::Path::new(&dir.join("/")))
-            .ok()?
-            .to_object(repo)
-            .ok()?
-            .into_tree()
-            .ok()?
-    };
-    let wanted = name.to_lowercase();
-    let entry = folder.iter().find(|entry| {
-        entry
-            .name()
-            .is_ok_and(|actual| actual.to_lowercase() == wanted)
-    })?;
-    let target = if entry.filemode() == LINK_MODE {
-        let blob = repo.find_blob(entry.id()).ok()?;
-        String::from_utf8_lossy(blob.content()).into_owned()
-    } else {
-        String::new()
-    };
-    Some((entry.name().ok()?.to_string(), entry.filemode(), target))
 }
 
 /// The project's product and watched paths from the policy at `commit`: its

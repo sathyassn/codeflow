@@ -34,12 +34,13 @@ while its managed block stays byte-identical to the target's. `CLAUDE.md`,
 harness and skill trees, `.codeflow/`, record templates, policy, hooks and
 CI still keep a range out of the planning class, and so do, in any folder,
 a hidden path, a harness instruction file, an adopter-facing path in any
-letter case, a symbolic link, and a path an instruction or enforcement
-link reaches once every link on its way is followed; a link whose way
-cannot be resolved inside the repository reaches every path, and
-`CLAUDE.md -> AGENTS.md` carries only what `AGENTS.md` may. The project's
-product and watched paths are read from the target's policy. CI prints
-the class as an amendment of the named epics and reports per epic each task whose criteria
+letter case, and a symbolic link or submodule entry. A range that
+carries a doc or `AGENTS.md` also needs trees with no symbolic link or
+submodule at all, since either could present that text at a path the
+amendment may not write; records and plans alone are judged as before.
+The project's product and watched paths are read from the target's
+policy. CI prints the class as an amendment of the named epics and
+reports per epic each task whose criteria
 change with its delta, the records added or removed, the status
 transitions, and the instruction and doc files touched. A change to a
 record of an epic the line does not name is refused; a standalone task or a
@@ -70,6 +71,10 @@ decisions D6 to D9, 2026-10-03).
   names that epic too; a breakdown that creates two epics names both.
 - Projects on CodeFlow 3.0.0 read `Task: EPC-001, EPC-002` as malformed, so a
   multi-epic amendment needs 3.1.0 on the CI that judges it.
+- A repository that holds any symbolic link or submodule, such as
+  `CLAUDE.md -> AGENTS.md`, carries only records and plans in an
+  amendment; its docs and project section land through a task pull
+  request.
 - A spec approval or supersession still travels in a range of records and
   plans only (R-32), so an amendment that approves a spec carries no docs
   or `AGENTS.md` change.

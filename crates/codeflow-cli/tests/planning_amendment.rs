@@ -629,7 +629,7 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
         assert_blocks(
             &ci(root, "plan/through-a-link", "Task: EPC-001"),
             "a document behind a link",
-            &["which the symbolic link CLAUDE.md reaches"],
+            &["holds the symbolic link CLAUDE.md"],
         );
         // On push the range is not an amendment, so no criteria may move.
         loosen(root, "TSK-001", Some("EPC-001"), "main");
@@ -662,7 +662,7 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
             assert_blocks(
                 &ci(root, &branch, "Task: EPC-001"),
                 doc,
-                &[&format!("which the symbolic link {link} reaches")],
+                &["holds the symbolic link"],
             );
             loosen(root, "TSK-001", Some("EPC-001"), "main");
             commit(root, "docs(records): loosen AC-1 behind the link");
@@ -675,88 +675,93 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
     }
 }
 
-/// A changed document, the links (path, target) that reach it, and the
-/// link a refusal names.
-#[cfg(unix)]
-type LinkCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
-
-/// Review round 3 (AC-2, AC-3): a link is followed through every link on
-/// its way, before the `..` after it, so a chain through a folder link, an
-/// absolute folder link or a backslash target still keeps the document it
-/// reaches out of a planning amendment, with a body and on push; a link to
-/// the root `AGENTS.md` carries only what `AGENTS.md` may.
+/// Review rounds 3 and 4 (AC-2, AC-3, AC-4): a range that carries a doc or
+/// `AGENTS.md` needs trees with no symbolic link or submodule, so no chain
+/// of links, case alias or submodule can present that text elsewhere; a
+/// range of records and plans only keeps its 3.0.0 behaviour, and a link
+/// or submodule entry is never changed by an amendment.
 #[cfg(unix)]
 #[test]
-fn a_link_chain_is_followed_before_its_dots() {
-    use std::os::unix::fs::symlink;
+fn links_and_submodules_keep_text_out_of_an_amendment() {
     let dir = repo();
     let root = dir.path();
-    // Control: CLAUDE.md -> AGENTS.md, and the project section changes.
-    symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+    std::os::unix::fs::symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
     commit(root, "docs: link the harness instructions to AGENTS.md");
+    // Records and plans only: admitted as in 3.0.0.
     two_epic_amendment(root);
-    write(root, "AGENTS.md", &agents("mine, with the amended plan"));
-    commit(root, "docs: carry the instruction text");
-    assert_passes(&ci(root, PLAN, BOTH), "a link to AGENTS.md", &[]);
-    assert_passes(&ci_push(root, PLAN), "a link to AGENTS.md on push", &[]);
-
-    let absolute = root.join("docs").to_string_lossy().into_owned();
-    let cases: [LinkCase; 3] = [
-        // docs/alias -> docs/another/subdir, so `..` lands in docs/another.
-        (
-            "docs/another/rules.md",
-            &[
-                ("docs/alias", "another/subdir"),
-                ("CLAUDE.local.md", "docs/alias/../rules.md"),
-            ],
-            "CLAUDE.local.md",
-        ),
-        // An absolute folder link on the way.
-        (
-            "docs/abs.md",
-            &[
-                ("docs/outside", absolute.as_str()),
-                ("CLAUDE.extra.md", "docs/outside/abs.md"),
-            ],
-            "CLAUDE.extra.md",
-        ),
-        // A backslash is a letter here and a separator on Windows.
-        (
-            "docs/instructions\\safe.md",
-            &[("CLAUDE.back.md", "docs/instructions\\safe.md")],
-            "CLAUDE.back.md",
-        ),
-    ];
-    for (doc, links, link) in cases {
-        git(root, &["switch", "main"]);
-        write(root, doc, &agents("linked"));
-        write(root, "docs/another/subdir/keep.md", "Kept.\n");
-        for (at, target) in links {
-            symlink(target, root.join(at)).unwrap();
-        }
-        commit(root, "docs: link an instruction file");
-        let branch = format!("plan/chain-{link}");
-        git(root, &["switch", "-C", &branch, "main"]);
-        let text = std::fs::read_to_string(root.join(doc)).unwrap();
-        write(root, doc, &text.replace("managed rules", "other rules"));
-        commit(root, "docs: change the linked instructions");
+    assert_passes(&ci(root, PLAN, BOTH), "records beside a link", &[]);
+    assert_passes(&ci_push(root, PLAN), "records beside a link on push", &[]);
+    // The project section of AGENTS.md, or any doc: refused, naming the link.
+    for (path, content) in [
+        ("AGENTS.md", agents("mine, with the amended plan")),
+        ("docs/reading.md", "Read this.\n".to_string()),
+    ] {
+        git(root, &["switch", "-C", "plan/text", PLAN]);
+        write(root, path, &content);
+        commit(root, "docs: carry text beside a link");
         assert_blocks(
-            &ci(root, &branch, "Task: EPC-001"),
-            doc,
-            &[&format!("which the symbolic link {link} reaches")],
+            &ci(root, "plan/text", BOTH),
+            path,
+            &[&format!(
+                "carries {path}, and the tree at the target holds the symbolic link CLAUDE.md"
+            )],
         );
-        loosen(root, "TSK-001", Some("EPC-001"), "main");
-        commit(root, "docs(records): loosen AC-1 behind the link");
-        assert_blocks(
-            &ci_push(root, &branch),
-            doc,
-            &["work.criteria_frozen", "TSK-001 changes its criteria"],
-        );
-        // Drop the links so the next case is judged on its own.
-        git(root, &["switch", "main"]);
-        for (at, _) in links {
-            std::fs::remove_file(root.join(at)).unwrap();
-        }
-        commit(root, "docs: drop the links");
+        assert_blocks(&ci_push(root, "plan/text"), path, &["work.criteria_frozen"]);
     }
+
+    // A submodule on the target: a doc beside it is refused, and the
+    // submodule entry itself is never changed by an amendment.
+    git(root, &["switch", "main"]);
+    std::fs::remove_file(root.join("CLAUDE.md")).unwrap();
+    commit(root, "docs: drop the link");
+    let first = git_out(root, &["rev-parse", "HEAD"]);
+    git(
+        root,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{first},docs/reference"),
+        ],
+    );
+    git(
+        root,
+        &["commit", "-q", "-m", "docs: add a reference submodule"],
+    );
+    git(root, &["switch", "-C", "plan/beside-a-submodule", "main"]);
+    loosen(root, "TSK-001", Some("EPC-001"), "main");
+    write(root, "docs/reading.md", "Read this.\n");
+    git(root, &["add", "project-management", "docs/reading.md"]);
+    git(
+        root,
+        &["commit", "-q", "-m", "docs: amend beside a submodule"],
+    );
+    assert_blocks(
+        &ci(root, "plan/beside-a-submodule", "Task: EPC-001"),
+        "a doc beside a submodule",
+        &["holds the submodule docs/reference"],
+    );
+    git(root, &["switch", "-C", "plan/moves-a-submodule", "main"]);
+    loosen(root, "TSK-001", Some("EPC-001"), "main");
+    git(root, &["add", "project-management"]);
+    let second = git_out(root, &["rev-parse", "HEAD~2"]);
+    git(
+        root,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{second},docs/reference"),
+        ],
+    );
+    git(root, &["commit", "-q", "-m", "docs: move the submodule"]);
+    assert_blocks(
+        &ci(root, "plan/moves-a-submodule", "Task: EPC-001"),
+        "a moved submodule",
+        &["changes the submodule docs/reference"],
+    );
+    assert_blocks(
+        &ci_push(root, "plan/moves-a-submodule"),
+        "a moved submodule on push",
+        &["work.criteria_frozen"],
+    );
 }
