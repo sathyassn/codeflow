@@ -303,7 +303,8 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         &codeflow(&root, &["validate", "--docs"]),
         "validate the plan",
     );
-    let (code, out) = pull_request(&root, "plan/backlog", LINE, "Task: EPC-001");
+    // The breakdown creates both epics, so it names both (ADR-0078).
+    let (code, out) = pull_request(&root, "plan/backlog", LINE, "Task: EPC-001, EPC-002");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("class: planning-only"), "{out}");
     land(&root, LINE, "plan/backlog");
