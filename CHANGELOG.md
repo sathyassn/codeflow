@@ -43,6 +43,19 @@ erratum below, never an edit of the section.
   epic-line landing with a configured release branch.
 
 <!-- codeflow:release-impact minor -->
+- **`codeflow ci` warns when a pull request body is too long.** A body over
+  1,000 words, counted as a reader sees it (HTML comments left out, fenced
+  blocks and tables counted), draws one warning that names the count, the
+  limit and the three largest `##` sections, and asks for the body to be
+  rewritten to its final state with records linked instead of copied. It
+  joins the existing presentation warnings under `git.pr_sections`: no new
+  policy key, advisory at any level, and never a blocking finding. It runs
+  wherever `codeflow ci` is given a body: a pull request event in hosted CI,
+  `CODEFLOW_PR_BODY`, `--pr-body` or `--pr-body-file`. The pre-push hook
+  passes no body, so it runs no body check. cf-ship's PR evidence reference
+  and the PR template say so.
+
+<!-- codeflow:release-impact minor -->
 - **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
   the named targets and their prerequisites, comma separated or repeated,
   so one gate can be split across parallel CI jobs. A limited run is
@@ -533,6 +546,23 @@ erratum below, never an edit of the section.
   such as an `origin/main` or another remote's upstream pointed at the
   task's own branch, can make the check stricter but never supplies
   criteria.
+
+<!-- codeflow:release-impact patch -->
+- **The portal's claim quarantine test no longer fails at random.** The
+  docs-portal test "unverified retired claims are quarantined without
+  regaining authority" replaced the retired workflow claim by deleting it
+  and writing a new file. The portal identifies a claim by device and inode
+  number, so on a filesystem that hands a freed inode straight back (ext4,
+  tmpfs) the replacement could be taken for the original, the lease was
+  released, and the test saw no error code. It failed once in hosted CI and
+  passed on rerun. The test, in the shipped starter and in this repository's
+  own copy, now builds the replacement while the original still exists, so
+  the two inodes differ on a filesystem that numbers coexisting files
+  uniquely, and asserts that. A portal adopted earlier gets the fix when
+  `codeflow portal setup` reconciles the starter, with an updated binary
+  and managed files you have not edited; a portal whose ownership was
+  transferred, or whose managed test file was modified, is not updated.
+  The portal's runtime and its claim identity check are unchanged.
 
 ## [3.0.0]
 
