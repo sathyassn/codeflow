@@ -842,3 +842,46 @@ fn entries_are_judged_whatever_their_names() {
         &["work.criteria_frozen"],
     );
 }
+
+/// TSK-234 (design D3): a task record the target deleted after its
+/// completion landed is judged against its newest judged version when an
+/// amendment adds it again. That version names its epic, so re-adding it
+/// as a standalone task still needs that epic named, and a criteria change
+/// is flagged as a landed task's.
+#[test]
+fn an_amendment_that_readds_a_deleted_landed_record_keeps_its_epic() {
+    let dir = repo();
+    let root = dir.path();
+    let reviewed = git_out(root, &["rev-parse", "HEAD"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &completed("TSK-002", CRITERIA, &reviewed),
+    );
+    commit(root, "docs: complete TSK-002");
+    std::fs::remove_file(root.join(record_path("TSK-002"))).unwrap();
+    commit(root, "docs: remove the TSK-002 record");
+    git(root, &["switch", "-c", PLAN]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", None, "main", "todo", LOOSER),
+    );
+    commit(root, "docs(records): add TSK-002 again, standalone");
+    // A maintainer registers the ids, so the added record is not refused.
+    assert!(run(root, &["ids", "seed"]).0, "ids seed");
+    assert_blocks(
+        &ci(root, PLAN, "Task: EPC-001"),
+        "a deleted landed record added again",
+        &["TSK-002 belongs to EPC-002", "work.planning_amendment"],
+    );
+    assert_passes(
+        &ci(root, PLAN, BOTH),
+        "a deleted landed record added again, its epic named",
+        &[
+            "EPC-002: TSK-002 is added again",
+            "EPC-002: TSK-002 criteria delta: AC-1 changed",
+            "EPC-002: TSK-002 landed a completion earlier",
+        ],
+    );
+}

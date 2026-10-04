@@ -1054,7 +1054,9 @@ fn a_pin_may_add_only_the_predecessors_status_and_closeout_to_its_review() {
 /// of the target brings in nothing the successor answers for. A product
 /// change the successor makes itself still needs its journey criterion,
 /// and so does a deletion of the predecessor's file, which leaves no
-/// difference from the target (TSK-234 review).
+/// difference from the target, also when it is resolved inside a merge
+/// (TSK-234 review rounds 1 and 2). An octopus merge cannot be read
+/// against a remerge, so it refuses (design D4).
 #[test]
 #[cfg(unix)]
 fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
@@ -1097,6 +1099,7 @@ fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
     git(root, &["commit", "-qm", "docs: write the notes"]);
     let notes = push_check(root, child, "HEAD", bin.path());
     assert!(notes.status.success(), "{}", text(&notes));
+    let unmerged = git(root, &["rev-parse", "HEAD"]);
     git(root, &["switch", "-q", "main"]);
     write(root, "src/m.rs", "pub fn m() {}\n");
     git(root, &["add", "."]);
@@ -1104,27 +1107,61 @@ fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
         root,
         &["commit", "-qm", "feat: other work lands on the target"],
     );
+    git(root, &["switch", "-qc", "side", "main~1"]);
+    write(root, "docs/side.md", "Side.\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: a side note"]);
     git(root, &["switch", "-q", child]);
     git(root, &["merge", "-q", "--no-edit", "main"]);
     let merged = push_check(root, child, "HEAD", bin.path());
     assert!(merged.status.success(), "{}", text(&merged));
     let before = git(root, &["rev-parse", "HEAD"]);
-    for (change, path) in [("delete", "src/a.rs"), ("add", "src/c.rs")] {
+    for (change, needle) in [
+        ("delete", "src/a.rs"),
+        ("add", "src/c.rs"),
+        ("delete inside the merge", "src/a.rs"),
+        ("octopus merge", "two-parent merge"),
+    ] {
         git(root, &["reset", "-q", "--hard", &before]);
-        if change == "delete" {
-            git(root, &["rm", "-q", "src/a.rs"]);
-        } else {
-            write(root, "src/c.rs", "pub fn c() {}\n");
-            git(root, &["add", "."]);
+        match change {
+            "delete" => {
+                git(root, &["rm", "-q", "src/a.rs"]);
+                git(root, &["commit", "-qm", "feat: change product code too"]);
+            }
+            "add" => {
+                write(root, "src/c.rs", "pub fn c() {}\n");
+                git(root, &["add", "."]);
+                git(root, &["commit", "-qm", "feat: change product code too"]);
+            }
+            "delete inside the merge" => {
+                // The merge's tree matches the target's side for src/a.rs,
+                // so only its difference from the clean remerge shows it.
+                git(root, &["reset", "-q", "--hard", &unmerged]);
+                git(root, &["merge", "-q", "--no-ff", "--no-commit", "main"]);
+                git(root, &["rm", "-q", "src/a.rs"]);
+                git(root, &["commit", "-qm", "chore: merge the target"]);
+            }
+            _ => {
+                git(root, &["reset", "-q", "--hard", &unmerged]);
+                git(root, &["merge", "-q", "--no-edit", "main", "side"]);
+                let parents = git(root, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+                assert_eq!(parents.split(' ').count(), 4, "an octopus merge: {parents}");
+            }
         }
-        git(root, &["commit", "-qm", "feat: change product code too"]);
         let product = push_check(root, child, "HEAD", bin.path());
         assert!(!product.status.success(), "{change}: {}", text(&product));
         assert!(
-            text(&product).contains("work.journey_criterion") && text(&product).contains(path),
+            text(&product).contains(needle),
             "{change}: {}",
             text(&product)
         );
+        if change != "octopus merge" {
+            assert!(
+                text(&product).contains("work.journey_criterion"),
+                "{change}: {}",
+                text(&product)
+            );
+        }
     }
 }
 
@@ -1174,4 +1211,41 @@ fn a_stacked_branch_keeps_its_predecessors_record() {
         "{}",
         text(&out)
     );
+}
+
+/// Readiness reads the predecessor's current status, never its history
+/// (TSK-234 design D3a): a predecessor that landed complete and was then
+/// reopened on the target is not a satisfied dependency, so its successor
+/// is not claimed without a reviewed pin.
+#[test]
+#[cfg(unix)]
+fn a_reopened_predecessor_is_not_ready_without_a_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-work";
+    reviewed_predecessor(root, branch);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore: land TSK-001",
+            branch,
+        ],
+    );
+    let path = "project-management/tasks/TSK-001.md";
+    let landed = std::fs::read_to_string(root.join(path)).unwrap();
+    assert!(landed.contains("status: complete"), "{landed}");
+    let reopened = landed.replace("status: complete", "status: todo").replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: fix the predecessor\n",
+    );
+    write(root, path, &reopened);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: reopen TSK-001"]);
+    let claim = cli(root, &["work", "claim", "TSK-002"], None);
+    assert!(!claim.status.success(), "{}", text(&claim));
+    assert!(text(&claim).contains("TSK-001"), "{}", text(&claim));
 }

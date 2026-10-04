@@ -376,49 +376,68 @@ pub(super) fn branch_journey(
     ran.push("journey");
     // A branch stacked on reviewed predecessor heads (issue #69) answers
     // for the paths it changes after them, and the predecessors' own pull
-    // requests answer for theirs. Its own paths are those its own commits
-    // change, a deletion or a restoration of a predecessor's file included,
-    // and every path of the range that also changed after the stack base.
-    let own = match codeflow_core::workgraph::work_start::stack_base(root, stacked) {
-        Ok(Some(stack)) => {
-            let stack = stack.to_string();
-            range_changes(root, &stack, range.head).and_then(|after| {
-                own_commit_paths(root, &stack, range.base, range.head)
-                    .map(|commits| Some((after, commits)))
-            })
+    // requests answer for theirs (SPC-013 R-53, TSK-234).
+    let stack = match codeflow_core::workgraph::work_start::stack_base(root, stacked) {
+        Ok(stack) => stack.map(|stack| stack.to_string()),
+        Err(error) => {
+            push_unlisted(tagged, &error);
+            return;
         }
-        Ok(None) => Ok(None),
-        Err(error) => Err(error),
     };
-    match range_changes(root, range.base, range.head)
-        .and_then(|changes| own.map(|own| (changes, own)))
-    {
-        Ok((changes, own)) => {
-            let mut files: Vec<String> = changes
-                .into_iter()
-                .map(|(_, path)| path)
-                .filter(|path| {
-                    own.as_ref()
-                        .is_none_or(|(after, _)| after.iter().any(|(_, changed)| changed == path))
-                })
-                .collect();
-            if let Some((_, commits)) = own {
-                for path in commits {
-                    if !files.contains(&path) {
-                        files.push(path);
-                    }
-                }
-            }
-            journey(root, git, &task_id, range.head, &files, tagged);
-        }
-        // The same finding the pull request check gives for that failure.
-        Err(error) => push(
-            tagged,
-            RULE,
-            format!("cannot list the paths the range changes: {error}"),
-            "pass --base and --head so CI can read the range",
-        ),
+    match journey_paths(root, range.base, range.head, stack.as_deref()) {
+        Ok(files) => journey(root, git, &task_id, range.head, &files, tagged),
+        Err(error) => push_unlisted(tagged, &error),
     }
+}
+
+/// The paths a range answers for under the journey rule (SPC-013 R-53,
+/// TSK-234): what its own commits change, read per commit, and what each
+/// merge changes against the automatic remerge of its parents
+/// ([`codeflow_core::workgraph::acceptance::owned_paths`]). Without a
+/// stack, the range's net change from its target is included too; with
+/// one, the predecessor's commits up to `stack` are its own pull request's.
+fn journey_paths(
+    root: &Path,
+    base: &str,
+    head: &str,
+    stack: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let mut hide = vec![base];
+    hide.extend(stack);
+    let mut files = codeflow_core::workgraph::acceptance::owned_paths(root, head, &hide)?;
+    if stack.is_none() {
+        for (_, path) in range_changes(root, base, head)? {
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// The journey rule for a pull request's task over its whole range.
+fn range_journey(
+    root: &Path,
+    git: &GitPolicy,
+    task_id: &str,
+    range: &Range<'_>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    match journey_paths(root, range.base, range.head, None) {
+        Ok(paths) => journey(root, git, task_id, range.head, &paths, tagged),
+        Err(error) => push_unlisted(tagged, &error),
+    }
+}
+
+/// The finding for a range whose paths cannot be listed: the one the pull
+/// request check gives for that failure.
+fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
+    push(
+        tagged,
+        RULE,
+        format!("cannot list the paths the range changes: {error}"),
+        "pass --base and --head so CI can read the range; redo an octopus merge as two-parent merges",
+    );
 }
 
 /// Where durable tracking is off: whether the body names exactly one unit
@@ -539,13 +558,13 @@ pub(super) fn dispatch(
                 head: range.head,
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
         Class::ReleaseIntegration { task_id } => {
             println!(
                 "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
             );
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
         untracked => announce(untracked),
     }
@@ -815,50 +834,6 @@ pub(super) fn range_changes(
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     parse_name_status(&out.stdout)
-}
-
-/// The paths the commits `head` reaches and neither `stack` nor `base`
-/// reaches change: a branch's own commits above a stack of reviewed
-/// predecessor heads (issue #69). A merge counts the paths it changes from
-/// every parent, so a merge of the target adds nothing of the target's.
-fn own_commit_paths(
-    root: &Path,
-    stack: &str,
-    base: &str,
-    head: &str,
-) -> Result<Vec<String>, String> {
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args([
-            "-c",
-            "core.quotePath=false",
-            "log",
-            "-z",
-            "--format=",
-            "--name-only",
-            "--no-renames",
-            "--no-ext-diff",
-            "--diff-merges=combined",
-            head,
-            &format!("^{stack}"),
-            &format!("^{base}"),
-            "--",
-        ])
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    let mut paths: Vec<String> = Vec::new();
-    for field in out.stdout.split(|byte| *byte == 0) {
-        let path = String::from_utf8_lossy(field);
-        let path = path.trim_matches('\n');
-        if !path.is_empty() && !paths.iter().any(|known| known == path) {
-            paths.push(path.to_string());
-        }
-    }
-    Ok(paths)
 }
 
 fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {

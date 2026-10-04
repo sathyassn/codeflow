@@ -3048,6 +3048,81 @@ fn a_cleared_closeout_does_not_hide_a_landed_completion() {
     }
 }
 
+/// A target that deleted a landed record does not make the task new
+/// (TSK-234 review round 2, design D2): the task landed, the target then
+/// removed its record, and the task branch reopens it with another
+/// criterion, merges the target keeping the reopened record, and completes
+/// again. The verb and CI refuse, because the target's history shows the
+/// landing and its newest judged version holds the criteria to keep.
+#[test]
+fn a_deleted_landed_record_keeps_its_newest_judged_criteria() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+    );
+    commit(root, "docs: plan the standalone task");
+    let reviewed = code_change(root, BRANCH, "pub fn original() {}\n");
+    let old = fix_block(&reviewed);
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "complete", OWN_JOURNEY, &old)),
+    );
+    commit(root, "docs: complete the task");
+    git(root, &["switch", "main"]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore: land the task", BRANCH],
+    );
+    git(root, &["rm", "-q", &path]);
+    commit(root, "docs: remove the task record");
+    let target = head(root);
+    git(root, &["switch", BRANCH]);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: fix the task\n",
+    );
+    let reopened = standalone_one(&task("TSK-001", "todo", REOPEN_ADDS, &archived));
+    write(root, &path, &reopened);
+    commit(root, "docs: reopen with one more criterion");
+    // The target deleted the record this branch changed, so the merge
+    // stops on that conflict; the branch keeps its reopened record.
+    Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", "main"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .unwrap();
+    write(root, &path, &reopened);
+    let fixed = commit(root, "chore: merge the target and keep the reopened task");
+    let closeout = format!("{archived}{}", three_criteria_block(&fixed));
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", REOPEN_ADDS, &closeout)),
+    );
+    let verb = status_complete(root, "TSK-001");
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "complete", REOPEN_ADDS, &closeout)),
+    );
+    commit(root, "docs(records): complete the fix");
+    let ci = ci_on(root, &target, BRANCH, "Task: TSK-001");
+    for (who, result) in [("verb", verb), ("ci", ci)] {
+        assert_blocks(
+            &result,
+            &format!("{who}: a landed task whose record the target deleted"),
+            &["reopened task keeps its criteria"],
+        );
+    }
+}
+
 /// Issue #67: a task the target records, never landed, adds a criterion on
 /// its own branch and completes; CI prints the delta as a note. The line
 /// then moves, so the task is reopened to take a line merge, the merge is
