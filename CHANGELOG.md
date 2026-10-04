@@ -546,8 +546,10 @@ erratum below, never an edit of the section.
   and the like) or `cd`, joined only by `;`, `&&`, `||` or newlines, with
   no assignment, no other command, no path-qualified program, no pipe,
   background job, subshell or process substitution, no substitution other
-  than a `$(cat <<'EOF' ...)` message, and no file written on a line that
-  runs `git` or `gh`, which would run a written hook. So
+  than a `$(cat <<'EOF' ...)` message, no `${...}`, `$[...]` or `$((...))`
+  expansion and no `printf` `%n`, which can assign, and no command after
+  one that can write a file (`>`, `tee`, `git`, `gh` and the like), which
+  could replace the program or hook it then runs. So
   `grep -c review <<< 'Codex review: approve'` and
   `git commit -F - <<< 'docs: record the Codex review'` pass. Any other
   line keeps the 3.0.0 judgement of its whole text, so a commit message
@@ -555,8 +557,9 @@ erratum below, never an edit of the section.
   out is also judged as a script, so a line in it that reads as a run is
   still refused. A brief written with `cat` and a heredoc, a `git commit
   -m` message and a `gh pr create --body` text on their own were already
-  allowed. Of 1,585 headless run forms compared with 3.0.0, none that
-  3.0.0 refused is let through.
+  allowed; a heredoc brief followed by another command on the same line
+  is judged as in 3.0.0. Of 1,596 headless run forms compared with 3.0.0,
+  none that 3.0.0 refused is let through.
 
 <!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The

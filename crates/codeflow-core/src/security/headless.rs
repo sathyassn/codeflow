@@ -37,7 +37,10 @@
 //! `&&`, `||` or newlines, with no assignment, no other command, no
 //! path-qualified program, no pipe, background job, subshell or process
 //! substitution, no substitution other than a `$(cat <<EOF …)` message,
-//! and no file written on a line that runs `git` or `gh`.
+//! no `${…}`, `$[…]` or `$((…))` expansion (which can assign), no `printf`
+//! `%n` conversion or variable argument, and no command after one that can
+//! write a file (`>`, `tee`, `uniq`, `base64`, `git`, `gh`), which could
+//! replace the program, hook or configuration it then runs.
 //! Then the heredoc bodies and the arguments it writes are left out, so
 //! `grep -c review <<< 'Codex review: approve'` is no run. Any other line
 //! keeps the 3.0.0 raw judgement of its whole text. The data left out is
@@ -136,10 +139,31 @@ fn data_command(words: &[String]) -> Option<bool> {
             .first()
             .is_some_and(|sub| matches!(sub.as_str(), "pr" | "issue" | "release" | "gist"))
             .then_some(false),
-        "printf" if args.iter().any(|a| a.starts_with("-v")) => None,
+        "printf"
+            if args
+                .iter()
+                .any(|a| a.starts_with("-v") || a.contains('$') || assigns_count(a)) =>
+        {
+            None
+        }
         name if DATA_COMMANDS.contains(&name) => Some(true),
         _ => None,
     }
+}
+
+/// Whether a `printf` argument holds a `%n` conversion, which stores a
+/// count in the variable it names.
+fn assigns_count(arg: &str) -> bool {
+    let mut rest = arg;
+    while let Some(at) = rest.find('%') {
+        let tail = &rest[at + 1..];
+        let spec = tail.trim_start_matches(|c: char| !c.is_ascii_alphabetic() && c != '%');
+        if spec.starts_with('n') {
+            return true;
+        }
+        rest = tail;
+    }
+    false
 }
 
 /// A heredoc opened in the current simple command, waiting for its body.
@@ -160,12 +184,13 @@ struct Segment {
     data: Option<bool>,
     /// No words, a data command, or `cd` with no substitution.
     plain: bool,
-    /// It writes a file: an output redirection, or `tee`, `uniq` or
-    /// `base64`, which can name an output file.
+    /// It can write a file: an output redirection, `tee`, `uniq` or
+    /// `base64`, which can name an output file, or `git` or `gh`, which
+    /// write the repository and fetched files. A later command could run
+    /// what it wrote.
     writes: bool,
-    /// `git` or `gh`, which run hooks, a configured fsmonitor and other
-    /// programs the repository's files name.
-    runs_repository_programs: bool,
+    /// It has words, so it runs a command.
+    has_words: bool,
 }
 
 /// The line in order: text that always stays in the code, a simple
@@ -189,6 +214,9 @@ struct LineShape {
     /// A pipe, a background job, a subshell or a process substitution:
     /// commands joined other than by `;`, `&&`, `||` or a newline.
     joined_otherwise: bool,
+    /// A `${…}`, `$[…]` or `$((…))` anywhere on the line, which can assign
+    /// a variable or a command hash (`${BASH_CMDS[cat]:=…}`).
+    expands: bool,
 }
 
 impl LineShape {
@@ -223,10 +251,8 @@ impl LineShape {
             writes: *writes
                 || program
                     .as_deref()
-                    .is_some_and(|name| matches!(name, "tee" | "uniq" | "base64")),
-            runs_repository_programs: program
-                .as_deref()
-                .is_some_and(|name| matches!(name, "git" | "gh")),
+                    .is_some_and(|name| matches!(name, "tee" | "uniq" | "base64" | "git" | "gh")),
+            has_words: !words.is_empty(),
         });
         self.pieces.push(Piece::Segment(owner));
         *runs = false;
@@ -234,18 +260,18 @@ impl LineShape {
     }
 
     /// Whether the line is data only: every simple command is plain, they
-    /// are joined only by `;`, `&&`, `||` or newlines, and no file is
-    /// written on a line that runs `git` or `gh` (a written hook or
-    /// configuration would run). Only then is its data left out; any other
-    /// line keeps its whole raw text.
+    /// are joined only by `;`, `&&`, `||` or newlines, no expansion can
+    /// assign, and no command follows one that can write a file (a written
+    /// program, hook or configuration would run). Only then is its data
+    /// left out; any other line keeps its whole raw text.
     fn data_only(&self) -> bool {
-        let writes = self.segments.iter().any(|segment| segment.writes);
-        let repository = self
-            .segments
-            .iter()
-            .any(|segment| segment.runs_repository_programs);
-        let exposed = self.joined_otherwise || (writes && repository);
-        !exposed && self.segments.iter().all(|segment| segment.plain)
+        let written_then_run = self.segments.iter().enumerate().any(|(at, segment)| {
+            segment.writes && self.segments[at + 1..].iter().any(|later| later.has_words)
+        });
+        !self.joined_otherwise
+            && !self.expands
+            && !written_then_run
+            && self.segments.iter().all(|segment| segment.plain)
     }
 }
 
@@ -260,7 +286,12 @@ impl LineShape {
 #[allow(clippy::too_many_lines)] // one character state machine
 fn split_data(command: &str) -> (String, Vec<String>) {
     let chars: Vec<char> = command.chars().collect();
-    let mut shape = LineShape::default();
+    let mut shape = LineShape {
+        expands: ["${", "$[", "$(("]
+            .iter()
+            .any(|form| command.contains(form)),
+        ..LineShape::default()
+    };
     let mut span = String::new();
     // Whether the span runs a substitution this reader does not clear.
     let mut runs = false;
@@ -1684,7 +1715,6 @@ mod tests {
             "git commit -F - <<< 'docs: record the Codex review'",
             "gh pr comment 56 --body-file - <<< 'the Codex review approved'",
             "grep -q review <<< 'Codex review: approve' && git commit -m 'docs: record the Codex review'",
-            "cat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ngrep -c Codex <<< 'Codex review: approve'",
         ] {
             assert_eq!(found(command), None, "{command}");
         }
@@ -1705,6 +1735,8 @@ mod tests {
             "grep -c review <<< 'Codex review' | wc -l",
             "(grep -c review <<< 'Codex review')",
             "if true; then grep -c review <<< 'Codex review'; fi",
+            "cat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ngrep -c Codex <<< 'Codex review: approve'",
+            "echo \"${NOTE:-x}\"; grep -c review <<< 'Codex review: approve'",
         ] {
             assert!(found(command).is_some(), "{command}");
         }
@@ -1810,6 +1842,28 @@ mod tests {
             "cat >> .git/config <<'EOF'\n[core]\n\tfsmonitor = sh -c 'codex exec x'\nEOF\ngit commit -m x <<< ''",
             "tee .git/hooks/pre-push <<< 'import os; os.system(\"codex exec x\")' && gh pr create --body x",
             "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
+        ] {
+            assert!(found(command).is_some(), "{command}");
+        }
+    }
+
+    /// TSK-223 final review round 2: an expansion that assigns, a `%n`
+    /// conversion, or a program written and then run by bare name keeps
+    /// the raw judgement, as in 3.0.0.
+    #[test]
+    fn assigning_expansions_and_written_programs_are_still_runs() {
+        for command in [
+            "printf '%s' \"${BASH_CMDS[cat]:=/usr/bin/python3}\"\ncat <<< 'import os; os.system(\"/opt/peer/bin/codex exec x\")'",
+            "echo ${X:=1}; cat <<< 'import os; os.system(\"codex exec x\")'",
+            "echo $((X = 1)); cat <<< 'import os; os.system(\"codex exec x\")'",
+            "echo $[X = 1]; cat <<< 'import os; os.system(\"codex exec x\")'",
+            "printf '%n' PATH\ncat <<< 'import os; os.system(\"codex exec x\")'",
+            "printf '%5n' PATH; cat <<< 'import os; os.system(\"codex exec x\")'",
+            "printf \"$F\" PATH; cat <<< 'import os; os.system(\"codex exec x\")'",
+            "printf '#!/usr/bin/python3\\nimport os\\nos.system(\"codex exec x\")\\n' > /tmp/review-bin/grep\ngrep <<< ''",
+            "tee /tmp/review-bin/grep <<< 'import os; os.system(\"codex exec x\")'; grep <<< ''",
+            "cat >> /tmp/review-bin/cat <<< 'import os; os.system(\"codex exec x\")' && cat <<< ''",
+            "gh release download v1 -D /tmp/review-bin; cat <<< 'import os; os.system(\"codex exec x\")'",
         ] {
             assert!(found(command).is_some(), "{command}");
         }
