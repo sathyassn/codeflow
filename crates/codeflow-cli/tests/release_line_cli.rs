@@ -632,6 +632,41 @@ fn an_amendment_behind_a_link_chain_stays_frozen_in_a_release() {
     );
 }
 
+/// TSK-229 review round 5: a planning landing that changes a link whose
+/// name holds a backslash stays frozen in a release, as its planning pull
+/// request was refused; the name is never rewritten before the check.
+#[cfg(unix)]
+#[test]
+fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
+    use std::os::unix::fs::symlink;
+    let fx = Fx::new(false);
+    let link = fx.root.join("project-management/ref\\alias");
+    fx.git(&["switch", "-q", "-C", "chore/link", LINE_A]);
+    symlink("one", &link).unwrap();
+    fx.commit("docs: add a link");
+    fx.land(LINE_A, "chore/link");
+    fx.git(&["switch", "-q", "-C", "plan/move-the-link", LINE_A]);
+    let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+    std::fs::remove_file(&link).unwrap();
+    symlink("two", &link).unwrap();
+    fx.commit("docs(records): amend the criterion and move the link");
+    let landing = fx.land(LINE_A, "plan/move-the-link");
+    fx.cut_release();
+    fx.import(LINE_A);
+    blocks(
+        &agree(&fx, "a moved link with a backslash"),
+        "a moved link with a backslash",
+        &[
+            "work.criteria_frozen",
+            &format!(
+                "TSK-003 changes its criteria on its line at {}",
+                &landing[..9]
+            ),
+        ],
+    );
+}
+
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
 /// The adoption marker line (SPC-013 R-120).

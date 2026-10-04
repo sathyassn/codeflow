@@ -34,7 +34,8 @@ while its managed block stays byte-identical to the target's. `CLAUDE.md`,
 harness and skill trees, `.codeflow/`, record templates, policy, hooks and
 CI still keep a range out of the planning class, and so do, in any folder,
 a hidden path, a harness instruction file, an adopter-facing path in any
-letter case, and a symbolic link or submodule entry. A range that
+letter case, a symbolic link or submodule entry, and a changed name that
+is not UTF-8 or holds a backslash. A range that
 carries a doc or `AGENTS.md` also needs trees with no symbolic link or
 submodule at all, since either could present that text at a path the
 amendment may not write; records and plans alone are judged as before.

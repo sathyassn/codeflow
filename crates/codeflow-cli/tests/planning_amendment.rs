@@ -765,3 +765,80 @@ fn links_and_submodules_keep_text_out_of_an_amendment() {
         &["work.criteria_frozen"],
     );
 }
+
+/// Stage a symbolic link entry named by raw `name` bytes and pointing at
+/// `target`, through Git's own plumbing, since a file system may refuse
+/// the name.
+#[cfg(unix)]
+fn stage_link(root: &Path, name: &[u8], target: &str) {
+    use std::os::unix::ffi::OsStringExt;
+    write(root, "link.tmp", target);
+    let blob = git_out(root, &["hash-object", "-w", "link.tmp"]);
+    std::fs::remove_file(root.join("link.tmp")).unwrap();
+    let mut info = format!("120000,{},", blob.trim()).into_bytes();
+    info.extend_from_slice(name);
+    let status = Command::new("git")
+        .args(["update-index", "--add", "--cacheinfo"])
+        .arg(std::ffi::OsString::from_vec(info))
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+/// Review round 5 (AC-3, AC-4): entries are judged from Git's own diff and
+/// tree modes, so a name that is not UTF-8 hides no link, and a changed
+/// entry with such a name is refused, with a body and on push.
+#[cfg(unix)]
+#[test]
+fn entries_are_judged_whatever_their_names() {
+    let record = record_path("TSK-001");
+    // A link on the target whose name is not UTF-8, beside an amended doc.
+    let dir = repo();
+    let root = dir.path();
+    write(root, "docs/runtime.md", "Runtime.\n");
+    git(root, &["add", "docs/runtime.md"]);
+    stage_link(root, b"src/\xFF", "../docs/runtime.md");
+    git(root, &["commit", "-q", "-m", "docs: link the runtime page"]);
+    git(root, &["switch", "-C", "plan/odd-tree", "main"]);
+    loosen(root, "TSK-001", Some("EPC-001"), "main");
+    write(root, "docs/runtime.md", "Other runtime.\n");
+    git(root, &["add", &record, "docs/runtime.md"]);
+    git(
+        root,
+        &["commit", "-q", "-m", "docs: amend beside an odd link"],
+    );
+    assert_blocks(
+        &ci(root, "plan/odd-tree", "Task: EPC-001"),
+        "a doc beside a link with an odd name",
+        &["holds the symbolic link src/"],
+    );
+    assert_blocks(
+        &ci_push(root, "plan/odd-tree"),
+        "a doc beside a link with an odd name on push",
+        &["work.criteria_frozen"],
+    );
+
+    // A changed link entry whose name is not UTF-8, in a records range.
+    let dir = repo();
+    let root = dir.path();
+    stage_link(root, b"project-management/ref\xFF", "one");
+    git(root, &["commit", "-q", "-m", "docs: add an odd link"]);
+    git(root, &["switch", "-C", "plan/odd-entry", "main"]);
+    loosen(root, "TSK-001", Some("EPC-001"), "main");
+    git(root, &["add", &record]);
+    stage_link(root, b"project-management/ref\xFF", "two");
+    git(root, &["commit", "-q", "-m", "docs: move the odd link"]);
+    assert_blocks(
+        &ci(root, "plan/odd-entry", "Task: EPC-001"),
+        "a changed entry with an odd name",
+        &["whose name is not plain UTF-8 or holds a backslash"],
+    );
+    assert_blocks(
+        &ci_push(root, "plan/odd-entry"),
+        "a changed entry with an odd name on push",
+        &["work.criteria_frozen"],
+    );
+}

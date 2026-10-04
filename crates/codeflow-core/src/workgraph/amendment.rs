@@ -308,8 +308,9 @@ pub fn range_problem_at(
 /// ride in a planning amendment (ADR-0078), or `None` when it can. The
 /// project's product and watched paths come from the policy at `base`, the
 /// target's, never from a working copy. Every path must be one
-/// [`amendment_path`] admits, and none may be a symbolic link or a
-/// submodule on either side. A range that carries a doc or `AGENTS.md`
+/// [`amendment_path`] admits, and, read from Git's own diff, none may be a symbolic link or a submodule on
+/// either side or have a name that is not plain UTF-8. A range that
+/// carries a doc or `AGENTS.md`
 /// needs trees with no symbolic link or submodule at all, since either
 /// could present that text at a path the amendment may not write; a range
 /// of records and plans only is judged as before. `AGENTS.md` keeps the
@@ -324,6 +325,9 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             ))
         }
     };
+    if let Some(problem) = entry_problem(repo, base, head) {
+        return Some(problem);
+    }
     let mut instructions = false;
     let mut text = None;
     for path in paths {
@@ -338,14 +342,6 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
                 instructions |= kind == AmendmentPath::Instructions;
                 text.get_or_insert(path);
             }
-        }
-        if let Some(kind) = [base, head]
-            .iter()
-            .find_map(|at| special(mode_at(repo, *at, path)?))
-        {
-            return Some(format!(
-                "a planning-only pull request changes the {kind} {path}; a planning amendment carries regular files only"
-            ));
         }
     }
     if let Some(path) = text {
@@ -374,36 +370,76 @@ fn special(mode: i32) -> Option<&'static str> {
     }
 }
 
-/// The mode of the entry at `path` in the tree of `commit`, read from the
-/// tree alone, so a submodule, whose commit is not in this repository,
-/// still has one.
-fn mode_at(repo: &Repository, commit: Oid, path: &str) -> Option<i32> {
-    let tree = repo
-        .find_commit(commit)
-        .and_then(|commit| commit.tree())
-        .ok()?;
-    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
-    Some(entry.filemode())
+/// Why an entry the range changes cannot ride in a planning amendment,
+/// read from the diff of the trees, from the merge-base of `base` and
+/// `head` to `head` as `codeflow ci` reads the range, so no name decoding
+/// stands between an entry and its check: a symbolic link or submodule on
+/// either side, or a name that is not UTF-8 or holds a backslash (a
+/// separator on Windows, a letter elsewhere). A range that cannot be read
+/// is refused.
+fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<String> {
+    let from = repo.merge_base(base, head).unwrap_or(base);
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let diff = tree(from)
+        .and_then(|before| {
+            let after = tree(head)?;
+            repo.diff_tree_to_tree(Some(&before), Some(&after), None)
+        })
+        .map_err(|error| error.message().to_string());
+    let diff = match diff {
+        Ok(diff) => diff,
+        Err(error) => return Some(format!("cannot read the range to classify it: {error}")),
+    };
+    for delta in diff.deltas() {
+        for file in [delta.old_file(), delta.new_file()] {
+            let Some(name) = file.path_bytes() else {
+                continue;
+            };
+            let shown = String::from_utf8_lossy(name);
+            if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
+                return Some(format!(
+                    "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
+                ));
+            }
+            if let Some(kind) = special(i32::from(file.mode())) {
+                return Some(format!(
+                    "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// The first symbolic link or submodule in the tree of `commit`, by kind
-/// and path.
+/// and path, found by mode whatever its name; a tree that cannot be read
+/// counts as holding one.
 fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String)> {
-    let tree = repo
-        .find_commit(commit)
-        .and_then(|commit| commit.tree())
-        .ok()?;
+    let unreadable = || {
+        Some((
+            "entry it cannot read in",
+            commit.to_string()[..9].to_string(),
+        ))
+    };
+    let Ok(tree) = repo.find_commit(commit).and_then(|commit| commit.tree()) else {
+        return unreadable();
+    };
     let mut found = None;
-    let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-        match (special(entry.filemode()), entry.name()) {
-            (Some(kind), Ok(name)) => {
+    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        match special(entry.filemode()) {
+            Some(kind) => {
+                let name = String::from_utf8_lossy(entry.name_bytes());
                 found = Some((kind, format!("{dir}{name}")));
                 git2::TreeWalkResult::Abort
             }
-            _ => git2::TreeWalkResult::Ok,
+            None => git2::TreeWalkResult::Ok,
         }
     });
-    found
+    match (found, walked) {
+        (Some(found), _) => Some(found),
+        (None, Err(_)) => unreadable(),
+        (None, Ok(())) => None,
+    }
 }
 
 /// The mode and bytes of the entry at `path` in the tree of `commit`.
@@ -484,7 +520,7 @@ pub(super) fn landing_problem(
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map(|path| path.to_string_lossy().into_owned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
