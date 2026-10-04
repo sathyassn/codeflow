@@ -156,6 +156,31 @@ The runtime posture each harness receives, including the Codex permission
 profile and Claude's credential mask, is in
 [harness posture](harness-posture.md).
 
+#### Text from the operating system and git
+
+Names, paths and process text that the operating system or git supplies are
+bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
+
+- **Compare bytes, or decode lossily, where the value is only compared or
+  shown.** A process argument, an index path, a listing line or a config value
+  is read with `String::from_utf8_lossy`, or compared as bytes, and never
+  turns a legal input into a failure. A lossy decode is safe for a match
+  because U+FFFD is part of no name the check looks for.
+- **Fail only where a wrong value would change a security or identity
+  decision**, and say why in a comment at that site, starting "OS text rule"
+  or "Kept strict". Refuse and do not skip: a name the check cannot read is
+  work or authority it cannot prove (a policy source ref, a remote name, a
+  worktree name, a state directory written into a hook command).
+- **A name that can only match a valid pattern is skipped.** A directory entry
+  tested against a UUID or a `.tmp` suffix cannot match when it is not valid
+  UTF-8, so the scan moves on.
+- **File content is not covered.** JSON, TOML, Markdown and blobs are a format
+  contract, and a decode failure there names the file.
+
+The sites that stay strict are the ones with a comment. The pre-push and
+reference-transaction stdin reads are strict by an earlier decision that the
+`remedy_clearing` tests pin.
+
 ### scaffold: `assets/`
 
 - `assets/base/` holds the shipped scaffold: the AGENTS.md and CLAUDE.md

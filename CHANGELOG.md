@@ -222,6 +222,23 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Text from the operating system or git that is not valid UTF-8 no
+  longer stops `present`, `codeflow test` or the discard guard.** A project
+  with a file name that is not UTF-8 could not run `codeflow test`, because
+  the gate's snapshot of tracked files refused the name. `present show` and
+  `present close` refused to read the identity of the recorded browser
+  process on macOS, Linux and Windows when its command line held such
+  bytes; the identity is now judged from the exact bytes of its two
+  identity arguments. The discard guard failed with uncertainty on a dirty
+  or untracked name or a ref name that is not UTF-8, and `git remote
+  update` was refused for any such value in the effective git
+  configuration; both now read the text lossily, and a name that cannot be
+  read still refuses where skipping it would pass an unchecked change (a
+  remote name, a worktree name). One rule for this text is in
+  `docs/architecture.md`, and each site that stays strict says why next to
+  the code.
+
+<!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A
   signed-in Codex 0.159.1 synced the account's installed remote plugins
   into the dedicated evaluator home at every start, and one of them holds a
