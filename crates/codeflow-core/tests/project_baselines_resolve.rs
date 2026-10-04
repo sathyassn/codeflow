@@ -177,7 +177,7 @@ fn exception_drift(found: &[Found]) -> Vec<String> {
     }
     for (table, line, id) in actual.difference(&expected) {
         drift.push(format!(
-            "{table}: {line} = {id} is not listed in ARCHIVE_ONLY; list it with its line, or name a public id the clone holds"
+            "{table}: {line} = {id} is not listed in ARCHIVE_ONLY; list it there with its line, or remove it from the table (the tables are a write-once bridge, SPC-013 R-120)"
         ));
     }
     drift
