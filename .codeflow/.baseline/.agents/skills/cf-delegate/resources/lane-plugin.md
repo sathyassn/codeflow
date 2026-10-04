@@ -1,7 +1,12 @@
-# cf-delegate lane: from Claude Code, through the Codex plugin
+# cf-delegate fallback: from Claude Code, through the Codex plugin
 
-Load this lane on a Claude host after the common core in `../SKILL.md`. A
-Codex host uses [the lifecycle lane](lane-lifecycle.md) instead.
+Load this file only when the official Codex plugin is the fallback in use on
+a Claude Code host, after the common core in `../SKILL.md`. It is optional
+and never the preferred route:
+[cross-family transport](../../cf-model-orchestrator/resources/routing/transport.md)
+names the Codex seat in a Herdr tab first and orders the fallbacks. A
+Claude seat uses [the lifecycle lane](lane-lifecycle.md) only when the
+host is Codex or Grok.
 
 ## Preflight
 
@@ -25,7 +30,7 @@ Collect the peer in-turn through the public foreground or qualified native
 fallback; no host `run_in_background` watcher. The Codex-host turn adapter
 does not apply here.
 
-Start every delegated plugin prompt with an explicit bounded role, for example
+Start every delegated plugin prompt, like every cross-family brief, with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
 model orchestrator or delegate back to the host lineage (Claude).` Claude
 subagents are not Codex; nested duos violate scope.

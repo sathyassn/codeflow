@@ -91,8 +91,10 @@ def deliver(args: argparse.Namespace) -> str:
     except OSError as error:
         raise Stop(2, f"cannot read {args.file}: {error}")
     if len(prompt.encode("utf-8")) > LIMIT:
-        raise Stop(2, f"{args.file} is over 256 KiB; nothing was sent. Use the "
-                      "degraded tmux paste-buffer path (cf-herdr).")
+        raise Stop(2, f"{args.file} is over 256 KiB; nothing was sent. Write "
+                      "the brief to a file outside the repository that the "
+                      "seat can read, and deliver a short prompt that names "
+                      "it (cf-herdr).")
     pane = herdr("pane", "get", args.pane)["result"]["pane"]
     folder = pane.get("foreground_cwd") or pane.get("cwd")
     if folder and not os.path.isdir(folder):

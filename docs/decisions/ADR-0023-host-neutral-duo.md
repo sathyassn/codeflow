@@ -151,3 +151,13 @@ gates and the rest stay accepted.
   and a normal 90% target." Superseded: the coverage floor is the
   project's configured gate (CodeFlow's is `--fail-under-lines 90`), not
   prose.
+
+## Note (2026-10-03)
+
+ADR-0077 restates the lanes in this record's Decision. A Claude Code host
+reaches Codex through the interactive Codex CLI in a Herdr tab, on the
+Codex app-server when it runs; the official plugin is an optional fallback.
+A Codex host reaches Claude through the interactive Claude CLI in a Herdr
+tab, from any host that reaches a Herdr server, with tmux only as the last
+fallback. The `delegates` doctor check reports Herdr and no longer requires
+the plugin. Roles, evidence gates and the schema-v2 lifecycle are unchanged.

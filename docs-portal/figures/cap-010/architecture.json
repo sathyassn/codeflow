@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "How does each host reach the other seat?",
-    "idea": "The host a session starts in picks the transport: the plugin from Claude Code, Herdr from Codex, and both from Grok Build.",
+    "idea": "Every host reaches the other seat the same way: the other family's interactive CLI in a Herdr tab, with tmux as the last fallback.",
     "title": "How each host reaches the other seat",
     "kicker": "Hosts and transports",
-    "caption": "Every route runs through a vendor's own interactive harness, so changing host changes the transport and never the contract.",
+    "caption": "Every route runs through a vendor's own interactive harness, so changing host never changes the seat, the transport or the contract.",
     "states": [
       {
         "name": "seat",
@@ -28,37 +28,47 @@
       {
         "name": "fallback",
         "mark": "todo",
-        "means": "Degraded transport"
+        "means": "Last fallback"
       }
     ],
     "facts": [
       {
-        "claim": "Claude Code reaches Codex through the plugin and app-server",
+        "claim": "Claude Code reaches Codex through the interactive Codex CLI in a Herdr tab",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
         "derive": "the Claude Code row",
         "check": {
           "kind": "contains",
-          "text": "| Claude Code | Reaches Codex through the official plugin/app-server |"
+          "text": "| Claude Code | Reaches Codex through the interactive Codex CLI on its app-server, in a Herdr tab; the official plugin is an optional fallback |"
         },
         "value": true
       },
       {
-        "claim": "Codex reaches Claude through Herdr, with tmux as the degraded host",
+        "claim": "Codex reaches Claude through the interactive Claude CLI in a Herdr tab",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
         "derive": "the Codex row",
         "check": {
           "kind": "contains",
-          "text": "with tmux as the degraded host |"
+          "text": "| Codex App or interactive CLI | Reaches Claude through the interactive Claude CLI in a Herdr tab"
         },
         "value": true
       },
       {
-        "claim": "Grok Build reaches Codex through the codex CLI and Claude through Herdr",
+        "claim": "Grok Build reaches Codex and Claude the same way",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
         "derive": "the Grok Build row",
         "check": {
           "kind": "contains",
-          "text": "| Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr |"
+          "text": "| Grok Build | Reaches Codex and Claude the same way, each in a Herdr tab |"
+        },
+        "value": true
+      },
+      {
+        "claim": "tmux is the last fallback when no Herdr server is reachable",
+        "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
+        "derive": "the sentence under the table",
+        "check": {
+          "kind": "contains",
+          "text": "tmux is the last fallback"
         },
         "value": true
       }
@@ -129,7 +139,7 @@
           "id": "e1"
         },
         {
-          "text": "Codex plugin, app-server",
+          "text": "Codex CLI, Herdr tab",
           "x": 360,
           "y": 50,
           "anchor": "middle",
@@ -145,7 +155,7 @@
           "id": "e2"
         },
         {
-          "text": "Herdr named tab",
+          "text": "Claude CLI, Herdr tab",
           "x": 360,
           "y": 88,
           "anchor": "middle",
@@ -160,7 +170,7 @@
           "id": "e3"
         },
         {
-          "text": "tmux, degraded",
+          "text": "tmux, last fallback",
           "x": 360,
           "y": 124,
           "anchor": "middle",
@@ -284,7 +294,7 @@
           ]
         },
         {
-          "text": "via the Codex plugin, app-server",
+          "text": "via the Codex CLI in a Herdr tab",
           "x": 8,
           "y": 67,
           "for": [
@@ -339,7 +349,7 @@
           ]
         },
         {
-          "text": "via a Herdr named tab",
+          "text": "via the Claude CLI in a Herdr tab",
           "x": 8,
           "y": 143,
           "for": [
@@ -393,7 +403,7 @@
           ]
         },
         {
-          "text": "via tmux, degraded",
+          "text": "via tmux, the last fallback",
           "x": 8,
           "y": 219,
           "style": "mute",
@@ -523,22 +533,22 @@
         [
           "Claude Code",
           "Codex",
-          "the official plugin and app-server"
+          "the interactive Codex CLI on its app-server, in a Herdr tab"
         ],
         [
           "Codex App or CLI",
           "Claude",
-          "a Herdr named tab, or tmux when degraded"
+          "the interactive Claude CLI in a Herdr tab"
         ],
         [
           "Grok Build",
           "Codex",
-          "the official `codex` CLI and local app-server daemon"
+          "the interactive Codex CLI on its app-server, in a Herdr tab"
         ],
         [
           "Grok Build",
           "Claude",
-          "Herdr"
+          "the interactive Claude CLI in a Herdr tab"
         ]
       ]
     }
