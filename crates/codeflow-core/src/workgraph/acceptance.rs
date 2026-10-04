@@ -1816,8 +1816,24 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
         .filter(|record| record.kind == RecordKind::Task)?;
     let own = task.criteria.items.iter().any(Criterion::is_journey);
     (!own && served_journey(task, graph).is_none()).then(|| {
+        let inner: Vec<&str> = task
+            .criteria
+            .items
+            .iter()
+            .filter(|criterion| criterion.has_inner_journey())
+            .map(|criterion| criterion.id.as_str())
+            .collect();
+        let note = if inner.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} {} `(journey)` inside its text, and the tag counts only where it opens or closes the criterion (R-50)",
+                inner.join(", "),
+                if inner.len() == 1 { "carries" } else { "carry" }
+            )
+        };
         format!(
-            "{task_id} changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion"
+            "{task_id} changes the adopter-facing path set but has no `(journey)` criterion and serves no epic journey criterion{note}"
         )
     })
 }

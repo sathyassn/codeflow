@@ -40,9 +40,12 @@ if (remnants.length > 0) {
   throw new Error(`Injected failure left task-owned temporary roots: ${remnants.join(", ")}`);
 }
 
+// The first close hangs and must use one exact-owned fallback. The second close
+// is slower than the former 15 s bound but finishes, and must not use one: a
+// busy host makes a close slow without making it hung.
 const fallbackEvidence = await mkdtemp(join(tmpdir(), `cf-present-close-fallback-${process.pid}-`));
 try {
-  const fallback = spawnSync(process.execPath, [qualification, "--inject-close-timeout"], {
+  const fallback = spawnSync(process.execPath, [qualification, "--inject-close-timeout", "--inject-slow-close"], {
     env: {
       ...process.env,
       CF_PRESENT_RUN_PREFIX: `${runPrefix}-close-timeout`,
@@ -60,7 +63,7 @@ try {
   }
   const results = JSON.parse(await readFile(join(fallbackEvidence, "output", "results.json"), "utf8"));
   if (results.checks?.browser_close_fallbacks !== 1) {
-    throw new Error(`Injected close timeout did not use one exact-owned fallback: ${JSON.stringify(results)}`);
+    throw new Error(`Injected close timeout did not use exactly one exact-owned fallback, for the hung close and not the slow one: ${JSON.stringify(results)}`);
   }
   if (
     !results.toolchain?.browser_version
@@ -73,7 +76,7 @@ try {
 }
 
 process.stdout.write(
-  "cf-present cleanup passed: primary failure preserved and exact-owned close timeout recovered\n",
+  "cf-present cleanup passed: primary failure preserved, hung close recovered by one exact-owned fallback, slow close left alone\n",
 );
 
 function delay(milliseconds) {

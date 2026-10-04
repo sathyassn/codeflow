@@ -11,16 +11,27 @@
 A present session is a short-lived local review document that an agent writes
 for you to read and comment on.
 
-The agent writes the content, and CodeFlow draws the page, its themes and the
-Comment tools. It is for the person an agent has asked to review a plan, a diff
-or a decision, and for the operator who starts the session. It is not durable
-documentation, a product UI or a standing server. A session stays private to
-your user account on your machine and closes itself after four idle hours.
+- The agent writes the content, and CodeFlow draws the page, its themes and the
+  Comment tools.
+- It is for the person an agent has asked to review a plan, a diff or a
+  decision, and for the operator who starts the session.
+- It is not durable documentation, a product UI or a standing server.
+- A session stays private to your user account on your machine and closes
+  itself after four idle hours.
 
 ## Architecture
 
 Four parts take part in a review, and the record stays with CodeFlow on your
 machine.
+
+```text
+agent session --- open, update ---> loopback service <--- page, review --- browser
+      ^                                    |
+      |                                    v
+      +------- feedback, resolve ------ feedback ledger
+```
+
+Arrows show who sends what, and the ledger records the state of each review.
 
 - **The agent session** writes one JSON document and opens it. Later it reads
   your submitted review and marks it addressed or dismissed.
@@ -55,12 +66,14 @@ repository's sessions.
 | `codeflow present show <SESSION_ID>` | Reopens an active session, restarting its service if it stopped. For a closed session it prints the session record. `--no-launch` prints where to open it |
 | `codeflow present update <SESSION_ID> <DOCUMENT>` | Adds a validated, immutable revision to an active session |
 | `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines to whoever runs it, usually the agent. `--follow` keeps delivering until the session closes |
+| `codeflow present responses list <SESSION_ID>` | Lists stored events with their status without delivering them. `--revision`, `--form`, `--status` (`pending`, `delivered`, `acknowledged`) and `--kind` (`review`, `answer`, `amendment`, `reopen`, `tombstone`) combine with AND |
+| `codeflow present ack <SESSION_ID> <EVENT_ID>` | Acknowledges a delivered event. Acknowledging again changes nothing |
 | `codeflow present resolve <SESSION_ID> <EVENT_ID>` | Marks one delivered review as handled. Needs `--event-version <N>` and `--status addressed` or `--status dismissed` |
 | `codeflow present history <SESSION_ID>` | Prints the session's full feedback history as JSON |
 | `codeflow present reply <SESSION_ID> <EVENT_ID> [--note <NOTE_ID>] "text"` | Adds an agent reply to the rail; it is not delivered back to the agent |
 | `codeflow present diff <SESSION_ID> --from N --to M` | Compares blocks and carries notes and answers to the target revision |
-| `codeflow present check <SESSION_ID>` | Reports framing, anchor and form faults without a browser; exit 9 means faults |
-| `codeflow present export <SESSION_ID> --out <FILE>` | Writes a self-contained, read-only HTML copy of the document. Notes, answers and replies require `--with-notes`. `--theme` takes `slate`, `graphite` or `sage`, or the aliases `editorial` (the default, shown as slate), `instrument`, `technical` and `ink`. `--mode` is `system` (default), `light` or `dark` |
+| `codeflow present check [SESSION_ID]` | Reports framing, anchor and form faults without a browser; exit 9 means faults. `--file <FILE>` checks a document file instead of a session, and `--revision <N>` picks the revision |
+| `codeflow present export <SESSION_ID> --out <FILE>` | Writes a self-contained, read-only HTML copy of the document. Notes, answers and replies require `--with-notes`. `--theme` takes `slate`, `graphite` or `sage`, or an alias: `editorial` (the default) is slate, `instrument` and `technical` are graphite, and `ink` is sage. `--mode` is `system` (default), `light` or `dark` |
 | `codeflow present close <SESSION_ID>` | Ends the session and closes its browser window. Repeating it is safe |
 | `codeflow present clear [SESSION_ID]` | Removes closed sessions older than `--older-than` (default `30d`). `--dry-run` lists what it would remove |
 
@@ -70,12 +83,13 @@ You review in the window CodeFlow opens, and your notes reach the agent only
 when you submit them.
 
 1. Wait for the agent to run `codeflow present open <document.json>`, or run it
-   yourself. If you closed the window, reopen it with
-   `codeflow present show <session-id>`. If `show` says the session's
-   browser is already open, that browser is still running (on macOS it
-   can keep running after its last window closes): switch to its window, or
-   quit it and run `show` again. `show --no-launch` prints the session's
-   address.
+   yourself.
+   - If you closed the window, reopen it with
+     `codeflow present show <session-id>`.
+   - If `show` says the session's browser is already open, that browser is
+     still running. On macOS it can keep running after its last window closes.
+     Switch to its window, or quit it and run `show` again.
+   - `show --no-launch` prints the session's address.
 2. Read the page from the top. On a wide screen, the left rail lists the
    sections.
 3. Press `C` or click **Comment** to turn on Comment mode. The notes rail
@@ -107,12 +121,15 @@ review is over.
 1. Find the session id with `codeflow present list`.
 2. Export a copy with
    `codeflow present export <session-id> --out review.html`. Add
-   `--mode dark` or `--theme graphite` if you want a different look. The copy
-   holds the document only, without notes or review controls.
+   `--mode dark` or `--theme graphite` if you want a different look. Without
+   `--with-notes`, the copy holds the document only, without notes or review
+   controls.
 3. Close the session with `codeflow present close <session-id>`.
 4. To reclaim space later, preview with `codeflow present clear --dry-run`,
    then run `codeflow present clear`.
 
-Export prints `exported <file>`, close prints `closed <session-id>` and the
-review window goes away, and clear prints `would remove` or `removed` for each
-session it selects.
+Each command reports its result:
+
+- Export prints `exported <file>`.
+- Close prints `closed <session-id>`, and the review window goes away.
+- Clear prints `would remove` or `removed` for each session it selects.

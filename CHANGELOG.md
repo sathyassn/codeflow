@@ -233,7 +233,137 @@ erratum below, never an edit of the section.
   keys added; the update report names them. The settings of delegated runs
   do not change.
 
+<!-- codeflow:release-impact patch -->
+- **The docs say plainly what CodeFlow is, and read in one order.**
+  `docs/product.md` now states what CodeFlow is, the problem it solves, who
+  it is for, what it does and what it is not, with a figure of the four
+  enforcement planes. The README opens from it and adds a table of the three
+  init tiers: what each installs and when to pick it. The docs are listed
+  in the order understand, start, use, configure, reference and maintain,
+  in the README and in the portal navigation, whose routes follow the new
+  groups (`understand/`, `start/`, `use/`, `configure/`, `reference/`,
+  `maintain/`). The other guides were swept for mannered prose and long
+  blocks, and gained text flows where a flow carries the point. No command,
+  flag, policy key or behavior changes. Links from the decision and task
+  records to `docs/verification/` now point at the copy on `main`, because
+  the source archive leaves that folder out. A workflow, `portal-pages.yml`,
+  builds the portal and deploys it to GitHub Pages once the repository owner
+  enables Pages; the portal `base` is now `/codeflow/`.
+
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The full gate runs inside CodeFlow's own Claude sandbox.** The full
+  gate takes a machine-wide lock under `~/.codeflow/locks` and keeps its
+  evidence under `~/.codeflow/gate-runs`, which the shipped Claude settings
+  presets did not let a sandboxed command write, so every full gate in a
+  sandboxed session refused with `gate lock unavailable`. The presets now
+  allow writes to those two directories and nothing else in the CodeFlow
+  home, and `codeflow update` adds them to existing settings. Two full
+  gates still never run at once on one machine. The refusal now points at
+  `codeflow doctor --check permissions`, which names each gate directory
+  this process cannot write. When `SANDBOX_RUNTIME` is set, doctor notes
+  it, probes the network over HTTPS instead of a DNS lookup the sandbox
+  cannot make and passes only on an HTTP 2xx or 3xx answer, and reports a
+  failed Codex sign-in probe as unconfirmed, quoting its error, unless the
+  probe says you are signed out.
+
+<!-- codeflow:release-impact patch -->
+- **An in-place `sed` on macOS is no longer read as an edit of the
+  enforcement files.** In a worktree under `.claude/worktrees/`, the git
+  guard refused `sed -i '' ...` on any file, and an empty operand of `rm`
+  and the other write commands, as an edit of the repository's enforcement
+  files. It now reads GNU and BSD sed's own option grammars (BSD `-i` and
+  `-I` take a separate backup suffix, `-l` is a flag), never treats an
+  empty argument as a path, and judges a worktree nested in the main
+  checkout's `.claude/` by its own files. Writes to the worktree's own
+  `.claude/settings.json` or `.codeflow/policy.json` are still refused,
+  and so is any `sed` whose script, options or `-f` script file names an
+  enforcement path; a plain read such as `sed -n p <file>` passes.
+
+<!-- codeflow:release-impact patch -->
+- **The git guard judges what `find` and `xargs` run, and protects live
+  worktrees.** `find -exec`, `-execdir` and `-delete` and `xargs` could
+  edit or delete the enforcement files. As new hardening that keeps every
+  refusal 3.0.0 made, a `sed`, `find`, `xargs` or `parallel` that can
+  change files is now refused when its command line names an enforcement
+  path anywhere, including a `sh -c` string or a producer piped into
+  `xargs`, in any spelling the file system reads as one (`//`, `/./`,
+  another case, or a glob that matches it). Each command, a pipeline
+  member or a `sh -c` body included, is judged from every directory a
+  literal `cd`, `pushd`, `env -C` or `env --chdir` on its line can move it
+  to, and a glob is expanded from there with each match judged through
+  symbolic links and registered worktrees, so `alias/pol*` with `alias`
+  linked to `.codeflow` is refused. Patterns are read so they match at
+  least every name the shell would: a plain set such as `[ab]` keeps its
+  members, any other bracket expression, POSIX classes and escapes
+  included, makes that part of the path match every name, a backslash
+  outside brackets makes the next character literal, and only a `[` with
+  no `]` after it is literal; a randomized test checks this against
+  Bash. Brace expansion is read before patterns, under every reading a
+  quote or escape allows, up to 64 words, and a larger one is refused;
+  a word with syntax the guard reads conservatively (`(` or `)`, zsh glob
+  qualifiers such as `(D)` included, `^`, `#`, a zsh range `<n-m>` or
+  `**`) matches every path below its longest literal directory, at every
+  depth, names that start with `.` included, while folder names above the
+  word, such as a Windows short name `RUNNER~1`, stay literal; a `~` after
+  the first character is read as zsh's exclusion, by the part before it;
+  parentheses attached to a word or after a command word are part of the
+  word, and the text inside them is also judged as commands, as Bash runs
+  `if(rm ...)`, and so is the code of a zsh `e` or `+` qualifier, each
+  group read once per nesting level, with text nested more than 8 levels
+  deep refused; a word with a
+  part filled in at run time is read by the names after that part, and a
+  value assigned on the same line counts; `~+` is the current directory
+  and other tilde prefixes are read by name; a line that turns on
+  `dotglob`, `GLOBIGNORE` or zsh `globdots` refuses a writing command
+  with a pattern. Two more randomized tests run whole command words
+  through the guard as direct targets, redirect targets and `xargs`
+  input, and compare them with the real expansion of Bash and of zsh. A `cd` or `pushd` operand other than a
+  plain literal path, such as `~1`, `cd -` or a pattern, counts as an
+  unknown directory, and a redirection counts as a read only when it is
+  `<`, a heredoc, a here-string or a descriptor copy, so `1<>` and
+  `{fd}>` writes are judged, after line continuations are joined. On a
+  command with `$'...'` or `$"..."` quoting and a `>`, any word that
+  could name an enforcement path is refused as a possible write target.
+  Where a directory is filled in at run
+  time, or a stack rotation or `popd` can reach a directory `pushd -n`
+  stacked, a writing command or write redirect whose words could name an
+  enforcement path by their names alone, such as `policy.json` or `pol*`,
+  is refused, while a
+  command proven to only read passes: a plain `sed` read, a `find` that
+  changes nothing, or `xargs` running a read-only program. The guard
+  follows at most 64 such directories per line and treats more as
+  unknown. One
+  expansion reads at most 4,096 directory entries; past that,
+  the directory it starts from decides, so a glob over a large build tree
+  passes and one over a tree holding enforcement files is refused.
+  Launchers such as `nice`, `timeout`, `stdbuf` and `env --unset` no longer
+  hide the command, and a launcher option the guard cannot read is
+  refused.
+  `find` actions are also judged on each protected path they can reach,
+  in expression order and from each match's own directory for
+  `-execdir`. A recursive `rm`, or a `chmod` or `chown`, of a directory
+  holding enforcement files is refused from any checkout. A recursive
+  `rm`, `trash`, `find -delete` or `git clean -ff` (through git's global
+  options, abbreviations and aliases) of a registered worktree, of a
+  directory holding one such as `.worktrees` or `.claude/worktrees`, or
+  of a target the guard cannot resolve in a checkout that holds
+  worktrees, is refused with `git worktree remove` as the way to remove
+  it. A path built at run time, which no argument spells, is past the
+  guard; in Claude sessions the sandbox's write denies are the backstop.
+
+<!-- codeflow:release-impact patch -->
+- **The git guard refuses a forced move of a protected branch.**
+  `git branch -f main HEAD~3` passed the guard, and the
+  reference-transaction hook lets a rewind behind the remote through. The
+  guard now refuses `git branch -f`, `-M` and `-C`, `git checkout -B`,
+  `git switch -C` and `git worktree add -B` aimed at a protected branch
+  under `git.local_ref_protection`, as it already refused `git
+  update-ref`. It reads flag clusters such as `-fv` and abbreviations
+  such as `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
+  repository, and refuses a forced move it cannot resolve, or one whose
+  expression an earlier git command on the same line may change.
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow present show` and `close` no longer fail on Linux because of an
@@ -550,6 +680,35 @@ erratum below, never an edit of the section.
   for an epic the pull request already completes, replace the block in
   its Closeout by hand in that pull request; an epic is never reopened.
   The cf-method project-organization reference states the same route.
+
+<!-- codeflow:release-impact patch -->
+- **The pre-push hook checks the journey criterion its pull request
+  will.** `codeflow ci` classified a range only when a pull request body
+  was given, so the pre-push run never reached `work.journey_criterion`,
+  and a task branch that changes an adopter-facing path without a journey
+  criterion passed the push and was blocked by hosted CI once its pull
+  request opened. A run without a body now holds a branch that carries its
+  task (`task/TSK-NNN-...`) to the journey rule over its range, which needs
+  only the task record and the paths the range changes, so the push is
+  refused with the finding the pull request check gives. The refusal also
+  names a criterion that carries `(journey)` inside its text and says the
+  tag counts only where it opens or closes the criterion.
+
+<!-- codeflow:release-impact patch -->
+- **The exec-guard refusal names the file route for text that mentions a
+  peer.** On a line exec-guard cannot fully parse, such as one with a
+  variable as the program or a here-string, it judges the raw text, so a
+  heredoc or inline string that names a peer with a headless flag is
+  refused, and a review brief or commit message written that way was
+  refused with no way forward. That matching is unchanged and is flagged
+  by design, refused at the default block level: a reader that tried to
+  leave such text out kept
+  missing shell forms that still run a peer. The refusal now says so and
+  names the route that works: write the text to a file with the editor
+  tool and pass it by path, as `git commit -F <file>`,
+  `gh pr create --body-file <file>` or `gh api ... -F body=@<file>`.
+  Verdicts are unchanged: 1,618 headless run forms and 12 text shapes
+  compared with 3.0.0 get the same verdict.
 
 <!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The

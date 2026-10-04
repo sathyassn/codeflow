@@ -307,6 +307,942 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
     assert!(stderr.contains("codeflow integrate"), "{stderr}");
 }
 
+/// TSK-216 AC-1 (issue 23): in a linked worktree under the main checkout's
+/// `.claude/worktrees/`, BSD `sed -i ''` and an empty operand of a write
+/// command name no enforcement file, while real writes to the worktree's own
+/// enforcement files are still refused. Replays the issue's table through
+/// the real binary.
+#[test]
+fn git_guard_allows_empty_operands_in_a_claude_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    init_repo(&root, "main");
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::write(root.join("README.md"), "a\n").unwrap();
+    git(&root, &["add", ".claude/settings.json", "README.md"]);
+    git(&root, &["commit", "-m", "chore: fixture settings"]);
+    write_agent_policy(&root, TARGETING_POLICY);
+    let worktree = root.join(".claude/worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&worktree)],
+    );
+    let scratch = shell_path(&tmp.path().join("x.txt"));
+    for command in [
+        format!("sed -i '' 's/a/b/' {scratch}"),
+        "sed -i '' 's/a/b/' README.md".to_string(),
+        format!("rm -f '' {scratch}"),
+        format!("sed -i 's/a/b/' {scratch}"),
+        format!("sed -i.bak 's/a/b/' {scratch}"),
+        "rm -f .".to_string(),
+    ] {
+        let out = guard_run(&command, &worktree);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{command}: {err}");
+        assert!(!err.contains("git.hook_integrity"), "{command}: {err}");
+    }
+    for command in [
+        "sed -i '' 's/block/off/' .codeflow/policy.json",
+        "sed -i '' -e 's/a/b/' .claude/settings.json",
+        "rm -rf .claude",
+        "rm -rf .codeflow",
+    ] {
+        let out = guard_run(command, &worktree);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("git.hook_integrity"), "{command}: {err}");
+    }
+}
+
+/// TSK-216 AC-4: the real binary refuses a forced move of a protected
+/// branch, which the reference-transaction hook lets through when the move
+/// goes behind the remote head.
+#[test]
+fn git_guard_refuses_a_forced_move_of_a_protected_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for command in [
+        "git branch -f main HEAD~3",
+        "git checkout -B main HEAD~3",
+        "git switch -C main HEAD~3",
+    ] {
+        let out = guard_run(command, dir.path());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+        assert!(err.contains("git.local_ref_protection"), "{command}: {err}");
+    }
+    let out = guard_run("git branch -f feat/y HEAD", dir.path());
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A repository on `main` with committed Claude settings and policy, the
+/// fixture of the TSK-216 review cases.
+fn enforced_repo(root: &Path) {
+    std::fs::create_dir_all(root.join(".claude")).unwrap();
+    init_repo(root, "main");
+    std::fs::write(root.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::write(root.join("README.md"), "a\n").unwrap();
+    git(root, &["add", ".claude/settings.json", "README.md"]);
+    git(root, &["commit", "-m", "chore: fixture settings"]);
+    write_agent_policy(root, TARGETING_POLICY);
+}
+
+/// Every command in `refused` is refused under `rule` and every one in
+/// `allowed` passes; the failure lists every command judged otherwise.
+fn assert_guard(session: &Path, refused: &[&str], allowed: &[&str], rule: &str) {
+    let mut wrong = Vec::new();
+    for command in refused {
+        let out = guard_run(command, session);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains(rule) {
+            wrong.push(format!("should refuse: {command}"));
+        }
+    }
+    for command in allowed {
+        let out = guard_run(command, session);
+        if out.status.code() != Some(0) {
+            let err = String::from_utf8_lossy(&out.stderr);
+            wrong.push(format!("should allow: {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// TSK-216 review finding 1: a recursive delete of a registered worktree,
+/// or of a directory that holds one, is refused from the main checkout and
+/// from inside a worktree, whatever the spelling; a clean or dirty worktree
+/// alike. Empty operands and `rm -f .` stay allowed.
+#[test]
+fn git_guard_refuses_recursive_deletion_of_registered_worktrees() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    let claude_tree = root.join(".claude/worktrees/w");
+    let plain_tree = root.join(".worktrees/v");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&claude_tree)],
+    );
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/v", &shell_path(&plain_tree)],
+    );
+    std::fs::write(plain_tree.join("dirty.txt"), "unsaved\n").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join(".worktrees"), root.join("trees")).unwrap();
+    let refused: Vec<&str> = [
+        "rm -rf .claude/worktrees",
+        "rm -rf .worktrees",
+        "rm -r .worktrees/v",
+        "rm -Rf .worktrees/v/",
+        "rm --recursive --force ./.worktrees/../.worktrees",
+        "find .worktrees -delete",
+        "find .claude -name worktrees -exec rm -rf {} +",
+    ]
+    .into_iter()
+    .chain(cfg!(unix).then_some("rm -rf trees/"))
+    .collect();
+    assert_guard(
+        &root,
+        &refused,
+        &[
+            "rm -rf target",
+            "rm -f .",
+            "rm -f ''",
+            "rm -rf .worktrees/gone",
+        ],
+        "git.hook_integrity",
+    );
+    assert_guard(
+        &claude_tree,
+        &["rm -rf ..", "rm -rf ../w", "rm -rf ../../.."],
+        &["rm -f .", "rm -f ''", "rm -rf build"],
+        "git.hook_integrity",
+    );
+}
+
+/// TSK-216 review findings 2 and 3: BSD `sed` grammar (`-l` is a flag,
+/// `-I` edits in place) and the `w` command reach the enforcement files.
+#[test]
+fn git_guard_refuses_sed_writes_through_bsd_options_and_the_w_command() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    assert_guard(
+        &root,
+        &[
+            "sed -i '' -e 's/a/b/' -l .codeflow/policy.json",
+            "sed -li '' 's/a/b/' .codeflow/policy.json",
+            "sed -I '' 's/a/b/' .codeflow/policy.json",
+            "sed -i '' -e 'w .codeflow/policy.json' README.md",
+            "sed -n 'w .codeflow/policy.json' README.md",
+            "sed -i 's/a/b/w .claude/settings.json' README.md",
+            "sed --expression='1W .codeflow/policy.json' README.md",
+        ],
+        &[
+            "sed -i '' -e 's/a/b/' -l README.md",
+            "sed -n 'w out.txt' README.md",
+            "sed -i '' 's/w/x/' README.md",
+            "sed -n p .codeflow/policy.json",
+        ],
+        "git.hook_integrity",
+    );
+}
+
+/// TSK-216 review finding 4: a forced move of a protected branch is refused
+/// through formatting flags, abbreviated long options and branch
+/// expressions that git resolves to the protected branch; names that only
+/// look like it create other refs and stay allowed.
+#[test]
+fn git_guard_resolves_forced_moves_of_a_protected_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    init_repo(root, "main");
+    git(root, &["checkout", "-q", "-b", "feat/x"]);
+    git(root, &["config", "branch.feat/x.remote", "."]);
+    git(root, &["config", "branch.feat/x.merge", "refs/heads/main"]);
+    assert_guard(
+        root,
+        &[
+            "git branch -fv main HEAD",
+            "git branch -vf main HEAD",
+            "git switch --force-c main HEAD",
+            "git switch --force-cr main HEAD",
+            "git branch -f @{-1} HEAD",
+            "git checkout -B @{-1} HEAD",
+            "git branch -f feat/x@{upstream} HEAD",
+            "git switch -C feat/x@{upstream} HEAD",
+            "git checkout -B feat/x@{u} HEAD",
+        ],
+        &[
+            "git branch -f refs/heads/main HEAD",
+            "git branch -f origin/main HEAD",
+            "git branch -v",
+            "git switch --force-c feat/z HEAD",
+        ],
+        "git.local_ref_protection",
+    );
+    git(root, &["checkout", "-q", "-b", "feat/y"]);
+    git(root, &["checkout", "-q", "feat/x"]);
+    assert_guard(
+        root,
+        &[
+            "git switch feat/y && git branch -f @{-1} HEAD",
+            "git checkout feat/y; git checkout -B @{-1} HEAD",
+            "git worktree add -B main ../other HEAD",
+            "git worktree add -fB main ../other HEAD",
+        ],
+        &[
+            "git branch -f @{-1} HEAD",
+            "git status && git branch -f @{-1} HEAD",
+            "git worktree add -B feat/w ../w2 HEAD",
+            "git worktree add -b feat/w ../w2 HEAD",
+        ],
+        "git.local_ref_protection",
+    );
+}
+
+/// TSK-216 review round 2: the guard never judges a wrapped write more
+/// weakly than 3.0.0's text rule. A mutating `sed`, `find` or `xargs`
+/// whose command line names an enforcement path is refused wherever the
+/// name sits; `find` actions are judged in expression order and from each
+/// match's own directory; shell positional arguments are bound; worktrees
+/// are kept from unresolved and alternative deletions. Cleanups that name
+/// nothing protected stay allowed.
+#[test]
+fn git_guard_holds_the_text_floor_for_wrapped_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    let claude_tree = root.join(".claude/worktrees/w");
+    git(
+        &root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&claude_tree)],
+    );
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/v",
+            &shell_path(&root.join(".worktrees/v")),
+        ],
+    );
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
+    let refused: Vec<&str> = [
+        r"printf 'w .codeflow/policy.json\n' | sed -f - README.md",
+        "sed -e 'e rm .codeflow/policy.json' README.md",
+        "sed -e '# w .codeflow/policy.json' README.md",
+        "find . -type f -delete -name '*.o'",
+        r"find . -exec rm -f {} \; -name '*.o'",
+        r"find . -name settings.json -execdir rm settings.json \;",
+        r"find . -name settings.json -execdir sh -c 'rm settings.json' \;",
+        r#"find . -name settings.json -exec sh -c 'rm "$1"' _ {} \;"#,
+        r#"printf '%s\n' .codeflow/policy.json | xargs -n1 sh -c 'rm "$1"' _"#,
+        r#"d=.claude/worktrees; rm -rf "$d""#,
+        r#"rm -rf "$(printf .claude/worktrees)""#,
+        "git clean -ffdx .claude/worktrees",
+        "git clean -ffdx",
+        "trash .claude/worktrees",
+        "ls .worktrees | xargs rm -rf",
+        r#"p=.codeflow/policy.json; rm "$p""#,
+        r#"sed -i '' 's/a/b/' "$(echo .codeflow/policy.json)""#,
+    ]
+    .into_iter()
+    .chain(cfg!(unix).then_some("find -L build -name policy.json -exec sed -i '' 's/a/b/' {} +"))
+    .collect();
+    assert_guard(
+        &root,
+        &refused,
+        &[
+            r"printf 'build/a.o\0' | xargs -0 rm",
+            "find build -type f -print0 | xargs -0 rm",
+            "find build -delete",
+            "find . -name '*.o' -delete",
+            "find . -name '*.o' -exec rm {} +",
+            "sed -n '1,5p' .codeflow/policy.json",
+            "git clean -ffdxn",
+            "rm -rf .worktrees/v/target",
+            r#"rm -f "$d""#,
+            // `PATH` is set wherever the tests run, and the line leaves it.
+            r#"rm -rf "$PATH/codeflow-scratch-tsk216""#,
+        ],
+        "git.hook_integrity",
+    );
+    // A worktree holds no other worktree, so an unresolved target there
+    // is not refused for that reason.
+    assert_guard(
+        &claude_tree,
+        &[],
+        &[r#"d=build; rm -rf "$d""#, "git clean -ffdx"],
+        "",
+    );
+}
+
+/// TSK-216 review finding 5: `xargs`, `find -exec`, `find -execdir` and
+/// `find -delete` cannot carry a write to the enforcement files past the
+/// guard; a wrapped command whose targets cannot be known is refused.
+#[test]
+fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/a.md"), "a\n").unwrap();
+    assert_guard(
+        &root,
+        &[
+            r"printf '%s\n' .codeflow/policy.json | xargs sed -i '' 's/a/b/'",
+            r"find .codeflow -name policy.json -exec sed -i '' 's/a/b/' {} \;",
+            r"find . -maxdepth 0 -exec rm -rf .codeflow \;",
+            "find . -name policy.json -delete",
+            "find . -type d -name .codeflow -exec rm -rf {} +",
+            r"find . -name settings.json -execdir rm {} \;",
+            r"find . -maxdepth 0 -exec sh -c 'rm -rf .codeflow' \;",
+        ],
+        &[
+            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
+            r"find docs -exec rm {} \;",
+            "find docs -delete",
+            "printf x | xargs echo",
+            "git ls-files | xargs grep -n a",
+            "git ls-files | xargs rm -f",
+            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            "find . -name '*.md' -print0 | xargs -0 grep -n a",
+        ],
+        "git.hook_integrity",
+    );
+}
+
+/// The fixture of the reviewers' commands: a main checkout on `main` with
+/// Claude settings and policy, a build folder, a 76 KiB `sed` script whose
+/// last line writes the policy, a NUL list naming the policy folder, a
+/// branch `feat/review`, and two registered worktrees. Returns the linked
+/// worktree under `.claude/worktrees`.
+fn reviewer_fixture(root: &Path) -> std::path::PathBuf {
+    enforced_repo(root);
+    git(root, &["branch", "feat/review"]);
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    let mut large = "# filler line\n".repeat(76 * 1024 / 14);
+    large.push_str("w .codeflow/policy.json\n");
+    std::fs::write(root.join("large.sed"), large).unwrap();
+    std::fs::write(root.join("build/list"), b".codeflow\0").unwrap();
+    let claude_tree = root.join(".claude/worktrees/w");
+    git(
+        root,
+        &["worktree", "add", "-b", "task/w", &shell_path(&claude_tree)],
+    );
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "task/v",
+            &shell_path(&root.join(".worktrees/v")),
+        ],
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(root.join(".codeflow"), root.join("build/link")).unwrap();
+        std::os::unix::fs::symlink(root.join(".codeflow"), root.join("alias")).unwrap();
+        std::os::unix::fs::symlink("../.codeflow", root.join("build/review-stack")).unwrap();
+    }
+    // More entries than one glob expansion reads, none of them protected.
+    let many = root.join("build/many");
+    std::fs::create_dir_all(&many).unwrap();
+    for n in 0..4100 {
+        std::fs::write(many.join(format!("f{n}.o")), "").unwrap();
+    }
+    claude_tree
+}
+
+/// The reviewers' exact commands from rounds two to sixteen of PR 36 that
+/// wrote, deleted or exposed enforcement files or worktrees, run from the
+/// main checkout. Each one is refused under `git.hook_integrity`.
+const REVIEWER_REFUSALS: &[&str] = &[
+    // Round two.
+    r"printf 'w .codeflow/policy.json\n' | sed -f - README.md",
+    "sed -f large.sed README.md",
+    "sed -e 'e rm .codeflow/policy.json' README.md",
+    "find . -type f -delete -name '*.o'",
+    r"find . -exec rm -f {} \; -name '*.o'",
+    r"find . -name settings.json -execdir rm settings.json \;",
+    r"find . -name settings.json -execdir sh -c 'rm settings.json' \;",
+    "find -files0-from build/list -delete",
+    r#"printf '%s\n' .codeflow/policy.json | xargs -n1 sh -c 'rm "$1"' _"#,
+    r"printf '%s\n' .codeflow/policy.json | parallel rm",
+    r#"d=.claude/worktrees; rm -rf "$d""#,
+    r#"rm -rf "$(printf .claude/worktrees)""#,
+    "git clean -ffdx .claude/worktrees",
+    "trash .claude/worktrees",
+    // Round three, finding 1.
+    "git -c color.ui=false clean -ffdx .claude/worktrees",
+    "git --no-pager clean -ffdx .claude/worktrees",
+    "git clean --force --for -dx .claude/worktrees",
+    "git -c alias.tidy='clean -ffdx' tidy .claude/worktrees",
+    // Finding 2.
+    r"printf 'README.md\n' | xargs sort -o .codeflow/policy.json",
+    "find build -type f -exec sort -o .codeflow/policy.json {} +",
+    r"printf 'README.md\n' | xargs -I{} uniq {} .codeflow/policy.json",
+    // Finding 3.
+    r"printf '%s\n' .codeflow//policy.json | xargs rm",
+    r"printf '%s\n' .codeflow/./policy.json | xargs rm",
+    r"printf '%s\n' .CODEFLOW/POLICY.JSON | xargs rm",
+    r"printf '%s\n' .codeflow/pol* | xargs rm",
+    r"printf 'w .codeflow//policy.json\n' | sed -f - README.md",
+    // Finding 4.
+    "nice sed -i '' s/original/changed/ .codeflow/policy.json",
+    r"printf '%s\n' .codeflow/policy.json | nice xargs rm",
+    "timeout 10 sed -i '' s/original/changed/ .codeflow/policy.json",
+    "env --unset FOO sed -i '' s/original/changed/ .codeflow/policy.json",
+    "nice -n 5 rm .codeflow/policy.json",
+    "timeout -s KILL 10 rm .codeflow/policy.json",
+    "stdbuf -o L rm .codeflow/policy.json",
+    "caffeinate -t 5 rm .codeflow/policy.json",
+    "xcrun --sdk macosx rm .codeflow/policy.json",
+    // Round four, finding 1: the directory a glob runs from.
+    r"cd build && printf '%s\n' ../.codeflow/pol* | xargs rm",
+    // Finding 2: a launcher's own effects.
+    "env -C .codeflow rm policy.json",
+    "env -C .codeflow sed -i '' s/a/b/ policy.json",
+    "env --chdir=.codeflow rm policy.json",
+    "timeout -- 1 rm .codeflow/policy.json",
+    "env --frobnicate rm README.md",
+    // Round five: the directory a launcher gives a shell body, and a
+    // directory filled in at run time.
+    "env -C .codeflow sh -c 'rm policy.json'",
+    "env -C .codeflow sh -c 'sed -i.bak s/a/b/ policy.json'",
+    r#"cd "$(printf build)" && rm ../policy.json"#,
+    // Round six: writes from a directory filled in at run time, beside the
+    // reads allowed below.
+    r#"cd "$dir" && sed -i '' s/a/b/ policy.json"#,
+    r#"cd "$dir" && find . -name policy.json -delete"#,
+    r#"cd "$dir" && printf "%s\n" *.json | xargs rm"#,
+    r#"cd "$dir" && sed -f fix.sed README.md"#,
+    // Round seven: a script from the input that writes the file `sed` also
+    // reads, beside the plain reads of the same file allowed below.
+    r#"cd "$dir" && printf '%s\n' 'w policy.json' | sed -f - policy.json"#,
+    r"printf 'w .codeflow/policy.json\n' | sed -f - .codeflow/policy.json",
+    // Round eight: an escaped read operand beside a heredoc that writes the
+    // same file, from a known and a run-time directory, and a here-string.
+    "sed -f - .codeflow/policy\\.json <<'SED'\nw .codeflow/policy.json\nSED",
+    "cd \"$dir\" && sed -f - policy\\.json <<'SED'\nw policy.json\nSED",
+    "sed -f - .codeflow/policy.json <<< 'w .codeflow/policy.json'",
+    // Round eleven: redirections that open their target for writing, from a
+    // run-time and a known directory, a target attached mid-word included.
+    r#"cd "$dir" && printf x 1<>policy.json"#,
+    r#"cd "$dir" && : {fd}>policy.json"#,
+    "printf x 1<>.codeflow/policy.json",
+    ": {fd}>.codeflow/policy.json",
+    "printf x>.codeflow/policy.json",
+    "printf x &>>.codeflow/policy.json",
+    // Round twelve: a target joined by a line continuation, and ANSI-C or
+    // locale quoting the redirection reader does not read.
+    "printf x > \\\n  .codeflow/policy.json",
+    "printf x > .codeflow/po\\\nlicy.json",
+    "cd \"$dir\" && printf x > \\\n  policy.json",
+    r"printf '%s\n' $'it\'s' > .codeflow/policy.json",
+    r#"cd "$dir" && printf x > $'policy.json'"#,
+    r#"cd "$dir" && printf x >$"policy.json""#,
+    // Round fourteen: a bracket expression holding POSIX classes, which
+    // ends at its own closing `]`, not at a class's.
+    "find . -name '[[:alpha:]_]olicy.json' -delete",
+    "find . -name '[[:alpha:][:digit:]]olicy.json' -delete",
+    r#"cd "$dir" && rm [[:alpha:]_]olicy.json"#,
+    // Round fifteen: an escaped `]` is a member of the set, so the shell
+    // closes the expression at the next `]`.
+    r"find . -name '[p\]]olicy.json' -delete",
+    r#"cd "$dir" && rm [p\]]olicy.json"#,
+    // Round sixteen: braces, a value filled in at run time before a name,
+    // a tilde prefix the guard cannot resolve, and a line that lets
+    // patterns match names that start with `.`.
+    "rm .code{flow,x}/policy.json",
+    r#"rm "$d"/policy.json"#,
+    "rm ~-/policy.json",
+    "shopt -s dotglob; rm -f *",
+];
+
+/// On unix, where the fixture's `build/link`, `build/review-stack` and
+/// `alias` point at the policy folder: round two's `find -L`, round ten's
+/// directory stack and round four's globs through a
+/// symbolic link.
+const REVIEWER_REFUSALS_UNIX: &[&str] = &[
+    "find -L build -name policy.json -exec sed -i '' 's/original/changed/' {} +",
+    r"printf '%s\n' alias/pol* | xargs rm",
+    "find alias/pol* -delete",
+    "rm alias/pol*",
+    // Round five: directory context across a pipeline and into shell bodies.
+    r"cd build && printf '%s\n' ../alias/pol* | xargs rm",
+    "env -C alias sh -c 'rm policy.json'",
+    r"printf x | xargs sh -c 'cd alias && rm policy.json'",
+    r"find build -name a.o -exec sh -c 'cd ../alias && rm policy.json' \;",
+    // Round ten: a relative directory `pushd -n` stacks, which bash resolves
+    // only when a rotation or `popd` reaches it, here after a `cd` into the
+    // folder whose `review-stack` points at the policy folder.
+    "pushd -n review-stack; cd build; pushd; printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; pushd; printf '%s\n' policy.json | xargs rm",
+    "pushd -n review-stack; cd build; pushd +1; printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd +1; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; pushd +1; printf '%s\n' policy.json | xargs rm",
+    "pushd -n review-stack; cd build; popd; printf x > policy.json",
+    "pushd -n review-stack; cd build; popd; sed -i '' s/a/b/ policy.json",
+    r"pushd -n review-stack; cd build; popd; printf '%s\n' policy.json | xargs rm",
+    // Round eleven: a stack reference as a `cd` operand.
+    "pushd -n review-stack; cd build; cd ~1; printf x > policy.json",
+    "pushd -n review-stack; cd build; cd ~+1; printf x > policy.json",
+    r"pushd -n review-stack; cd build; cd ~1; printf '%s\n' policy.json | xargs rm",
+    // Round fourteen: the same bracket expression through the link.
+    "rm alias/[[:alpha:]_]olicy.json",
+    // Round fifteen: escapes inside a bracket expression, through the link.
+    r"rm alias/[p\]]olicy.json",
+    r"rm alias/[pa\[:alpha:]olicy.json",
+    // Round sixteen: brace expansion through the link, in a command and in
+    // a producer, and the other expansions the round's inventory found.
+    "rm alias/{[pq],x}olicy.json",
+    "rm alias/p{ol,uz}*.json",
+    r"printf '%s\0' alias/p{ol,uz}*.json | xargs -0 rm",
+    "printf x > alias/polic{y..y}.json",
+    r"printf '%s\0' alias/policy.json | xargs -0 rm",
+    "IFS=/; x=alias/policy.json; rm $x",
+    "rm alias/**/policy.json",
+    "rm alias/$x",
+    "rm ~+/alias/policy.json",
+    "rm alias/^x",
+    // Round eighteen: parentheses after a keyword run a subshell in Bash,
+    // and in argument position zsh reads them as a pattern; a zsh `e`
+    // qualifier runs its code.
+    "if(rm alias/policy.json); then :; fi",
+    "while(rm alias/policy.json); do break; done",
+    "until(rm alias/policy.json); do break; done",
+    "if(find alias/policy.json -delete); then :; fi",
+    "rm (alias|x)/policy.json",
+    "printf x > (alias|x)/policy.json",
+    "ls build/*(e:'rm alias/policy.json':)",
+];
+
+/// Round three, finding 5, from the linked worktree under
+/// `.claude/worktrees`: recursive changes and permission changes of its
+/// root reach its own enforcement files.
+const REVIEWER_REFUSALS_IN_WORKTREE: &[&str] = &[
+    "chmod -R 000 .",
+    "chmod 000 .",
+    "chmod -R u+w .",
+    "chown -R nobody .",
+    "rm -rf .",
+];
+
+/// Ordinary work that names nothing protected, from the main checkout.
+const REVIEWER_ALLOWED: &[&str] = &[
+    r"printf 'build/a.o\0' | xargs -0 rm",
+    "find build -type f -print0 | xargs -0 rm",
+    "find build -delete",
+    "find . -name '*.o' -delete",
+    "find . -name '*.o' -exec rm {} +",
+    "git clean -ffdxn",
+    "git -c color.ui=false clean -ffdxn .claude/worktrees",
+    "git clean --dry-run --force --force .claude/worktrees",
+    "sed -n '1,5p' .codeflow/policy.json",
+    "find .codeflow -exec grep -n a {} +",
+    r"printf 'README.md\n' | xargs sort",
+    r"printf 'README.md\n' | xargs -I{} uniq {}",
+    "nice -n 5 sed -n p README.md",
+    "timeout 10 sed -i '' s/a/b/ README.md",
+    "sed -i '' 's/.*//' README.md",
+    r"printf '%s\n' build/many/* | xargs rm",
+    "rm build/many/*.o",
+    r"cd build && printf '%s\n' *.o | xargs rm",
+    "env -C build rm a.o",
+    "timeout -- 1 sed -n p README.md",
+    "env -i PATH=/usr/bin rm build/a.o",
+    "env -C build sh -c 'rm a.o'",
+    r#"cd "$(printf build)" && rm -f a.o"#,
+    "cd build && make clean | tee log.txt",
+    // Round six: reads from a directory filled in at run time, and a line
+    // of many directory moves, which the guard judges without stalling.
+    r#"cd "$(git rev-parse --show-toplevel)" && sed -n '1,5p' .codeflow/policy.json"#,
+    r#"cd "$dir" && find . -name "*.json" -print"#,
+    r#"cd "$dir" && printf "%s\n" *.json | xargs cat"#,
+    // Round seven: plain reads of the file the writes above target.
+    r#"cd "$dir" && sed -n p policy.json"#,
+    r"printf 'p\n' | sed -f - .codeflow/policy.json",
+    // Round eight: the same plain reads with a quoted or escaped operand.
+    r"printf 'p\n' | sed -f - '.codeflow/policy.json'",
+    r"printf 'p\n' | sed -f - .codeflow/policy\.json",
+    r#"cd "$dir" && sed -n p 'policy.json'"#,
+    r#"cd "$dir" && sed -n p policy\.json"#,
+    // Round ten: `pushd -n` alone stays put, and a read after a rotation
+    // that can reach a stacked directory still passes.
+    "pushd -n .codeflow && printf x > policy.json",
+    "pushd -n review-stack; cd build; pushd; sed -n p policy.json",
+    // Round eleven: quoted text that looks like a redirection, reads and
+    // descriptor copies, and a read after a stack reference.
+    r#"cd "$dir" && printf '%s\n' ">policy.json""#,
+    r"printf '%s\n' '>.codeflow/policy.json'",
+    r#"cd "$dir" && cat < policy.json"#,
+    r#"cd "$dir" && make 2>&1 >&2 3<&0 4>&- | tee build.log"#,
+    "pushd -n review-stack; cd build; cd ~1; cat policy.json",
+    // Round thirteen: colour escapes and an unclosed bracket are not a
+    // match-everything glob, with `alias` linked to the policy folder.
+    r"printf $'\e[32mhello\e[0m\n' > build.log",
+    r"printf $'\e[32mhello\e[0m\n' 2>&1",
+    "find . -name 'x[' -delete",
+    // Round sixteen: braces and run-time values in ordinary work.
+    "rm build/{a,b}.o",
+    "rm build/out{1..100}.o",
+    r#"rm "$tmpfile""#,
+    r#"cp README.md "$OUT"/notes.md"#,
+    "awk '{print $1}' README.md > build/out.txt",
+    "git log --format='%H,%s' > build/log.txt",
+    // Round eighteen: conditions in parentheses, and zsh qualifiers on
+    // ordinary reads.
+    "if(true); then :; fi",
+    "while(false); do :; done",
+    "ls *(.)",
+    "x=(a b c)",
+    "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
+];
+
+/// Harmless operands of the linked worktree's root, which the per-checkout
+/// correction lets through (issue 23).
+const REVIEWER_ALLOWED_IN_WORKTREE: &[&str] = &[
+    "rm -f .",
+    "rm -f ''",
+    "chmod -R u+w build",
+    "rm -rf build",
+    "sed -i '' 's/a/b/' README.md",
+];
+
+/// Round two and three of the PR 36 review, as regression tests: every
+/// command the reviewers showed writing or deleting an enforcement file or
+/// a worktree is refused, and the ordinary forms beside them pass.
+#[test]
+fn git_guard_refuses_the_reviewers_commands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    reviewer_fixture(&root);
+    let refused: Vec<&str> = REVIEWER_REFUSALS
+        .iter()
+        .copied()
+        .chain(
+            REVIEWER_REFUSALS_UNIX
+                .iter()
+                .copied()
+                .filter(|_| cfg!(unix)),
+        )
+        .collect();
+    assert_guard(&root, &refused, REVIEWER_ALLOWED, "git.hook_integrity");
+    assert_guard(
+        &root,
+        &[
+            "git switch feat/review && git branch -f @{-1} HEAD",
+            "git worktree add -B main ../other HEAD",
+            "if(git branch -f main HEAD); then :; fi",
+        ],
+        &[],
+        "git.local_ref_protection",
+    );
+}
+
+/// Round seventeen of the PR 36 review: a zsh glob qualifier such as `(D)`
+/// admits names that start with `.` in every component, so with only a
+/// hidden link under `build` leading to the policy folder, the reviewer's
+/// three commands reach the policy file and are refused. Ordinary globs
+/// over `build`, which Bash and zsh read without hidden names, still pass.
+#[cfg(unix)]
+#[test]
+fn git_guard_reads_a_zsh_qualifier_as_part_of_its_word() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    enforced_repo(&root);
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::write(root.join("build/a.o"), "").unwrap();
+    std::os::unix::fs::symlink(".codeflow", root.join("alias")).unwrap();
+    std::os::unix::fs::symlink("../alias", root.join("build/.review-hidden")).unwrap();
+    assert_guard(
+        &root,
+        &[
+            "rm build/*/policy.json(D)",
+            "printf x > build/*/policy.json(D)",
+            r"printf '%s\0' build/*/policy.json(D) | xargs -0 rm",
+        ],
+        &[
+            "rm build/*.o",
+            "rm -rf build/*",
+            "ls build/*(D)",
+            "f() { rm -f build/a.o; }; f",
+        ],
+        "git.hook_integrity",
+    );
+}
+
+/// Round three, finding 5: in a linked worktree under `.claude/worktrees`,
+/// a recursive change of its root reaches its own enforcement files and is
+/// refused, while a harmless operation on the same root operand passes.
+#[test]
+fn git_guard_judges_recursive_changes_by_the_files_they_reach() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let claude_tree = reviewer_fixture(&root);
+    assert_guard(
+        &claude_tree,
+        REVIEWER_REFUSALS_IN_WORKTREE,
+        REVIEWER_ALLOWED_IN_WORKTREE,
+        "git.hook_integrity",
+    );
+}
+
+/// Refusals the guard held before this change, from the main checkout:
+/// direct writes, removals and permission changes of the enforcement
+/// files and the commands that reach them through a shell or a launcher.
+const BASELINE_CLASSICS: &[&str] = &[
+    "rm .codeflow/policy.json",
+    "rm -rf .codeflow",
+    "rm -rf .claude",
+    "rm .claude/settings.json",
+    "rm -rf .git/hooks",
+    "echo x > .codeflow/policy.json",
+    "echo x >> .claude/settings.json",
+    "tee .codeflow/policy.json",
+    "truncate -s0 .codeflow/policy.json",
+    "chmod 000 .codeflow/policy.json",
+    "chmod -R 000 .",
+    "chmod -R u+w .codeflow",
+    "chown -R nobody .claude",
+    "cp README.md .codeflow/policy.json",
+    "mv README.md .claude/settings.json",
+    "ln -sf README.md .codeflow/policy.json",
+    "dd if=/dev/null of=.codeflow/policy.json",
+    "install README.md .codeflow/policy.json",
+    "sed -i '' s/a/b/ .codeflow/policy.json",
+    "sed -i -e s/a/b/ .claude/settings.json",
+    "sed -i '' -e 'w .codeflow/policy.json' README.md",
+    r"find . -maxdepth 0 -exec rm -rf .codeflow \;",
+    "find .codeflow -delete",
+    "find .codeflow -exec rm {} +",
+    "git rm .codeflow/policy.json",
+    "git mv .codeflow/policy.json x.json",
+    "git config core.hooksPath /dev/null",
+    "sh -c 'rm .codeflow/policy.json'",
+    "bash -c 'rm -rf .codeflow'",
+    "env FOO=1 rm .codeflow/policy.json",
+    "nohup rm .codeflow/policy.json",
+    "command rm .codeflow/policy.json",
+    "rm -rf .",
+    "if(rm .codeflow/policy.json); then :; fi",
+    "while(rm .codeflow/policy.json); do break; done",
+    "until(rm .codeflow/policy.json); do break; done",
+    "if(find .codeflow/policy.json -delete); then :; fi",
+];
+
+/// The same from the linked worktree under `.claude/worktrees`.
+const BASELINE_CLASSICS_IN_WORKTREE: &[&str] = &[
+    "rm .codeflow/policy.json",
+    "rm -rf .codeflow",
+    "rm .claude/settings.json",
+    "sed -i '' s/a/b/ .codeflow/policy.json",
+    "chmod -R 000 .",
+    "chmod -R u+w .",
+    "rm -rf .",
+    "rm -rf ..",
+];
+
+/// Commands an earlier guard refused that this change lets through on
+/// purpose (issue 23): a non-recursive removal naming a linked worktree's
+/// root, which `rm` refuses for a directory anyway, or an empty operand.
+const INTENDED_REPAIRS: &[&str] = &["rm -f .", "rm -f ''"];
+
+/// The guard at `binary` judging `command` with the session cwd `session`.
+fn guard_with(binary: &Path, command: &str, session: &Path) -> Output {
+    let template = codeflow();
+    let mut cmd = Command::new(binary);
+    for (key, value) in template.get_envs() {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
+    run_with_stdin(
+        cmd.args(["hook", "git-guard"]).current_dir(session),
+        &guard_payload(command, session),
+    )
+}
+
+/// Differential check against an earlier guard (TSK-216 round 3): every
+/// command the baseline binary refuses, this guard refuses too, apart from
+/// the intended repairs, which it allows. The baseline is a `codeflow`
+/// binary built from the comparison revision, such as `origin/main`, named
+/// by `CODEFLOW_BASELINE_GUARD`. The commands the baseline let through are
+/// printed, so a report can say which bypasses predate this change.
+#[test]
+#[ignore = "needs CODEFLOW_BASELINE_GUARD, a codeflow binary built from the baseline revision"]
+fn git_guard_keeps_every_baseline_refusal() {
+    let baseline = std::path::PathBuf::from(
+        std::env::var_os("CODEFLOW_BASELINE_GUARD")
+            .expect("set CODEFLOW_BASELINE_GUARD to a codeflow binary built from the baseline"),
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    let claude_tree = reviewer_fixture(&root);
+    let mut sessions: Vec<(&Path, Vec<&str>)> = vec![(
+        root.as_path(),
+        REVIEWER_REFUSALS
+            .iter()
+            .chain(REVIEWER_REFUSALS_UNIX.iter().filter(|_| cfg!(unix)))
+            .chain(BASELINE_CLASSICS)
+            .chain(INTENDED_REPAIRS)
+            .copied()
+            .collect(),
+    )];
+    sessions.push((
+        claude_tree.as_path(),
+        REVIEWER_REFUSALS_IN_WORKTREE
+            .iter()
+            .chain(BASELINE_CLASSICS_IN_WORKTREE)
+            .chain(INTENDED_REPAIRS)
+            .copied()
+            .collect(),
+    ));
+    let relaxed = tmp.path().join("relaxed/repo");
+    std::fs::create_dir_all(&relaxed).unwrap();
+    relaxed_fixture(&relaxed);
+    sessions.push((relaxed.as_path(), RELAXED_AUTHORITY.to_vec()));
+    let mut weaker = Vec::new();
+    let mut table = Vec::new();
+    for (session, commands) in &sessions {
+        let place = if *session == root.as_path() {
+            "main checkout"
+        } else if *session == relaxed.as_path() {
+            "relaxed hook integrity"
+        } else {
+            "linked worktree"
+        };
+        for command in commands {
+            let before = guard_with(&baseline, command, session).status.code() == Some(2);
+            let after = guard_run(command, session).status.code() == Some(2);
+            let repair = INTENDED_REPAIRS.contains(command);
+            table.push(format!(
+                "{place}: baseline {} / head {}: {command}",
+                if before { "refuses" } else { "allows" },
+                if after { "refuses" } else { "allows" }
+            ));
+            if before && !after && !repair {
+                weaker.push(format!("{place}: {command}"));
+            }
+            if repair && after {
+                weaker.push(format!("{place}: intended repair still refused: {command}"));
+            }
+        }
+    }
+    eprintln!("{}", table.join("\n"));
+    assert!(
+        weaker.is_empty(),
+        "the head is weaker than the baseline on:\n{}",
+        weaker.join("\n")
+    );
+}
+
+/// A repository whose landed policy relaxes `git.hook_integrity`, as the
+/// refusal journey's authority test sets it up: the remote-tracking
+/// authority metadata stays protected all the same.
+fn relaxed_fixture(root: &Path) {
+    enforced_repo(root);
+    let remote = root.with_file_name("remote.git");
+    git(
+        root.parent().unwrap(),
+        &["init", "-q", "--bare", &shell_path(&remote)],
+    );
+    git(root, &["remote", "add", "origin", &shell_path(&remote)]);
+    write_agent_policy(root, r#"{"git":{"hook_integrity":"off"}}"#);
+    git(root, &["push", "-q", "origin", "HEAD:main"]);
+    git(
+        root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+}
+
+/// The authority metadata 3.0.0 kept protected when hook integrity is
+/// relaxed (refusal journey `ac2_authority_metadata_is_not_disabled_by_local_edit_relief`
+/// and its neighbours), which the new hardening must not shadow.
+const RELAXED_AUTHORITY: &[&str] = &[
+    "printf x > .git/config",
+    "rm -rf .git/refs/remotes",
+    "rm -r .git/refs/remotes",
+    "printf x > .git/packed-refs",
+    "rm .git/packed-refs",
+    "rm -rf .git/refs/remotes/origin",
+    "find .git/refs/remotes -delete",
+    "chmod -R 000 .git/refs/remotes",
+    "env FOO=1 rm -rf .git/refs/remotes",
+    "nice rm -rf .git/refs/remotes",
+];
+
+/// CI round on PR 36: the new recursive-change check answered first for
+/// `rm -rf .git/refs/remotes` with a message that lost its authority class,
+/// so a relaxed policy let it through. Every authority write is refused
+/// with hook integrity relaxed.
+#[test]
+fn git_guard_keeps_authority_metadata_when_integrity_is_relaxed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    relaxed_fixture(&root);
+    assert_guard(&root, RELAXED_AUTHORITY, &[], "git.hook_integrity");
+}
+
 /// `path` as a bare word in a Bash command. Bash removes an unquoted
 /// backslash, so on Windows the word uses `/`, which git and Git Bash both
 /// read as the separator.
@@ -1328,6 +2264,66 @@ fn exec_guard_classifies_every_review_probe() {
             "{command}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+}
+
+#[test]
+fn exec_guard_points_text_that_names_a_peer_to_a_file() {
+    // TSK-223 AC-3 (sathyassn/codeflow#52): text that only mentions a peer
+    // passes when it is written to a file and passed by path; the same text
+    // inline on a line exec-guard cannot fully parse is still refused, and
+    // the refusal names the file route.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"security": {"headless_peer_runs": "block"}}"#,
+    );
+    std::fs::write(
+        dir.path().join("msg.txt"),
+        "docs: record the review\n\nNo codex exec run was used.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("body.md"),
+        "The Codex review approved; codex exec was not used.\n",
+    )
+    .unwrap();
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "git commit -F msg.txt",
+        "gh pr create --body-file body.md",
+        "gh api -X PATCH repos/o/r/pulls/1 -F body=@body.md",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "should allow: {command}: {err}");
+        assert!(!err.contains("headless"), "{command}: {err}");
+    }
+    for command in [
+        "grep -c review <<< 'Codex review: approve'",
+        "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        for part in [
+            "security.headless_peer_runs",
+            "could not be fully parsed",
+            "`git commit -F <file>`",
+            "`gh pr create --body-file <file>`",
+            "-F body=@<file>",
+            "flagged by design",
+        ] {
+            assert!(err.contains(part), "{command}: missing {part}: {err}");
+        }
     }
 }
 

@@ -17,19 +17,23 @@ service, which the agent reads when it is ready.
 ## Architecture
 
 Each active review keeps its state in three places, so growth is governed
-where it happens. One project-keyed, owner-private durable authority holds the
-record, a separate derived runtime root holds only what the browser needs
-to start and recover, and the browser profile holds nothing that counts as
-record.
+where it happens.
 
-Immutable revisions and feedback are the only quota-governed history. The
-browser profile and cache never become durable authority, and the
-CodeFlow-owned bootstrap, ready, and launch-recovery controls have a separate
-exact budget. Conservative cache flags, bounded idle lifetime, and
-identity-scoped cleanup limit browser growth without presenting it as a hard
-CodeFlow quota. One lock order covers both roots:
-project mutation, then session, then runtime control
-(architecture decision record ADR-0052).
+- One project-keyed, owner-private durable authority holds the record.
+- A separate derived runtime root holds only what the browser needs to start
+  and recover.
+- The browser profile holds nothing that counts as record.
+
+Growth is bounded as follows.
+
+- Immutable revisions and feedback are the only quota-governed history.
+- The browser profile and cache never become durable authority.
+- The CodeFlow-owned bootstrap, ready, and launch-recovery controls have a
+  separate exact budget.
+- Conservative cache flags, bounded idle lifetime, and identity-scoped cleanup
+  limit browser growth without presenting it as a hard CodeFlow quota.
+- One lock order covers both roots: project mutation, then session, then
+  runtime control (architecture decision record ADR-0052).
 
 ## Technical
 
@@ -91,7 +95,8 @@ Platform boundaries are native and fail closed.
 | Unix generally | state-root inputs must be absolute; a relative XDG state override is ignored and a relative home is rejected rather than placing state in the worktree |
 
 Every browser or auxiliary system-tool child starts from one allowlist-only
-environment, so provider-secret environment variables are not inherited.
+environment, so provider-secret environment variables are not inherited. Launch
+and cleanup follow these rules.
 
 | Lifecycle rule | Behavior |
 |---|---|
@@ -105,7 +110,7 @@ environment, so provider-secret environment variables are not inherited.
 
 Cross-target compilation checks adapter shape only. Native runtime, Unicode
 path, access control list (ACL), process-tree, browser, and cleanup evidence
-remains a release gate: the capability stays `building` until the full native
+remains a release gate. The capability stays `building` until the full native
 macOS, Linux, WSL2 and Windows matrix with a qualified browser is recorded.
 
 ### Review-surface anchoring and resolve
@@ -124,17 +129,21 @@ macOS, Linux, WSL2 and Windows matrix with a qualified browser is recorded.
 
 ### Conversation and revision projections
 
-Replies, reopens and tombstones extend `responses.jsonl` additively and record
-the revision at each transition. Replies are agent output; only reviewer
-reopens and tombstones join the v2 delivery stream. Thread routes use the same
-host, origin, cookie and request-header checks as answers. Deletion redacts
-public projections, including note replies, while the private ledger remains
-append-only until clear. Previously delivered copies cannot be recalled.
-
-New revisions optionally record repository commit, dirty state and code/diff
-source paths. Existing records omit those fields and still load. Captured
-paths are metadata only: the service has no repository-file route, and the
-path/commit pair does not certify snippet equality. `present diff` compares
-stored block bodies and reanchors carried notes against its target revision.
-`present check` reuses document validation without launching a browser.
-Default exports omit the conversation; `--with-notes` adds a read-only appendix.
+- Replies, reopens and tombstones extend `responses.jsonl` additively and
+  record the revision at each transition.
+- Replies are agent output. Only reviewer reopens and tombstones join the v2
+  delivery stream.
+- Thread routes use the same host, origin, cookie and request-header checks as
+  answers.
+- Deletion redacts public projections, including note replies, while the
+  private ledger remains append-only until clear. Previously delivered copies
+  cannot be recalled.
+- New revisions optionally record repository commit, dirty state and code/diff
+  source paths. Existing records omit those fields and still load.
+- Captured paths are metadata only. The service has no repository-file route,
+  and the path/commit pair does not certify snippet equality.
+- `present diff` compares stored block bodies and reanchors carried notes
+  against its target revision.
+- `present check` reuses document validation without launching a browser.
+- Default exports omit the conversation. `--with-notes` adds a read-only
+  appendix.

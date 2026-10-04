@@ -43,7 +43,7 @@
         "derive": "the lifetime sentence",
         "check": {
           "kind": "contains",
-          "text": "closes itself after four idle hours."
+          "text": "itself after four idle hours."
         },
         "value": true
       },

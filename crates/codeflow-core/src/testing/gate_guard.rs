@@ -9,11 +9,15 @@
 //! - the machine-wide lock under the `CodeFlow` home (`CODEFLOW_HOME`, else
 //!   `~/.codeflow`), which spans every repository on the machine;
 //! - the repository lock under the git common directory, which spans every
-//!   worktree of the repository and stays writable in a sandbox that can
-//!   commit but cannot write the home directory.
+//!   worktree of the repository.
 //!
-//! Every configured lock must be opened and acquired before targets start.
-//! An unavailable lock refuses, naming the path and sandbox error. A held lock refuses and
+//! Every configured lock must be opened and acquired before targets start,
+//! so two full gates never run at once on one machine. An unavailable lock
+//! refuses, naming the path and sandbox error. The shipped Claude settings
+//! presets allow sandboxed writes to `~/.codeflow/locks` and
+//! `~/.codeflow/gate-runs` (TSK-216), the two home directories a full gate
+//! writes, and `codeflow doctor --check permissions` names any of them this
+//! process cannot write ([`unwritable_gate_dirs`]). A held lock refuses and
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
@@ -133,6 +137,12 @@ impl std::fmt::Display for LockHeld {
     }
 }
 
+/// The directory under the `CodeFlow` home that holds the machine-wide lock.
+pub const HOME_LOCK_DIR: &str = "locks";
+
+/// The directory under the `CodeFlow` home that keeps full-run evidence.
+pub const HOME_EVIDENCE_DIR: &str = "gate-runs";
+
 /// Lock directories for a project: the machine-wide one under `home` (when
 /// known) and the repository one under the git common directory (when the
 /// project is in a git repository).
@@ -140,12 +150,48 @@ impl std::fmt::Display for LockHeld {
 pub fn lock_dirs(project_dir: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = home {
-        dirs.push(home.join("locks"));
+        dirs.push(home.join(HOME_LOCK_DIR));
     }
     if let Ok(repo) = git2::Repository::discover(project_dir) {
         dirs.push(repo.commondir().join("codeflow"));
     }
     dirs
+}
+
+/// The directories a full gate writes outside the worktree that this
+/// process cannot write, each with its error: every lock directory and the
+/// evidence directory under `home`. Each lock file is opened as the gate
+/// opens it, without taking the lock, so a running gate is not disturbed;
+/// the evidence directory is probed with a file that is removed again.
+#[must_use]
+pub fn unwritable_gate_dirs(
+    project_dir: &Path,
+    home: Option<&Path>,
+) -> Vec<(PathBuf, std::io::Error)> {
+    let mut unwritable = Vec::new();
+    for dir in lock_dirs(project_dir, home) {
+        if let Err(error) = open_lock_file(&dir.join(LOCK_FILE)) {
+            unwritable.push((dir, error));
+        }
+    }
+    if let Some(home) = home {
+        let dir = home.join(HOME_EVIDENCE_DIR);
+        let probe = dir.join(format!(".write-probe-{}", std::process::id()));
+        let result = std::fs::create_dir_all(&dir).and_then(|()| {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&probe)
+                .map(drop)
+        });
+        match result {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&probe);
+            }
+            Err(error) => unwritable.push((dir, error)),
+        }
+    }
+    unwritable
 }
 
 /// Take every full-gate lock in `dirs`, or refuse naming the holder.
@@ -676,6 +722,40 @@ mod tests {
         let found = lock_dirs(tmp.path(), Some(&home));
         assert_eq!(found[0], home.join("locks"));
         assert!(found[1].ends_with(".git/codeflow"), "{found:?}");
+    }
+
+    /// TSK-216 AC-3: doctor's probe names each gate directory this process
+    /// cannot write. Where it can write, it creates the directories and the
+    /// empty lock files a gate would, and keeps them: a lock file is shared
+    /// with any running gate and is never unlinked. Only its evidence probe
+    /// file is removed.
+    #[test]
+    fn unwritable_gate_dirs_names_each_directory_the_gate_cannot_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let home = tmp.path().join("home");
+        assert!(unwritable_gate_dirs(tmp.path(), Some(&home)).is_empty());
+        let evidence: Vec<_> = std::fs::read_dir(home.join(HOME_EVIDENCE_DIR))
+            .unwrap()
+            .collect();
+        assert!(evidence.is_empty(), "the probe file is removed");
+        let lock = home.join(HOME_LOCK_DIR).join(LOCK_FILE);
+        assert_eq!(
+            std::fs::metadata(&lock).map(|m| m.len()).ok(),
+            Some(0),
+            "{lock:?}"
+        );
+
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, "file").unwrap();
+        let found: Vec<PathBuf> = unwritable_gate_dirs(tmp.path(), Some(&blocker))
+            .into_iter()
+            .map(|(dir, _)| dir)
+            .collect();
+        assert_eq!(
+            found,
+            [blocker.join(HOME_LOCK_DIR), blocker.join(HOME_EVIDENCE_DIR)]
+        );
     }
 
     #[test]

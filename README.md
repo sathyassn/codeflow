@@ -1,61 +1,103 @@
-# codeflow
+# CodeFlow
 
-The AI-development discipline layer you install into any repo: one Rust binary
-(`codeflow`) that scaffolds, enforces, verifies, and remembers, while Claude
-Code (or any harness) does the developing. Policy lives in one config
-(`.codeflow/policy.json`) and can reach four complementary protection planes.
-Installed files alone do not make those planes effective; verify the relevant
-hooks, harness integration, CI requirements, and remote rules.
+CodeFlow adds guardrails to a git repository where AI coding agents work. It
+blocks the mistakes that are hard to undo, in git, in the agent's session and
+in CI, and it keeps a record of why work was done. It is one Rust binary,
+`codeflow`. The agent you already use, such as Claude Code, Codex or Grok
+Build, still does the developing.
 
-## Why codeflow
+Read [the product page](docs/product.md) for who CodeFlow is for and what it is
+not.
 
-- **Integrated, proportional discipline.** codeflow connects a living
-  `docs/capabilities.md` registry, architecture and decision records, shared
-  policy, staged workflows, and project recall. Full tier adds durable epics,
-  tasks, and specs plus referential checks for work that outlives sessions;
-  accepted external trackers and approved plans keep their authority. Trivial
-  or conversational work needs no new artifact, and non-trivial work uses only
-  the stages its outcome warrants.
-- **Durable, conditional recall.** The ledger and repository records provide
-  cross-session traceability. Session summaries are captured automatically only
-  when a supported harness's SessionEnd hook is installed and actually executes;
-  without that event, externalize decisions, progress, and evidence as you go.
-- **When not to use it.** A scratch or throwaway repo (`--minimal`, or skip
-  it), or a team that wants a full workflow framework rather than guardrails;
-  codeflow is deliberately not a harness, agent framework, or runtime model
-  router. Its standard/full scaffold does provide a portable Claude+Codex
-  orchestration skill while each model remains in its native harness.
+## The problem it solves
+
+An agent works fast, and some of its mistakes cannot be undone:
+
+- a commit or force push to the main branch
+- a secret committed to history
+- a commit message that credits the AI tool
+- a destructive shell command
+- work that nobody can explain a month later
+
+A prompt that asks an agent to behave does not stop any of these. CodeFlow
+turns the rules into checks, and the repository holds the record. Session
+summaries are captured automatically only when a supported harness's
+SessionEnd hook is installed and actually executes; otherwise write decisions,
+progress and evidence down as you go. Every rule is written once, in
+`.codeflow/policy.json`, and four planes read it:
+
+```text
+  .codeflow/policy.json   one place where every rule is written
+        |
+        +--> 1 git hooks            run when git runs
+        +--> 2 in-session guards    run before an agent's commands and edits
+        +--> 3 scaffolded CI        runs `codeflow ci` on the server
+        +--> 4 remote protection    the host's branch rules protect main
+```
+
+Planes 1 and 2 give fast local feedback and can be edited. Planes 3 and 4 are
+the perimeter, where CI runs and the remote requires it. CI becomes a merge
+gate when the remote requires its result.
+
+Installed files alone do not make those planes effective. Verify hook
+execution, harness trust and event support, required CI results, and actual
+remote rules, permissions, and bypasses. Codex-driven work receives the
+git-hook plane where those hooks are installed and executed. See
+[the product page](docs/product.md#the-four-enforcement-planes) and
+[the enforcement planes](docs/architecture/enforcement-planes.md).
+
+## Choose a tier
+
+`codeflow init` installs one of three tiers. Each tier includes everything in
+the tier listed before it, and all three install the same enforcement floor.
+A project can start small and move up later, and a lower-tier request never
+removes files.
+
+| Tier | Installs | Pick it when |
+|---|---|---|
+| `--minimal` | The enforcement floor: five git hooks, the CI check, the in-session guards, an armed `policy.json`, and a lean `AGENTS.md` and `CLAUDE.md` | The repository is a doc set, a config repo or a small tool, or you want only the guardrails |
+| `--standard` (default) | Minimal plus the develop-loop skills, reviewer agents, the pipeline workflow and the `docs/` spine (product, architecture, capabilities, decisions) | The repository is a code project |
+| `--full` | Standard plus `project-management/` templates for epics, tasks and specs | Work outlives a session and needs durable plans and criteria |
+
+Full tier adds durable epics, tasks, and specs plus referential checks for
+work that outlives sessions. Trivial or conversational work needs no new
+artifact.
+
+Minimal init scaffolds local hooks, in-session settings, and CI while
+preserving an existing hook manager; it does not configure remote branch
+protection, and no tier does. See [docs/adoption.md](docs/adoption.md) for the
+tiers, ownership and the daily flow.
 
 ## Install
 
-From 3.1.0 on, each release publishes archives for macOS (arm64 and x64),
-Linux x64 and Windows x64, each with a `.sha256` file, plus a shell installer
-and a PowerShell installer. 3.0.0 published macOS and Linux only. Install the
-latest release on macOS or Linux:
+From 3.1.0 on, each release publishes archives for macOS (arm64 and x64), Linux
+x64 and Windows x64, each with a `.sha256` file, plus a shell installer and a
+PowerShell installer. 3.0.0 published macOS and Linux only.
+
+Install the latest release on macOS or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-On native Windows, in PowerShell (Git for Windows is required), once 3.1.0 is
-the latest release:
+On native Windows, once 3.1.0 is the latest release, run this in PowerShell (Git
+for Windows is required):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
 ```
 
-Or build from a checkout, with a Rust toolchain:
+To build from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-WSL2 uses the Linux installer and is the preferred Windows route for
-Linux-native tooling or Claude sandboxing. See
-[platform assurance](docs/harness-posture.md#platform-assurance) in the harness
-posture guide before high-blast-radius work.
-
-See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
+WSL2 uses the Linux installer. It is the preferred Windows route for
+Linux-native tooling or Claude sandboxing; see
+[platform assurance](docs/harness-posture.md#platform-assurance) before
+high-blast-radius work. The full install guide is in
+[docs/adoption.md](docs/adoption.md).
 
 ## Quickstart
 
@@ -64,96 +106,118 @@ cd your-project
 codeflow init --standard --yes   # scaffold; offline; sane defaults
 ```
 
-`init` is idempotent and non-destructive: it writes managed scaffold files,
-wires git hooks via `core.hooksPath`, and (in a fresh repo) makes the scaffold
-commit and arms branch policy. Standard/full init then points to
-`/cf-customize`, which reconciles the consuming project's product,
-architecture, commands, harness settings, and required tools before the first
-non-trivial task enters `/cf-model-orchestrator`. See
-[docs/adoption.md](docs/adoption.md) for the greenfield/brownfield paths, tiers,
-ownership model, and daily flow, and
-[docs/harness-posture.md](docs/harness-posture.md) for the autonomy, sandbox,
-and harness-settings posture.
+`init` is idempotent and non-destructive. It writes the managed scaffold files
+and wires the git hooks through `core.hooksPath`. In a fresh repository it also
+makes the scaffold commit and arms branch policy.
 
-When a production model, harness, permission profile, or material instruction
-changes, `/cf-evaluate-model` provides a separate native-interactive
-qualification flow over reproducible disposable fixtures. It is not part of
-ordinary task execution and adds no model-running CLI command; the maintenance
-path is [docs/model-upgrades.md](docs/model-upgrades.md).
+The standard and full tiers then point to `/cf-customize`. That skill
+reconciles the project's product, architecture, commands, harness settings and
+required tools before the first non-trivial task goes to
+`/cf-model-orchestrator`.
+
+- [docs/adoption.md](docs/adoption.md) covers the greenfield and brownfield
+  paths, the tiers, the ownership model and the daily flow.
+- [docs/harness-posture.md](docs/harness-posture.md) covers the autonomy,
+  sandbox and harness-settings posture.
+- [docs/model-upgrades.md](docs/model-upgrades.md) covers qualifying a new
+  production model, harness, permission profile or material instruction change
+  with `/cf-evaluate-model`. That flow adds no model-running command.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
-| `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
-| `portal setup --path <dir>` | Adopt or reconcile the offline documentation-portal starter (same utility craft as present; durable docs, with no per-session review comments) |
-| `portal transfer --confirm` | Take responsibility for the adopted runtime while preserving edits and intentional deletions |
-| `present` | Open, revise, review, export, close, and clear a this-session catalog review (runtime owns chrome and Comment; not a docs portal) |
-| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`; `prompt-reminder` for manual use) |
-| `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
+| `update` | Refresh managed scaffold files (3-way merge, never clobbers) |
 | `orient` | Print the session-start digest (pointers, not content) |
-| `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
-| `validate` | Validate policy + records; `--docs` adds doc-graph integrity and `--portal <dir>` verifies portal evidence without running project code |
-| `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
-| `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
-| `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (20): hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
-| `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
-| `recall` | Search project memory: ledger, session summaries, ADRs, epics/tasks/specs, capabilities |
-| `remote` | Remote provider operations (branch protection) |
-| `epic new` | Allocate the next `EPC-NNN` and scaffold the epic from the template |
-| `spec new --for <id>` | Allocate the next `SPC-NNN`, scaffold it, and link it from an epic or task |
-| `task new` | Allocate the next independent `TSK-NNN` under an epic or with an explicit standalone rationale |
-| `work start <task-id>` | Read-only proof that durable planning is anchored and its parent/spec/dependency graph is ready |
-| `estimate check <forecast.json>` | Read-only check of a project-owned forecast's explicit allocations and pinned evidence; schedules nothing, writes nothing, and makes no estimate itself; `--json` emits the versioned report (ADR-0057) |
-| `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal. The host launches the harness and delivers the prompt (ADR-0036) |
+| `status` | Show the branch, worktrees, in-flight work and capabilities; `--delivery` adds the capability-delivery rollup |
+| `doctor` | Health checks (20): hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
+| `test` | Run the test gate; `test setup` detects root stacks, lists templates and appends targets |
+| `validate` | Validate policy and records; `--docs` adds doc-graph checks and `--portal <dir>` verifies portal evidence without running project code |
+| `ci` | Check a commit range and branch name against policy, the same check CI runs; exit 2 on a violation or invalid policy |
+| `policy` | `explain` renders every policy key with its default and valid values; `show` prints the values in effect |
+| `recall` | Search project memory: ledger, session summaries, ADRs, epics, tasks, specs and capabilities |
+| `epic new`, `spec new`, `task new` | Allocate the next `EPC-NNN`, `SPC-NNN` or `TSK-NNN` and scaffold the record |
+| `work start <task-id>` | Check, read-only, that planning is anchored and the task's graph is ready |
+| `integrate` | Land a branch into a target: rebase, test, then fast-forward merge under a lock |
+| `remote protect` | Apply protected-branch policy to the remote provider |
+| `hook`, `git-hook` | Targets for the harness hooks and the `.codeflow/git-hooks` shims |
+| `delegate` | Track one delegate turn handed to a peer model: `init`, `arm`, `wait`; the host launches the harness |
+| `present` | Open, review, export and close a review of this session in a local browser window |
+| `portal setup`, `portal transfer` | Adopt the offline docs-portal starter, or take ownership of the adopted runtime |
+| `estimate check <forecast.json>` | Read-only check of a project-owned forecast; it makes no estimate (ADR-0057) |
+| `models` | Resolve catalog duties without launching models |
+| `ids`, `adr`, `report` | The shared ID registry, ADR allocation, and read-only process reports |
 
-`codeflow test setup` with no options only fills an absent or empty config from
-root stack markers; for templates, explicit targets, replacement, and
-monorepos see
+[docs/cli.md](docs/cli.md) documents every command and flag. `codeflow test
+setup` with no options only fills an absent or empty config; for templates,
+explicit targets and monorepos see
 [configure test targets](docs/adoption.md#configure-test-targets).
 
-## Enforcement planes
+## Who merges
 
-One policy (`.codeflow/policy.json`), four complementary planes: git client
-hooks, in-session PreToolUse guards (`git-guard`, `exec-guard`), CI, and remote
-branch protection. Minimal init scaffolds local hooks, in-session settings, and
-CI while preserving an existing hook manager; it does not configure remote
-branch protection. Installed files alone do not make those planes effective.
-Verify hook execution, harness trust and event support, required CI results,
-and actual remote rules, permissions, and bypasses before claiming a plane
-effective. Codex-driven work receives the git-hook plane where those hooks are
-installed and executed. CI becomes a merge gate when the remote requires its
-result. Protected-branch merges land via a PR **merged by a human**,
-or `codeflow integrate`; an agent never merges into protected. A human can
-override the git-hook plane's protected-branch commit, merge and push rules
-from their own terminal with `CODEFLOW_HUMAN_OVERRIDE=1`, for example
-`CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main` for the first push to an
-empty remote; force pushes, deletions and the secret checks stay refused.
-git-guard never honors that env and blocks agents from setting it. Plane-by-plane
-detail: [the enforcement matrix](docs/architecture/enforcement-planes.md).
+Protected branches change through a pull request that a human merges, or
+through `codeflow integrate`. An agent never merges into a protected branch.
+
+A human can override the git-hook plane's protected-branch commit, merge and
+push rules from their own terminal with `CODEFLOW_HUMAN_OVERRIDE=1`, for
+example `CODEFLOW_HUMAN_OVERRIDE=1 git push -u origin main` for the first push
+to an empty remote. Force pushes, deletions and the secret checks stay refused.
+The in-session guard ignores the variable and blocks agents from setting it.
 
 ## Docs
 
-- [docs/adoption.md](docs/adoption.md): tiers, install, ownership, the daily flow
-- [docs/architecture/enforcement-planes.md](docs/architecture/enforcement-planes.md): the enforcement matrix and what each plane catches
-- [docs/harness-posture.md](docs/harness-posture.md): autonomy, sandbox, and harness settings per harness
-- [docs/model-upgrades.md](docs/model-upgrades.md): qualifying a new model, harness, or permission profile
+The docs are listed in reading order, by what the reader needs next.
+
+**Understand**
+
+- [docs/product.md](docs/product.md): what CodeFlow is, who it is for and what it is not
+- [docs/glossary.md](docs/glossary.md): the terms the docs use
+
+**Start**
+
+- [docs/adoption.md](docs/adoption.md): install, tiers, adoption, ownership and the daily flow
+- [docs/workspace-mode.md](docs/workspace-mode.md): an umbrella repository that holds several projects
+
+**Use**
+
+- [docs/delivery.md](docs/delivery.md): how work moves from a request to `main`
+- [docs/cli.md](docs/cli.md): every command and flag
+- [docs/delegation.md](docs/delegation.md): handing a turn to a peer model
+- [docs/present-guide.md](docs/present-guide.md): reviewing a document in a present session
+- [docs/skills.md](docs/skills.md): the skills each tier installs
+
+**Configure**
+
+- [docs/policy-reference.md](docs/policy-reference.md): every policy key and its default
+- [docs/harness-posture.md](docs/harness-posture.md): autonomy, sandbox and settings per harness
+- [docs/model-upgrades.md](docs/model-upgrades.md): qualifying a new model, harness or permission profile
+
+**Reference**
+
+- [docs/capabilities.md](docs/capabilities.md): the registry of what the system does
+- [docs/capabilities/CAP-010-duo-model-orchestration.md](docs/capabilities/CAP-010-duo-model-orchestration.md) and [docs/capabilities/CAP-015-opt-in-documentation-portal.md](docs/capabilities/CAP-015-opt-in-documentation-portal.md): two models working together, and the opt-in docs portal
 - [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
-- [docs/product.md](docs/product.md): what codeflow is for and its non-goals
-- [docs/capabilities.md](docs/capabilities.md): the CAP-### registry of what the system does
-- [docs/releasing.md](docs/releasing.md): the release runbook, and versioning in a project that consumes CodeFlow
-- [docs/release-checklist.md](docs/release-checklist.md): evidence required for every release
-- [docs/decisions/](docs/decisions/): ADRs (the record of why)
+- [docs/architecture/enforcement-planes.md](docs/architecture/enforcement-planes.md): what each plane catches
+- [docs/architecture/present.md](docs/architecture/present.md) and [docs/architecture/utility-presentation.md](docs/architecture/utility-presentation.md): how review pages and figures are built
+- [docs/decisions/](docs/decisions/) and [docs/decision-map.md](docs/decision-map.md): the decisions and why they were made
+
+**Maintain**
+
+- [docs/releasing.md](docs/releasing.md): the release runbook, and versioning in a project that uses CodeFlow
+- [docs/release-checklist.md](docs/release-checklist.md): the evidence every release needs
+- [docs/troubleshooting.md](docs/troubleshooting.md): fixing what `codeflow doctor` reports
 
 ### Repository guide
 
 The same documents can be read as a layered, searchable guide with source
-links, altitude tabs, and Markdown twins. It is generated locally from
-`docs-portal/` and is not a hosted website: GitHub renders the Markdown above,
-and nothing publishes the generated HTML. From a clean committed checkout, with
-the Node version pinned in `docs-portal/.node-version` (24.18.0):
+links, altitude tabs and Markdown twins. It is generated from `docs-portal/`
+and lists the pages in the same order as above. A workflow builds it and
+deploys it to GitHub Pages once the repository owner enables Pages for the
+repository; the planned address, not live yet, is
+`https://sathyassn.github.io/codeflow/`. To build it locally, run these from a
+clean committed checkout with the Node version pinned in
+`docs-portal/.node-version` (24.18.0):
 
 ```sh
 cd docs-portal
@@ -162,17 +226,17 @@ npm run build          # derive pages and evidence, build site
 npm run preview        # serve the built site on loopback
 ```
 
-The guide names the exact commit it was built from; it shows a release
-version only when a verified published release exists for that commit. See
+The guide names the commit it was built from. It shows a release version only
+when a verified published release exists for that commit. See
 [this repository's own guide](docs/capabilities/CAP-015-opt-in-documentation-portal.md#this-repositorys-own-guide)
-for the check, validate, preview, and cleanup details.
+for the check, validate, preview and cleanup details.
 
 ## Contributing
 
-Contributions are welcome; see [CONTRIBUTING.md](docs/CONTRIBUTING.md). In short:
-format, tests, clippy, and rustdoc green; conventional commits; no AI
-attribution (codeflow's own hooks enforce it). Please read
-[SECURITY.md](docs/SECURITY.md) before reporting a vulnerability, and be mindful of the
+Contributions are welcome; see [CONTRIBUTING.md](docs/CONTRIBUTING.md). In
+short, format, tests, clippy and rustdoc stay green, commits are conventional,
+and no commit carries AI attribution (CodeFlow's own hooks enforce this). Read
+[SECURITY.md](docs/SECURITY.md) before reporting a vulnerability, and follow the
 [Code of Conduct](docs/CODE_OF_CONDUCT.md).
 
 ## License

@@ -1985,12 +1985,79 @@ fn check_permissions(opts: &Options) -> CheckResult {
 
     let _ = config_dir; // suppress unused warning on non-unix
 
+    // A full gate also writes its locks and its evidence outside the
+    // worktree (TSK-216); in a sandbox those are the writes that fail.
+    let sandbox = if sandboxed(opts) {
+        format!("; {SANDBOX_NOTE}")
+    } else {
+        String::new()
+    };
+    let unwritable = if opts.project_dir.is_empty() {
+        Vec::new()
+    } else {
+        crate::testing::gate_guard::unwritable_gate_dirs(
+            Path::new(&opts.project_dir),
+            opts.codeflow_home.as_deref(),
+        )
+    };
+    if !unwritable.is_empty() {
+        let paths: Vec<String> = unwritable
+            .iter()
+            .map(|(dir, _)| format!("`{}`", dir.display()))
+            .collect();
+        let errors: Vec<String> = unwritable
+            .iter()
+            .map(|(dir, error)| format!("{}: {error}", dir.display()))
+            .collect();
+        return CheckResult {
+            name: "permissions".into(),
+            status: Status::Warn(remedy::DOCTOR_GATE_DIRS.with(&[("paths", &paths.join(", "))])),
+            message: format!(
+                "a full gate cannot write its lock or evidence directories, so `codeflow test --mode full` refuses or fails here ({}){sandbox}",
+                errors.join("; ")
+            ),
+            duration: start.elapsed(),
+        };
+    }
+
     CheckResult {
         name: "permissions".into(),
         status: Status::Pass,
-        message: "file permissions correct".into(),
+        message: format!(
+            "file permissions correct; the full gate's lock and evidence directories are writable{sandbox}"
+        ),
         duration: start.elapsed(),
     }
+}
+
+/// Claude Code sets `SANDBOX_RUNTIME` in the commands its sandbox runs.
+fn sandboxed(opts: &Options) -> bool {
+    opts.env("SANDBOX_RUNTIME")
+        .is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+/// Reported context only: the marker says a sandbox launched the command,
+/// not which restrictions apply or why a probe failed.
+const SANDBOX_NOTE: &str = "SANDBOX_RUNTIME is set, so this likely runs in the Claude Code sandbox";
+
+/// The first non-empty line of a probe's output, for quoting.
+fn first_line(output: &str) -> &str {
+    output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no output")
+}
+
+/// The HTTP status code `curl -w '%{http_code}'` printed, when it printed
+/// one (`000` means no response).
+fn http_status(output: &str) -> Option<u16> {
+    output
+        .trim()
+        .trim_matches('\'')
+        .parse()
+        .ok()
+        .filter(|code| *code != 0)
 }
 
 fn check_network(opts: &Options) -> CheckResult {
@@ -2001,6 +2068,65 @@ fn check_network(opts: &Options) -> CheckResult {
         message,
         duration: start.elapsed(),
     };
+
+    // The Claude Code sandbox carries traffic through its proxy and gives
+    // no direct DNS, so there the probe is an HTTPS request, which the
+    // proxy carries as it carries every other tool's (TSK-216).
+    if sandboxed(opts) {
+        if opts.do_look_path("curl").is_err() {
+            return warn(
+                format!("`curl` not found; skipping connectivity probe; {SANDBOX_NOTE}"),
+                remedy::DOCTOR_TOOL_MISSING
+                    .with(&[("tool", "the `curl` tool"), ("check", "network")]),
+            );
+        }
+        // The status line decides: a proxy refusal or an upstream error
+        // still exits 0 without `--fail`.
+        return match opts.do_exec(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "5",
+                "https://github.com",
+            ],
+        ) {
+            Ok(out) => match http_status(&out) {
+                Some(code @ 200..=399) => CheckResult {
+                    name: "network".into(),
+                    status: Status::Pass,
+                    message: format!(
+                        "network connectivity OK over HTTPS (github.com answered HTTP {code}); {SANDBOX_NOTE}"
+                    ),
+                    duration: start.elapsed(),
+                },
+                Some(code) => warn(
+                    format!(
+                        "HTTPS request to github.com answered HTTP {code}, so connectivity is not confirmed; {SANDBOX_NOTE}"
+                    ),
+                    remedy::DOCTOR_NETWORK.remedy(),
+                ),
+                None => warn(
+                    format!(
+                        "HTTPS request to github.com returned no HTTP status ({}); {SANDBOX_NOTE}",
+                        first_line(&out)
+                    ),
+                    remedy::DOCTOR_NETWORK.remedy(),
+                ),
+            },
+            Err(error) => warn(
+                format!(
+                    "HTTPS request to github.com failed ({}); {SANDBOX_NOTE}",
+                    first_line(&error)
+                ),
+                remedy::DOCTOR_NETWORK.remedy(),
+            ),
+        };
+    }
 
     // The probe is `host`. If it isn't installed we cannot infer offline from its
     // absence — say so and skip, rather than implying the network is down.
@@ -2047,12 +2173,20 @@ fn check_delegates(opts: &Options) -> CheckResult {
     // the operator's own account can close.
     let mut gaps = Vec::new();
     let mut signed_out = false;
+    // The shipped presets deny reading the Codex auth file in the sandbox,
+    // so there a failed status that does not say "not logged in" leaves the
+    // sign-in unconfirmed (TSK-216); it is quoted, never explained.
+    let mut auth_unseen: Option<String> = None;
     let mut plugin_note = "";
 
     match opts.do_look_path("codex") {
         Ok(codex_bin) => {
-            if opts.do_exec(&codex_bin, &["login", "status"]).is_err() {
-                signed_out = true;
+            if let Err(error) = opts.do_exec(&codex_bin, &["login", "status"]) {
+                if sandboxed(opts) && !error.to_ascii_lowercase().contains("not logged in") {
+                    auth_unseen = Some(first_line(&error).to_string());
+                } else {
+                    signed_out = true;
+                }
             }
             if opts.do_exec(&codex_bin, &["mcp", "list"]).is_err() {
                 gaps.push("Codex MCP inventory unavailable (run `codex mcp list`)".to_string());
@@ -2084,6 +2218,25 @@ fn check_delegates(opts: &Options) -> CheckResult {
         } else {
             gaps.push("herdr and tmux missing from PATH (no seat host)".to_string());
         }
+    }
+
+    if let (Some(error), true) = (&auth_unseen, gaps.is_empty()) {
+        return CheckResult {
+            name: "delegates".into(),
+            status: Status::Note(remedy::DOCTOR_SANDBOX_UNSEEN.with(&[
+                ("check", "delegates"),
+                ("what", "the Codex sign-in"),
+            ])),
+            message: format!(
+                "Claude↔Codex prerequisites present; the Codex sign-in is unconfirmed: `codex login status` failed ({error}), and the settings preset denies sandboxed commands the Codex auth file; {SANDBOX_NOTE}{plugin_note}{agy_note}"
+            ),
+            duration: start.elapsed(),
+        };
+    }
+    if let Some(error) = &auth_unseen {
+        gaps.push(format!(
+            "Codex sign-in unconfirmed: `codex login status` failed ({error}); run `codeflow doctor --check delegates` outside the sandbox"
+        ));
     }
 
     if gaps.is_empty() && !signed_out {
@@ -5103,6 +5256,185 @@ mod tests {
 
         assert_eq!(result.status, Status::Fail);
         assert!(result.message.contains("not writable"));
+    }
+
+    fn in_sandbox(name: &str) -> Option<String> {
+        (name == "SANDBOX_RUNTIME").then(|| "1".to_string())
+    }
+
+    /// TSK-216 AC-3: the permissions check names each full-gate directory
+    /// this process cannot write, and says when it runs in the sandbox.
+    #[test]
+    fn test_check_permissions_names_unwritable_gate_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codeflow")).unwrap();
+        git2::Repository::init(&project).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = project.to_string_lossy().to_string();
+
+        opts.codeflow_home = Some(dir.path().join("home"));
+        let result = check_permissions(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(result.message.contains("writable"), "{}", result.message);
+        assert!(!result.message.contains("sandbox"), "{}", result.message);
+
+        let blocked = dir.path().join("not-a-dir");
+        std::fs::write(&blocked, "file").unwrap();
+        opts.codeflow_home = Some(blocked.clone());
+        opts.env_var = Some(in_sandbox);
+        let result = check_permissions(&opts);
+        let Status::Warn(remedy) = &result.status else {
+            panic!("{:?} {}", result.status, result.message);
+        };
+        for dir in [blocked.join("locks"), blocked.join("gate-runs")] {
+            let shown = dir.display().to_string();
+            assert!(result.message.contains(&shown), "{}", result.message);
+            assert!(remedy.to_string().contains(&shown), "{remedy}");
+        }
+        assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
+        assert!(remedy.to_string().contains("allowWrite"), "{remedy}");
+    }
+
+    /// TSK-216 AC-3: in the sandbox the network probe is an HTTPS request,
+    /// which its proxy carries, never a direct DNS lookup, and it passes
+    /// only on an HTTP 2xx or 3xx answer.
+    #[test]
+    fn test_check_network_in_the_sandbox_probes_https() {
+        let mut opts = test_opts();
+        opts.env_var = Some(in_sandbox);
+        opts.look_path = Some(|name| Ok(format!("/usr/bin/{name}")));
+        opts.exec_command = Some(|cmd, args| {
+            if cmd == "curl" && args.contains(&"https://github.com") {
+                Ok("200".into())
+            } else {
+                Err("no direct DNS in the sandbox".into())
+            }
+        });
+        let result = check_network(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(result.message.contains("HTTP 200"), "{}", result.message);
+        assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
+
+        // A proxy refusal still exits 0 and is not connectivity.
+        opts.exec_command = Some(|_, _| Ok("403".into()));
+        let result = check_network(&opts);
+        assert!(result.status.is_warn(), "{}", result.message);
+        assert!(result.message.contains("HTTP 403"), "{}", result.message);
+        assert!(!result.message.contains("OK"), "{}", result.message);
+
+        // No response at all.
+        opts.exec_command = Some(|_, _| Ok("000".into()));
+        let result = check_network(&opts);
+        assert!(result.status.is_warn(), "{}", result.message);
+        assert!(
+            result.message.contains("no HTTP status"),
+            "{}",
+            result.message
+        );
+
+        // A transport failure quotes curl's error.
+        opts.exec_command = Some(|_, _| Err("curl: (56) CONNECT tunnel failed\n".into()));
+        let result = check_network(&opts);
+        assert!(result.status.is_warn());
+        assert!(
+            result.message.contains("CONNECT tunnel failed"),
+            "{}",
+            result.message
+        );
+        assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
+    }
+
+    /// Delegate prerequisites present, with `codex login status` answering
+    /// `login`.
+    fn delegates_with_login(
+        login: fn(&str, &[&str]) -> Result<String, String>,
+        sandbox: bool,
+    ) -> CheckResult {
+        let mut opts = test_opts();
+        if sandbox {
+            opts.env_var = Some(in_sandbox);
+        } else {
+            opts.env_var = Some(|_| None);
+        }
+        opts.look_path = Some(|name| match name {
+            "codex" | "claude" | "herdr" => Ok(format!("/usr/local/bin/{name}")),
+            _ => Err("not found".into()),
+        });
+        opts.exec_command = Some(login);
+        check_delegates(&opts)
+    }
+
+    fn access_denied(_: &str, args: &[&str]) -> Result<String, String> {
+        match args {
+            ["login", "status"] => Err("Error: Permission denied (os error 1)\n".into()),
+            ["plugin", "list", "--json"] => {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
+            }
+            _ => Ok("ready".into()),
+        }
+    }
+
+    fn signed_out(_: &str, args: &[&str]) -> Result<String, String> {
+        match args {
+            ["login", "status"] => Err("Not logged in\n".into()),
+            ["plugin", "list", "--json"] => {
+                Ok(r#"[{"id":"codex@openai-codex","enabled":true}]"#.into())
+            }
+            _ => Ok("ready".into()),
+        }
+    }
+
+    /// TSK-216 AC-3: in the sandbox a failed `codex login status` that does
+    /// not say it is signed out leaves the sign-in unconfirmed and quotes the
+    /// failure; an explicit "Not logged in" is a sign-in to fix everywhere.
+    #[test]
+    fn test_check_delegates_in_the_sandbox_reports_auth_unreadable() {
+        let result = delegates_with_login(access_denied, true);
+        let Status::Note(remedy) = &result.status else {
+            panic!("{:?} {}", result.status, result.message);
+        };
+        assert!(result.message.contains("unconfirmed"), "{}", result.message);
+        assert!(
+            result.message.contains("Permission denied"),
+            "{}",
+            result.message
+        );
+        assert!(
+            !result.message.contains("`codex login`"),
+            "{}",
+            result.message
+        );
+        assert!(result.message.contains(SANDBOX_NOTE), "{}", result.message);
+        assert!(
+            remedy.to_string().contains("outside the sandbox"),
+            "{remedy}"
+        );
+
+        // Signed out, said so: a sign-in to fix, sandbox or not.
+        for sandbox in [true, false] {
+            let result = delegates_with_login(signed_out, sandbox);
+            assert!(
+                result.status.is_warn(),
+                "{:?} {}",
+                result.status,
+                result.message
+            );
+            assert!(
+                result.message.contains("`codex login`"),
+                "{}",
+                result.message
+            );
+        }
+
+        // Outside the sandbox any failure is a sign-in to fix.
+        let result = delegates_with_login(access_denied, false);
+        assert!(result.status.is_warn());
+        assert!(
+            result.message.contains("`codex login`"),
+            "{}",
+            result.message
+        );
     }
 
     #[test]
