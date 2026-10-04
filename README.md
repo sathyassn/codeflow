@@ -196,6 +196,7 @@ The docs are listed in reading order, by what the reader needs next.
 **Reference**
 
 - [docs/capabilities.md](docs/capabilities.md): the registry of what the system does
+- [docs/capabilities/CAP-010-duo-model-orchestration.md](docs/capabilities/CAP-010-duo-model-orchestration.md) and [docs/capabilities/CAP-015-opt-in-documentation-portal.md](docs/capabilities/CAP-015-opt-in-documentation-portal.md): two models working together, and the opt-in docs portal
 - [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
 - [docs/architecture/enforcement-planes.md](docs/architecture/enforcement-planes.md): what each plane catches
 - [docs/architecture/present.md](docs/architecture/present.md) and [docs/architecture/utility-presentation.md](docs/architecture/utility-presentation.md): how review pages and figures are built
