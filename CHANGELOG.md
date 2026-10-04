@@ -222,6 +222,17 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **`codeflow init` no longer hangs on a full pipe.** In a repository with
+  enough folders, `codeflow init` could block forever: it wrote all of the
+  folder names to `git check-ignore -v -n --stdin -z` before reading any
+  answer, while git wrote an answer per name, so once the output pipe
+  filled each side waited for the other. The input is now written from
+  its own thread while the output is read, in the nested-repository scan,
+  the `codeflow doctor` probes that pass input and the `gh` calls that
+  pass a request body. Output of any size completes, and a child that
+  stops reading early is judged by its exit status.
+
+<!-- codeflow:release-impact patch -->
 - **The full gate runs inside CodeFlow's own Claude sandbox.** The full
   gate takes a machine-wide lock under `~/.codeflow/locks` and keeps its
   evidence under `~/.codeflow/gate-runs`, which the shipped Claude settings

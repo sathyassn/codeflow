@@ -226,22 +226,13 @@ impl Options {
         if let Some(f) = self.exec_command_stdin {
             f(cmd, args, stdin)
         } else {
-            let mut child = crate::git::process(cmd)
-                .args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|error| error.to_string())?;
-            child
-                .stdin
-                .as_mut()
-                .ok_or_else(|| "command stdin was not piped".to_string())?
-                .write_all(stdin.as_bytes())
-                .map_err(|error| error.to_string())?;
-            let output = child
-                .wait_with_output()
-                .map_err(|error| error.to_string())?;
+            // Stdin is written while stdout and stderr are drained, so the
+            // command's output cannot deadlock against a large input.
+            let output = crate::git::output_with_input(
+                crate::git::process(cmd).args(args),
+                stdin.as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
             if output.status.success() {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
@@ -1813,13 +1804,19 @@ fn run_captured(
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        // A child that exits without reading closes the pipe; its exit
-        // status, not this write, is the result.
-        let _ = pipe.write_all(text.as_bytes());
-    }
+    // Written from its own thread, after the readers start, so an answer
+    // larger than a pipe cannot block the write and with it the timeout
+    // below. A child that exits without reading closes the pipe; its exit
+    // status, not this write, is the result, and a killed child ends the
+    // write the same way.
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        let text = text.to_string();
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
@@ -6227,5 +6224,26 @@ mod tests {
         let opts = test_opts();
         let result = run_check("claude", &opts).unwrap();
         assert_eq!(result.name, "claude");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_larger_than_a_pipe_does_not_block_a_large_stdin() {
+        // `cat` echoes its stdin as it reads, so a writer that sent all of
+        // stdin before it read stdout would block with the pipes full.
+        let input = "x".repeat(2 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let captured = run_captured("cat", &[], Duration::from_secs(30), Some(&input), None);
+            let exec = Options::default().do_exec_stdin("cat", &[], &input);
+            let _ = sender.send((captured, exec));
+        });
+        let (captured, exec) = receiver
+            .recv_timeout(Duration::from_secs(90))
+            .expect("the child exchange finished instead of deadlocking on a pipe");
+        let captured = captured.unwrap();
+        assert_eq!(captured.code, Some(0));
+        assert!(captured.stdout.starts_with('x'));
+        assert_eq!(exec.unwrap().len(), 2 * 1024 * 1024);
     }
 }
