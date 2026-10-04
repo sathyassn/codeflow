@@ -13,6 +13,7 @@ read on their trigger. Each section is the one home for its duties.
 
 | Section | Read |
 |---|---|
+| [Cross-family transport](routing/transport.md) | every task |
 | [Admissible cross-lineage evidence](routing/evidence.md) | every task |
 | [Route status and actual execution](routing/route-status.md) | when a route is being qualified, or a claim of scoped qualification, promotion or savings is made |
 | [Design routing](routing/design.md) | when the task has product, UX, UI, interaction, or visual design work |

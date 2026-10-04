@@ -21,8 +21,8 @@ check; when unsure, route.
   `.claude/settings.json`: sandbox-contained Bash, public web research and
   local dev binding are enabled; a failed sandboxed command may request one
   auto-classified unsandboxed retry for a trusted installed tool that needs
-  host state (for example, the official Codex plugin). This is not a general
-  bypass. Claude ignores repository requests for both auto mode and
+  host state (for example, `herdr` or the official Codex plugin). This is not
+  a general bypass. Claude ignores repository requests for both auto mode and
   classifier policy, so select auto in the active host (or user settings) and
   supply `autoMode.classifyAllShell` at user or CLI scope. `/cf-customize`
   canaries the effective mode; never claim the repo file enabled it.
@@ -39,7 +39,7 @@ check; when unsure, route.
 
 | Row | Claude mechanism |
 |---|---|
-| take a new request (routed work; when unsure, route) | `/cf-model-orchestrator` once per brief, with the seat selectors and efforts in `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`; the other lineage through the official Codex plugin, or a Herdr tab when `HERDR_ENV=1`; the Claude seat owns design and the integrated verdict; a missing seat degrades legibly after preflight and is recorded; after mode selection, follow `.claude/skills/cf-method/references/workflow-lifecycle.md`. Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate. `/cf-plan` and `/cf-develop` are supporting or solo flows, not alternate entry points |
+| take a new request (routed work; when unsure, route) | `/cf-model-orchestrator` once per brief, with the seat selectors and efforts in `.claude/skills/cf-model-orchestrator/resources/current-ensemble.json`; the other lineage through an interactive seat as `.claude/skills/cf-model-orchestrator/resources/routing/transport.md` states; the Claude seat owns design and the integrated verdict; a missing seat degrades legibly after preflight and is recorded; after mode selection, follow `.claude/skills/cf-method/references/workflow-lifecycle.md`. Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate. `/cf-plan` and `/cf-develop` are supporting or solo flows, not alternate entry points |
 | build | this session stays the orchestrator; wide search goes to the `Explore` subagent, bounded routine work to a capable worker as a native subagent of this session, never a separate CLI session or Herdr tab; parallel branches use separate worktrees, bounded fan-out from host memory and CPU, explicit file ownership and serialized landing |
 | give or ask for a review | the other lineage first; `cf-reviewer` as the same-family fresh-context pass, in the foreground (`run_in_background: false`) so its verdict lands before the turn ends; `cf-security-reviewer` on its trigger |
 | show something complex | when the session offers the inline widget tool (`show_widget`), the figure goes in the reply as an inline HTML widget; when it offers the Artifact tool, a page to share or comment on is an Artifact page, or `/cf-present` when anchored review is needed; with neither (the terminal), fenced ASCII |
