@@ -44,6 +44,13 @@ malformed, repeated or mismatched `Task:` line is refused.
 - `codeflow ci` warns on unclosed HTML and on a Testing section with no
   `Not tested:` line. Keep the body short by linking records instead of
   copying them; never drop evidence to shorten it.
+- `codeflow ci` also warns, and never blocks, when the body passes 1,000
+  words as a reader sees it: HTML comments are left out, fenced blocks and
+  tables count. The warning names the count and the three largest `##`
+  sections. A body grows when each review round is appended. Write it to its
+  final state instead: replace it on each update, link records instead of
+  copying them, keep one results block at the head and one review row per
+  reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope and the verdict, nothing more; the verdict and its native
   provenance live on the PR and findings live in the linked record. A review

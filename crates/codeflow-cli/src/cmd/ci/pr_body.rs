@@ -386,6 +386,388 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         })
 }
 
+/// A body over this many words draws the length warning (TSK-228).
+const BODY_WORD_LIMIT: usize = 1000;
+
+/// The HTML elements GitHub keeps that start a new line of text. It strips
+/// every other tag and keeps its text, so the words either side of one of
+/// those join: `<script>`, `<article>` and a stray `<String>` separate
+/// nothing.
+const BLOCK_TAGS: &[&str] = &[
+    "blockquote",
+    "br",
+    "caption",
+    "details",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+];
+
+/// Where the reading of the body's raw HTML stands. GitHub escapes the
+/// Markdown text it renders, so only raw HTML can close a comment, a CDATA
+/// section, a processing instruction, a declaration or a tag: after one
+/// opens, everything up to its closer is hidden, whatever the renderer
+/// writes between.
+enum HtmlState {
+    Text,
+    /// Inside a comment, CDATA section, processing instruction or
+    /// declaration, until this closer.
+    Until(&'static str),
+    /// Inside a tag that has not ended; `quote` is the open attribute quote.
+    Tag {
+        block: bool,
+        quote: Option<char>,
+    },
+}
+
+struct HtmlScan {
+    state: HtmlState,
+}
+
+impl HtmlScan {
+    fn new() -> Self {
+        Self {
+            state: HtmlState::Text,
+        }
+    }
+
+    /// The text a reader sees in this stretch of raw HTML: comments,
+    /// declarations, processing instructions and tags are gone, a block tag
+    /// separates its neighbours, and character references are decoded.
+    fn feed(&mut self, html: &str) -> String {
+        let mut out = String::new();
+        let mut rest = html;
+        while !rest.is_empty() {
+            match std::mem::replace(&mut self.state, HtmlState::Text) {
+                HtmlState::Until(close) => {
+                    let Some(end) = rest.find(close) else {
+                        self.state = HtmlState::Until(close);
+                        break;
+                    };
+                    rest = &rest[end + close.len()..];
+                }
+                HtmlState::Tag { block, mut quote } => {
+                    let mut ended = None;
+                    for (at, ch) in rest.char_indices() {
+                        match (quote, ch) {
+                            (None, '>') => {
+                                ended = Some(at);
+                                break;
+                            }
+                            (None, '"' | '\'') => quote = Some(ch),
+                            (Some(open), _) if ch == open => quote = None,
+                            _ => {}
+                        }
+                    }
+                    let Some(at) = ended else {
+                        self.state = HtmlState::Tag { block, quote };
+                        break;
+                    };
+                    if block {
+                        out.push('\n');
+                    }
+                    rest = &rest[at + 1..];
+                }
+                HtmlState::Text => {
+                    let Some(at) = rest.find('<') else {
+                        out.push_str(rest);
+                        break;
+                    };
+                    out.push_str(&rest[..at]);
+                    rest = &rest[at..];
+                    if let Some(after) = rest.strip_prefix("<!--") {
+                        // `<!-->` and `<!--->` are complete comments.
+                        if let Some(after) = after.strip_prefix('>').or(after.strip_prefix("->")) {
+                            rest = after;
+                        } else {
+                            self.state = HtmlState::Until("-->");
+                            rest = after;
+                        }
+                    } else if let Some(after) = rest.strip_prefix("<![CDATA[") {
+                        self.state = HtmlState::Until("]]>");
+                        rest = after;
+                    } else if let Some(after) = rest.strip_prefix("<?") {
+                        self.state = HtmlState::Until("?>");
+                        rest = after;
+                    } else if let Some(after) = rest
+                        .strip_prefix("<!")
+                        .filter(|after| after.starts_with(|c: char| c.is_ascii_alphabetic()))
+                    {
+                        self.state = HtmlState::Until(">");
+                        rest = after;
+                    } else if rest[1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '/')
+                    {
+                        let name = rest[1..]
+                            .trim_start_matches('/')
+                            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                            .next()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase();
+                        self.state = HtmlState::Tag {
+                            block: BLOCK_TAGS.contains(&name.as_str()),
+                            quote: None,
+                        };
+                        rest = &rest[1..];
+                    } else {
+                        out.push('<');
+                        rest = &rest[1..];
+                    }
+                }
+            }
+        }
+        decode_entities(&out)
+    }
+}
+
+/// What the HTML character reference at the start of `rest` (which begins
+/// with `&`) stands for, and the bytes it takes. The named references cover
+/// the markup characters and every space the HTML specification names, so
+/// each separates words as it does on the page; any other reference stays
+/// as written.
+fn reference(rest: &str) -> Option<(&'static str, usize)> {
+    if let Some(numeric) = rest.strip_prefix("&#") {
+        return numeric_reference(numeric).map(|taken| (" ", taken + 2));
+    }
+    let end = rest.bytes().take(33).position(|byte| byte == b';');
+    if let Some(end) = end {
+        let named = match &rest[1..end] {
+            "amp" => Some("&"),
+            "lt" => Some("<"),
+            "gt" => Some(">"),
+            "quot" => Some("\""),
+            "apos" => Some("'"),
+            "nbsp" | "NonBreakingSpace" => Some("\u{a0}"),
+            "ensp" => Some("\u{2002}"),
+            "emsp" => Some("\u{2003}"),
+            "emsp13" => Some("\u{2004}"),
+            "emsp14" => Some("\u{2005}"),
+            "numsp" => Some("\u{2007}"),
+            "puncsp" => Some("\u{2008}"),
+            "thinsp" | "ThinSpace" => Some("\u{2009}"),
+            "hairsp" | "VeryThinSpace" => Some("\u{200a}"),
+            "MediumSpace" => Some("\u{205f}"),
+            "ThickSpace" => Some("\u{205f}\u{200a}"),
+            "Tab" => Some("\t"),
+            "NewLine" => Some("\n"),
+            _ => None,
+        };
+        if let Some(text) = named {
+            return Some((text, end + 1));
+        }
+    }
+    // HTML also reads `&nbsp` with no semicolon.
+    rest.starts_with("&nbsp").then_some(("\u{a0}", 5))
+}
+
+/// The bytes a numeric reference takes after its `&#`, when it stands for a
+/// space: decimal or hex digits, padded or not, then an optional `;`. HTML
+/// replaces the C1 range with other characters, so those are never spaces.
+fn numeric_reference(rest: &str) -> Option<usize> {
+    let (radix, digits) = match rest.strip_prefix(['x', 'X']) {
+        Some(hex) => (16, hex),
+        None => (10, rest),
+    };
+    let count = digits.chars().take_while(|c| c.is_digit(radix)).count();
+    let code = u32::from_str_radix(digits.get(..count).filter(|d| !d.is_empty())?, radix).ok()?;
+    let space =
+        char::from_u32(code).is_some_and(|ch| ch.is_whitespace() && !(0x80..=0x9f).contains(&code));
+    space.then(|| rest.len() - digits.len() + count + usize::from(digits[count..].starts_with(';')))
+}
+
+/// Decode the character references an HTML block can carry.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some((decoded, taken)) = reference(rest) {
+            out.push_str(decoded);
+            rest = &rest[taken..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Text as the reference Markdown renderer writes it into HTML: `&`, `<`,
+/// `>` and `"` escaped, an apostrophe left alone.
+fn escape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The text of a body as a reader sees it, read from the HTML the Markdown
+/// renderer writes for the whole body, so the renderer's own tags and
+/// quotes, the body's raw HTML and the escaping of text all meet in one
+/// reading, as they do in a browser. The events are cut into chunks at the
+/// given source offsets and rendered one chunk at a time, so each chunk's
+/// words are known while one parse of the body resolves references and one
+/// HTML reading carries across the chunks.
+struct ReaderText {
+    text: String,
+    /// `(source offset where a chunk starts, text length before it)`.
+    marks: Vec<(usize, usize)>,
+}
+
+impl ReaderText {
+    /// Headings, tables and fenced blocks count; HTML comments, tag markup,
+    /// image alt text and footnote definitions nothing refers to do not.
+    /// `cuts` must lie between top-level blocks.
+    fn of(source: &str, cuts: &[usize]) -> Self {
+        let options = github_options();
+        let referenced: std::collections::HashSet<String> = Parser::new_ext(source, options)
+            .filter_map(|event| match event {
+                Event::FootnoteReference(label) => Some(label.into_string()),
+                _ => None,
+            })
+            .collect();
+        let mut cuts = cuts.to_vec();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut chunks: Vec<Vec<Event<'_>>> = vec![Vec::new(); cuts.len() + 1];
+        let mut current = 0;
+        let mut hidden_definition = false;
+        for (event, span) in Parser::new_ext(source, options).into_offset_iter() {
+            let skip = match &event {
+                Event::Start(Tag::FootnoteDefinition(label)) => {
+                    hidden_definition = !referenced.contains(label.as_ref());
+                    hidden_definition
+                }
+                Event::End(TagEnd::FootnoteDefinition) => std::mem::take(&mut hidden_definition),
+                _ => hidden_definition,
+            };
+            if !skip {
+                current = current.max(cuts.partition_point(|cut| *cut <= span.start));
+                // The reference renderer escapes a double quote in text and
+                // this one does not, and an unescaped quote would close an
+                // open attribute value, so the text is escaped here.
+                chunks[current].push(match event {
+                    Event::Text(text) => Event::Html(escape_text(&text).into()),
+                    Event::Code(text) => {
+                        Event::Html(format!("<code>{}</code>", escape_text(&text)).into())
+                    }
+                    other => other,
+                });
+            }
+        }
+        let mut reader = Self {
+            text: String::new(),
+            marks: Vec::new(),
+        };
+        let mut scan = HtmlScan::new();
+        for (index, events) in chunks.into_iter().enumerate() {
+            let mut html = String::new();
+            pulldown_cmark::html::push_html(&mut html, events.into_iter());
+            let start = index.checked_sub(1).map_or(0, |cut| cuts[cut]);
+            reader.marks.push((start, reader.text.len()));
+            reader.text.push_str(&scan.feed(&html));
+            reader.text.push('\n');
+        }
+        reader
+    }
+
+    /// The words of the whole body.
+    fn words(&self) -> usize {
+        self.text.split_whitespace().count()
+    }
+
+    /// The words of the chunks that start at source offsets `start..end`.
+    fn words_in(&self, start: usize, end: usize) -> usize {
+        let at = |offset: usize| {
+            let index = self.marks.partition_point(|mark| mark.0 < offset);
+            self.marks.get(index).map_or(self.text.len(), |mark| mark.1)
+        };
+        self.text[at(start)..at(end)].split_whitespace().count()
+    }
+}
+
+/// The words of `source` as a reader sees them.
+#[cfg(test)]
+fn word_count(source: &str) -> usize {
+    ReaderText::of(source, &[]).words()
+}
+
+/// The length warning's message for an over-long body: the count, the limit
+/// and the three largest `##` sections with their word counts. `None` at or
+/// under the limit.
+fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
+    // Each section's heading and its content are chunks of their own.
+    let cuts: Vec<usize> = sections
+        .iter()
+        .flat_map(|section| [section.heading_start, section.start])
+        .collect();
+    let reader = ReaderText::of(body, &cuts);
+    let total = reader.words();
+    if total <= BODY_WORD_LIMIT {
+        return None;
+    }
+    let mut largest: Vec<(&str, usize)> = sections
+        .iter()
+        .filter(|section| section.depth == HeadingLevel::H2)
+        .map(|section| {
+            (
+                section.name.trim(),
+                reader.words_in(section.start, section.end),
+            )
+        })
+        .filter(|(_, words)| *words > 0)
+        .collect();
+    // Stable, so equal sections keep their order in the body.
+    largest.sort_by(|a, b| b.1.cmp(&a.1));
+    let named = largest
+        .iter()
+        .take(3)
+        .map(|(name, words)| format!("## {name} ({words} words)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sections = if named.is_empty() {
+        String::new()
+    } else {
+        format!("; largest sections: {named}")
+    };
+    Some(format!(
+        "PR body is {total} words, over the {BODY_WORD_LIMIT}-word limit (HTML comments not counted){sections}"
+    ))
+}
+
 pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec<Violation> {
     if !git.pr_sections.is_active() {
         return Vec::new();
@@ -400,6 +782,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         ));
     };
     let outline = outline(body);
+    // TSK-228: a body over the word limit warns and never blocks; this check
+    // raises every finding at warn, whatever `git.pr_sections` says.
+    let length = length_message(body, &outline.sections);
     for tag in &outline.unclosed {
         warn(format!(
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
@@ -416,6 +801,14 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         {
             warn("PR Testing has no Not tested: line".into());
         }
+    }
+    if let Some(message) = length {
+        out.push(Violation::new(
+            "git.pr_sections",
+            PolicyLevel::Warn,
+            message,
+            codeflow_core::remedy::PR_BODY_LENGTH.remedy(),
+        ));
     }
     out
 }
@@ -1623,6 +2016,375 @@ mod tests {
             ..GitPolicy::default()
         };
         assert!(presentation(&git, &body, false).is_empty());
+    }
+
+    fn words(n: usize) -> String {
+        "word ".repeat(n)
+    }
+
+    /// TSK-228: the count is what a reader sees. Comments, tag markup and
+    /// image alt text are left out; code blocks, tables, headings and link
+    /// text are in.
+    #[test]
+    fn word_count_reads_what_a_reader_sees() {
+        assert_eq!(word_count("one two three"), 3);
+        assert_eq!(word_count("one <!-- hidden words here --> two"), 2);
+        assert_eq!(
+            word_count("one\n\n<!--\nhidden\n\nmore hidden\n-->\n\ntwo"),
+            2
+        );
+        assert_eq!(word_count("a <!-- split\nacross lines --> b"), 2);
+        assert_eq!(word_count("## Heading of three\ntext"), 4);
+        assert_eq!(word_count("```text\nfenced output of five words\n```"), 5);
+        assert_eq!(
+            word_count("```\n<!-- shown in a fence -->\n```"),
+            6,
+            "a comment inside a fenced block is shown, so it counts"
+        );
+        assert_eq!(
+            word_count("| a | b |\n|---|---|\n| one two | three |"),
+            5,
+            "cell text counts; pipes and the delimiter row do not"
+        );
+        assert_eq!(
+            word_count("see [the guide](https://example.com/a/b) now"),
+            4,
+            "a link counts by its text, never its address"
+        );
+        assert_eq!(word_count("look ![alt text of image](x.png) here"), 2);
+        assert_eq!(word_count("a <b>bold</b> c"), 3);
+        assert_eq!(word_count("foo**bar**baz"), 1, "inline marks join words");
+        assert_eq!(word_count("- one\n- two\n- three"), 3);
+        assert_eq!(word_count(""), 0);
+        assert_eq!(word_count("<!-- only a comment -->"), 0);
+    }
+
+    /// Review round 1 (F1): raw HTML keeps its block, cell and line-break
+    /// boundaries, decodes entities and hides what GitHub hides.
+    #[test]
+    fn word_count_reads_raw_html_as_rendered() {
+        assert_eq!(word_count("<p>one</p><p>two</p><p>three</p>"), 3);
+        assert_eq!(word_count("one<br>two<br/>three"), 3);
+        assert_eq!(
+            word_count("<table><tr><td>a</td><td>b</td></tr></table>"),
+            2
+        );
+        assert_eq!(
+            word_count("<details><summary>Round</summary>one two</details>"),
+            3
+        );
+        assert_eq!(word_count("a&nbsp;b &amp; c"), 4);
+        assert_eq!(word_count("&nbsp; &#160; &#xA0;"), 0);
+        assert_eq!(word_count("<p>foo<b>bar</b>baz</p>"), 1, "inline tags join");
+        assert_eq!(word_count("<p>a < b</p>"), 3, "a bare < is text");
+        assert_eq!(
+            word_count("<!-- unterminated comment runs to the end\n\nhidden"),
+            0
+        );
+        let long = "<p>word</p>".repeat(BODY_WORD_LIMIT + 100);
+        assert!(
+            length_message(&long, &sections(&long)).is_some(),
+            "adjacent HTML elements are separate words and pass the limit"
+        );
+    }
+
+    /// Review round 2: a `>` inside a quoted attribute does not end the
+    /// tag, and the named whitespace references separate words.
+    #[test]
+    fn word_count_reads_quoted_attributes_and_named_spaces() {
+        assert_eq!(
+            word_count("<div><img src=\"x.png\" alt=\"a > hidden words\"></div>"),
+            0
+        );
+        assert_eq!(
+            word_count("<div><img src='x.png' alt='a > hidden words'>shown</div>"),
+            1
+        );
+        assert_eq!(word_count("<p title=\"x\">a < b</p>"), 3);
+        assert_eq!(
+            word_count("<div>one&ensp;two&emsp;three&Tab;four&NewLine;five&thinsp;six</div>"),
+            6
+        );
+        let at = format!(
+            "{}<div><img src=\"x.png\" alt=\"a > hidden image alternative words here\"></div>",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(length_message(&at, &sections(&at)).is_none());
+        let over = format!(
+            "{}<div>one&ensp;two&emsp;three&Tab;four&NewLine;five</div>",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(length_message(&over, &sections(&over)).is_some());
+    }
+
+    /// Review round 3: every space the HTML specification names, however it
+    /// is written, separates words at the 1,000-word boundary.
+    #[test]
+    fn spaces_written_as_references_separate_words_at_the_boundary() {
+        let spaces = [
+            "&nbsp;",
+            "&NonBreakingSpace;",
+            "&ensp;",
+            "&emsp;",
+            "&emsp13;",
+            "&emsp14;",
+            "&numsp;",
+            "&puncsp;",
+            "&thinsp;",
+            "&ThinSpace;",
+            "&hairsp;",
+            "&VeryThinSpace;",
+            "&MediumSpace;",
+            "&ThickSpace;",
+            "&Tab;",
+            "&NewLine;",
+            "&#32;",
+            "&#x20;",
+            "&#x00000020;",
+            "&#00032;",
+            "&#9;",
+            "&#xA0;",
+            "&#160;",
+        ];
+        for space in spaces {
+            let body = format!(
+                "{}\n\n<div>one{space}two{space}three</div>",
+                words(BODY_WORD_LIMIT - 2)
+            );
+            assert_eq!(word_count(&body), BODY_WORD_LIMIT + 1, "{space}");
+            assert!(length_message(&body, &sections(&body)).is_some(), "{space}");
+        }
+        assert_eq!(word_count("<div>one&nbsptwo</div>"), 2, "legacy form");
+        for space in ["&#32", "&#x20", "&#X20", "&#9", "&#160", "&#xA0", "&#00032"] {
+            let body = format!(
+                "{}\n\n<div>one{space}two{space}three</div>",
+                words(BODY_WORD_LIMIT - 2)
+            );
+            assert_eq!(
+                word_count(&body),
+                BODY_WORD_LIMIT + 1,
+                "{space} with no semicolon"
+            );
+        }
+        // HTML turns the C1 range into other characters, so these are not spaces.
+        assert_eq!(word_count("<div>one&#133;two&#x85;three</div>"), 1);
+        assert_eq!(word_count("<div>one&#133two&#x85three</div>"), 1);
+        assert_eq!(
+            word_count("<div>R&D &amp; Q&A</div>"),
+            3,
+            "a bare & is text"
+        );
+    }
+
+    /// Checked against GitHub's rendering of each form: it keeps a short
+    /// list of block tags, strips every other tag and keeps its text, and
+    /// shows nothing for CDATA, processing instructions or declarations.
+    #[test]
+    fn word_count_follows_the_tags_github_keeps() {
+        assert_eq!(word_count("<section>one<p>two</p></section>three"), 3);
+        assert_eq!(word_count("<div>one<script>a b</script>two</div>"), 2);
+        assert_eq!(word_count("<div>one<style>.a</style>two</div>"), 1);
+        assert_eq!(word_count("<div>one<foo>two</foo>three</div>"), 1);
+        assert_eq!(word_count("<div>one<article>two</article></div>"), 1);
+        assert_eq!(word_count("<![CDATA[ a b c ]]>\n\none two"), 2);
+        assert_eq!(word_count("<?php a b c ?>\n\none two"), 2);
+        assert_eq!(word_count("<!DOCTYPE html>\n\none two"), 2);
+        assert_eq!(
+            word_count("<div>one <b two three"),
+            1,
+            "an unended tag is dropped"
+        );
+        assert_eq!(
+            word_count(
+                "<table><caption>cap words</caption><tr><th>h1</th><td>a b</td></tr></table>"
+            ),
+            5
+        );
+    }
+
+    /// Review round 5: GitHub escapes rendered text, so only raw HTML ends
+    /// a comment or a tag, and what an unended one covers stays hidden
+    /// across Markdown blocks, at the boundary and in the section counts.
+    #[test]
+    fn unended_comments_and_tags_hide_what_follows_across_blocks() {
+        let prefix = words(BODY_WORD_LIMIT - 2);
+        let comment = format!(
+            "{prefix}\n\n<details>\n<summary>Evidence</summary>\n<!-- hidden\n\nmore hidden words here\n-->\n</details>\n"
+        );
+        assert_eq!(word_count(&comment), BODY_WORD_LIMIT - 1);
+        for quote in ['"', '\''] {
+            let tag = format!(
+                "{prefix}\n\n<div><img src=x alt={quote}one\n\ntwo three{quote}> after</div>\n"
+            );
+            assert_eq!(word_count(&tag), BODY_WORD_LIMIT - 2, "{quote}");
+        }
+        // An apostrophe is not escaped in rendered text, so it closes a
+        // single-quoted value; a double quote is escaped and never does.
+        let tail = "<div><img src=x alt=QONE\n\ntwo three QTWO> after</div>\n\ntail words";
+        for (open, visible) in [("'", 2), ("\"", 0)] {
+            let body = format!(
+                "{prefix}\n\n{}",
+                tail.replace("QONE", &format!("{open}one"))
+                    .replace("QTWO", open)
+            );
+            assert_eq!(word_count(&body), BODY_WORD_LIMIT - 2 + visible, "{open}");
+        }
+        assert_eq!(
+            word_count("one <!--> two"),
+            2,
+            "an abrupt comment is complete"
+        );
+        assert_eq!(word_count("one <!---> two"), 2);
+        assert_eq!(word_count("<!-- a b\n\nc d\n-->\n\none two"), 2);
+        let body = format!(
+            "## First\n<!-- hidden\n\n{}\n## Second\n{}\n",
+            words(300),
+            words(BODY_WORD_LIMIT)
+        );
+        assert_eq!(
+            word_count(&body),
+            1,
+            "an unended comment hides the rest of the body"
+        );
+        let sections = format!(
+            "## First\n<!-- a\n\nb -->\n{}\n## Second\n{}\n",
+            words(400),
+            words(700)
+        );
+        let message = length_message(&sections, &super::sections(&sections)).unwrap();
+        assert!(
+            message.ends_with("## Second (700 words), ## First (400 words)"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn word_count_hides_footnote_definitions_nothing_refers_to() {
+        assert_eq!(word_count("text[^1]\n\n[^1]: used note words"), 5);
+        assert_eq!(word_count("text\n\n[^1]: unused note words here"), 1);
+        let at = format!(
+            "{}\n\n[^9]: unused four word note",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(
+            length_message(&at, &sections(&at)).is_none(),
+            "an unused definition does not push a body over the limit"
+        );
+    }
+
+    /// Review round 1 (F2): a section's words come from the one parse of
+    /// the whole body, so a reference defined in another section resolves.
+    #[test]
+    fn section_counts_keep_references_defined_elsewhere() {
+        let body = format!(
+            "## Images\n![alt text of an image][img] and [a link here][lnk]\n\n## Big\n{}\n## Links\n[img]: x.png\n[lnk]: https://example.com\n",
+            words(BODY_WORD_LIMIT + 100),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        let named = message.split("largest sections: ").nth(1).unwrap();
+        assert!(
+            named.starts_with("## Big (1100 words), ## Images (4 words)"),
+            "{message}"
+        );
+        assert!(!named.contains("## Links"), "{message}");
+        assert!(message.contains("is 1107 words"), "{message}");
+    }
+
+    /// Review round 1 (nit): equal sections keep their order in the body.
+    #[test]
+    fn length_message_keeps_body_order_between_equal_sections() {
+        let body = format!(
+            "## First\n{}\n## Second\n{}\n## Third\n{}\n## Fourth\n{}\n",
+            words(400),
+            words(400),
+            words(400),
+            words(400),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        assert!(
+            message.ends_with("## First (400 words), ## Second (400 words), ## Third (400 words)"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn length_message_fires_only_over_the_limit() {
+        let at = format!("## Summary\n{}", words(BODY_WORD_LIMIT - 1));
+        assert_eq!(word_count(&at), BODY_WORD_LIMIT);
+        assert!(length_message(&at, &sections(&at)).is_none());
+        let over = format!("{at}word");
+        let message = length_message(&over, &sections(&over)).unwrap();
+        assert!(
+            message.starts_with("PR body is 1001 words, over the 1000-word limit"),
+            "{message}"
+        );
+        let commented = format!("{at}\n<!-- {} -->", words(500));
+        assert!(length_message(&commented, &sections(&commented)).is_none());
+    }
+
+    /// TSK-228: the three largest `##` sections are named with their words;
+    /// a subsection belongs to its parent and text before the first heading
+    /// belongs to none.
+    #[test]
+    fn length_message_names_the_three_largest_sections() {
+        let body = format!(
+            "Task: TSK-001 {}\n## Summary\n{}\n## Changes\n{}\n## Testing\n{}\n### Detail\n{}\n## Reviews\n{}\n",
+            words(5),
+            words(10),
+            words(300),
+            words(100),
+            words(400),
+            words(450),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        let named = message.split("largest sections: ").nth(1).unwrap();
+        assert_eq!(
+            named, "## Testing (501 words), ## Reviews (450 words), ## Changes (300 words)",
+            "{message}"
+        );
+        assert!(!message.contains("Detail"), "{message}");
+        assert!(!message.contains("Summary"), "{message}");
+    }
+
+    #[test]
+    fn length_message_without_sections_names_none() {
+        let body = words(1200);
+        let message = length_message(&body, &sections(&body)).unwrap();
+        assert!(message.contains("1200 words"), "{message}");
+        assert!(!message.contains("largest sections"), "{message}");
+    }
+
+    /// TSK-228: the warning rides the presentation check, so it is always a
+    /// warning, names its remedy, and follows `git.pr_sections` being active.
+    #[test]
+    fn long_body_warns_at_warn_whatever_the_section_level() {
+        let body = format!(
+            "## Summary\nShort.\n## Testing\nNot tested: x.\n{}",
+            words(1100)
+        );
+        for level in [PolicyLevel::Block, PolicyLevel::Warn] {
+            let git = GitPolicy {
+                pr_sections: level,
+                ..GitPolicy::default()
+            };
+            let findings = presentation(&git, &body, true);
+            let long: Vec<_> = findings
+                .iter()
+                .filter(|v| v.message.contains("-word limit"))
+                .collect();
+            assert_eq!(long.len(), 1, "{level}: {findings:?}");
+            assert_eq!(long[0].level, PolicyLevel::Warn);
+            assert!(long[0].remedy.to_string().contains("link records"));
+        }
+        for level in [PolicyLevel::Allow, PolicyLevel::Off] {
+            let git = GitPolicy {
+                pr_sections: level,
+                ..GitPolicy::default()
+            };
+            assert!(presentation(&git, &body, true).is_empty(), "{level}");
+        }
+        let short = "## Summary\nShort.\n## Testing\nNot tested: x.\n";
+        assert!(presentation(&GitPolicy::default(), short, true).is_empty());
     }
 
     /// ADR-0071 rule 7 (Codex TSK-108 review, R108-1): a Summary is judged
