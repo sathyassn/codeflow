@@ -1,0 +1,11 @@
+id = "TSK-231"
+uid = "ef3836d9-618d-431d-a14f-57b462246814"
+kind = "TSK"
+title = "Evaluation trials launch Codex without remote plugins and Grok 1.0.46"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T05:22:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
