@@ -143,9 +143,10 @@ erratum below, never an edit of the section.
   finds a new instance of the same class stops the rounds and sends the
   unit back to design. A critical defect (live in a release or blocking
   current work, and blocking adopters, weakening a security boundary,
-  losing data or hanging a gate) gets interim guidance the same day and a
-  prioritized fix; moving another epic's planned work for it is the
-  operator's call. The lifecycle reference's repair bullet points a
+  losing data or hanging a gate) gets interim guidance the same day, a
+  prioritized fix when that guidance does not clear the block, a recorded
+  release decision and a notice to affected adopters; moving another
+  epic's planned work for it is the operator's call. The lifecycle reference's repair bullet points a
   reported defect at it, and `cf-reviewer` checks that the fix covers the
   class and that the sweep is recorded. It adds no check, pull request,
   approval or review round. Standard and full tiers receive it with
