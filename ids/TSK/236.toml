@@ -1,0 +1,11 @@
+id = "TSK-236"
+uid = "09abc2e1-791a-48a9-be7a-b2ee6f615604"
+kind = "TSK"
+title = "A project can configure design authority"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T16:35:39Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
