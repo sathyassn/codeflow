@@ -1141,10 +1141,12 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
     finally:
         for descriptor in opened:
             os.close(descriptor)
-    skills, agents, servers = set(), set(), set()
-    tools: dict[str, set[str]] = {}
+    skills, agents, servers, seen_tools, undeclared_tools = set(), set(), set(), set(), set()
     for relative, data in transcripts:
         found["transcripts"].append(relative)
+        # Each transcript is one session: a tool's server attribution in one
+        # session never vouches for the same name in another.
+        tools: dict[str, set[str]] = {}
         try:
             lines = data.decode("utf-8").splitlines()
         except UnicodeDecodeError as exc:
@@ -1197,12 +1199,14 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
                         name = block.get("name")
                         if isinstance(name, str) and name.startswith("mcp__"):
                             tools.setdefault(name, set())
+        seen_tools.update(tools)
+        undeclared_tools.update(name for name, by in tools.items() if not mcp_tool_declared(name, allowed, by))
     found["skills"], found["agents"] = sorted(skills), sorted(agents)
-    found["mcp_servers"], found["tools"] = sorted(servers), sorted(tools)
+    found["mcp_servers"], found["tools"] = sorted(servers), sorted(seen_tools)
     found["loaded"] = {
         "skills": sorted(name for name in skills if ":" in name),
         "agents": sorted(name for name in agents if ":" in name),
-        "tools": sorted(name for name, by in tools.items() if not mcp_tool_declared(name, allowed, by)),
+        "tools": sorted(undeclared_tools),
         "mcp_servers": sorted(name for name in servers if mcp_server_key(name) not in allowed),
     }
     return found

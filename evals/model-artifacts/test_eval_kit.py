@@ -8860,6 +8860,12 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             self.write_transcript(env, lines)
             self.assertEqual(["mcp__foo__bar__read"],
                              runner.claude_loaded_extensions(env, ["foo__bar"])["loaded"]["tools"])
+            # Attribution is per session: a second, clean transcript that
+            # attributes the name never clears the first one's finding.
+            self.write_transcript(env, [snapshot("foo__bar")], "subject.jsonl")
+            found = runner.claude_loaded_extensions(env, ["foo__bar"])
+            self.assertEqual(["session.jsonl", "subject.jsonl"], found["transcripts"])
+            self.assertEqual(["mcp__foo__bar__read"], found["loaded"]["tools"])
 
     def test_transcript_scan_rejects_special_files_and_swaps_without_blocking(self):
         runner = self.runner()
