@@ -51,6 +51,25 @@ registry.
 Open an issue using the templates. For security issues, see
 [SECURITY.md](SECURITY.md) and do not open a public issue.
 
+A bug report gives a reproduction and a severity. Severity is `critical`
+when the bug is live in a published release or blocks current work and does
+one of these:
+
+- blocks adopters: a managed file, gate, hook or guard fails or refuses
+  ordinary work in a consuming project;
+- weakens a security boundary or lets it be bypassed (report it privately,
+  as above);
+- loses or rewrites data, records or history;
+- deadlocks or hangs a gate, or blocks the tool's own fix path.
+
+Anything else is `normal`. Maintainers confirm the severity at intake and
+add the `critical` label. A fix then names the defect class, checks the
+tree for every other site of that class, and closes the issue with a note
+of what was fixed, what was deferred and which release carries it. The
+full process is the issue-handling reference,
+`.agents/skills/cf-method/references/issue-handling.md`; the release routes
+for a critical bug are in [releasing](releasing.md#critical-issues).
+
 ## Releasing
 
 Each work PR carries its release state (ADR-0062):
