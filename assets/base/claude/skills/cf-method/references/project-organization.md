@@ -302,9 +302,12 @@ After the review, a task pull request may merge its moved target and keep
 the binding when the merge's recorded result equals the conflict-free
 automatic merge of its parents, so refreshing a stale base needs no new
 review; any other merge or a later code change needs one. A reopened task
-keeps its criteria once a completion of it has landed on the target; before
-that, a reopen inside its own pull request may change them, also when the
-target already records the task.
+keeps its criteria once a completion of it has landed on the target, read
+from every version of its record in the target's history, so a later edit
+or deletion there does not undo the landing; before that, a reopen inside
+its own pull request may change them, also when the target already records
+the task. A history that cannot prove the task never landed (a shallow
+clone, for one) refuses the change.
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new

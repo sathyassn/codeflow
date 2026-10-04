@@ -783,16 +783,21 @@ erratum below, never an edit of the section.
   reopened task keeps its criteria as the anchored target has them", the
   same change accepted one completion earlier
   ([#67](https://github.com/sathyassn/codeflow/issues/67)). The freeze now
-  follows a landed completion: a reopened task keeps its criteria when a
-  completion of it is complete on the target, kept there as an archived
-  block or reopen line, reachable from the target's tip, shown by any
-  earlier version of its record in the target's history, or recorded by a
-  branch or remote-tracking ref outside the range; otherwise
-  `codeflow task status` and `codeflow ci` accept the change and CI prints
-  it for the reviewer. A landed task's criteria still change only through
-  a reviewed planning change, and a local branch or remote-tracking ref
-  can still only make the check stricter. The entry on new tasks above
-  now holds for every task whose completion never landed.
+  follows landing evidence: a reopened task keeps its criteria when any
+  version of its record in the judged target's history is complete, keeps
+  an acceptance block or records a reopen, however the target changed or
+  deleted the record later, and it keeps the criteria of the newest
+  judged version. Otherwise `codeflow task status` and `codeflow ci`
+  accept the change and CI prints it for the reviewer. A history that
+  cannot prove the task never landed (a shallow clone, grafts or replace
+  refs, a record that does not parse, or one id with two uids) refuses a
+  criteria change and nothing else. A landed task's criteria still change
+  only through a planning amendment that names its epic, which now flags
+  any landed task and reads a record the target deleted from its history;
+  a local branch or remote-tracking ref can still only make the check
+  stricter, and readiness still reads a predecessor's current status. The
+  entry on new tasks above now holds for every task whose completion never
+  landed.
 
 <!-- codeflow:release-impact patch -->
 - **A branch claimed on a reviewed predecessor head passes its own push
@@ -805,8 +810,10 @@ erratum below, never an edit of the section.
   row names, through the same lookup `work claim` uses: the commits up to
   it are judged as the predecessor's reviewed pull request, so its criteria
   change is printed, its completion binds at the pin, its status is read
-  there, and the journey rule holds the successor only to the paths it
-  changes itself, a deletion of the predecessor's file included. A head
+  there, and the journey rule holds the successor only to the paths its
+  own commits change and each merge changes against the automatic remerge
+  of its parents, so a deletion of the predecessor's file counts even
+  inside a merge, and an octopus merge refuses. A head
   no review names is not honoured, a successor that changes, reverts or
   removes the predecessor's record as the pin has it is refused, and the
   pull request into the target still waits for the predecessor to land.
