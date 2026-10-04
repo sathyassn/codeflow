@@ -1925,6 +1925,10 @@ fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
             ("critical label", "with the `critical` label where the host has labels"),
             ("jump within the epic", "the primary, within the fix's own epic"),
             ("jump across epics", "the operator, when it moves another epic's planned work"),
+            (
+                "release decision and notice",
+                "Every critical defect then gets a release decision, and affected adopters are told the outcome",
+            ),
             ("release route", "Only a route the project's release policy supports; agents never publish"),
             ("no route under pressure", "never a step taken under pressure"),
         ],

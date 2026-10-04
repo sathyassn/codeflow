@@ -425,7 +425,7 @@
     ".agents/skills/cf-method/references/issue-handling.md": {
       "src": "claude/skills/cf-method/references/issue-handling.md",
       "ownership": "managed",
-      "sha256": "c71d088f433996a8a013f097f094dd7baa378de57ea3927aa100f7ec51bd7a97",
+      "sha256": "287966d066e264280421d489f0020ce4fe4597d10f98f1397ee92d0eb1af274e",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -1265,7 +1265,7 @@
     ".claude/skills/cf-method/references/issue-handling.md": {
       "src": "claude/skills/cf-method/references/issue-handling.md",
       "ownership": "managed",
-      "sha256": "c71d088f433996a8a013f097f094dd7baa378de57ea3927aa100f7ec51bd7a97",
+      "sha256": "287966d066e264280421d489f0020ce4fe4597d10f98f1397ee92d0eb1af274e",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {

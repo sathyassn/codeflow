@@ -565,7 +565,7 @@ patch. Adding one would change these guards and costs:
 | The source must be a PR merged into `main` | `scripts/release.py:1860` | accept a merge into the branch |
 | One pending section, bumped once from the published baseline | `scripts/release.py:817`, `scripts/release.py:830` | a second live `CHANGELOG.md` section and target |
 | Branch protection | repository settings | rules for the new branch |
-| Every fix | each pull request | landed twice, once per line |
+| A fix that applies to both lines | each such pull request | landed twice, once per line |
 
 The first three rows are publication guards. Loosening them is a
 security-relevant change and an operator decision, taken with this cost

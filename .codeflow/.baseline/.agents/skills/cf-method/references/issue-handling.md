@@ -70,14 +70,16 @@ The primary marks the issue critical at intake, with the `critical` label
 where the host has labels, and names the criterion that holds. Every other
 defect keeps its place in the plan.
 
-The responses, in order. Each is taken when the one before it does not clear
-the block.
+The responses, in order. The fix is prioritized when the interim guidance
+does not clear the block. Every critical defect then gets a release
+decision, and affected adopters are told the outcome, whether or not the
+guidance cleared the block.
 
 | Step | What | Who decides |
 |---|---|---|
 | Interim guidance, the same day | A workaround that is true now, tested before it is posted, with what it does not cover; in the issue, and in the release plan when adopters are affected | the primary |
 | Prioritized fix | The fix unit moves ahead of planned work and lands first, so the branch the project releases from stays releasable | the primary, within the fix's own epic; the operator, when it moves another epic's planned work or work the operator ordered |
-| Release | Only a route the project's release policy supports; agents never publish | the operator |
+| Release | The fix goes in the next release the project can cut, and the release plan records whether that release is cut now or waits, and why. Only a route the project's release policy supports; agents never publish | the operator |
 | Adopters told | The issue comment, the changelog entry with its `Migration` line and the release notes; a security defect goes through the project's private reporting path, never a public issue | the primary writes, the operator publishes |
 
 The project's release policy names its routes and what each one costs. A

@@ -21,6 +21,9 @@ blocks current work, and it does one of these (say which):
 - loses or rewrites data, records or history
 - deadlocks or hangs a gate, or blocks CodeFlow's own fix path
 
+How a report is handled after this, and the routes for a critical bug, are
+in `docs/CONTRIBUTING.md`, "Reporting bugs / requesting features".
+
 **Reproduction**
 Steps to reproduce — ideally the exact `codeflow` command(s) and, where a gate
 fired, the guard/hook message it printed.

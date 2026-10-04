@@ -63,10 +63,10 @@ one of these:
 - deadlocks or hangs a gate, or blocks the tool's own fix path.
 
 Anything else is `normal`. Maintainers confirm the severity at intake and
-add the `critical` label. A fix then names the defect class, checks the
-tree for every other site of that class, and closes the issue with a note
-of what was fixed, what was deferred and which release carries it. The
-full process is the issue-handling reference,
+add the `critical` label when it holds. A fix then names the defect class,
+checks the tree for every other site of that class, and closes the issue
+with a note of what was fixed, what was deferred and which release carries
+it. The full process is the issue-handling reference,
 `.agents/skills/cf-method/references/issue-handling.md`; the release routes
 for a critical bug are in [releasing](releasing.md#critical-issues).
 
