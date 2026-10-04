@@ -540,28 +540,23 @@ erratum below, never an edit of the section.
   commit messages included, and refused it as a headless run whenever a
   peer name was followed anywhere later by a marker word: a review brief
   written with `cat` that named Codex and, further on, the word review was
-  refused. The raw text now leaves out what the line only writes as data,
-  when nothing that may run after it can run that data. Data is a heredoc
-  body read by a data command such as `cat` or `tee`, and a data command
-  written as the program itself that feeds no pipe and runs no
-  substitution, such as `echo '...'`, `git commit -m '...'` (a
-  `$(cat <<'EOF' ...)` message included) or `gh pr create --body '...'`.
-  Every command after it must be inert, such as `cat`, `grep` or `ls`;
-  with a pipe, a background job, a loop, a function or a trap on the
-  line, every other command must be. So `$EDITOR notes.md; git commit -m
-  'docs: record the Codex review'` passes, while a brief written with
-  `cat` and then opened with `$EDITOR brief.md` is still judged whole, as
-  in 3.0.0, because the guard cannot tell that `$EDITOR` will not run
-  it. The data left out is also judged as a script, so a line in it that
-  reads as a run, such as "Grok agent seat too.", is still refused. The
-  rest of the line, and interpreter code, are judged as before. A line
-  that defines an alias or function, sources, evaluates or `exec`s, or
-  sets `PATH` or a similar variable keeps all its data. Of 1,573 headless
-  run forms compared with 3.0.0, none that 3.0.0 refused is let through.
-  The guard reads the line's text; a run hidden behind a command it
-  cannot resolve that redefines a later data command, such as a `$X`
-  that is `eval`, is outside what it can see, as an encoded run already
-  was.
+  refused. When the whole line is data, its data is now left out of that
+  raw text: every simple command is a data command written by its bare
+  name (`cat`, `tee`, `echo`, `printf`, `grep`, `jq`, `git commit`, `gh pr`
+  and the like) or `cd`, joined only by `;`, `&&`, `||` or newlines, with
+  no assignment, no other command, no path-qualified program, no pipe,
+  background job, subshell or process substitution, no substitution other
+  than a `$(cat <<'EOF' ...)` message, and no file written on a line that
+  runs `git` or `gh`, which would run a written hook. So
+  `grep -c review <<< 'Codex review: approve'` and
+  `git commit -F - <<< 'docs: record the Codex review'` pass. Any other
+  line keeps the 3.0.0 judgement of its whole text, so a commit message
+  beside `$EDITOR notes.md` is still refused, as in 3.0.0. The data left
+  out is also judged as a script, so a line in it that reads as a run is
+  still refused. A brief written with `cat` and a heredoc, a `git commit
+  -m` message and a `gh pr create --body` text on their own were already
+  allowed. Of 1,585 headless run forms compared with 3.0.0, none that
+  3.0.0 refused is let through.
 
 <!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The

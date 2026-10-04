@@ -30,25 +30,23 @@
 //! the message says the line was not fully parsed, and a project that needs
 //! such a run sets `security.headless_peer_runs` to `warn`.
 //!
-//! The raw text leaves out what the line only writes as data, when nothing
-//! that may run after it can run that data (TSK-223). Data is a heredoc
-//! body read by a data command (`cat > brief.md <<EOF`), and a data
-//! command written as the program itself, feeding no pipe and running no
-//! substitution, such as `echo '…'`, `git commit -m '…'` (a
-//! `$(cat <<EOF …)` message included) or `gh pr create --body '…'`. It is
-//! left out only when every command after it is inert (`cat`, `grep`,
-//! `ls` and the like, with no assignment before them); in a line with a
-//! pipe, a background job, a process substitution, a loop, a function, a
-//! trap, an alias, `source`, `eval`, `exec` or a `PATH`-like assignment,
-//! every other command must be inert, which keeps all the data. So `$EDITOR notes.md; git commit -m '…'` drops
-//! its message, while `cat > run.sh <<EOF … EOF` followed by `bash run.sh`
-//! or `$EDITOR run.sh` is judged whole, as before. The data left out is
+//! The raw text leaves out what the line only writes as data only when
+//! the whole line is data (TSK-223): every simple command is a data command
+//! written by its bare name (`cat`, `echo`, `grep`, `git commit`, `gh pr`
+//! and the others `data_command` names) or `cd`, joined only by `;`,
+//! `&&`, `||` or newlines, with no assignment, no other command, no
+//! path-qualified program, no pipe, background job, subshell or process
+//! substitution, no substitution other than a `$(cat <<EOF …)` message,
+//! and no file written on a line that runs `git` or `gh`.
+//! Then the heredoc bodies and the arguments it writes are left out, so
+//! `grep -c review <<< 'Codex review: approve'` is no run. Any other line
+//! keeps the 3.0.0 raw judgement of its whole text. The data left out is
 //! still judged as a script, read with shell quoting: a peer counts only in
 //! command position, with its headless flag, or with its headless
 //! subcommand as the first word after its options, and a command the
 //! script cannot resolve sends its whole text to the raw matcher.
 
-use crate::hooks::git_guard::{command_argv, shell_tokens, simple_commands, strip_reserved_words};
+use crate::hooks::git_guard::{command_argv, shell_tokens, simple_commands};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,109 +110,6 @@ const DATA_COMMANDS: &[&str] = &[
     "cut", "diff", "jq", "base64", "true", ":",
 ];
 
-/// Programs that can follow written data without running it: they read
-/// files and text, or change nothing, and never run a program a file or
-/// argument names.
-const INERT_COMMANDS: &[&str] = &[
-    "cat", "echo", "printf", "grep", "egrep", "fgrep", "head", "tail", "wc", "uniq", "tr", "cut",
-    "diff", "jq", "base64", "true", "false", ":", "ls", "pwd", "cd", "mkdir", "touch", "test", "[",
-];
-
-/// Words that make a line's commands run in another order than they are
-/// written (a loop runs an earlier command again, a function or trap runs
-/// it later, a coprocess beside it), or change what a later command name
-/// runs (an alias, a sourced or evaluated definition, `exec` redirection,
-/// a hashed path, a builtin switched off).
-const REORDERING_WORDS: &[&str] = &[
-    "while", "until", "for", "select", "function", "trap", "coproc", "alias", "unalias", "source",
-    ".", "eval", "exec", "hash", "enable",
-];
-
-/// Launchers that run the command after them, walked to find the command
-/// word: `command`, `builtin` and `time`, and zsh's `noglob`, `nocorrect`
-/// and `-` modifiers, reach a builtin (a harness may run zsh); `nohup` and
-/// `env` are walked as well, which only ever keeps data.
-const WORD_LAUNCHERS: &[&str] = &[
-    "command",
-    "builtin",
-    "time",
-    "noglob",
-    "nocorrect",
-    "-",
-    "nohup",
-    "env",
-];
-
-/// Launcher options that take the next word as their value.
-const LAUNCHER_VALUES: &[&str] = &["-u", "-S", "-P", "-C", "-o", "-f"];
-
-/// Whether the command these words run is a [`REORDERING_WORDS`] word,
-/// read past `{`, `!`, assignments and [`WORD_LAUNCHERS`] with their
-/// options, so `command source`, `{ eval …; }` and `time builtin .` count
-/// while `git add .` or `find . -exec` do not.
-fn runs_reordering_word(words: &[String]) -> bool {
-    let mut at = 0;
-    loop {
-        while words
-            .get(at)
-            .is_some_and(|w| w == "{" || w == "!" || is_assignment(w))
-        {
-            at += 1;
-        }
-        let Some(word) = words.get(at) else {
-            return false;
-        };
-        if REORDERING_WORDS.contains(&word.as_str()) {
-            return true;
-        }
-        if !WORD_LAUNCHERS.contains(&basename(word).as_str()) {
-            return false;
-        }
-        at += 1;
-        while let Some(option) = words.get(at) {
-            if option == "--" {
-                at += 1;
-                break;
-            }
-            if !option.starts_with('-') {
-                break;
-            }
-            at += if LAUNCHER_VALUES.contains(&option.as_str()) {
-                2
-            } else {
-                1
-            };
-        }
-    }
-}
-
-/// Variables that change which program a name runs, or what runs beside
-/// it.
-const RUN_ENVIRONMENT: &[&str] = &[
-    "PATH",
-    "BASH_ENV",
-    "ENV",
-    "SHELLOPTS",
-    "BASHOPTS",
-    "PROMPT_COMMAND",
-    "PS4",
-    "IFS",
-    "LD_PRELOAD",
-    "LD_LIBRARY_PATH",
-    "DYLD_INSERT_LIBRARIES",
-    "DYLD_LIBRARY_PATH",
-];
-
-/// Whether `words` assign one of [`RUN_ENVIRONMENT`], anywhere
-/// (`PATH=…`, `export PATH=…`, `env PATH=… cat`).
-fn sets_run_environment(words: &[String]) -> bool {
-    words.iter().any(|w| {
-        is_assignment(w)
-            && w.split_once('=')
-                .is_some_and(|(name, _)| RUN_ENVIRONMENT.contains(&name))
-    })
-}
-
 /// Whether a simple command's words are a data command, written as the
 /// program itself with no assignment or launcher before it: one of
 /// [`DATA_COMMANDS`] (`printf -v` assigns, so it is not), `git commit`,
@@ -247,18 +142,6 @@ fn data_command(words: &[String]) -> Option<bool> {
     }
 }
 
-/// Whether a simple command cannot run data the line wrote before it: no
-/// words, only assignments, or one of [`INERT_COMMANDS`] with no
-/// assignment before it (an environment such as `LD_PRELOAD` can make
-/// any program load a written file).
-fn inert(words: &[String]) -> bool {
-    match words.first() {
-        None => true,
-        Some(_) if words.iter().all(|w| is_assignment(w)) => true,
-        Some(program) => INERT_COMMANDS.contains(&basename(program).as_str()),
-    }
-}
-
 /// A heredoc opened in the current simple command, waiting for its body.
 struct PendingDoc {
     delimiter: String,
@@ -272,10 +155,17 @@ struct PendingDoc {
 /// One simple command of the line, as [`split_data`] read it.
 struct Segment {
     text: String,
-    /// `Some(judge_args)` when it is a data command that feeds no pipe and
-    /// runs no substitution of its own.
+    /// `Some(judge_args)` when it is a data command written by its bare
+    /// name that feeds no pipe and runs no substitution of its own.
     data: Option<bool>,
-    inert: bool,
+    /// No words, a data command, or `cd` with no substitution.
+    plain: bool,
+    /// It writes a file: an output redirection, or `tee`, `uniq` or
+    /// `base64`, which can name an output file.
+    writes: bool,
+    /// `git` or `gh`, which run hooks, a configured fsmonitor and other
+    /// programs the repository's files name.
+    runs_repository_programs: bool,
 }
 
 /// The line in order: text that always stays in the code, a simple
@@ -296,29 +186,32 @@ enum Piece {
 struct LineShape {
     segments: Vec<Segment>,
     pieces: Vec<Piece>,
-    /// A pipe, a background job, a process substitution, a command that
-    /// runs a [`REORDERING_WORDS`] word ([`runs_reordering_word`]), or a
-    /// [`RUN_ENVIRONMENT`] assignment:
-    /// commands may run in another order than they are written, or a name
-    /// may run another program.
-    reordered: bool,
+    /// A pipe, a background job, a subshell or a process substitution:
+    /// commands joined other than by `;`, `&&`, `||` or a newline.
+    joined_otherwise: bool,
 }
 
 impl LineShape {
-    /// Close the simple command in `span`.
-    fn flush(&mut self, span: &mut String, runs: &mut bool, docs: &mut [PendingDoc], piped: bool) {
-        let mut words = command_argv(span);
-        let environment = sets_run_environment(&words);
-        // Before the reserved words go (`while`, `until`), and after
-        // (`then source …`, `if command eval …`).
-        let mut reorders = runs_reordering_word(&words);
-        strip_reserved_words(&mut words);
-        reorders |= runs_reordering_word(&words);
-        let data = data_command(&words).filter(|_| !piped && !*runs);
-        let inert = !*runs && !environment && inert(&words);
-        if environment || reorders {
-            self.reordered = true;
-        }
+    /// Close the simple command in `span`. Its words are read as written,
+    /// reserved words included, so `if`, `while`, `{` or `fi` is no plain
+    /// command.
+    fn flush(
+        &mut self,
+        span: &mut String,
+        runs: &mut bool,
+        writes: &mut bool,
+        docs: &mut [PendingDoc],
+        piped: bool,
+    ) {
+        let words = command_argv(span);
+        let program = words.first().map(|word| basename(word));
+        let bare = words
+            .first()
+            .is_none_or(|program| !program.contains(['/', '\\']));
+        let data = data_command(&words).filter(|_| bare && !piped && !*runs);
+        let plain = words.is_empty()
+            || data.is_some()
+            || (words.first().is_some_and(|w| w == "cd") && !*runs && !piped);
         let owner = self.segments.len();
         for doc in docs.iter_mut().filter(|doc| doc.owner == usize::MAX) {
             doc.owner = owner;
@@ -326,42 +219,40 @@ impl LineShape {
         self.segments.push(Segment {
             text: std::mem::take(span),
             data,
-            inert,
+            plain,
+            writes: *writes
+                || program
+                    .as_deref()
+                    .is_some_and(|name| matches!(name, "tee" | "uniq" | "base64")),
+            runs_repository_programs: program
+                .as_deref()
+                .is_some_and(|name| matches!(name, "git" | "gh")),
         });
         self.pieces.push(Piece::Segment(owner));
         *runs = false;
+        *writes = false;
     }
 
-    /// A substitution that spans lines, other than a `$(cat <<EOF …)`
-    /// message, may hold a heredoc this reader does not follow: keep all
-    /// the data.
-    fn substitution_text(&mut self, text: &[char], message: bool) {
-        if !message && text.contains(&'\n') {
-            self.reordered = true;
-        }
-    }
-
-    /// Whether the data command at `at` can be left out of the code: no
-    /// command that may run after it can run what it wrote. In a line
-    /// read in order that is every later command; in a reordered line,
-    /// every other command.
-    fn removable(&self, at: usize) -> bool {
-        self.segments[at].data.is_some()
-            && self
-                .segments
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| if self.reordered { *i != at } else { *i > at })
-                .all(|(_, segment)| segment.inert)
+    /// Whether the line is data only: every simple command is plain, they
+    /// are joined only by `;`, `&&`, `||` or newlines, and no file is
+    /// written on a line that runs `git` or `gh` (a written hook or
+    /// configuration would run). Only then is its data left out; any other
+    /// line keeps its whole raw text.
+    fn data_only(&self) -> bool {
+        let writes = self.segments.iter().any(|segment| segment.writes);
+        let repository = self
+            .segments
+            .iter()
+            .any(|segment| segment.runs_repository_programs);
+        let exposed = self.joined_otherwise || (writes && repository);
+        !exposed && self.segments.iter().all(|segment| segment.plain)
     }
 }
 
 /// Split `command` into the text that can run and the data it only
-/// writes. A simple command is data when [`data_command`] says so, it
-/// feeds no pipe, it runs no substitution other than a `$(cat <<EOF …)`
-/// message, and no command that may run after it can run what it wrote
-/// ([`LineShape::removable`]); its heredoc bodies are data with it, unless
-/// an unquoted body runs a substitution. The data returned is each judged
+/// writes. Data is left out only when the line is data only
+/// ([`LineShape::data_only`]): then each data command's text, and its
+/// heredoc bodies unless an unquoted body runs a substitution, is data. The data returned is each judged
 /// piece: a body, and a data command's arguments, joined and one by one,
 /// unless they are a message. Quotes, `$(…)` and backticks are tracked so
 /// a separator inside them splits nothing; anything this reader cannot
@@ -373,6 +264,8 @@ fn split_data(command: &str) -> (String, Vec<String>) {
     let mut span = String::new();
     // Whether the span runs a substitution this reader does not clear.
     let mut runs = false;
+    // Whether the span redirects output to a file.
+    let mut writes = false;
     let mut docs: Vec<PendingDoc> = Vec::new();
     let mut quote: Option<char> = None;
     let mut i = 0;
@@ -380,9 +273,7 @@ fn split_data(command: &str) -> (String, Vec<String>) {
         let c = chars[i];
         if let Some(open) = quote {
             if c == '`' && open == '"' {
-                let end = backtick(&chars, i, &mut span, &mut runs);
-                shape.substitution_text(&chars[i..end], false);
-                i = end;
+                i = backtick(&chars, i, &mut span, &mut runs);
                 continue;
             }
             span.push(c);
@@ -396,10 +287,7 @@ fn split_data(command: &str) -> (String, Vec<String>) {
             if c == open {
                 quote = None;
             } else if open == '"' && c == '$' && chars.get(i + 1) == Some(&'(') {
-                let message = cat_heredoc_substitution(&chars, i).is_some();
-                let end = substitution(&chars, i, &mut span, &mut runs);
-                shape.substitution_text(&chars[i..end], message);
-                i = end;
+                i = substitution(&chars, i, &mut span, &mut runs);
                 continue;
             }
             i += 1;
@@ -414,9 +302,7 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                 }
             }
             '`' => {
-                let end = backtick(&chars, i, &mut span, &mut runs);
-                shape.substitution_text(&chars[i..end], false);
-                i = end;
+                i = backtick(&chars, i, &mut span, &mut runs);
                 continue;
             }
             '\'' | '"' => {
@@ -424,10 +310,7 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                 span.push(c);
             }
             '$' if chars.get(i + 1) == Some(&'(') => {
-                let message = cat_heredoc_substitution(&chars, i).is_some();
-                let end = substitution(&chars, i, &mut span, &mut runs);
-                shape.substitution_text(&chars[i..end], message);
-                i = end;
+                i = substitution(&chars, i, &mut span, &mut runs);
                 continue;
             }
             '<' if chars.get(i + 1) == Some(&'<')
@@ -443,7 +326,11 @@ fn split_data(command: &str) -> (String, Vec<String>) {
             '<' | '>' if chars.get(i + 1) == Some(&'(') => {
                 // A process substitution runs its text, beside the command.
                 runs = true;
-                shape.reordered = true;
+                shape.joined_otherwise = true;
+                span.push(c);
+            }
+            '>' => {
+                writes = true;
                 span.push(c);
             }
             '&' if matches!(chars.get(i + 1), Some('>')) => span.push(c),
@@ -453,15 +340,10 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                 let next = chars.get(i + 1).copied();
                 let piped = c == '|' && next != Some('|') && prev != Some('|');
                 let background = c == '&' && next != Some('&') && !matches!(prev, Some('&' | '|'));
-                let function = c == '('
-                    && chars[i + 1..]
-                        .iter()
-                        .find(|x| !x.is_whitespace())
-                        .is_some_and(|x| *x == ')');
-                if piped || background || function {
-                    shape.reordered = true;
+                if piped || background || matches!(c, '(' | ')') {
+                    shape.joined_otherwise = true;
                 }
-                shape.flush(&mut span, &mut runs, &mut docs, piped);
+                shape.flush(&mut span, &mut runs, &mut writes, &mut docs, piped);
                 shape.pieces.push(Piece::Code(c.to_string()));
                 if c == '\n' && !docs.is_empty() {
                     i = heredoc_bodies(&chars, i + 1, &mut docs, &mut shape.pieces);
@@ -472,10 +354,13 @@ fn split_data(command: &str) -> (String, Vec<String>) {
         }
         i += 1;
     }
-    shape.flush(&mut span, &mut runs, &mut docs, false);
+    shape.flush(&mut span, &mut runs, &mut writes, &mut docs, false);
     // A heredoc with no body line yet: its operator stays in the code.
-    let removed: Vec<bool> = (0..shape.segments.len())
-        .map(|at| shape.removable(at))
+    let data_only = shape.data_only();
+    let removed: Vec<bool> = shape
+        .segments
+        .iter()
+        .map(|segment| data_only && segment.data.is_some())
         .collect();
     let mut code = String::new();
     let mut data: Vec<String> = Vec::new();
@@ -1792,24 +1677,36 @@ mod tests {
     #[test]
     fn text_that_only_names_a_peer_is_not_a_run() {
         for command in [
-            "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF",
-            "\"$EDITOR\" notes.md\ncat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ncat brief.md",
-            "$EDITOR x; echo \"`date`\"; echo 'Codex review: done'",
-            // Round four of review: `.` and `exec` as arguments are no
-            // reordering words.
-            "$EDITOR notes.md\ngit add .\ngit commit -m 'docs: record the Codex review'",
-            "$EDITOR notes.md; git add . && git commit -m 'docs: record the Codex review'",
-            "$EDITOR notes.md; cp notes.md .; find . -exec true {} \\;; git commit -m 'the Codex review'",
-            "$EDITOR notes.md; npm exec prettier; git commit -m 'docs: record the Codex review'",
-            "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
-            "M=$(date); $PAGER notes.md; git commit -m \"docs: record the Codex review\"",
-            "$EDITOR x; git commit -m \"$(cat <<'EOF'\nfix: apply the Codex review\n\nClaude -p was not used.\nEOF\n)\"",
             "grep -c review <<< 'Codex review: approve'",
-            "bash run.sh; echo 'Codex adversarial seat: please review the page'",
-            "$PAGER notes.md && echo 'Grok, the agent seat, and Claude will review it'",
-            "$RUN; gh pr create --body 'the Codex review approved'",
+            "cat > brief.md <<< 'Codex adversarial seat: please review'",
+            "jq -r .x <<< '{\"x\":\"Codex review\"}'",
+            "cd docs && grep -c review <<< 'Codex review: approve'",
+            "git commit -F - <<< 'docs: record the Codex review'",
+            "gh pr comment 56 --body-file - <<< 'the Codex review approved'",
+            "grep -q review <<< 'Codex review: approve' && git commit -m 'docs: record the Codex review'",
+            "cat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ngrep -c Codex <<< 'Codex review: approve'",
         ] {
             assert_eq!(found(command), None, "{command}");
+        }
+    }
+
+    /// TSK-223: a line with any command other than bare data commands and
+    /// `cd` keeps the 3.0.0 raw judgement of its whole text, so text that
+    /// only names a peer beside such a command is still refused.
+    #[test]
+    fn a_line_with_another_command_keeps_its_raw_text() {
+        for command in [
+            "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+            "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review\nEOF",
+            "$RUN; gh pr create --body 'the Codex review approved'",
+            "D=$PWD; grep -c review <<< 'Codex review: approve'",
+            "git add . && grep -c review <<< 'Codex review: approve'",
+            "/bin/cat <<< 'Codex review: approve'",
+            "grep -c review <<< 'Codex review' | wc -l",
+            "(grep -c review <<< 'Codex review')",
+            "if true; then grep -c review <<< 'Codex review'; fi",
+        ] {
+            assert!(found(command).is_some(), "{command}");
         }
     }
 
@@ -1898,6 +1795,20 @@ mod tests {
             "$EDITOR notes.md; noglob source fn.sh; echo codex exec do the work",
             "$EDITOR notes.md; nocorrect . fn.sh; echo codex exec do the work",
             "$EDITOR notes.md; - builtin source fn.sh; echo codex exec do the work",
+            // Final review: an alias variable or a replaced program.
+            "shopt -s expand_aliases\nprintf -v 'BASH_ALIASES[echo]' command\nX=true; $X\necho codex exec x",
+            "shopt -s expand_aliases\nBASH_ALIASES[echo]=command\nX=true; $X\necho codex exec x",
+            "shopt -s expand_aliases; printf -v 'BASH_ALIASES[echo]' command; X=true; $X; echo codex exec x",
+            "declare -A BASH_ALIASES=([echo]=command); $X; echo codex exec x",
+            "X=true; $X\nmkdir -p /tmp/review-bin\ncp /usr/bin/python3 /tmp/review-bin/cat\n/tmp/review-bin/cat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
+            "X=true; $X\nprintf -v PATH '/tmp/review-bin:%s' \"$PATH\"\ncat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
+            "PATH=/tmp/review-bin:$PATH; $X; cat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
+            "./cat <<< 'codex exec x'",
+            "read -r X <<< 'codex exec x'; cat <<< 'x'",
+            // A written hook or configuration that git or gh then runs.
+            "cat > .git/hooks/pre-commit <<'EOF'\n#!/usr/bin/env python3\nimport os\nos.system('codex exec x')\nEOF\ngit commit -m x <<< ''",
+            "cat >> .git/config <<'EOF'\n[core]\n\tfsmonitor = sh -c 'codex exec x'\nEOF\ngit commit -m x <<< ''",
+            "tee .git/hooks/pre-push <<< 'import os; os.system(\"codex exec x\")' && gh pr create --body x",
             "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
         ] {
             assert!(found(command).is_some(), "{command}");

@@ -1334,9 +1334,9 @@ fn exec_guard_classifies_every_review_probe() {
 #[test]
 fn exec_guard_lets_text_that_only_names_a_peer_through() {
     // TSK-223 AC-3 (sathyassn/codeflow#52): a brief or commit message that
-    // names a peer and the word review, on a line with a variable program,
-    // is no headless run when nothing after it can run it; a line that runs
-    // the peer, or runs what it wrote, still is.
+    // names a peer and the word review, on a line of bare data commands that
+    // exec-guard cannot fully resolve (a here-string), is no headless run; a
+    // line with any other command keeps its raw text and still is.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
     let guard = |command: &str| {
@@ -1348,9 +1348,9 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
         )
     };
     for command in [
-        "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF",
-        "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
         "grep -c review <<< 'Codex review: approve'",
+        "cat > brief.md <<< 'Codex adversarial seat: please review'",
+        "git commit -F - <<< 'docs: record the Codex review'",
     ] {
         let out = guard(command);
         let err = String::from_utf8_lossy(&out.stderr);
@@ -1360,6 +1360,9 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
     for command in [
         "CMD=codex; $CMD exec x",
         "printf -v CMD 'codex exec'; $CMD x",
+        "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+        "shopt -s expand_aliases; printf -v 'BASH_ALIASES[echo]' command; X=true; $X; echo codex exec x",
+        "PATH=/tmp/review-bin:$PATH; $X; cat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
         "cat > run.sh <<'EOF'\nCMD=codex\n$CMD exec x\nEOF\nbash run.sh",
         "D=$PWD; cat > brief.md <<EOF\nCodex: review\nEOF\necho 'codex exec x' | $SHELL",
     ] {
