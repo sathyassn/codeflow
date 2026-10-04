@@ -316,3 +316,40 @@ Moving design, architecture and technical planning to Fable while Opus
 keeps orchestration is an engine change and a change to "Launch identity
 and design authority" above. It was offered to the operator on 2026-10-02
 as their decision. Until then the Fable row above stands.
+
+## Note (2026-10-04)
+
+The operator decided issue 43 on 2026-10-04 and TSK-236 applies it. This
+narrows the project schema 2 "never" list in "Local and project
+selection" and answers the 2026-10-02 offer above for adopting projects.
+
+- D1, yes, same family only: a project may name another line of the design
+  owner seat (for example Fable after Opus) as a standing design co-owner
+  in `.codeflow/model-selection.json` schema 2 `design_authority`. Another
+  family still needs the task-specific `OPERATOR_OVERRIDE`, which is
+  unchanged.
+- D2, yes: a separate opt-in `design-approval` duty, held by the co-owner
+  (consultants advisory), recorded apart from the cross-family review and
+  never counted as the independent review.
+- D3: standing extra-family reviews live in schema 2 `standing_reviews` and
+  add the catalog's own extra-family participant to `unit-review` or
+  `body-review` resolved with `--area`; `routing-policy.json` is unchanged.
+- D4: the "fallback, reduced assurance" label is dropped only for a line
+  the project designated, and only on `design` and `design-approval`;
+  elsewhere the later line stays a fallback.
+- D5: applying this to CodeFlow's own `model-selection.json` is a later
+  separate task.
+
+The protections hold. The owner must be the seat's first line, so
+authority never follows list order silently, and every fallback stays
+labelled. The block confers authority only as committed at the merge-base
+of `HEAD` and the task's integration target, read the same way as the
+override; a working-tree copy, a task-branch commit and a caller string
+confer none. The block names only lines the catalog's design owner seat
+already lists, in that seat's family, each with an active version
+designated or fully qualified for the seat, so repository content still
+cannot add a selector, command, family, harness or designation. A
+same-family approval never fills the independent review, and a standing
+review adds a named, labelled participant, so an extra family never votes
+silently. With no file or a schema 1 file every duty resolves exactly as
+before.

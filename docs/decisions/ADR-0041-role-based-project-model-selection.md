@@ -85,3 +85,9 @@ approved binding ids for exact roles and harnesses, and is checked against the
 schema 5 catalog, which stays fully managed. A personal overlay,
 `~/.codeflow/model-catalog.local.json`, may add candidate versions or exclude
 versions on one machine; it cannot designate a seat or claim evidence.
+
+## Note (2026-10-04)
+
+Schema 1 remains the binding-reference form. Schema 2 adds an optional
+project design-authority block and standing extra-family reviews; binding
+references keep the rules above. See the ADR-0069 note of 2026-10-04.

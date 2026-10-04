@@ -80,6 +80,18 @@ driver and not design authorship. Adaptive viewports, accessibility,
 i18n/l10n including LTR/RTL, and system layers stay proportionate intent
 dimensions — collapse with an evidenced `N/A`.
 
+## Note (2026-10-04)
+
+The operator decided issue 43 on 2026-10-04 (ADR-0069 note of the same
+date). A project may designate a later line of the Claude design owner
+seat as a standing design co-owner in `.codeflow/model-selection.json`
+schema 2. Committed on the task's integration target, it produces design
+after the first line with the same authority, and it gives the
+same-family `design-approval`. That approval and the cross-family review
+are separate duties; when both are configured, both are required, and the
+approval never counts as the independent review. Another family still
+designs only through the task-specific operator override.
+
 ## Consequences
 
 - Design reasoning becomes explicit and reviewable without expanding the

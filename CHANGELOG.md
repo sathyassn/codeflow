@@ -131,6 +131,30 @@ erratum below, never an edit of the section.
   Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
   `project-management/templates/` carries the new section.
 
+<!-- codeflow:release-impact minor -->
+- **A project can configure design authority.** `.codeflow/model-selection.json`
+  schema 2 adds two optional blocks (issue 43). `design_authority` names
+  roles inside the catalog's design owner seat: one `owner`, which must be
+  the seat's first line, and later lines of the same seat as `co-owner` or
+  `consultant`, with the stages they approve at or are consulted before. A
+  co-owner designs after the owner with no task override and without the
+  reduced-assurance label. The block counts only as committed on the
+  task's integration target, so `codeflow models resolve --duty design`
+  needs `--task` to apply it; a working-tree or task-branch copy confers
+  nothing. A new engine-owned duty, `design-approval`, resolves the
+  co-owner as a required same-family approver and each consultant as an
+  advisory one, labelled as never the independent review; unconfigured, it
+  is an optional open gap with exit 0. `standing_reviews` makes an
+  extra-family seat a standing reviewer for an area: a `unit-review` or
+  `body-review` resolved with the new `--area` flag owes that catalog
+  participant as a standing assignment. Another family still designs only
+  through a task `OPERATOR_OVERRIDE`, any invalid entry rejects the whole
+  file, `codeflow doctor --check model-bindings` prints both blocks, and a
+  schema 1 file or no file resolves every duty exactly as before. The
+  design routing reference and cf-design's revision reference say that a
+  same-family design approval and a cross-family review are separate
+  duties, both required when both are configured.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
