@@ -8,7 +8,10 @@
 //! the helper it accepts only a stdin set to null or inherited, or the
 //! process's own `io::stdin()`; any other `.stdin(...)` argument (a variable
 //! or a conditional hides what it pipes), a `Command::stdin` path call and any
-//! use of a child's `stdin` handle is a failure.
+//! use of a child's `stdin` handle, `ChildStdin`, or a `Child { .. }` pattern is
+//! a failure. Raw identifiers (`r#stdin`) are read as the plain name. Limits,
+//! stated rather than hidden: code a macro generates, and raw file
+//! descriptors or handles taken from the operating system, are not seen.
 
 use std::path::{Path, PathBuf};
 
@@ -83,13 +86,19 @@ fn code_only(text: &str) -> String {
             }
             blank(&mut out, i, j);
             i = j;
-        } else if rest[0] == b'r' && (rest.starts_with(b"r\"") || rest.starts_with(b"r#"))
-            || rest.starts_with(b"br\"")
-            || rest.starts_with(b"br#")
+        } else if (i == 0 || !is_ident(bytes[i - 1]))
+            && (rest.starts_with(b"r\"")
+                || rest.starts_with(b"r#")
+                || rest.starts_with(b"br\"")
+                || rest.starts_with(b"br#"))
         {
             let start = i + usize::from(rest[0] == b'b') + 1;
             let hashes = bytes[start..].iter().take_while(|b| **b == b'#').count();
-            if bytes.get(start + hashes) == Some(&b'"') {
+            if rest.starts_with(b"r#") && bytes.get(start + hashes).is_some_and(|b| is_ident(*b)) {
+                // A raw identifier (`r#stdin`): keep the name, drop `r#`.
+                blank(&mut out, i, i + 2);
+                i += 2;
+            } else if bytes.get(start + hashes) == Some(&b'"') {
                 let closing = format!("\"{}", "#".repeat(hashes));
                 let body = start + hashes + 1;
                 let end = text[body..]
@@ -197,7 +206,16 @@ fn stdin_uses(source: &str) -> Vec<(usize, String)> {
         let line = code[..at].matches('\n').count() + 1;
         let after = code[end..].trim_start();
         if !after.starts_with('(') {
-            found.push((line, "a use of a child's stdin handle".to_string()));
+            // `use std::io::stdin;` names the process's own stdin.
+            let statement = code[..at].rfind([';', '{', '}']).map_or(0, |n| n + 1);
+            let names_import = path_call
+                && code[statement..at]
+                    .trim_start()
+                    .trim_start_matches("pub ")
+                    .starts_with("use ");
+            if !names_import {
+                found.push((line, "a use of a child's stdin handle".to_string()));
+            }
             continue;
         }
         let open = end + (code[end..].len() - after.len());
@@ -217,11 +235,42 @@ fn stdin_uses(source: &str) -> Vec<(usize, String)> {
             }
         }
         let argument: String = code[open + 1..close].split_whitespace().collect();
+        let argument = argument.trim_end_matches(',').to_string();
         let own_stdin = path_call && argument.is_empty();
         if !own_stdin && !NOT_PIPED.contains(&argument.as_str()) {
             found.push((line, format!("stdin({argument})")));
         }
     }
+    // Destructuring a `Child { stdin, .. }` reaches the handle without the
+    // word after a dot, and `ChildStdin` names its type.
+    for name in ["ChildStdin", "Child"] {
+        for (at, _) in code.match_indices(name) {
+            let end = at + name.len();
+            if (at > 0 && is_ident(bytes[at - 1])) || bytes.get(end).is_some_and(|b| is_ident(*b)) {
+                continue;
+            }
+            if name == "Child" {
+                // Only a `Child { stdin, .. }` pattern: braces that name
+                // `stdin` (a return type followed by a body does not).
+                let rest = code[end..].trim_start();
+                let names_stdin = rest.starts_with('{')
+                    && rest.find('}').is_some_and(|close| {
+                        rest[..close]
+                            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .any(|word| word == "stdin")
+                    });
+                if !names_stdin {
+                    continue;
+                }
+            }
+            let line = code[..at].matches('\n').count() + 1;
+            found.push((
+                line,
+                format!("the child process type `{name}` spelled as a pattern"),
+            ));
+        }
+    }
+    found.sort();
     found
 }
 
@@ -275,6 +324,14 @@ fn the_scan_flags_each_way_to_reach_a_childs_stdin() {
             "take across lines",
         ),
         ("child.stdin.as_mut().unwrap();", "as_mut"),
+        ("command.r#stdin(Stdio::piped());", "raw identifier call"),
+        ("let w = child.r#stdin.take();", "raw identifier field"),
+        (
+            "Command::r#stdin(&mut command, mode);",
+            "raw identifier path",
+        ),
+        ("let Child { stdin, .. } = child;", "a destructured child"),
+        ("fn f(w: ChildStdin) {}", "the handle type"),
     ] {
         assert_eq!(stdin_uses(source).len(), 1, "{what}: {source}");
     }
