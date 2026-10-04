@@ -461,7 +461,16 @@ pub fn pin_release(
     // outside printable ASCII, say) stays as it was, and would fail every
     // CI install, so the pin stops before writing and names it.
     if let PinnedDigests::Unreadable(reason) = pinned_digests(&out) {
-        let line = unread_line(&out).map_or_else(String::new, |(_, text)| format!(" at {text}"));
+        // Name the line in the file as it stands; only when the file reads
+        // and the rewrite does not, name the line of the rewrite.
+        let line = unread_line(&text).map_or_else(
+            || {
+                unread_line(&out).map_or_else(String::new, |(_, shown)| {
+                    format!(" at {shown} of the state the pin would write")
+                })
+            },
+            |(_, shown)| format!(" at {shown}"),
+        );
         return Err(format!(
             "the [{TABLE}] table in {PROJECT_TOML} {reason}{line}; rename, rewrite or remove that line and pin again (nothing was written)"
         ));

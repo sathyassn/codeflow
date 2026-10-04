@@ -218,15 +218,18 @@ fn update_pin_refuses_a_state_the_installers_would_refuse() {
     };
     std::fs::write(
         fx.root().join(STATE),
-        format!("{state}\n[notes]\n\"caf\u{e9}\" = \"kept\"\n"),
+        format!("{state}\n# a comment\n\n[notes]\n# about\n\"caf\u{e9}\" = \"kept\"\n"),
     )
     .unwrap();
     commit("chore: a note");
+    // The line as it stands in the file, after comments and blank lines the
+    // rewrite would drop.
+    let line = format!("line {} (", state.lines().count() + 6);
     let refused = fx.codeflow(&["update", "--pin", "99.0.0"]);
     assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
     assert!(
         text(&refused).contains("a name with a character outside printable ASCII")
-            && text(&refused).contains("caf\u{e9}")
+            && text(&refused).contains(&format!("{line}\"\\\"caf\u{e9}\\\" = \\\"kept\\\"\")"))
             && text(&refused).contains("nothing was written"),
         "{}",
         text(&refused)
@@ -234,7 +237,10 @@ fn update_pin_refuses_a_state_the_installers_would_refuse() {
     assert_eq!(fx.changed(), "");
     let doctor = fx.codeflow(&["doctor", "--check", "ci-perimeter"]);
     assert!(
-        text(&doctor).contains("rewrite or remove line"),
+        text(&doctor).contains(&format!(
+            "rewrite or remove line {} of",
+            state.lines().count() + 6
+        )),
         "{}",
         text(&doctor)
     );
