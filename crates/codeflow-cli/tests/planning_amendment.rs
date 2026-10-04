@@ -269,7 +269,7 @@ fn an_amendment_carries_its_instruction_text_but_not_the_managed_block() {
         "instruction text in the amendment",
         &[
             "planning-only amendment of EPC-001, EPC-002",
-            "instruction and doc files: AGENTS.md (outside its managed block), docs/reading.md",
+            "instruction and doc files: AGENTS.md (outside its managed block), docs/plan/plan.md, docs/reading.md",
         ],
     );
     assert_passes(&ci_push(root, PLAN), "instruction text on push", &[]);
@@ -354,8 +354,12 @@ fn a_task_pull_request_keeps_other_criteria_frozen() {
 
     // A complete task reopened in an amendment keeps its criteria.
     git(root, &["switch", "-C", "main", "main"]);
-    let done = task("TSK-002", Some("EPC-002"), "main", "complete", CRITERIA);
-    write(root, &record_path("TSK-002"), &done);
+    let reviewed = git_out(root, &["rev-parse", "HEAD"]);
+    write(
+        root,
+        &record_path("TSK-002"),
+        &completed("TSK-002", CRITERIA, &reviewed),
+    );
     commit(root, "docs: complete TSK-002");
     git(root, &["switch", "-C", PLAN, "main"]);
     loosen(root, "TSK-002", Some("EPC-002"), "main");
@@ -365,21 +369,47 @@ fn a_task_pull_request_keeps_other_criteria_frozen() {
         "a reopened task in an amendment",
         &["work.criteria_frozen", "reopened task keeps its criteria"],
     );
-    // Still complete with changed criteria: listed as not admitted.
+    // Kept complete, with its valid block, a criteria change is admitted
+    // and flagged for the reviewer; a description change is not flagged.
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let described =
+        completed("TSK-002", CRITERIA, &reviewed).replace("Work.\n", "Work, described.\n");
+    write(root, &record_path("TSK-002"), &described);
+    commit(root, "docs(records): describe TSK-002");
+    let described_run = ci(root, PLAN, BOTH);
+    assert_passes(&described_run, "a complete task's description", &[]);
+    assert!(
+        !described_run
+            .1
+            .contains("reviewed against the earlier criteria"),
+        "{}",
+        described_run.1
+    );
     write(
         root,
         &record_path("TSK-002"),
-        &task("TSK-002", Some("EPC-002"), "main", "complete", LOOSER),
+        &completed("TSK-002", LOOSER, &reviewed).replace("Work.\n", "Work, described.\n"),
     );
-    commit(root, "docs(records): keep TSK-002 complete");
-    let listed = ci(root, PLAN, BOTH);
-    assert!(
-        listed
-            .1
-            .contains("EPC-002: TSK-002 is complete, so its criteria change is not admitted"),
-        "{}",
-        listed.1
+    commit(root, "docs(records): loosen complete TSK-002");
+    assert_passes(
+        &ci(root, PLAN, BOTH),
+        "a complete task's criteria",
+        &[
+            "EPC-002: TSK-002 criteria delta: AC-1 changed",
+            "EPC-002: TSK-002 is complete, and its acceptance block was reviewed against the earlier criteria",
+        ],
     );
+}
+
+/// TSK-002 complete with `criteria` and a valid acceptance block reviewed
+/// at `reviewed`.
+fn completed(id: &str, criteria: &str, reviewed: &str) -> String {
+    task(id, Some("EPC-002"), "main", "complete", criteria).replace(
+        "Pending.\n",
+        &format!(
+            "```yaml\nacceptance:\n  reviewed: {reviewed}\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | test ran\n    AC-2: verified | journey ran\n  journey: verified | fixture\n  not_verified: none\n  follow_ups: none: done\n  verdict: approved\n```\n"
+        ),
+    )
 }
 
 /// AC-7: an amendment that changes a record of an epic its `Task:` line does
@@ -543,4 +573,71 @@ fn a_line_takes_the_amendment_by_merging_main() {
     );
     assert!(amended.contains("shall mostly work"), "{amended}");
     assert!(amended.contains("as the line found it"), "{amended}");
+}
+
+/// Review round 1 (AC-2, AC-4): an instruction file under a planning
+/// folder, a path the target's policy (not the head's) names as product,
+/// and a document reached through a symbolic link all keep a range out of
+/// the planning class, with a body and on push.
+#[test]
+fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
+    let dir = repo();
+    let root = dir.path();
+    // An instruction file inside a planning folder.
+    two_epic_amendment(root);
+    write(root, "docs/plan/AGENTS.md", "Agents, read this.\n");
+    commit(root, "docs: hide instructions in the plan");
+    assert_blocks(
+        &ci(root, PLAN, BOTH),
+        "an instruction file under docs/plan",
+        &["touches a product path: docs/plan/AGENTS.md"],
+    );
+
+    // The target marks docs/tool.md as product after the branch was cut;
+    // the branch keeps the older policy.
+    git(root, &["switch", "-C", "plan/old-policy", "main"]);
+    write(root, "docs/tool.md", "A tool page.\n");
+    commit(root, "docs: change a page");
+    git(root, &["switch", "main"]);
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\", \"docs/tool.md\"]}\n}\n",
+    );
+    commit(root, "chore: name the tool page as product");
+    git(root, &["switch", "plan/old-policy"]);
+    assert_blocks(
+        &ci(root, "plan/old-policy", "Task: EPC-001"),
+        "a path the target's policy names as product",
+        &["touches a product path: docs/tool.md"],
+    );
+
+    // A document a symbolic link carries into the instructions.
+    #[cfg(unix)]
+    {
+        git(root, &["switch", "main"]);
+        write(root, "docs/instructions.md", &agents("linked"));
+        std::os::unix::fs::symlink("docs/instructions.md", root.join("CLAUDE.md")).unwrap();
+        commit(root, "docs: link the harness instructions");
+        git(root, &["switch", "-C", "plan/through-a-link", "main"]);
+        write(
+            root,
+            "docs/instructions.md",
+            &agents("linked").replace("managed rules", "other rules"),
+        );
+        commit(root, "docs: change the linked instructions");
+        assert_blocks(
+            &ci(root, "plan/through-a-link", "Task: EPC-001"),
+            "a document behind a link",
+            &["which the symbolic link CLAUDE.md reaches"],
+        );
+        // On push the range is not an amendment, so no criteria may move.
+        loosen(root, "TSK-001", Some("EPC-001"), "main");
+        commit(root, "docs(records): loosen AC-1 behind the link");
+        assert_blocks(
+            &ci_push(root, "plan/through-a-link"),
+            "a document behind a link on push",
+            &["work.criteria_frozen", "TSK-001 changes its criteria"],
+        );
+    }
 }

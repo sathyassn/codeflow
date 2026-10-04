@@ -8,9 +8,11 @@
 //! with its delta, the records added or removed, the status transitions,
 //! and the instruction and doc files the range touches. A record of an epic
 //! the line does not name is refused; a standalone task or a spec belongs
-//! to no epic and is listed, never refused. A task complete on both sides
-//! keeps the criteria its acceptance block was reviewed against (R-119), so
-//! its changed criteria are listed as not admitted. The amendment lands on
+//! to no epic and is listed, never refused. A criteria change to a task
+//! complete on both sides is flagged, since its acceptance block was
+//! reviewed against the earlier criteria (R-119). Before any of that, [`range_problem`] keeps
+//! product, instruction and enforcement paths out of the range. The
+//! amendment lands on
 //! the target, and a line takes it by merging the target; a record that
 //! changed on its line since the line last merged the target is flagged.
 
@@ -19,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use git2::{Oid, Repository};
 
 use super::acceptance::{blob_at, criteria_delta, finding, target_tips, Finding};
+use super::classify::{amendment_path, instructions_block_unchanged, AmendmentPath, ProjectPaths};
 use super::lifecycle::{Graph, RecordView};
 use super::work_start::RecordKind;
 
@@ -88,9 +91,7 @@ pub fn findings(
     let files: Vec<&str> = changed_paths
         .iter()
         .map(String::as_str)
-        .filter(|path| {
-            *path == "AGENTS.md" || (path.starts_with("docs/") && !path.starts_with("docs/plan/"))
-        })
+        .filter(|path| *path == "AGENTS.md" || path.starts_with("docs/"))
         .collect();
     let mut found = refused;
     // Named epics first, in the order the line names them, then the rest.
@@ -198,15 +199,14 @@ fn changes(id: &str, before: Option<&RecordView>, after: Option<&RecordView>) ->
         ));
     }
     if after.kind == RecordKind::Task && before.criteria.signature() != after.criteria.signature() {
+        let delta = criteria_delta(&before.criteria.items, &after.criteria.items);
+        if !delta.is_empty() {
+            lines.push(format!("{id} criteria delta: {}", delta.join("; ")));
+        }
         if before.status == "complete" && after.status == "complete" {
             lines.push(format!(
-                "{id} is complete, so its criteria change is not admitted while its acceptance block stands (SPC-013 R-119)"
+                "{id} is complete, and its acceptance block was reviewed against the earlier criteria: confirm that completion still holds, or reopen the task in its own pull request (SPC-013 R-119)"
             ));
-        } else {
-            let delta = criteria_delta(&before.criteria.items, &after.criteria.items);
-            if !delta.is_empty() {
-                lines.push(format!("{id} criteria delta: {}", delta.join("; ")));
-            }
         }
     }
     if lines.is_empty() {
@@ -268,4 +268,221 @@ pub fn epic_problem(
         }
         _ => None,
     }
+}
+
+/// Why a planning amendment that changes `AGENTS.md`'s managed block is
+/// refused.
+pub const MANAGED_BLOCK_CHANGED: &str = "a planning-only pull request changes the managed block of AGENTS.md (codeflow:managed:begin to codeflow:managed:end), which must stay byte-identical to the target's; `codeflow update` owns that block, and a planning amendment edits only the project section";
+
+/// A Git tree entry's mode for a symbolic link.
+const LINK_MODE: i32 = 0o120_000;
+
+/// [`range_problem`] for revisions named as text, as `codeflow ci` holds
+/// them: the target (`base`) and the head of a range whose changed paths
+/// are `paths`.
+#[must_use]
+pub fn range_problem_at(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    paths: &[String],
+) -> Option<String> {
+    let resolved = Repository::discover(repo_root)
+        .map_err(|error| error.message().to_string())
+        .and_then(|repo| {
+            let oid = |revision: &str| {
+                repo.revparse_single(revision)
+                    .and_then(|object| object.peel_to_commit())
+                    .map(|commit| commit.id())
+                    .map_err(|error| format!("{revision}: {}", error.message()))
+            };
+            Ok(range_problem(&repo, oid(base)?, oid(head)?, paths))
+        });
+    resolved.unwrap_or_else(|error| Some(format!("cannot read the range to classify it: {error}")))
+}
+
+/// Why the change of `paths` from the target at `base` to `head` cannot
+/// ride in a planning amendment (ADR-0078), or `None` when it can. The
+/// project's product and watched paths come from the policy at `base`, the
+/// target's, never from a working copy. Every path must be one
+/// [`amendment_path`] admits; no changed path may be a symbolic link on
+/// either side, or lie at or under the target of one, so a link cannot
+/// carry instruction text in through a document; and `AGENTS.md` keeps the
+/// target's managed block byte for byte.
+#[must_use]
+pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) -> Option<String> {
+    let project = match project_at(repo, base) {
+        Ok(project) => project,
+        Err(error) => {
+            return Some(format!(
+                "cannot read the target's policy to classify the range: {error}"
+            ))
+        }
+    };
+    let mut instructions = false;
+    for path in paths {
+        match amendment_path(path, &project) {
+            None => {
+                return Some(format!(
+                    "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
+                ))
+            }
+            Some(AmendmentPath::Instructions) => instructions = true,
+            Some(_) => {}
+        }
+        if [base, head]
+            .iter()
+            .any(|at| entry_at(repo, *at, path).is_some_and(|(mode, _)| mode == LINK_MODE))
+        {
+            return Some(format!(
+                "a planning-only pull request changes the symbolic link {path}; a planning amendment carries regular files only"
+            ));
+        }
+    }
+    for at in [base, head] {
+        for (link, target) in links(repo, at) {
+            if let Some(path) = paths
+                .iter()
+                .find(|path| **path == target || path.starts_with(&format!("{target}/")))
+            {
+                return Some(format!(
+                    "a planning-only pull request changes {path}, which the symbolic link {link} reaches; a planning amendment does not change what a link carries"
+                ));
+            }
+        }
+    }
+    let bytes = |at: Oid| entry_at(repo, at, "AGENTS.md").map(|(_, bytes)| bytes);
+    if instructions && !instructions_block_unchanged(bytes(base).as_deref(), bytes(head).as_deref())
+    {
+        return Some(MANAGED_BLOCK_CHANGED.to_string());
+    }
+    None
+}
+
+/// The mode and bytes of the entry at `path` in the tree of `commit`.
+fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .ok()?;
+    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    Some((entry.filemode(), blob.content().to_vec()))
+}
+
+/// Every symbolic link in the tree of `commit` with the repository path it
+/// points to; a target that is absolute or leaves the repository is left
+/// out.
+fn links(repo: &Repository, commit: Oid) -> Vec<(String, String)> {
+    let Ok(tree) = repo.find_commit(commit).and_then(|commit| commit.tree()) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.filemode() == LINK_MODE {
+            if let (Ok(name), Ok(blob)) = (entry.name(), repo.find_blob(entry.id())) {
+                let target = String::from_utf8_lossy(blob.content()).into_owned();
+                if let Some(resolved) = resolve(dir, &target) {
+                    found.push((format!("{dir}{name}"), resolved));
+                }
+            }
+        }
+        git2::TreeWalkResult::Ok
+    });
+    found
+}
+
+/// `target` read from the folder `dir` (with its trailing `/`), as a
+/// repository path, or `None` when it is absolute or leaves the repository.
+fn resolve(dir: &str, target: &str) -> Option<String> {
+    if target.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// The project's product and watched paths from the policy at `commit`: its
+/// `git.product_paths`, else the default for the stack its project file
+/// records, and its `git.breaking_watch_paths`.
+fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
+    let list = |value: &serde_json::Value| -> Vec<String> {
+        value
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json") {
+        Some((_, bytes)) => serde_json::from_slice(&bytes).map_err(|error| error.to_string())?,
+        None => serde_json::Value::Null,
+    };
+    let git = &policy["git"];
+    let product = if git["product_paths"].is_array() {
+        list(&git["product_paths"])
+    } else {
+        let stack = entry_at(repo, commit, ".codeflow/project.toml")
+            .and_then(|(_, bytes)| String::from_utf8(bytes).ok())
+            .and_then(|text| text.parse::<toml::Table>().ok())
+            .and_then(|table| {
+                table
+                    .get("stack")
+                    .and_then(|stack| stack.as_str().map(str::to_string))
+            })
+            .unwrap_or_default();
+        super::classify::stack_product_paths(&stack)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    };
+    Ok(ProjectPaths {
+        product,
+        watched: list(&git["breaking_watch_paths"]),
+    })
+}
+
+/// What keeps a criteria change landed by `landing` (on top of `parent`)
+/// from being a planning change, or `None` when it is one: records and
+/// plans only, or a planning amendment that [`range_problem`] admits
+/// (ADR-0078).
+///
+/// # Errors
+///
+/// Returns the Git error when a tree cannot be read.
+pub(super) fn landing_problem(
+    repo: &Repository,
+    parent: Option<Oid>,
+    landing: Oid,
+) -> Result<Option<String>, git2::Error> {
+    let Some(changed) = super::acceptance::non_planning_change(repo, parent, landing)? else {
+        return Ok(None);
+    };
+    let Some(parent) = parent else {
+        return Ok(Some(changed));
+    };
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let diff = repo.diff_tree_to_tree(Some(&tree(parent)?), Some(&tree(landing)?), None)?;
+    let paths: Vec<String> = diff
+        .deltas()
+        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
+        .flatten()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(range_problem(repo, parent, landing, &paths).map(|_| changed))
 }

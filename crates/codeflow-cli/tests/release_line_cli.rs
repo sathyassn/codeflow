@@ -555,6 +555,40 @@ fn a_reopened_task_brought_with_changed_criteria_is_frozen() {
     );
 }
 
+/// TSK-229 review round 1: a planning amendment that also carries a doc
+/// (ADR-0078) brings its criteria change into a release as a planning
+/// landing; the same landing with `CLAUDE.md` stays frozen.
+#[test]
+fn an_amendment_carrying_a_doc_is_brought_into_a_release() {
+    for (file, admitted) in [("docs/reading.md", true), ("CLAUDE.md", false)] {
+        let fx = Fx::new(false);
+        fx.git(&["switch", "-q", "-C", "plan/amend-with-doc", LINE_A]);
+        let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+        fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+        fx.write(file, "Read this.\n");
+        fx.commit("docs(records): amend the criterion with its doc");
+        let landing = fx.land(LINE_A, "plan/amend-with-doc");
+        fx.cut_release();
+        fx.import(LINE_A);
+        let result = agree(&fx, file);
+        if admitted {
+            passes(&result, "an amendment with a doc");
+        } else {
+            blocks(
+                &result,
+                file,
+                &[
+                    "work.criteria_frozen",
+                    &format!(
+                        "TSK-003 changes its criteria on its line at {}",
+                        &landing[..9]
+                    ),
+                ],
+            );
+        }
+    }
+}
+
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
 /// The adoption marker line (SPC-013 R-120).

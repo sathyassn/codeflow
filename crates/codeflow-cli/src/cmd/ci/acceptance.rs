@@ -16,11 +16,10 @@ use codeflow_core::workgraph::acceptance::{
     pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
-use codeflow_core::workgraph::classify::{amendment_path, AmendmentPath, ProjectPaths};
 use codeflow_core::workgraph::release_line;
 use codeflow_core::workgraph::{check_epic_line, task_id_from_branch};
 
-use super::classification::{instructions_unchanged, range_changes, root_branch_at, Class, Range};
+use super::classification::{range_changes, root_branch_at, Class, Range};
 
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
@@ -263,20 +262,18 @@ fn criteria(
     })
 }
 
-/// Whether every path of the range is one a planning amendment carries, with
-/// `AGENTS.md` keeping the target's managed block (ADR-0078): the push-side
-/// twin of the planning class.
+/// Whether the range carries only what a planning amendment may, read
+/// against the target at the base (ADR-0078): the push-side twin of the
+/// planning class.
 fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, String> {
-    let project = ProjectPaths::load(root);
-    let mut instructions = false;
-    for (_, path) in range_changes(root, range.base, range.head)? {
-        match amendment_path(&path, &project) {
-            None => return Ok(false),
-            Some(AmendmentPath::Instructions) => instructions = true,
-            Some(_) => {}
-        }
-    }
-    Ok(!instructions || instructions_unchanged(root, range.base, range.head))
+    let paths: Vec<String> = range_changes(root, range.base, range.head)?
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect();
+    Ok(
+        codeflow_core::workgraph::amendment::range_problem_at(root, range.base, range.head, &paths)
+            .is_none(),
+    )
 }
 
 /// Criteria frozen and a planning amendment's epic scope always block

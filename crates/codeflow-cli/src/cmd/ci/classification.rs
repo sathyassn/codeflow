@@ -14,10 +14,7 @@ use std::path::Path;
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
-use codeflow_core::workgraph::classify::{
-    amendment_path, instructions_block_unchanged, is_spike_path, path_sets, AmendmentPath,
-    ProjectPaths,
-};
+use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
 use codeflow_core::workgraph::{
     check_epic_line, declared_work_target, declared_work_target_at_revision,
     durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
@@ -157,11 +154,10 @@ pub(super) struct Input<'a> {
     pub epic_line: Option<Result<String, String>>,
     /// Whether the head is the branch the target's `git.root_branch` names.
     pub root_branch: bool,
-    /// The project's own product and watched paths, which keep a `docs/`
-    /// path out of a planning amendment.
-    pub project: &'a ProjectPaths,
-    /// Whether `AGENTS.md` keeps the target's managed block byte for byte.
-    pub instructions_unchanged: bool,
+    /// Why a range changing these files cannot ride in a planning
+    /// amendment ([`amendment::range_problem`]), asked only for a planning
+    /// class.
+    pub amendment_problem: &'a dyn Fn(&[String]) -> Option<String>,
     /// Why an epic a planning amendment names cannot be named: absent from
     /// the head, or cancelled at the target. `None` when it can.
     pub epic_problem: &'a dyn Fn(&str) -> Option<String>,
@@ -231,60 +227,15 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
 }
 
 /// A planning amendment of `epics` (ADR-0078): each epic can be named, and
-/// every path is one a planning amendment carries, `AGENTS.md` only while
-/// its managed block is the target's.
+/// the range carries only what a planning amendment may, `AGENTS.md` only
+/// while its managed block is the target's.
 fn planning(input: &Input<'_>, epics: Vec<String>) -> Result<Class, String> {
     if let Some(problem) = epics.iter().find_map(|epic| (input.epic_problem)(epic)) {
         return Err(problem);
     }
-    for path in input.files {
-        match amendment_path(path, input.project) {
-            None => {
-                return Err(format!(
-                    "a planning-only pull request touches a product path: {path}; a planning amendment carries records, plans, docs outside the adopter-facing set and AGENTS.md outside its managed block"
-                ))
-            }
-            Some(AmendmentPath::Instructions) if !input.instructions_unchanged => {
-                return Err(MANAGED_BLOCK_CHANGED.to_string())
-            }
-            Some(_) => {}
-        }
-    }
-    Ok(Class::PlanningOnly { epics })
-}
-
-/// Why a planning amendment that changes `AGENTS.md`'s managed block is
-/// refused.
-pub(super) const MANAGED_BLOCK_CHANGED: &str = "a planning-only pull request changes the managed block of AGENTS.md (codeflow:managed:begin to codeflow:managed:end), which must stay byte-identical to the target's; `codeflow update` owns that block, and a planning amendment edits only the project section";
-
-/// Whether `AGENTS.md` keeps the target's managed block byte for byte from
-/// `base` to `head`, the target's file read from the base. An unreadable
-/// revision counts as a change, so it never admits.
-pub(super) fn instructions_unchanged(root: &Path, base: &str, head: &str) -> bool {
-    let read = |revision: &str| -> Result<Option<String>, ()> {
-        let commit = codeflow_core::git::command()
-            .arg("-C")
-            .arg(root)
-            .args(["cat-file", "-e", &format!("{revision}^{{commit}}")])
-            .output()
-            .map_err(|_| ())?;
-        if !commit.status.success() {
-            return Err(());
-        }
-        let out = codeflow_core::git::command()
-            .arg("-C")
-            .arg(root)
-            .args(["show", &format!("{revision}:AGENTS.md")])
-            .output()
-            .map_err(|_| ())?;
-        Ok(out
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned()))
-    };
-    match (read(base), read(head)) {
-        (Ok(target), Ok(head)) => instructions_block_unchanged(target.as_deref(), head.as_deref()),
-        _ => false,
+    match (input.amendment_problem)(input.files) {
+        Some(problem) => Err(problem),
+        None => Ok(Class::PlanningOnly { epics }),
     }
 }
 
@@ -454,7 +405,8 @@ pub(super) fn dispatch(
     }
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
-    let project = ProjectPaths::load(root);
+    let amendment_problem =
+        |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
     let input = Input {
         body,
@@ -465,9 +417,7 @@ pub(super) fn dispatch(
             .starts_with("integration/")
             .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
-        project: &project,
-        instructions_unchanged: !files.iter().any(|path| path == "AGENTS.md")
-            || instructions_unchanged(root, range.base, range.head),
+        amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
     let class = match classify(&input).map(|class| release_class(release, class)) {
@@ -791,13 +741,23 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
 mod tests {
     use super::*;
 
-    static PROJECT: std::sync::LazyLock<ProjectPaths> = std::sync::LazyLock::new(|| ProjectPaths {
-        product: vec!["src/**".to_string()],
-        watched: Vec::new(),
-    });
-
     fn no_problem(_: &str) -> Option<String> {
         None
+    }
+
+    /// The path rule alone, for a project whose product is `src/**`; the
+    /// managed block and links need a repository (`planning_amendment`).
+    fn path_problem(files: &[String]) -> Option<String> {
+        let project = ProjectPaths {
+            product: vec!["src/**".to_string()],
+            watched: Vec::new(),
+        };
+        files
+            .iter()
+            .find(|path| {
+                codeflow_core::workgraph::classify::amendment_path(path, &project).is_none()
+            })
+            .map(|path| format!("a planning-only pull request touches a product path: {path}"))
     }
 
     fn input<'a>(body: &'a str, branch: &'a str, files: &'a [String]) -> Input<'a> {
@@ -808,8 +768,7 @@ mod tests {
             branch_task: None,
             epic_line: None,
             root_branch: false,
-            project: &PROJECT,
-            instructions_unchanged: true,
+            amendment_problem: &path_problem,
             epic_problem: &no_problem,
         }
     }
@@ -908,9 +867,10 @@ mod tests {
                 .unwrap_err()
                 .contains("a task id never takes a list")
         );
-        let mut block = input("Task: EPC-001, EPC-002", "plan/next", &carried);
-        block.instructions_unchanged = false;
-        assert!(classify(&block)
+        let block = |_: &[String]| Some(amendment::MANAGED_BLOCK_CHANGED.to_string());
+        let mut changed = input("Task: EPC-001, EPC-002", "plan/next", &carried);
+        changed.amendment_problem = &block;
+        assert!(classify(&changed)
             .unwrap_err()
             .contains("managed block of AGENTS.md"));
         let claude_settings = [".claude", "settings.json"].join("/");
