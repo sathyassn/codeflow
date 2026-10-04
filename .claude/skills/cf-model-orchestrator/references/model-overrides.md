@@ -19,9 +19,9 @@ invalid entry rejects the whole file:
   the same-family `design-approval`; a consultant gives an advisory
   approval and never designs. Another family is rejected here and still
   needs a task-specific `OPERATOR_OVERRIDE`. The block confers authority
-  only as committed on the task's integration target, with the task
-  anchored there (a standalone task reads it only from `main` or
-  `master`); a working-tree or task-branch copy confers nothing.
+  only as committed on the task's integration target, read on the task's
+  own branch once the task passes `codeflow work start`'s anchor rule; a
+  working-tree or task-branch copy confers nothing.
 - `standing_reviews` lists `{area, seat, mode, per, record}`: an extra-family
   catalog seat the review duties already route, `read-only`, per `unit` or
   `phase`. A `unit-review` or `body-review` resolved with `--area <area>`

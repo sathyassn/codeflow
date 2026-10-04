@@ -2884,6 +2884,8 @@ fn commit_design_authority(root: &Path, owner: &str, first: &str, second: &str) 
         root,
         &["commit", "-q", "-m", "chore: designate a design co-owner"],
     );
+    // Design authority is read on the task's own branch, as work start is.
+    git_with_binary(root, &["switch", "-q", "-c", "task/TSK-001-journey"]);
     selection
 }
 

@@ -398,61 +398,61 @@ fn a_rewritten_task_target_cannot_borrow_another_lines_authority() {
     );
 }
 
-/// A standalone task whose record is not on its integration line reads no
-/// authority from that line; on `main` it reads the committed block.
+/// A standalone task, whose record arrives with its own pull request, reads
+/// the block committed on the target it declares, as `codeflow work start`
+/// accepts it; a block that arrives only with the task branch, or a branch
+/// that does not carry the task id, confers nothing.
 #[test]
-fn a_standalone_task_reads_authority_only_from_main() {
-    // Not anchored: the record arrives on the task branch only.
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    write(root, CATALOG, &fixture_data::fixture().to_string());
-    write(root, SELECTION, &authority().to_string());
-    git(root, &["init", "-q", "-b", TARGET]);
-    git(root, &["config", "user.email", "fixture@example.test"]);
-    git(root, &["config", "user.name", "Fixture"]);
-    commit_all(root, "test: the line carries a block");
-    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
-    write(
-        root,
-        "project-management/tasks/TSK-900.md",
-        &task("TSK-900", ""),
-    );
-    commit_all(root, "test: a standalone record");
-    let project = Project { dir };
-    let open = project.resolve(DESIGN, 1);
-    assert!(
-        open["open"][0]["reasons"]
-            .to_string()
-            .contains("reads design authority only from main or master"),
-        "{open}"
-    );
-
-    // On main, the same standalone record reads the committed block.
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    write(root, CATALOG, &fixture_data::fixture().to_string());
-    write(root, SELECTION, &authority().to_string());
-    git(root, &["init", "-q", "-b", "main"]);
-    git(root, &["config", "user.email", "fixture@example.test"]);
-    git(root, &["config", "user.name", "Fixture"]);
-    commit_all(root, "test: main carries a block");
-    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
-    write(
-        root,
-        "project-management/tasks/TSK-900.md",
-        &task("TSK-900", "").replace(
-            "integration_target: integration/fixture",
-            "integration_target: main",
+fn a_standalone_task_reads_only_its_targets_committed_block() {
+    let standalone = |target: &str, block_on_target: bool, branch: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, CATALOG, &fixture_data::fixture().to_string());
+        if block_on_target {
+            write(root, SELECTION, &authority().to_string());
+        }
+        git(root, &["init", "-q", "-b", target]);
+        git(root, &["config", "user.email", "fixture@example.test"]);
+        git(root, &["config", "user.name", "Fixture"]);
+        commit_all(root, "test: seed the target");
+        git(root, &["checkout", "-q", "-b", branch]);
+        write(root, SELECTION, &authority().to_string());
+        write(
+            root,
+            "project-management/tasks/TSK-900.md",
+            &task("TSK-900", "").replace(
+                "integration_target: integration/fixture",
+                &format!("integration_target: {target}"),
+            ),
+        );
+        commit_all(root, "test: a standalone record");
+        Project { dir }
+    };
+    for target in [TARGET, "main", "release/stable"] {
+        let project = standalone(target, true, "task/TSK-900-fixture");
+        let result = project.resolve(DESIGN, 0);
+        assert_eq!(
+            result["participants"][0]["line"], "orchid-support",
+            "{result}"
+        );
+        assert!(limitations(&result["participants"][0])
+            .iter()
+            .any(|l| l.contains(&format!("committed on {target} at "))));
+    }
+    for (block_on_target, branch, reason) in [
+        (false, "task/TSK-900-fixture", "not committed on main"),
+        (
+            true,
+            "task/TSK-901-fixture",
+            "project design authority not applied",
         ),
-    );
-    commit_all(root, "test: a standalone record on main");
-    let project = Project { dir };
-    let result = project.resolve(DESIGN, 0);
-    assert_eq!(
-        result["participants"][0]["line"], "orchid-support",
-        "{result}"
-    );
-    assert!(limitations(&result["participants"][0])
-        .iter()
-        .any(|l| l.contains("committed on main at ")));
+    ] {
+        let project = standalone("main", block_on_target, branch);
+        let open = project.resolve(DESIGN, 1);
+        assert_eq!(open["participants"], json!([]), "{open}");
+        assert!(
+            open["open"][0]["reasons"].to_string().contains(reason),
+            "{reason}: {open}"
+        );
+    }
 }

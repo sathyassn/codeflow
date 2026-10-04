@@ -343,11 +343,12 @@ selection" and answers the 2026-10-02 offer above for adopting projects.
 The protections hold. The owner must be the seat's first line, so
 authority never follows list order silently, and every fallback stays
 labelled. The block confers authority only as committed at the merge-base
-of `HEAD` and the task's integration target, and the task must be anchored
-there on the target it declares, as the override requires; a standalone
-task, whose record is not on its target yet, reads the block only from
-`main` or `master`. A working-tree copy, a task-branch commit, a rewritten
-target and a caller string confer none. The block names only lines the catalog's design owner seat
+of `HEAD` and the task's integration target, read on the task's own branch
+after the planning anchor rule that `codeflow work start` applies: a task
+already on the anchor must declare the same target there, and a standalone
+record arriving with its own pull request is judged at the head. A
+working-tree copy, a task-branch commit, a rewritten target and a caller
+string confer none. The block names only lines the catalog's design owner seat
 already lists, in that seat's family, each with an active version
 designated or fully qualified for the seat, so repository content still
 cannot add a selector, command, family, harness or designation. A
