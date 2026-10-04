@@ -18,8 +18,10 @@ and Changes. The rest appear only when their condition holds.
 Every PR names its work on a `Task:` line: `TSK-NNN` or `EPC-NNN` where
 durable tracking is active (judged from the tracking state, not the
 installed tier), and a non-empty unit name where it is not. It names its
-task, or its epic for the breakdown PR and the PR to main. A missing, empty,
-malformed, repeated or mismatched `Task:` line is refused.
+task, or its epic for the breakdown PR and the PR to main. A planning
+amendment names every epic it changes, `Task: EPC-001, EPC-002` (ADR-0078);
+a task id never takes a list. A missing, empty, malformed, repeated or
+mismatched `Task:` line is refused.
 
 | Section | When | Content |
 |---|---|---|

@@ -172,7 +172,7 @@ metadata preserves topology and does not execute the plan.
 | Guards | select mutually exclusive branches; a later join may list every structural candidate while waiting only for active predecessors plus resolution evidence for the alternatives; missing or ambiguous guard evidence creates Plan vN+1 rather than an improvised route |
 | New plan version | a change of outcome, cross-task interface, dependency graph or safety boundary forces Plan vN+1 and both approvals; an ownership change and a task's own criteria change do not (ADR-0076 narrows ADR-0040) |
 | Same plan version | ordinary steps, bounded rework, extra strengthening tests, in-node implementation detail, or another safe topological order inside the same contract remain execution-ledger evidence |
-| A later change of scope | a follow-up, a new or split outcome, a reassignment or another task's criteria ride in one batched epic amendment on a `plan/` branch with one other-lineage reviewer; nothing plans again per task |
+| A later change of scope | a follow-up, a new or split outcome, a reassignment or another task's criteria ride in one batched epic amendment on a `plan/` branch with one other-lineage reviewer; one amendment may span several epics and names each (ADR-0078); nothing plans again per task |
 | `validate --docs` | checks canonical identities and filenames, references, relationship shape, parent-or-standalone ownership, spec readiness, stable integration targets, completed acceptance criteria, and malformed, dangling, self-referential, duplicate, or cyclic topology |
 | `codeflow work start` | checks the planning anchor of the task the branch carries on any work prefix (`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or `integration/`): the epic's planning change for an epic task, or the record at head for a standalone task whose record arrives in its own pull request; with its parent or standalone rationale, approved specs and completed predecessors, without mutating repository state |
 | CI, once per pull request | applies the same read-only merge-base check when full-tier or recognizable historical task tracking is active, proving validated planning is present on the declared stable target; the per-commit hook does not. CI shares the structural core of the check and not the start gate, so it admits a standalone task's own record that arrives complete with a valid acceptance block |
@@ -182,8 +182,11 @@ metadata preserves topology and does not execute the plan.
 #### Pull request classes
 
 With tracking on, `codeflow ci` classifies every pull request: tracked
-(`Task: TSK-NNN`, or the id the branch carries), an epic's planning-only
-range (`Task: EPC-NNN`; records and `docs/plan/` only), an epic's integration
+(`Task: TSK-NNN`, or the id the branch carries), a planning amendment
+(`Task: EPC-NNN`, or `Task: EPC-001, EPC-002` naming every epic it changes;
+records, `docs/plan/`, other docs outside the adopter-facing set, and
+`AGENTS.md` with its managed block unchanged; a change to an unnamed epic's
+record is refused, ADR-0078), an epic's integration
 line (`Task: EPC-NNN`; a task of the epic targets it, it lands on the default
 target, and it holds only merges), or an automation profile. A pull request
 that names no task and no epic is refused whatever it touches; the

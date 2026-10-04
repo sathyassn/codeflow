@@ -323,6 +323,10 @@ exit code, to tell an advisory failure from a clean pass. `delegate-turn` exits
 be read.
 
 `codeflow ci` proceeds when only warnings were raised and reports the count.
+A pull request's `Task:` line may list several epics, `Task: EPC-001,
+EPC-002`, only for a planning amendment; `codeflow ci` then prints one
+`work.planning_amendment` note per change, grouped by epic, and refuses a
+change to a record of an epic the line does not name (ADR-0078).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist.
 
