@@ -5619,8 +5619,8 @@ class ProcessRepairTests(unittest.TestCase):
         return f"Folder access\n {path}\n\nTrust this folder? Codex can read, edit, and run files here,\nsubject to your permission settings.\n{choices}\nenter continue · esc quit\n"
 
     @staticmethod
-    def grok_trust(path):
-        return f"Do you trust the contents of this directory?\n{path}\n\nGrok Build may run or modify contents in this directory,\nposing security risks.\n\nYes, proceed                 y\nNo, quit                     n\n\nGrok Build  1.0.44 [stable]\n"
+    def grok_trust(path, version="1.0.44"):
+        return f"Do you trust the contents of this directory?\n{path}\n\nGrok Build may run or modify contents in this directory,\nposing security risks.\n\nYes, proceed                 y\nNo, quit                     n\n\nGrok Build  {version} [stable]\n"
 
     @staticmethod
     def renderer_screen(selected=False):
@@ -6081,7 +6081,8 @@ class ProcessRepairTests(unittest.TestCase):
             root = Path(temp) / ".codeflow-eval"
             self.assertEqual({"theme": "dark", "hasCompletedOnboarding": True},
                              json.loads((root / "claude/.claude.json").read_text()))
-            self.assertEqual('cli_auth_credentials_store = "file"\n', (root / "codex/config.toml").read_text())
+            self.assertEqual('cli_auth_credentials_store = "file"\n\n[features]\nplugins = false\nremote_plugin = false\n',
+                             (root / "codex/config.toml").read_text())
             self.assertTrue((root / "grok").is_dir())
             for word in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "/login", "/hooks", "browser"]:
                 self.assertIn(word, output)
@@ -6089,6 +6090,251 @@ class ProcessRepairTests(unittest.TestCase):
             eval_kit.prepare_eval_homes()
             self.assertEqual("preserve without parsing", (root / "claude/.claude.json").read_text())
             run.assert_not_called()
+
+    # Grok Build 1.0.46 screens captured live: the trust dialog from TSK-194's
+    # run of 2026-10-04 and the welcome from TSK-231's launch, with the fixture
+    # path and its short form as placeholders.
+    GROK_1_0_46_TRUST = "\n".join([
+        '',
+        '  \ue0a0 test/in-node-detail /p/t/c/r/{name}/repository',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '                                                                 ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄',
+        '                                                                 ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀',
+        '                                                                 ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀',
+        '                                                                 ⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀',
+        '                                                                 ⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀',
+        '                                                                 ⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀',
+        '                                                                 ⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀',
+        '',
+        '',
+        '                                                  Do you trust the contents of this directory?',
+        '                            {path}',
+        '',
+        '                                            Grok Build may run or modify contents in this directory,',
+        '                                                             posing security risks.',
+        '',
+        '                                                         Yes, proceed                 y',
+        '                                                         No, quit                     n',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '                                                                                                                   Grok Build  1.0.46 [stable]',
+    ]) + "\n"
+    GROK_1_0_46_WELCOME = "\n".join([
+        '',
+        '  \ue0a0 test/in-node-detail /p/t/c/r/{name}/repository',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '            ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮',
+        '            │                                                                                                                      │',
+        '            │  ⠀⠀⠀⠀⠀⠀⣀⣀⡀⠀⠀⠀⢀⠄   Grok Build  1.0.46                                                                                 │',
+        '            │  ⠀⠀⠀⣠⣾⠿⠛⠛⠛⠛⢀⡴⠁⠀                                                                                                      │',
+        '            │  ⠀⠀⣼⡟⠁⠀⠀⠀⢀⡴⠻⣿⡀⠀   New /learn skill!                                                                                  │',
+        '            │  ⠀⠀⣿⡇⠀⠀⠀⠔⠁⠀⠀⣿⡇⠀   Ask Grok to /learn from your past traces and tune Grok Build to how you work.                      │',
+        '            │  ⠀⠀⢹⣷⠀⠀⠀⠀⠀⢀⣴⡿⠀⠀                                                                                                      │',
+        '            │  ⠀⢀⠞⠁⠠⢶⣶⣶⣶⠿⠋⠀⠀⠀   New worktree                                                                               ctrl+w  │',
+        '            │  ⠐⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   Resume session                                                                             ctrl+r  │',
+        '            │                   Changelog                                                                                          │',
+        '            │                   Quit                                                                                       ctrl+q  │',
+        '            │                                                                                                                      │',
+        '            ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '  Help improve Grok                                                                                                         [Opt out] [Opt in]',
+        '  Off by default. Opt-in to allow SpaceXAI to retain coding data, e.g., prompts, traces, & metrics, for training and',
+        '  debugging purposes. Change anytime via settings.',
+        '  Read Terms and Privacy Policy.',
+        '',
+        '  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮',
+        '  │ ❯                                                                                                                                        │',
+        '  ╰─────────────────────────────────────────────────────────────────────────────────────────────────────── Grok 4.7 (high) · always-approve ─╯',
+        '',
+        '                                                                                                                                      [stable]',
+    ]) + "\n"
+
+    def test_prepare_turns_off_codex_plugins_and_moves_the_remote_cache(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            root = Path(temp) / ".codeflow-eval"
+            home = root / "codex"
+            home.mkdir(parents=True)
+            config = home / "config.toml"
+            # A home signed in before this fix: no features table, a trust
+            # entry, and the account's plugins synced into the cache.
+            original = 'cli_auth_credentials_store = "file"\n\n[projects."/private/tmp/earlier"]\ntrust_level = "trusted"\n'
+            config.write_text(original)
+            remote = home / "plugins/cache/openai-curated-remote/defense-factory/0.1.1"
+            (remote / ".internal/ui/src/hooks").mkdir(parents=True)
+            (remote.parent / ".codex-remote-plugin-install.json").write_text("{}")
+            marked = home / "plugins/cache/another-remote/tool"
+            marked.mkdir(parents=True)
+            (marked / ".codex-remote-plugin-install.json").write_text("{}")
+            local = home / "plugins/cache/openai-curated/kept/1/.codex-plugin"
+            local.mkdir(parents=True)
+            (home / "plugins/.remote-plugin-install-staging/partial").mkdir(parents=True)
+            personal = Path(temp) / ".codex"
+            (personal / "plugins/cache/openai-curated-remote/mine").mkdir(parents=True)
+            (personal / "config.toml").write_text("personal = true\n")
+            output = eval_kit.prepare_eval_homes()
+            document = tomllib.loads(config.read_text())
+            self.assertEqual({"plugins": False, "remote_plugin": False}, document["features"])
+            self.assertTrue(config.read_text().startswith(original))
+            self.assertEqual({"trust_level": "trusted"}, document["projects"]["/private/tmp/earlier"])
+            self.assertEqual([], eval_kit.codex_remote_plugin_cache(home))
+            self.assertTrue(local.is_dir())
+            [moved] = list((root / "removed-remote-plugins").iterdir())
+            for relative in ["plugins/cache/openai-curated-remote/defense-factory/0.1.1/.internal/ui/src/hooks",
+                             "plugins/cache/another-remote/tool", "plugins/.remote-plugin-install-staging/partial"]:
+                self.assertTrue((moved / relative).is_dir(), relative)
+            self.assertIn("wrote plugins = false and remote_plugin = false", output)
+            self.assertIn(f"moved {home / 'plugins/cache/openai-curated-remote'}", output)
+            self.assertIn("Reason: account-managed plugins", output)
+            self.assertEqual("personal = true\n", (personal / "config.toml").read_text())
+            self.assertTrue((personal / "plugins/cache/openai-curated-remote/mine").is_dir())
+            # A second run changes nothing and reports nothing.
+            settled = config.read_text()
+            again = eval_kit.prepare_eval_homes()
+            self.assertEqual(settled, config.read_text())
+            self.assertNotIn("Codex: wrote", again)
+            self.assertNotIn("Codex: moved", again)
+            # A features table gains only the missing setting, under its header.
+            config.write_text('model = "x"\n\n[features]\nremote_plugin = false # kept\n\n[tui]\nscreen = true\n')
+            self.assertIn("wrote plugins = false under", eval_kit.prepare_eval_homes())
+            document = tomllib.loads(config.read_text())
+            self.assertEqual({"plugins": False, "remote_plugin": False}, document["features"])
+            self.assertEqual({"screen": True}, document["tui"])
+            # Another value, or a form the kit cannot extend, refuses unchanged.
+            for text, reason in [('[features]\nplugins = true\n', "another value than false"),
+                                 ('features.hooks = true\n', "does not extend"),
+                                 ('features = { hooks = true }\n', "does not extend")]:
+                config.write_text(text)
+                with self.subTest(text=text), self.assertRaisesRegex(eval_kit.EvalError, reason):
+                    eval_kit.prepare_eval_homes()
+                self.assertEqual(text, config.read_text())
+
+    def test_every_codex_start_the_kit_builds_turns_off_plugins(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp)):
+            output = runner.kit.prepare_eval_homes()
+            self.assertIn("eval_home_launch codex -c 'cli_auth_credentials_store=\"file\"' "
+                          "-c features.plugins=false -c features.remote_plugin=false", output)
+            environment = runner.kit.subject_environment(Path(temp) / "trial", Path(temp) / "bin/codeflow", [])
+            for tail in [runner.kit.trial_native_args("codex", environment),
+                         runner.peer_argument_tail("codex", environment, "review"),
+                         runner.peer_argument_tail("codex", environment, "bypass")]:
+                pairs = list(zip(tail, tail[1:]))
+                self.assertIn(("-c", "features.plugins=false"), pairs)
+                self.assertIn(("-c", "features.remote_plugin=false"), pairs)
+            for harness in ["claude", "grok"]:
+                self.assertFalse(any("features." in value for value in runner.kit.trial_native_args(harness, environment)))
+            home = Path(environment["CODEX_HOME"])
+            self.assertEqual({"features": {"plugins": False, "remote_plugin": False}, "remote_cache": []},
+                             runner.require_codex_remote_plugins_off(home))
+            config = home / "config.toml"
+            prepared = config.read_text()
+            for text in ['cli_auth_credentials_store = "file"\n',
+                         prepared.replace("plugins = false\nremote", "remote"),
+                         prepared.replace("remote_plugin = false", "remote_plugin = true")]:
+                config.write_text(text)
+                with self.subTest(text=text), self.assertRaisesRegex(runner.Refused, r"under \[features\]: run prepare-eval-homes"):
+                    runner.require_codex_remote_plugins_off(home)
+            config.write_text(prepared)
+            cache = home / "plugins/cache/openai-curated-remote/github/1"
+            cache.mkdir(parents=True)
+            with self.assertRaisesRegex(runner.Refused, "remote plugin cache .*openai-curated-remote.*run prepare-eval-homes"):
+                runner.require_codex_remote_plugins_off(home)
+            snapshot = runner.config_snapshot(environment)
+            self.assertEqual(["plugins/cache/openai-curated-remote"], snapshot["codex_remote_plugins"]["remote_cache"])
+            shutil.rmtree(home / "plugins")
+            self.assertIn("evaluator_config_drift", runner.config_drift(snapshot, runner.config_snapshot(environment)))
+
+    def test_grok_1_0_46_screens_are_recognized_and_1_0_44_still_is(self):
+        runner = self.runner()
+        path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
+        trust = self.GROK_1_0_46_TRUST.format(path=path, name="abc")
+        self.assertEqual("1.0.46", runner.grok_version(trust))
+        self.assertEqual("grok-yes", runner.trust_choice(trust, "grok", path))
+        self.assertEqual("grok-yes", runner.trust_choice(self.grok_trust(path), "grok", path))
+        with patch.object(runner, "herdr", return_value=trust) as transport:
+            event = runner.accept_workspace_trust("owned", "grok", path, trust)
+        self.assertEqual("1.0.46", event["version"])
+        self.assertEqual([("pane", "send-keys", "owned", "y")],
+                         [c.args for c in transport.call_args_list if c.args[1] == "send-keys"])
+        welcome = self.GROK_1_0_46_WELCOME.format(name="abc")
+        self.assertTrue(runner.grok_authenticated_editor(welcome))
+        # The welcome names no channel, so the version comes from the trust dialog.
+        self.assertIsNone(runner.grok_version(welcome))
+
+    def test_unknown_grok_versions_and_screens_refuse_by_version_and_screen(self):
+        runner = self.runner()
+        path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
+        trust = self.GROK_1_0_46_TRUST.format(path=path, name="abc")
+        for screen, message in [
+            (trust.replace("1.0.46", "1.0.47"), r"Grok Build 1\.0\.47 trust dialog: not a captured version \(1\.0\.44, 1\.0\.46\)"),
+            (trust.replace("Grok Build  1.0.46 [stable]", ""), r"Grok Build \(version not shown\) trust dialog"),
+            (trust.replace(str(path), str(path) + "-other"), r"Grok Build 1\.0\.46 trust dialog: unrecognized wording or a different subject path"),
+            (trust.replace("posing security risks.", "posing risks."), r"Grok Build 1\.0\.46 trust dialog: unrecognized wording"),
+        ]:
+            with self.subTest(message), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 self.assertRaisesRegex(runner.Refused, message):
+                runner.handle_startup("owned", "grok", path, screen, [], [])
+            transport.assert_not_called()
+        welcome = self.GROK_1_0_46_WELCOME.format(name="abc")
+        changed = welcome.replace("Resume session", "Resume chat")
+        for screen, message in [
+            (changed + "Grok Build  1.0.46 [stable]\n", r"^Grok Build 1\.0\.46: welcome screen not recognized"),
+            (changed, r"^Grok Build 1\.0\.46: welcome screen not recognized"),
+            (changed.replace("Grok Build  1.0.46", ""), r"^Grok Build \(version not shown\): welcome screen not recognized"),
+            ("Something new\n", r"^Grok Build \(version not shown\): unknown screen not recognized"),
+            ("", r"blank screen"),
+            (welcome + "Approve in your browser to finish signing in.\n", "^" + re.escape(runner.AUTH_REFUSAL) + "$"),
+        ]:
+            with self.subTest(message), patch.object(runner, "herdr", return_value=screen) as transport, \
+                 patch.object(runner, "state", return_value={"agent_status": "idle"}), \
+                 patch.object(runner.time, "monotonic", side_effect=[0, 2]), self.assertRaisesRegex(runner.Refused, message):
+                runner.wait_ready("owned", 1, "grok", path, [], [])
+            self.assertFalse(any(c.args[:2] in {("pane", "send-keys"), ("pane", "send-text")} for c in transport.call_args_list))
 
     def test_evaluator_home_missing_and_symlink_are_refused_without_status_command(self):
         runner = self.runner()
@@ -6825,7 +7071,8 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual("bypass", refused["hook_trust"]["option"])
             self.assertFalse(refused["hook_trust"]["flag_used"])
             args.output = evidence_root / "codex-verified-delivery-opt-in"
-            cached = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            # A cached local-marketplace plugin: remote ones are refused outright.
+            cached = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated/example/1/.codex-plugin/plugin.json"
             cached.parent.mkdir(parents=True)
             cached.write_text('{"name":"example","version":"1","apps":"./.app.json"}')
             clean_plugin = cached.read_text()
@@ -6917,6 +7164,35 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual({"evaluator_home": "refused", "fixture_hooks": "not_checked"}, refused["hook_trust"]["checks"])
             self.assertEqual(flag, refused["refused_flag"])
             user_hooks.unlink()
+            # Account-managed plugins left in the home, or plugins turned back
+            # on, refuse before any transport and name the setup step.
+            remote = Path(environment["CODEX_HOME"]) / "plugins/cache/openai-curated-remote/defense-factory/0.1.1"
+            (remote / "src/hooks").mkdir(parents=True)
+            prepared = config.read_text()
+            for name, change in [("cache", None), ("setting", prepared.replace("plugins = false\nremote", "remote"))]:
+                if change is not None:
+                    shutil.rmtree(remote.parents[1])
+                    config.write_text(change)
+                args.output = evidence_root / ("codex-remote-plugins-" + name)
+                with self.subTest(name), patch.object(runner, "herdr") as transport, \
+                     self.assertRaisesRegex(runner.Refused, "run prepare-eval-homes"):
+                    runner.launch(args)
+                transport.assert_not_called()
+                self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
+            config.write_text(prepared)
+            # A sync during startup refuses after readiness, before any prompt.
+            def syncing_ready(*_args, **_kwargs):
+                (remote / "src/hooks").mkdir(parents=True)
+                return {"agent_status": "idle"}
+            args.output = evidence_root / "codex-remote-plugins-after-ready"
+            with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr", side_effect=herdr), \
+                 patch.object(runner, "wait_ready", side_effect=syncing_ready), \
+                 patch.object(runner, "deliver_codex", return_value=1) as delivery, patch.object(runner.time, "sleep"), \
+                 self.assertRaisesRegex(runner.Refused, "remote plugin recheck after readiness refused: .*remote plugin cache"):
+                runner.launch(args)
+            delivery.assert_not_called()
+            shutil.rmtree(remote.parents[1])
             args.output = evidence_root / "codex-without-model"
             args.native = ["--", "--ask-for-approval", "never", "--sandbox", "workspace-write"]
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--model"):
@@ -7012,6 +7288,27 @@ class ProcessRepairTests(unittest.TestCase):
             capture.assert_not_called()
             self.assertEqual("refused", json.loads((args.output / "launch.json").read_text())["status"])
             self.assertFalse(any(call[:2] in [("pane", "send-text"), ("pane", "send-keys")] for call in calls))
+            # The welcome shows no version: without an accepted trust dialog of
+            # a captured version the seat is refused, and any other screen is
+            # named with its version, never reported as a missing sign-in.
+            welcome = self.GROK_1_0_46_WELCOME.format(name="trial")
+            for name, screen, message in [
+                ("grok-unverified-version", welcome, "Grok Build version not verified"),
+                ("grok-unknown-screen", "Something new\nGrok Build  1.0.48 [stable]\n",
+                 r"^Grok Build 1\.0\.48: unknown screen not recognized"),
+            ]:
+                args.output = evidence_root / name
+                calls.clear()
+                with self.subTest(name), patch.object(runner, "check_evaluator_auth", return_value={"signed_in": False}), \
+                     patch.object(runner, "herdr", side_effect=lambda *a, s=screen, **k: s if a[:2] == ("pane", "read") else herdr(*a, **k)), \
+                     patch.object(runner, "wait_ready", side_effect=ready), \
+                     patch.object(runner, "snapshot") as capture, patch.object(runner.time, "sleep"), \
+                     self.assertRaisesRegex(runner.Refused, message):
+                    runner.launch(args)
+                capture.assert_not_called()
+                self.assertEqual(screen, (args.output / "startup-screen.txt").read_text())
+                self.assertNotIn(runner.AUTH_REFUSAL, json.loads((args.output / "launch.json").read_text())["error"])
+                self.assertFalse(any(call[:2] in [("pane", "send-text"), ("pane", "send-keys")] for call in calls))
             record["path"] = "/another/repository"
             runner.write(record_path, record)
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "signature"):
@@ -7336,7 +7633,12 @@ class ProcessRepairTests(unittest.TestCase):
             (home / "hooks.json").write_text("{}")
             self.assertIn("user-level hooks", check(self.peer_request(run))["error"])
             (home / "hooks.json").unlink()
-            plugin = home / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            remote = home / "plugins/cache/openai-curated-remote/example/1/.codex-plugin/plugin.json"
+            remote.parent.mkdir(parents=True)
+            remote.write_text('{"name":"example","version":"1"}')
+            self.assertIn("run prepare-eval-homes", check(self.peer_request(run))["error"])
+            shutil.rmtree(home / "plugins")
+            plugin = home / "plugins/cache/openai-curated/example/1/.codex-plugin/plugin.json"
             plugin.parent.mkdir(parents=True)
             plugin.write_text('{"name":"example","version":"1","hooks":"./h.json"}')
             self.assertIn("hooks", check(self.peer_request(run))["error"])
@@ -8066,7 +8368,7 @@ class ProcessRepairTests(unittest.TestCase):
             output.mkdir(); watched.mkdir()
             environment = run["environment"]
             config = Path(environment["CODEX_HOME"]) / "config.toml"
-            config.write_text('model = "gpt-6-astra"\n')
+            config.write_text('model = "gpt-6-astra"\n\n[features]\nplugins = false\nremote_plugin = false\n')
             args = ["--model", "gpt-6-astra", "-c", "model_reasoning_effort=high", "--ask-for-approval", "never"]
             # The request as the launcher wrote it, from the subject's login shell
             # (which reordered PATH).
