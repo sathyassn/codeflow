@@ -1,0 +1,11 @@
+id = "TSK-233"
+uid = "f97cc415-ba3c-4256-b2b6-ec6e23b2a5a7"
+kind = "TSK"
+title = "exec-guard semicolon launcher check needs a word boundary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T16:10:54Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
