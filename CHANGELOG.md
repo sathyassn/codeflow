@@ -43,6 +43,17 @@ erratum below, never an edit of the section.
   epic-line landing with a configured release branch.
 
 <!-- codeflow:release-impact minor -->
+- **`codeflow ci` warns when a pull request body is too long.** A body over
+  1,000 words, counted as a reader sees it (HTML comments left out, fenced
+  blocks and tables counted), draws one warning that names the count, the
+  limit and the three largest `##` sections, and asks for the body to be
+  rewritten to its final state with records linked instead of copied. It
+  joins the existing presentation warnings under `git.pr_sections`: no new
+  policy key, advisory at any level, and never a blocking finding, in hosted
+  CI and in the pre-push check alike. cf-ship's PR evidence reference and the
+  PR template say so.
+
+<!-- codeflow:release-impact minor -->
 - **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
   the named targets and their prerequisites, comma separated or repeated,
   so one gate can be split across parallel CI jobs. A limited run is
