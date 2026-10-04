@@ -212,6 +212,18 @@ def recover_registration(pane: str, name: str, harness: str, repository: Path,
     return {"registered_agent": registered}
 
 
+# Grok Build releases whose trust and welcome screens were captured from a
+# live launch. Any other version fails closed until it is captured too.
+GROK_VERSIONS = ("1.0.44", "1.0.46")
+GROK_FOOTER = re.compile(r"(?m)^\s*[│┃]?\s*Grok Build\s+(\d+(?:\.\d+)+\S*)\s+\[[^\]\n]+\]\s*[│┃]?\s*$")
+
+
+def grok_version(screen: str) -> str | None:
+    """The version in Grok Build's footer, when the screen shows exactly one."""
+    found = set(GROK_FOOTER.findall(screen))
+    return found.pop() if len(found) == 1 else None
+
+
 def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
     lines = [line.strip() for line in screen.splitlines()]
     if harness == "codex" and "Hooks need review" in lines:
@@ -226,9 +238,13 @@ def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
         expected = ["Do you trust the contents of this directory?", str(repository),
                     "Grok Build may run or modify contents in this directory,", "posing security risks.",
                     "Yes, proceed y", "No, quit n"]
+        version = grok_version(screen)
+        if version not in GROK_VERSIONS:
+            raise Refused(f"Grok Build {version or '(version not shown)'} trust dialog: not a captured "
+                          f"version ({', '.join(GROK_VERSIONS)}); no key sent")
         if (body[:6] != expected or len(body) != 7
-                or not re.fullmatch(r"Grok Build 1\.0\.44 \[stable\]", body[-1])):
-            raise Refused("unrecognized Grok trust dialog or different subject path")
+                or body[-1] != f"Grok Build {version} [stable]"):
+            raise Refused(f"Grok Build {version} trust dialog: unrecognized wording or a different subject path; no key sent")
         return "grok-yes"
     header = {"claude": "Accessing workspace:", "codex": "Folder access"}.get(harness)
     suspicious = re.search(r"(?i)do you trust|trust (?:this|the) (?:folder|directory|project)|one you trust|folder access|accessing workspace:", screen)
@@ -280,8 +296,11 @@ def accept_workspace_trust(pane: str, harness: str, repository: Path, screen: st
     if before_key:
         before_key()
     herdr("pane", "send-keys", pane, "y" if harness == "grok" else "Enter")
-    return {"harness": harness, "path": str(repository),
-            "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+    event = {"harness": harness, "path": str(repository),
+             "screen_sha256": "sha256:" + hashlib.sha256(current.encode()).hexdigest(), "time": time.time()}
+    if harness == "grok":
+        event["version"] = grok_version(current)
+    return event
 
 
 def renderer_choice(screen: str) -> str | None:
@@ -452,6 +471,8 @@ def wait_ready(pane: str, seconds: float, harness: str | None = None,
                 frames.append(frame_event("codex", "ready", screen))
             return current
         if (not trust_pending and current.get("agent_status") == "blocked") or time.monotonic() >= end:
+            if harness == "grok":
+                raise Refused(grok_startup_refusal(screen))
             raise Refused("seat did not become ready; inspect its native UI before any delivery")
         time.sleep(0.5)
 
@@ -567,10 +588,33 @@ def check_evaluator_auth(harness: str, environment: dict[str, str], cwd: Path) -
     return {"method": "native-status", "command": argv, "signed_in": True}
 
 
+GROK_SIGN_IN = re.compile(r"(?im)^\s*[│┃]?[ \t\u2800-\u28ff]*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)[ \t]*[│┃]?\s*$")
+
+
+def grok_startup_refusal(screen: str) -> str:
+    """Why a Grok seat is not ready, naming its version and the screen shown.
+    Only a visible sign-in screen is reported as a missing sign-in."""
+    if GROK_SIGN_IN.search(screen):
+        return AUTH_REFUSAL
+    # For naming only: the welcome shows its version without the channel.
+    shown = set(re.findall(r"Grok Build\s+(\d+(?:\.\d+)+)", screen))
+    version = grok_version(screen) or (shown.pop() if len(shown) == 1 else "(version not shown)")
+    if "Do you trust the contents of this directory?" in screen:
+        kind = "trust dialog"
+    elif re.search(r"\b(?:New worktree|Resume session)\b", screen):
+        kind = "welcome screen"
+    elif not screen.strip():
+        kind = "blank screen"
+    else:
+        kind = "unknown screen"
+    return (f"Grok Build {version}: {kind} not recognized (captured versions: "
+            f"{', '.join(GROK_VERSIONS)}); no key or prompt sent")
+
+
 def grok_authenticated_editor(screen: str) -> bool:
     # Public Grok welcome renderer: these menu rows require AuthState::Done
     # with access. Pending login can paint a prompt too, so prompt alone fails.
-    if re.search(r"(?im)^\s*[│┃]?[ \t\u2800-\u28ff]*(?:Login with .+|Approve in your browser to finish signing in\.|A browser window will open for authentication\.|Switch account(?:\s+.*)?)[ \t]*[│┃]?\s*$", screen):
+    if GROK_SIGN_IN.search(screen):
         return False
     lines = [line.strip() for line in screen.splitlines()]
     return (bool(re.search(r"(?m)^\s*[│┃]?[ \t\u2800-\u28ff]*New worktree[ \t]+ctrl\+w[ \t]*[│┃]?\s*$", screen))
@@ -851,6 +895,30 @@ def codex_hook_preflight(environment: dict[str, str], repository: Path,
         raise Refused(f"cannot verify Codex {stage}: {exc}", CODEX_HOOK_TRUST_FLAG) from exc
 
 
+def codex_remote_plugin_state(home: Path) -> dict:
+    """The dedicated Codex home's plugin feature settings and any
+    account-managed remote plugin cache left in it."""
+    try:
+        features = kit.codex_plugin_features(home / "config.toml")
+        cache = [path.relative_to(home).as_posix() for path in kit.codex_remote_plugin_cache(home)]
+    except (kit.EvalError, OSError, ValueError) as exc:
+        raise Refused(f"cannot read the plugin state of the dedicated Codex home: {exc}") from exc
+    return {"features": features, "remote_cache": cache}
+
+
+def require_codex_remote_plugins_off(home: Path) -> dict:
+    """No plugin, account-managed ones included, loads in the dedicated Codex home."""
+    found = codex_remote_plugin_state(home)
+    unset = [name for name, value in found["features"].items() if value is not False]
+    if unset:
+        raise Refused(f"the dedicated Codex home {home} does not set {' and '.join(f'{name} = false' for name in unset)} "
+                      "under [features]: run prepare-eval-homes")
+    if found["remote_cache"]:
+        raise Refused(f"the dedicated Codex home {home} holds an account-managed remote plugin cache "
+                      f"({', '.join(found['remote_cache'])}): run prepare-eval-homes, which moves it out")
+    return found
+
+
 CONFIG_FILES = {
     "claude": ("settings.json", "settings.local.json", "CLAUDE.md", "CLAUDE.local.md", "rules"),
     "codex": ("config.toml", "AGENTS.md", "AGENTS.override.md", "hooks.json", "rules"),
@@ -895,6 +963,8 @@ def config_snapshot(environment: dict[str, str], *, plugin_repository: Path | No
                         raise Refused(f"evaluator config exceeds size cap: {harness}")
                     hashes[str(candidate.relative_to(root))] = "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest()
         result[harness] = hashes
+        if harness == "codex":
+            result["codex_remote_plugins"] = codex_remote_plugin_state(root)
     if repository is not None:
         result["codex_trust"] = codex_trust_entry(Path(environment["CODEX_HOME"]) / "config.toml", repository)
     if plugin_repository is not None:
@@ -1140,6 +1210,8 @@ def check_peer_state(run: dict, harness: str, args: list[str], cwd: str, environ
             raise Refused(f"{key} differs from the trial environment", key)
     result = {"permission_flags": permission_flags(harness, args, repository, environment=environment,
                                                    codex_hook_trust=option, peer=True)}
+    if harness == "codex":
+        require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
     if harness == "codex" and option == "bypass":
         checks = codex_hook_preflight(environment, repository)
         result["hook_trust"] = {key: checks[key] for key in ("evaluator_home", "hooks_sha256", "checks")}
@@ -1588,6 +1660,10 @@ def launch(args) -> None:
         # On any harness the option also covers Codex peers the subject opens;
         # only a Codex seat itself gets the native flag at launch.
         if args.codex_hook_trust == "bypass":
+            dedicated_codex_home(environment)
+        # Every trial can start Codex, as its seat or as a peer, in this home.
+        remote_plugins = require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
+        if args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
     except Refused as exc:
@@ -1615,7 +1691,8 @@ def launch(args) -> None:
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness, "workspace": args.workspace, "peers": peers,
            "native_args": native, "permission_flags": permissions,
-           "hook_trust": hook_trust, "config_preflight": config_preflight,
+           "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
+           "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
            "observation_limitations": ["Only explicitly declared watch directories are observed. Harness TMPDIR is unobserved; planted controls must be outside it."],
@@ -1659,22 +1736,30 @@ def launch(args) -> None:
                 raise Refused("accepted trust dialog has not cleared; no repeated key")
             run["launch_response"] = recover_registration(
                 run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
-        try:
-            initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
-                                 run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
-        except Refused as exc:
-            if args.harness == "grok":
-                raise Refused(AUTH_REFUSAL) from exc
-            raise
+        initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
+                             run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
         if args.harness == "grok":
-            if not grok_authenticated_editor(herdr("pane", "read", run["pane"], "--source", "visible", text=True)):
-                raise Refused(AUTH_REFUSAL)
+            screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
+            if not grok_authenticated_editor(screen):
+                raise Refused(grok_startup_refusal(screen))
+            # The welcome shows no version; the fresh fixture's trust dialog does.
+            versions = {event.get("version") for event in run["trust_acceptances"] if event}
+            if len(versions) != 1 or not versions <= set(GROK_VERSIONS):
+                raise Refused("Grok Build version not verified: no trust dialog of a captured version "
+                              "was accepted for this fresh fixture; no prompt sent")
             run["authentication"]["signed_in"] = True
+            run["authentication"]["grok_version"] = versions.pop()
+            run["verified_frames"].append(frame_event("grok", "ready", screen))
+            (args.output / "grok-ready.txt").write_text(screen, encoding="utf-8")
         # From here a start in the subject's pane is a peer request too.
         write_peer_context(peers, subject={"pane": run["pane"], "ready": True})
         peers["subject_start_via_launcher"] = any(
             path.name.endswith("-subject.json") for path in Path(peers["launches"]).glob("*.json"))
         bypass = hook_trust["option"] == "bypass"
+        try:
+            require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
+        except Refused as exc:
+            raise Refused(f"remote plugin recheck after readiness refused: {exc}") from exc
         try:
             run["config_start"] = config_snapshot(
                 environment, plugin_repository=repository if bypass else None, repository=repository)
@@ -1706,6 +1791,13 @@ def launch(args) -> None:
         run["status"] = "started"
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         run.update(status="refused", error=str(exc))
+        if "pane" in run and "initial_agent" not in run:
+            # Keep the screen a startup refusal met, for inspection.
+            try:
+                (args.output / "startup-screen.txt").write_text(
+                    herdr("pane", "read", run["pane"], "--source", "visible", text=True), encoding="utf-8")
+            except Exception:  # noqa: BLE001 - evidence only; never masks the refusal
+                pass
         if "peer_watch" in run:
             (args.output / "peers.stop").write_text("", encoding="utf-8")
         raise

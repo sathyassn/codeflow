@@ -49,9 +49,35 @@ python3 "$kit/eval_kit.py" prepare-eval-homes
 ```
 
 Run the printed native commands yourself and complete each harness's sign-in.
-The command only creates folders and missing non-secret settings; it never
-signs in, reads credentials, or overwrites existing config. Claude uses
-`/login`, Codex uses its ChatGPT sign-in, and Grok uses browser approval.
+The command creates folders and missing non-secret settings; it never signs
+in or reads credentials. Claude uses `/login`, Codex uses its ChatGPT sign-in,
+and Grok uses browser approval.
+
+No plugin loads in the dedicated Codex home. A signed-in Codex 0.159.1 syncs
+the account's installed remote plugins into `plugins/cache/` at every start
+whenever its `plugins` feature is on; `remote_plugin` alone turns off only the
+remote catalog. So the command writes `plugins = false` and
+`remote_plugin = false` under `[features]` in that home's `config.toml`,
+adding only what is missing and verifying that the rest of the file parses
+unchanged. It refuses a config that sets either one to another value, or that
+defines `[features]` in a form other than one table header. It then moves an
+account-managed plugin cache out of the home (the `openai-curated-remote`
+marketplace, any marketplace holding Codex's remote-install marker, and a
+non-empty install staging folder) into
+`~/.codeflow-eval/removed-remote-plugins/<time>/`, printing each move and the
+reason. Delete that folder once it is no longer needed. Reading that config
+needs Python 3.11 or newer, as the runner does. Every Codex start the
+kit builds (the trial seat, a peer's answer, the hook-review command and the
+setup helper) also passes `-c features.plugins=false -c
+features.remote_plugin=false`. The command touches only the dedicated home,
+never `~/.codex`.
+
+Every launch checks the dedicated Codex home before any seat starts, whatever
+the harness, since any trial can open a Codex peer: a missing or different
+setting, or a remote plugin cache, refuses with `run prepare-eval-homes`. The
+check runs again after readiness, before the prompt, and for every Codex peer
+start; `config_finish` records the same state, so a change flags
+`evaluator_config_drift`. `launch.json` records it as `codex_remote_plugins`.
 For an operator's own interactive Codex hook review, materialize a fresh
 fixture with the current binary, then print the operator command:
 
@@ -114,9 +140,11 @@ bypass launch, the runner checks:
   definitions refuse. Fixture TOML hooks refuse; fixture plugin sources
   receive the same inspection. Symlinked hook/config sources refuse.
 
-Hook-free plugins are allowed. Account-managed curated plugins add skills
-and apps to the subject's context; that contribution is recorded rather than
-refused. `hook_trust.plugins` in `launch.json` lists each inspected plugin's
+With plugins turned off, Codex loads no plugin in the dedicated home, and an
+account-managed remote cache is refused before these checks run (see the
+sign-in setup above). Any other plugin left on disk is still inspected:
+hook-free ones are recorded rather than refused, and the `hooks` rule above is
+unchanged. `hook_trust.plugins` in `launch.json` lists each inspected plugin's
 name, declared version (null if absent), source, marketplace, path, skills
 and apps presence, every manifest's SHA-256, and a digest of entry metadata
 (paths, modes, sizes and mtimes). This is a disk inventory, not proof
@@ -124,8 +152,9 @@ that each plugin was enabled or used. Trace review must account for it.
 
 These checks restrict bypass to the reviewed shipped hook commands and
 exclude user and plugin hooks that could otherwise run without review.
-The runner never writes trust grants, deletes plugin caches, removes
-existing trust records, or touches the operator's personal `~/.codex`.
+The runner never writes trust grants, moves or deletes plugin caches, removes
+existing trust records, or touches the operator's personal `~/.codex`; only
+`prepare-eval-homes`, run by the operator, moves a remote plugin cache.
 An unexpected "Hooks need review" screen still refuses without a key.
 Existing exact-path workspace-trust checks remain in force; trial paths
 stay fresh. No stable path or archive lifecycle is used.
@@ -189,10 +218,14 @@ Before creating a tab, Claude must report `loggedIn: true` with the expected
 using ChatGPT` from `codex login status`. Raw account details are not retained.
 Grok has no installed auth-status subcommand: after startup its fresh welcome
 must show the authenticated `New worktree` and `Resume session` menu rows
-and an empty or placeholder editor, without a login screen. Unknown states
-refuse before any prompt, using `evaluator home not signed in: run
-prepare-eval-homes`. Grok may show a browser-approval screen before refusal;
-the runner never answers it. A positive status is local sign-in evidence,
+and an empty or placeholder editor, without a login screen. A visible
+sign-in screen refuses with `evaluator home not signed in: run
+prepare-eval-homes`. Any other state refuses before any prompt with a
+message naming the Grok version (or `(version not shown)`) and the screen:
+trust dialog, welcome screen, blank screen or unknown screen, for example
+`Grok Build 1.0.46: welcome screen not recognized`. The screen a startup
+refusal met is kept as `startup-screen.txt`. Grok may show a
+browser-approval screen before refusal; the runner never answers it. A positive status is local sign-in evidence,
 not a guarantee that a remote subscription or token will remain valid.
 
 During startup, the runner may accept only Claude's workspace-trust or
@@ -254,17 +287,23 @@ and the native theme dialog; the onboarding key is not a stable settings API.
 The kit seeds only a missing file. A changed first-run UI is a refusal for
 inspection, not permission to invent flags or answer login automatically.
 
-The runner accepts Grok's observed 1.0.44 workspace-trust dialog only when
-its wording and full repository path match the disposable fixture. The
-record includes the screen digest and time, just as for Claude and Codex.
+The runner accepts Grok's workspace-trust dialog, as observed in 1.0.44 and
+1.0.46, only when its wording and full repository path match the disposable
+fixture. The record includes the screen digest, time and Grok version, just
+as for Claude and Codex.
 For Claude's exact "Try the new fullscreen renderer?" dialog it selects
 "Not now", verifies that selection before Enter, and records the display
 choice in `launch.json`. This keeps the current renderer; the kit writes no
 setting to suppress the dialog. Unknown or changed dialogs still refuse,
 and the strict empty-editor check runs before any trial prompt is pasted.
-The Grok match is pinned to the `Grok Build 1.0.44 [stable]` footer, so an
-upgraded Grok fails closed until its trust and welcome screens are captured
-again and the runner is updated.
+The Grok match is pinned to the trust dialog's `Grok Build <version> [stable]`
+footer for the captured versions 1.0.44 and 1.0.46. The 1.0.46 welcome shows
+no channel, so the version comes from that dialog: a Grok seat reaches
+readiness only after the runner accepted a trust dialog of a captured version
+for the fresh fixture, and `authentication.grok_version` and a `ready` entry
+in `verified_frames` (with `grok-ready.txt`) record it. Another version fails
+closed, naming itself, until its trust and welcome screens are captured
+again and added to `GROK_VERSIONS` in the runner.
 
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
@@ -434,6 +473,8 @@ after these checks, and refuses otherwise:
 - the arguments pass the same per-harness allowlist as a top-level seat, so
   resume, continue, profiles, config overrides, headless subcommands and
   personal paths refuse; approval flags are the subject's choice;
+- for every Codex peer: the dedicated home still turns plugins off and holds
+  no remote plugin cache;
 - for Codex with `--codex-hook-trust=bypass`: the dedicated home, user and
   plugin hook sources and the fixture's shipped hooks are checked again, and
   the plugin inventory must equal the launch preflight's.
