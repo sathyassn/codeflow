@@ -1,0 +1,11 @@
+id = "TSK-227"
+uid = "32c60f9d-4c7e-47fa-8c0b-f8b83c6fa37f"
+kind = "TSK"
+title = "Baseline commit ids must resolve"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T00:08:26Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
