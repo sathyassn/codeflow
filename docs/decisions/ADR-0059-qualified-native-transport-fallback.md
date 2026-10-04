@@ -54,3 +54,14 @@ or independent review remains a gap. Frozen failures stay visible. This adds
 guidance, not a process broker, private harness-state reader or security bypass.
 `doctor` still reports absence of the preferred plugin as a prerequisite gap;
 fallback qualification lives in run evidence, not in that inventory check.
+
+## Note (2026-10-03)
+
+ADR-0077 reverses this record's preference: the official plugin is an
+optional fallback, never the preferred Claude to Codex route. The preferred
+route is the interactive Codex CLI in a Herdr tab, on the app-server when it
+runs. The qualification of a fallback, the five evidence obligations and the
+boundary rules here stand. Doctor no longer reports a missing plugin as a
+prerequisite gap. Reading the seat's own Codex session record for its reply
+and observed model and effort is a native session surface for that one
+session, not a private harness-state reader, and never a completion signal.

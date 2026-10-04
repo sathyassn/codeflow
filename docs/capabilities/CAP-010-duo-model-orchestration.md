@@ -91,9 +91,13 @@ the host a session starts in decides the transport, not the contract:
 
 | Host | How it reaches the other seat |
 |---|---|
-| Claude Code | Reaches Codex through the official plugin/app-server |
-| Codex App or interactive CLI | Reaches Claude through Herdr, the named-tab terminal host for an interactive peer CLI, with tmux as the degraded host |
-| Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr |
+| Claude Code | Reaches Codex through the interactive Codex CLI on its app-server, in a Herdr tab; the official plugin is an optional fallback |
+| Codex App or interactive CLI | Reaches Claude through the interactive Claude CLI in a Herdr tab, the named-tab terminal host for an interactive peer CLI |
+| Grok Build | Reaches Codex and Claude the same way, each in a Herdr tab |
+
+Any host may drive a reachable Herdr server, and tmux is the last fallback
+when none is reachable. The rule is stated once in
+`cf-model-orchestrator/resources/routing/transport.md` (ADR-0077).
 
 Grok and extra families:
 
@@ -415,37 +419,53 @@ record a pull request changes (`codeflow ci`).
 #### Completion binding
 
 A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
-R-62). `task status complete` and `codeflow ci` check that:
-
-- the block's `reviewed` commit, named by object id, is the head or an ancestor
-  after which only the record's status and Closeout changed, apart from a merge
-  from the integration line whose tree equals the clean re-merge
-- each waiver names the commit that changed that criterion: a planning-only
-  amendment on the target, or a record-only commit in the pull request's own
-  range before the reviewed commit
-
-The verb also refuses uncommitted changes outside the record.
-
-- A clean task landing can carry that reviewed source onto its line, including
-  when only status and Closeout changed between the review and the landed task
-  head. Unrelated line work before the landing does not invalidate that
-  source.
-- Direct work and transported work use the same binding predicate.
-- At a batch landing, each completion binds at the commit that introduced its
-  block, so reviewed heads land together on one candidate.
-- A task pull request may change its own criteria, and CI prints the change for
-  the reviewer. A reopened task keeps its criteria. Another task's criteria
-  change only in its own pull request, a planning-only change or a checked epic
-  line.
-- A range touching the adopter-facing path set needs a `(journey)` criterion or
-  one serving the epic's journey. A leaf serving it says what ran or its
-  narrower path.
-- A criterion tagged `(after release)` is `deferred` with owner, window and a
-  listed follow-up.
-- A tag opens or closes its criterion, trailing sentence punctuation included.
-  A tag inside the text does not count.
-- `git.work_records` sets the binding and journey rules. The frozen criteria of
-  other records always block.
+R-62): `task status complete` and `codeflow ci` check that the block's
+`reviewed` commit, named by object id, is the head or an ancestor after
+which only the record's status and Closeout changed, apart from a merge from
+the integration line whose tree equals the clean re-merge, and that each
+waiver names the commit that changed that criterion: a planning-only
+amendment on the target, or a record-only commit in the pull request's own
+range before the reviewed commit; the verb also refuses uncommitted changes
+outside the record. A clean task landing can carry that reviewed source onto
+its line, including when only status and Closeout changed between the review
+and the landed task head; unrelated line work before the landing does not
+invalidate that source. Direct work and transported work use the same
+binding predicate. At a batch landing each completion binds at the commit
+that introduced its block, so reviewed heads land together on one candidate.
+A task pull request that merges its moved target after the review keeps its
+binding when each merge brings a commit on the first-parent line of a target
+tip the run is judged against, and the merge's recorded result equals the
+conflict-free automatic merge of its parents (TSK-220). The target tips come
+from the run, never from a local branch or its upstream configuration: the
+base `codeflow ci` is given (in hosted CI, the pull request's base commit),
+and in the pre-push hook also its candidate authority, the destination
+default branch's advertised tip; a planning or line range also accepts its
+own line, for the tasks that target that line. Any other merge, a merge
+of more than two parents, a later commit beyond the record's status and
+Closeout, a history overlay (grafts or replace refs) or a shallow cut on
+the walked chain refuses, even when the net change cancels out, and the
+refusal names that commit. The status verb, which has no run base, previews
+the same rule against the task's target as `work start` anchors it. A task
+completed, reopened and completed again inside its own pull request may
+change its own criteria while no record with its id or uid is on the
+target, under any path and file name the record reader accepts; when the
+target cannot be read, the task keeps the criteria it was completed with.
+The criteria to keep come only from the range anchor and the run's own
+bases; a line range's own head may carry merges but never supplies
+criteria, and another tip of the task's targets, a local branch or a
+remote-tracking ref, that holds the task can only keep the criteria it was
+completed with. It still reviews its own range.
+A task pull request may change its own criteria, and CI prints the change
+for the reviewer; a reopened task whose record is on the target keeps its
+criteria, and another task's criteria change only in its own pull request,
+a planning-only change or a checked epic line. A range touching
+the adopter-facing path set needs a `(journey)` criterion or one serving the
+epic's journey, and a leaf serving it says what ran or its narrower path. A
+criterion tagged `(after release)` is `deferred` with owner, window and a
+listed follow-up. A tag opens or closes its criterion, trailing sentence
+punctuation included; a tag inside the text does not count.
+`git.work_records` sets the binding and journey rules; the frozen criteria of
+other records always block.
 
 #### Release rules
 

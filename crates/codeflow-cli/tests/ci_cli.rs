@@ -587,6 +587,94 @@ fn ci_summary_shape_blocks_prose_only_and_follows_its_level() {
     }
 }
 
+/// An over-long body (TSK-228) draws one warning that names the count, the
+/// limit and the largest `##` sections, through `--pr-body`,
+/// `--pr-body-file` and `CODEFLOW_PR_BODY`. It never fails the run, whatever `git.pr_sections`
+/// says, and a project that turns the section check off hears nothing.
+#[test]
+fn ci_long_body_warns_without_blocking() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let pasted = "pasted output line with six words\n".repeat(200);
+    let long = FULL_BODY.replacen(
+        "Not tested: Windows.\n",
+        &format!("Not tested: Windows.\n```text\n{pasted}```\n"),
+        1,
+    );
+    assert_ne!(long, FULL_BODY, "the fixture names its Testing section");
+
+    let out = ci_with_body(dir.path(), &long);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("PR body is 1"), "{stderr}");
+    assert!(
+        stderr.contains("words, over the 1000-word limit"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("## Testing (1"), "{stderr}");
+    assert!(
+        stderr.contains("link records instead of copying them"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("-word limit").count(), 1, "{stderr}");
+
+    let file = dir.path().join("long-body.md");
+    std::fs::write(&file, format!("Task: TSK-001\n{long}")).unwrap();
+    let out = run_in(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "feat/x",
+            "--pr-body-file",
+            file.to_str().unwrap(),
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("-word limit"), "{stderr}");
+
+    // The environment channel hosted CI uses carries the body the same way.
+    let out = codeflow()
+        .args([
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ])
+        .env("CODEFLOW_PR_BODY", format!("Task: TSK-001\n{long}"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("-word limit"), "{stderr}");
+
+    let out = ci_with_body(dir.path(), FULL_BODY);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("-word limit"));
+
+    let cf = dir.path().join(".codeflow");
+    std::fs::create_dir_all(&cf).unwrap();
+    for (level, warns) in [
+        ("block", true),
+        ("warn", true),
+        ("allow", false),
+        ("off", false),
+    ] {
+        std::fs::write(
+            cf.join("policy.json"),
+            format!(r#"{{"schema_version":1,"git":{{"pr_sections":"{level}"}}}}"#),
+        )
+        .unwrap();
+        let out = ci_with_body(dir.path(), &long);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{level}: {stderr}");
+        assert_eq!(stderr.contains("-word limit"), warns, "{level}: {stderr}");
+    }
+}
+
 // -- policy characters (ADR-0067) --------------------------------------------
 
 /// Set `git.policy_characters` to `block`, the level this repository uses;

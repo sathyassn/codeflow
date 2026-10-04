@@ -145,6 +145,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_SECTION_MISSING", Runs),
     ("PR_TEMPLATE_REMNANT", Runs),
     ("PR_PRESENTATION", Runs),
+    ("PR_BODY_LENGTH", Runs),
     ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
@@ -932,6 +933,25 @@ fn clears_pr_presentation() {
         &BODY.replace("- Not tested: Windows.\n", ""),
         BODY,
         "has no Not tested: line",
+    );
+}
+
+#[test]
+fn clears_pr_body_length() {
+    // TSK-228: an over-long body warns; rewriting it to its final state
+    // clears the warning on the next run.
+    prove_body(
+        "PR_BODY_LENGTH",
+        DEFAULTS,
+        &BODY.replace(
+            "- one change\n",
+            &format!(
+                "- one change\n\n{}",
+                "pasted review round text\n\n".repeat(300)
+            ),
+        ),
+        BODY,
+        "-word limit",
     );
 }
 
@@ -2847,7 +2867,7 @@ fn clears_doctor_tool_missing() {
     );
 }
 
-// Cross-vendor delegation runs peers in tmux, which native Windows lacks;
+// Cross-vendor seats run in Herdr or tmux, which native Windows lacks;
 // `codeflow delegate init` refuses there and points at WSL2.
 #[cfg(unix)]
 #[test]
@@ -2857,7 +2877,8 @@ fn clears_doctor_delegates() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     // PATH holds only this directory, so doctor finds exactly what is here:
-    // a signed-in codex, and a claude whose Codex plugin is not enabled.
+    // a signed-in codex, and a claude whose Codex plugin is not enabled,
+    // which is no gap: the plugin is an optional fallback (ADR-0077).
     let bin = tempfile::tempdir().unwrap();
     let stand_in = |name: &str, script: &str| {
         let path = bin.path().join(name);
@@ -2889,12 +2910,14 @@ fn clears_doctor_delegates() {
         "cross-vendor delegation is partially unavailable",
         check,
         |printed| {
-            assert!(printed.contains("tmux missing from PATH"), "{printed}");
-            assert!(printed.contains("plugin not enabled"), "{printed}");
-            // Install tmux and enable the plugin: stand-ins are what doctor
-            // can see of both.
-            stand_in("tmux", "exit 0\n");
-            stand_in("claude", &plugin(true));
+            assert!(
+                printed.contains("herdr and tmux missing from PATH"),
+                "{printed}"
+            );
+            assert!(!printed.contains("plugin"), "{printed}");
+            // Install Herdr, the seat host: a stand-in is what doctor can
+            // see of it. The plugin stays disabled.
+            stand_in("herdr", "exit 0\n");
         },
     );
 }

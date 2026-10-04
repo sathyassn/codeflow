@@ -46,15 +46,22 @@ confidence and gate policy; no second flag. The security reviewer's
 
 A review brief names the unit, its revision, the criteria, the remedy expected
 on every blocker and major finding, and the provenance the reply must carry.
-The reviewer returns the verdict, the findings with their remedy, what was
-verified and what was not verified. Cross-lineage and Herdr briefs follow this
-contract.
+It asks for one holistic pass: the whole unit, its full diff against its base
+at one head, and its blast radius, meaning what it touches upstream and
+downstream, adopters, other platforms, CI time, docs and records. Findings
+from earlier rounds enter the brief as checks within that pass, never as its
+whole scope. The reviewer returns the verdict, the findings with their remedy,
+what was verified and what was not verified. Every review and consult brief,
+same-family or cross-family, follows this contract; `cf-herdr` states how a
+review seat runs in Herdr.
 
 ### Review rounds
 
 Review is one holistic pass per revision: every assigned reviewer reviews the
 whole change in parallel on that revision, with no minimum or maximum number
-of passes. The builder collects the findings into one dependency-ordered batch
+of passes. A round after fixes, or after merging the base, reviews the whole
+unit again at the new head, not only the delta; confirming one fix, below, is
+not a new round. The builder collects the findings into one dependency-ordered batch
 with provenance preserved, deduplicates them by mechanism, evaluates each
 proposed remedy against the diagnosed mechanism and the impact set, and
 records accept, modify or reject with the reason. Rejecting a remedy never
