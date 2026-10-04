@@ -147,6 +147,32 @@ fn remote_update(root: &Path, args: &[String]) -> Option<String> {
     }
 }
 
+/// The `key`, `value` pairs of `git config --null --list`.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): the listing holds every
+/// value in the user's effective git configuration, such as a name or an
+/// alias in another encoding, and this check reads only `remotes.*` and
+/// `remote.<name>.skip*` keys and boolean values. A value is decoded lossily,
+/// so one that is not valid UTF-8 cannot refuse the command. A key is
+/// identity: it names a remote, so a key that is not valid UTF-8 is dropped
+/// and never decoded, because its lossy spelling could equal the key of a
+/// different, valid remote and replace that remote's setting. Such a remote
+/// is refused by name in [`utf8_remote_names`].
+fn config_entries(listing: &[u8]) -> Vec<(String, String)> {
+    listing
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| {
+            let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
+                Some(split) => (&entry[..split], &entry[split + 1..]),
+                None => (entry, b"true".as_slice()),
+            };
+            let key = String::from_utf8(key.to_vec()).ok()?;
+            Some((key, String::from_utf8_lossy(value).into_owned()))
+        })
+        .collect()
+}
+
 fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     // Read the same effective config as Git, including includes and global scope.
     let config = crate::git::command()
@@ -157,16 +183,10 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
     if !config.status.success() {
         return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
     }
-    // OS text rule (issue 79, `docs/architecture.md`): the listing holds every
-    // value in the user's effective git configuration, such as a name or an
-    // alias in another encoding, and this check reads only `remotes.*` and
-    // `remote.<name>.skip*` keys and boolean values. The listing is decoded
-    // lossily, so a value that is not valid UTF-8 cannot refuse the command,
-    // and an invalid byte cannot make a key match one it does not.
-    let text = String::from_utf8_lossy(&config.stdout);
-    let entries: Vec<_> = text
-        .split_terminator('\0')
-        .map(|entry| entry.split_once('\n').unwrap_or((entry, "true")))
+    let entries = config_entries(&config.stdout);
+    let entries: Vec<_> = entries
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect();
     let group = |name: &str| {
         let key = format!("remotes.{name}");
@@ -233,7 +253,9 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
 /// write policy authority, and a name it cannot read is a remote it cannot
 /// prove, so skipping it would let `git fetch` or `git remote update` run an
 /// unchecked mapping. The operator reads the remote with `git remote -v`.
-fn utf8_remote_names(remotes: &git2::string_array::StringArray) -> Result<Vec<String>, String> {
+pub(super) fn utf8_remote_names(
+    remotes: &git2::string_array::StringArray,
+) -> Result<Vec<String>, String> {
     remotes
         .iter_bytes()
         .map(|name| {
@@ -391,6 +413,31 @@ mod tests {
         assert_eq!(
             update_remotes(dir.path(), &["group".to_string()]).unwrap(),
             ["origin"]
+        );
+    }
+
+    /// Review finding: a config key that is not valid UTF-8 must not become
+    /// the key of a different, valid remote. `remote."caf\xff"` read lossily is
+    /// `remote."caf\u{fffd}"`, so its `skipdefaultupdate` would hide that
+    /// valid remote from `git remote update`.
+    #[test]
+    fn a_config_key_that_is_not_utf8_never_sets_another_remotes_option() {
+        let dir = repository_with_config(
+            b"[remote \"caf\xef\xbf\xbd\"]\n\turl = https://example.invalid/b.git\n[remote \"caf\xff\"]\n\tskipdefaultupdate = true\n",
+        );
+        // The valid remote stays in the update, whatever the other key says.
+        assert_eq!(
+            update_remotes(dir.path(), &[]).unwrap(),
+            ["caf\u{fffd}", "origin"]
+        );
+        let parsed =
+            config_entries(b"remote.caf\xff.skipdefaultupdate\ntrue\0remote.ok.url\nu\0flag\0");
+        assert_eq!(
+            parsed,
+            [
+                ("remote.ok.url".to_string(), "u".to_string()),
+                ("flag".to_string(), "true".to_string())
+            ]
         );
     }
 

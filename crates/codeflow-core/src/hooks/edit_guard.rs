@@ -509,14 +509,23 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         return false;
     };
     let mut paths = vec![
-        ("refs/remotes".to_string(), true),
-        ("packed-refs".to_string(), false),
-        ("config".to_string(), false),
-        ("config.worktree".to_string(), false),
+        (PathBuf::from("refs/remotes"), true),
+        (PathBuf::from("packed-refs"), false),
+        (PathBuf::from("config"), false),
+        (PathBuf::from("config.worktree"), false),
     ];
     if let Ok(names) = repo.worktrees() {
-        for name in names.iter().flatten().flatten() {
-            paths.push((format!("worktrees/{name}/config.worktree"), false));
+        // OS text rule (issue 79, `docs/architecture.md`): the names are kept
+        // as bytes. A worktree whose folder name is not valid UTF-8 still has
+        // a `config.worktree` that authority rests on, so it must stay in the
+        // protected list instead of dropping out of it.
+        for name in names.iter_bytes() {
+            paths.push((
+                Path::new("worktrees")
+                    .join(os_component(name))
+                    .join("config.worktree"),
+                false,
+            ));
         }
     }
     for resolve in [false, true] {
@@ -557,13 +566,55 @@ fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
         }
     }
     if let Ok(names) = repo.worktrees() {
-        for name in names.iter().flatten().flatten() {
-            if let Ok(tree) = repo.find_worktree(name) {
-                roots.push(tree.path().to_path_buf());
+        for name in names.iter_bytes() {
+            if let Some(root) = std::str::from_utf8(name)
+                .ok()
+                .and_then(|name| repo.find_worktree(name).ok())
+                .map(|tree| tree.path().to_path_buf())
+                .or_else(|| unreadable_name_worktree_root(repo, name))
+            {
+                roots.push(root);
             }
         }
     }
     roots
+}
+
+/// A worktree folder name as one path component, byte for byte where the
+/// platform allows it.
+fn os_component(name: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        PathBuf::from(std::ffi::OsStr::from_bytes(name))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(name).into_owned())
+    }
+}
+
+/// The checkout of a linked worktree whose administrative folder name is not
+/// valid UTF-8, which `find_worktree` cannot be asked for. Its `gitdir` file
+/// holds the path of the checkout's `.git`, as git writes it. A worktree this
+/// cannot read is one fewer protected checkout, so only a name that is not
+/// valid UTF-8 comes here.
+fn unreadable_name_worktree_root(repo: &git2::Repository, name: &[u8]) -> Option<PathBuf> {
+    let file = repo
+        .commondir()
+        .join("worktrees")
+        .join(os_component(name))
+        .join("gitdir");
+    let text = std::fs::read(file).ok()?;
+    let text = text.trim_ascii_end();
+    #[cfg(unix)]
+    let gitdir = {
+        use std::os::unix::ffi::OsStrExt as _;
+        PathBuf::from(std::ffi::OsStr::from_bytes(text))
+    };
+    #[cfg(not(unix))]
+    let gitdir = PathBuf::from(String::from_utf8_lossy(text).into_owned());
+    gitdir.parent().map(Path::to_path_buf)
 }
 
 /// The enforcement paths of every checkout sharing this repository, each
@@ -1180,5 +1231,75 @@ mod tests {
         std::fs::write(&shared, "{}").unwrap();
         symlink(&shared, f.root.join(".codeflow/policy.json")).unwrap();
         assert!(f.refused(shared.to_str().unwrap()));
+    }
+    /// A repository whose linked worktree has the administrative folder name
+    /// `caf\xe9`, which is not valid UTF-8, and the path of that folder. `None`
+    /// when the file system refuses the name (APFS does), so the test runs where
+    /// it can, as on Linux.
+    #[cfg(unix)]
+    fn repository_with_a_worktree_named_in_latin1() -> Option<(tempfile::TempDir, PathBuf)> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let admin = dir
+            .path()
+            .join(".git")
+            .join("worktrees")
+            .join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        std::fs::create_dir_all(&admin).ok()?;
+        let checkout = dir.path().join("linked");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", checkout.join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        Some((dir, admin))
+    }
+
+    /// Review finding on issue 79: a worktree whose folder name is not valid
+    /// UTF-8 used to drop out of the protected list, leaving its
+    /// `config.worktree` editable.
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_named_in_latin1_keeps_its_config_protected() {
+        let Some((dir, admin)) = repository_with_a_worktree_named_in_latin1() else {
+            return;
+        };
+        let target = admin.join("config.worktree");
+        assert!(repository_authority_target(&target, dir.path(), false));
+        assert!(!repository_authority_target(
+            &admin.join("other"),
+            dir.path(),
+            false
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_named_in_latin1_is_still_a_protected_checkout() {
+        let Some((dir, _admin)) = repository_with_a_worktree_named_in_latin1() else {
+            return;
+        };
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let roots = checkout_roots(&repo);
+        assert!(
+            roots.iter().any(|root| root.ends_with("linked")),
+            "{roots:?}"
+        );
+    }
+
+    /// Kept strict (issue 79): the rules that protect a path are text globs,
+    /// so a path that is not valid UTF-8 is refused, not matched lossily.
+    #[cfg(unix)]
+    #[test]
+    fn an_enforcement_path_that_is_not_utf8_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"/repo/caf\xe9.md"));
+        let error = path_text(path).unwrap_err();
+        assert!(error.0.contains("non-UTF-8"), "{}", error.0);
+        assert!(path_text(Path::new("/repo/cafe.md")).is_ok());
     }
 }

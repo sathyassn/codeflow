@@ -550,4 +550,63 @@ mod tests {
         .unwrap()
         .is_none());
     }
+
+    /// Kept strict (issue 79): a pathspec that is not valid UTF-8 would pick a
+    /// directory to protect from a wrong text, so it is uncertainty.
+    #[cfg(unix)]
+    #[test]
+    fn a_pathspec_that_is_not_utf8_is_uncertainty() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"d/caf\xe9"));
+        assert_eq!(portable(path).unwrap_err(), "non-UTF8 pathspec");
+        assert_eq!(portable(Path::new("d/cafe")).unwrap(), "d/cafe");
+    }
+
+    /// Kept strict (issue 79): a worktree whose folder name is not valid
+    /// UTF-8 cannot be judged, so a force removal is uncertainty, never a
+    /// pass. Runs where the file system accepts the name, as on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn a_worktree_named_in_latin1_makes_a_forced_removal_uncertain() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let (dir, _repo) = fixture();
+        let admin = dir
+            .path()
+            .join(".git")
+            .join("worktrees")
+            .join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        if std::fs::create_dir_all(&admin).is_err() {
+            return;
+        }
+        let checkout = dir.path().join("linked");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", checkout.join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let removal = Intent::ForceRemoveWorktree("linked".into());
+        assert!(inspect(dir.path(), None, &removal).is_err());
+    }
+
+    /// Issue 79: an untracked name that is not valid UTF-8 is counted. Runs
+    /// where the file system accepts the name, as on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn an_untracked_name_that_is_not_utf8_is_counted() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let (dir, repo) = fixture();
+        let name = dir.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        if std::fs::write(name, b"keep").is_err() {
+            return;
+        }
+        assert_eq!(untracked_paths(&repo, true).unwrap(), ["caf\u{fffd}"]);
+        let clean = Intent::CleanNonIgnored {
+            paths: vec![],
+            directories: false,
+        };
+        assert!(inspect(dir.path(), None, &clean).is_ok());
+    }
 }

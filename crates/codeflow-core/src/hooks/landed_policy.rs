@@ -25,7 +25,12 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
         return Ok(working(root, "working copy (unborn HEAD; no remote)"));
     };
     let remotes = repo.remotes().map_err(|e| e.to_string())?;
-    let names: Vec<_> = remotes.iter().flatten().flatten().collect();
+    // OS text rule (issue 79, `docs/architecture.md`): kept strict. The remote
+    // picks the policy source, so a remote name that is not valid UTF-8 stops
+    // the read instead of dropping out of the list, where the policy would be
+    // read from `HEAD` as if no remote existed.
+    let names = super::ref_authority::utf8_remote_names(&remotes)?;
+    let names: Vec<_> = names.iter().map(String::as_str).collect();
     let remote = if names.contains(&"origin") {
         Some("origin")
     } else {
@@ -357,4 +362,66 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
         "policy source: {}{residual}{drift}; refresh with git fetch{advice}",
         authority.source
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository with one commit, the remote `origin` and `extra` bytes
+    /// appended to its configuration.
+    fn repository(extra: &[u8]) -> (tempfile::TempDir, git2::Oid) {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
+            .unwrap();
+        drop(tree);
+        repo.remote("origin", "https://example.invalid/origin.git")
+            .unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config.write_all(extra).unwrap();
+        (dir, commit)
+    }
+
+    /// Review finding on issue 79: a remote name that is not valid UTF-8 used
+    /// to drop out of the list, so the policy was read from `HEAD` as if no
+    /// remote existed. The read now stops and says why.
+    #[test]
+    fn a_remote_name_that_is_not_utf8_stops_the_policy_read() {
+        let (dir, _) = repository(b"[remote \"caf\xe9\"]\n\turl = https://example.invalid/x.git\n");
+        let error = load(dir.path()).err().expect("the read is refused");
+        assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Kept strict: the default branch of the remote picks the policy source,
+    /// so a name that is not valid UTF-8 is a recovery error, never a lossy
+    /// spelling of another ref.
+    #[test]
+    fn a_remote_head_that_names_a_ref_that_is_not_utf8_stops_the_policy_read() {
+        let (dir, commit) = repository(b"");
+        let git = dir.path().join(".git");
+        std::fs::create_dir_all(git.join("refs").join("remotes").join("origin")).unwrap();
+        let mut head = b"ref: refs/remotes/origin/caf\xe9\n".to_vec();
+        std::fs::write(
+            git.join("refs").join("remotes").join("origin").join("HEAD"),
+            &head,
+        )
+        .unwrap();
+        head.clear();
+        let mut packed = b"# pack-refs with: peeled fully-peeled sorted \n".to_vec();
+        packed.extend_from_slice(format!("{commit} refs/remotes/origin/").as_bytes());
+        packed.extend_from_slice(b"caf\xe9\n");
+        std::fs::write(git.join("packed-refs"), packed).unwrap();
+        let error = load(dir.path()).err().expect("the read is refused");
+        assert!(error.contains("cannot read policy source"), "{error}");
+    }
 }
