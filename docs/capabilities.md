@@ -423,16 +423,16 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002, EPC-011, EPC-012, EPC-018]
-adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth. CodeFlow's gates judge
-the output whoever wrote it (ADR-0005). Transport is interactive only. From
-Claude Code it uses the official `codex-plugin-cc` plugin, with a qualified
-native client fallback (ADR-0059). From Codex it uses the interactive `claude`
-CLI through the delegate lifecycle. When `HERDR_ENV=1`, `cf-herdr` hosts that
-terminal in a named Herdr tab. Headless task execution is prohibited. Delegates
+the output whoever wrote it (ADR-0005). Transport is interactive only and
+stated once, in `cf-model-orchestrator/resources/routing/transport.md`
+(ADR-0077): another family runs its own interactive CLI in a Herdr tab that
+`cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional
+fallback and tmux the last. Headless task execution is prohibited. Delegates
 edit only inside a worktree on a feature branch, under the same gates. Detail:
 [delegation](delegation.md).
 

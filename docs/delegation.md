@@ -25,26 +25,26 @@ an independent reviewer.
 
 ## Architecture
 
-The host you start in decides the route to the peer, and every route ends in
-the same gates.
+Every peer runs as its own interactive CLI in a Herdr tab, whichever host
+you start in, and every route ends in the same gates. The rule is stated once
+in `cf-model-orchestrator/resources/routing/transport.md`.
 
-- **Claude Code to Codex** goes through the official Codex plugin for Claude
-  Code, `codex@openai-codex`. `/codex:review` and `/codex:adversarial-review`
-  consult, `/codex:rescue` delegates, and `/codex:transfer` keeps one thread
-  across several rounds. A reply counts as Codex only with its native thread
-  id.
-- **Codex to Claude** runs the interactive `claude` CLI in a Herdr tab, and
-  CodeFlow's delegate lifecycle proves each turn started, was accepted and
-  ended. Outside Herdr, a dedicated tmux session is the degraded host.
-- **Grok Build** reaches Codex through the official `codex` CLI and its local
-  app-server daemon, and reaches Claude through Herdr and the delegate
-  lifecycle.
+- **A Codex peer** runs the interactive Codex CLI, on the local Codex
+  app-server when it runs. A reply counts as Codex only with its native
+  session id.
+- **A Claude peer** runs the interactive `claude` CLI, and CodeFlow's
+  delegate lifecycle proves each turn started, was accepted and ended.
+- **A Grok peer** runs the interactive Grok Build CLI.
+- **Fallbacks:** from Claude Code, the official Codex plugin is an optional
+  fallback for a Codex peer; tmux is the last fallback, only when no Herdr
+  server is reachable.
 - **Herdr** is a terminal host with named tabs. Each peer gets its own tab
   labelled `cf/<repo>/<work>/<kind>/<nn>`, where the kind is `claude`, `codex`
   or `grok`. Your agent never types into your pane and never closes a tab it
   did not create.
 - A Herdr `idle` or `done` status is not turn completion. Completion comes
-  from the plugin's thread result or from the lifecycle records.
+  from the seat's confirmed turn and its native session, or from the
+  lifecycle records.
 - CodeFlow never launches a harness or delivers a prompt itself. It writes the
   lifecycle records and waits on them, and the host does the rest.
 - A delegate edits only in a worktree on a feature branch. The git hooks bind
@@ -82,13 +82,12 @@ matching skill for the host you are in.
    lifecycle itself with `codeflow doctor --check delegate-roundtrip`.
 3. Log in yourself with `codex login`, and log in to `claude` in its own
    session. CodeFlow never automates login.
-4. In Claude Code, install the plugin once with
-   `/plugin marketplace add openai/codex-plugin-cc`, then
-   `/plugin install codex@openai-codex`, `/reload-plugins` and `/codex:setup`.
+4. Run a Herdr server, which hosts each peer in a tab. The official Codex
+   plugin for Claude Code is optional.
 5. For an opinion, run `/cf-consult` and name the paths, diff or question and
    the criteria to judge by.
 6. For work, start a worktree on a feature branch first, then run
-   `/cf-delegate` scoped to it. From Claude Code this uses `/codex:rescue`.
+   `/cf-delegate` scoped to it. The peer's tab works in that worktree.
 7. Read your agent's synthesis. It lists where it agrees and disagrees with
    the peer, each point backed by its own evidence.
 
@@ -99,23 +98,32 @@ on the feature branch and pass the same gates.
 
 ### Host a peer in Herdr
 
-When your agent runs inside Herdr, it hosts the peer in a new named tab beside
-yours.
+When a Herdr server is running, your agent hosts the peer in a new named tab
+in your project's workspace, whether the agent itself runs inside Herdr or
+not.
 
-1. Start your agent inside Herdr and check that `echo $HERDR_ENV` prints `1`.
-   Outside Herdr, the agent uses tmux and reports that path as degraded.
+1. Check that `herdr status server` reports `status: running`. With no
+   server reachable, the agent uses tmux and reports that path as degraded.
 2. Ask for the consult or delegate. The agent first lists what exists with
-   `herdr workspace list`, `herdr tab list --workspace "$HERDR_WORKSPACE_ID"`
-   and `herdr agent list`.
+   `herdr workspace list`, `herdr tab list --workspace "$WS"` and
+   `herdr agent list`, where `$WS` is the project's workspace.
 3. It creates the tab without taking focus with
-   `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "cf/<repo>/<work>/<kind>/<nn>" --cwd "$PWD" --no-focus`.
+   `herdr tab create --workspace "$WS" --label "cf/<repo>/<work>/<kind>/<nn>" --cwd "$PWD" --no-focus`.
 4. It starts the peer with
    `herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> --pane <pane-id> -- <native-args>`.
-5. For a Claude peer, it arms the prompt, sends it with
-   `herdr pane send-text <pane-id> "$(cat <prompt-file>)"`, pauses briefly,
-   presses Enter with `herdr pane send-keys <pane-id> Enter`, then waits with
+5. A new peer can first ask to trust the folder or the project's hooks.
+   The agent answers folder trust for the task's own folder only and skips
+   any update offer. Hook trust stays yours
+   ([ADR-0075's 2026-10-03 amendment](decisions/ADR-0075-agent-sessions-refuse-instead-of-prompting-under.md)):
+   every hook prompt, and every Grok trust prompt, waits for you in the
+   seat's Herdr tab, or its tmux pane under the fallback. The agent may tell
+   you whether the hook files match the target and the managed copy; that
+   is information, not a grant.
+6. It delivers the prompt with the `cf-herdr` delivery script, which sends
+   the exact file and confirms the turn started. For a Claude peer it arms
+   the prompt first and then waits with
    `codeflow delegate wait ... --until terminal`.
-6. A follow-up on the same work reuses the same tab. When the work is done,
+7. A follow-up on the same work reuses the same tab. When the work is done,
    the agent closes only the tab it created.
 
 It worked when a `cf/` tab appears beside yours with the peer running, your
