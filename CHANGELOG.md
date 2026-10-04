@@ -230,15 +230,19 @@ erratum below, never an edit of the section.
   process on macOS, Linux and Windows when its command line held such
   bytes; the identity is now judged from the exact bytes of its two
   identity arguments on Linux and macOS, and on Windows from text decoded
-  lossily, refused when the profile path holds U+FFFD too. The discard guard failed with uncertainty on a dirty
-  or untracked name or a ref name that is not UTF-8, and `git remote
-  update` was refused for any such value in the effective git
-  configuration; both now read the text lossily, and a name that cannot be
-  read still refuses where skipping it would pass an unchecked change (a
-  remote name, a worktree name, the policy source). A config key that is
-  not UTF-8 is never read as another remote's key. One rule for this text is in
-  `docs/architecture.md`, and each site that stays strict says why next to
-  the code.
+  lossily, refused when the profile path holds U+FFFD too. The discard
+  guard failed with uncertainty on a dirty or untracked name or a ref name
+  that is not UTF-8, and `git remote update` was refused for any such
+  value in the effective git configuration; both now read the text
+  lossily, and a name that cannot be read still refuses where skipping it
+  would pass an unchecked change (a remote name, a worktree name, the
+  policy source). A config key that is not UTF-8 is never read as another
+  remote's key. A checked-out branch whose name is not UTF-8 stays
+  protected instead of reading as detached, a linked worktree or task
+  branch with such a name is listed instead of dropped, and the gate's
+  snapshot hashes a symlink target by its exact bytes. One rule for this
+  text is in `docs/architecture.md`, and each site that stays strict says
+  why next to the code.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A
