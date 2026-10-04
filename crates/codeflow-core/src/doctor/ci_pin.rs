@@ -203,12 +203,15 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
         PinnedDigests::Absent => Ok(format!(
             "its sha256.sum only: no release digest is pinned beside it (`codeflow update --pin {version}` pins one)"
         )),
-        PinnedDigests::Table { version: table, .. } if table.as_deref() != Some(version) => {
-            Err(format!(
-                "the [{TABLE}] table in {STATE} pins the digests of codeflow {}, not {version}, so the CI install fails closed",
-                table.as_deref().unwrap_or("no version")
-            ))
-        }
+        PinnedDigests::Table { version: None, .. } => Err(format!(
+            "the [{TABLE}] table in {STATE} names no version the CI installers can read (they read `version = \"<version>\"`), so the CI install fails closed"
+        )),
+        PinnedDigests::Table {
+            version: Some(table),
+            ..
+        } if table != version => Err(format!(
+            "the [{TABLE}] table in {STATE} pins the digests of codeflow {table}, not {version}, so the CI install fails closed"
+        )),
         PinnedDigests::Table { missing, .. } if !missing.is_empty() => Err(format!(
             "the [{TABLE}] table in {STATE} lists no digest for {}, so the CI install on that platform fails closed",
             missing.join(", ")

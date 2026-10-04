@@ -102,26 +102,54 @@ pub enum PinnedDigests {
     },
 }
 
-/// Reads the `[scaffold_sha256]` table from a project state's text. A state
-/// that does not parse reads as absent; its own checks report it.
+/// Reads the `[scaffold_sha256]` table from a project state's text exactly
+/// as the CI installers' awk reader does, line by line, so doctor reports
+/// what CI will check: a `[scaffold_sha256]` section header, then
+/// `key = "value"` lines with a bare or double-quoted key and a
+/// double-quoted value, up to the next header. A table written another way
+/// (inline, dotted keys, a quoted header, single-quoted values) is valid
+/// TOML that the installers do not read, so it reads as absent or missing
+/// here too; `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
-    let Ok(value) = toml::from_str::<toml::Value>(state) else {
+    let header =
+        regex::Regex::new(r"^\s*\[\s*scaffold_sha256\s*\]\s*(#.*)?$").expect("static regex");
+    let entry = regex::Regex::new(r#"^\s*"?([0-9A-Za-z_.-]+)"?\s*="#).expect("static regex");
+    let (mut inside, mut table) = (false, false);
+    let mut version = None;
+    let mut values = std::collections::BTreeMap::new();
+    for line in state.lines() {
+        if line.trim_start().starts_with('[') {
+            inside = header.is_match(line);
+            table |= inside;
+            continue;
+        }
+        let Some(key) = inside.then(|| entry.captures(line)).flatten() else {
+            continue;
+        };
+        let rest = line
+            .split_once('=')
+            .map_or("", |(_, rest)| rest)
+            .trim_start();
+        let value = rest
+            .strip_prefix('"')
+            .and_then(|quoted| quoted.split('"').next())
+            .unwrap_or_default()
+            .to_string();
+        match &key[1] {
+            "version" => version = Some(value),
+            triple => {
+                values.insert(triple.to_string(), value);
+            }
+        }
+    }
+    if !table {
         return PinnedDigests::Absent;
-    };
-    let Some(table) = value.get(TABLE).and_then(toml::Value::as_table) else {
-        return PinnedDigests::Absent;
-    };
-    let version = table
-        .get("version")
-        .and_then(toml::Value::as_str)
-        .map(str::to_string);
-    let (listed, missing) = TRIPLES.iter().partition(|triple| {
-        table
-            .get(**triple)
-            .and_then(toml::Value::as_str)
-            .is_some_and(is_digest)
-    });
+    }
+    let version = version.filter(|v| !v.is_empty());
+    let (listed, missing) = TRIPLES
+        .iter()
+        .partition(|triple| values.get(**triple).is_some_and(|v| is_digest(v)));
     PinnedDigests::Table {
         version,
         listed,
@@ -388,6 +416,39 @@ mod tests {
         );
         assert_eq!(
             pinned_digests(&partial),
+            PinnedDigests::Table {
+                version: Some("1.2.3".into()),
+                listed: vec!["x86_64-unknown-linux-gnu"],
+                missing: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+            }
+        );
+        // Valid TOML the installers' reader does not see reads as they read
+        // it: an inline or dotted table as absent, a quoted header as
+        // absent, single-quoted values as missing.
+        for unread in [
+            format!("scaffold_sha256 = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{DIGEST}\" }}\n"),
+            format!("scaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.x86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
+            format!("[\"scaffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
+        ] {
+            assert_eq!(pinned_digests(&unread), PinnedDigests::Absent, "{unread}");
+        }
+        let single = format!(
+            "[ scaffold_sha256 ] # pinned\nversion = '1.2.3'\n\"x86_64-unknown-linux-gnu\" = '{DIGEST}'\n"
+        );
+        assert_eq!(
+            pinned_digests(&single),
+            PinnedDigests::Table {
+                version: None,
+                listed: vec![],
+                missing: TRIPLES.to_vec(),
+            }
+        );
+        // The section ends at the next header, and a quoted key counts.
+        let ended = format!(
+            "[scaffold_sha256]\nversion = \"1.2.3\"\n\"x86_64-unknown-linux-gnu\" = \"{DIGEST}\"\n[other]\naarch64-apple-darwin = \"{DIGEST}\"\n"
+        );
+        assert_eq!(
+            pinned_digests(&ended),
             PinnedDigests::Table {
                 version: Some("1.2.3".into()),
                 listed: vec!["x86_64-unknown-linux-gnu"],
