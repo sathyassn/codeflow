@@ -1800,7 +1800,7 @@ fn run_captured(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    // The input is written from its own thread (`git::spawn_with_input`),
+    // The input is written from its own thread (`git::spawn_with_input_stopping`),
     // so an answer larger than a pipe cannot block the write and with it the
     // timeout below. A child that exits without reading closes the pipe; its
     // exit status, not this write, is the result, and a killed child ends the
@@ -1808,9 +1808,13 @@ fn run_captured(
     // descendant that keeps the pipe open and never reads would leave it
     // blocked, so the tree is stopped and the run times out.
     let (mut child, writer) = match stdin {
-        Some(text) => crate::git::spawn_with_input(&mut command, text.as_bytes().to_vec())
-            .map(|(child, writer)| (child, Some(writer)))
-            .map_err(|error| error.to_string())?,
+        Some(text) => crate::git::spawn_with_input_stopping(
+            &mut command,
+            text.as_bytes().to_vec(),
+            terminate_process_tree,
+        )
+        .map(|(child, writer)| (child, Some(writer)))
+        .map_err(|error| error.to_string())?,
         // No input: the child inherits doctor's stdin, as documented above.
         None => (command.spawn().map_err(|error| error.to_string())?, None),
     };
@@ -6279,5 +6283,21 @@ mod tests {
             .expect("run_captured returned instead of waiting on the blocked write");
         assert!(run.unwrap_err().contains("timed out"));
         assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_that_cannot_start_ends_the_run_with_an_error() {
+        let fail = &crate::git::stdin::tests::FAIL_WRITER_START;
+        fail.with(|flag| flag.set(true));
+        let run = run_captured(
+            "sleep",
+            &["30"],
+            Duration::from_secs(30),
+            Some("input"),
+            None,
+        );
+        fail.with(|flag| flag.set(false));
+        assert!(run.unwrap_err().contains("injected"));
     }
 }

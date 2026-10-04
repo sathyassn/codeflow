@@ -233,7 +233,8 @@ erratum below, never an edit of the section.
   request body, the ID registry, the pre-push and CI git reads, the
   conflict-marker attribute check and the portal's git reads. Output of
   any size completes, and a child that stops reading early is judged by
-  its exit status. A test fails when new code pipes stdin anywhere else.
+  its exit status. A test over the Rust sources fails when new code reaches a child's
+  stdin anywhere else.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A

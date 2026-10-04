@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 pub mod ci;
 pub mod conflict;
 pub mod remote_query;
-mod stdin;
+pub(crate) mod stdin;
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
 /// whose command started git, instead of the `codeflow` first on PATH
@@ -62,7 +62,7 @@ fn runs_git(program: &std::ffi::OsStr) -> bool {
 
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
-pub use stdin::{output_with_input, spawn_with_input, InputWriter};
+pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
 #[cfg(test)]
 mod tests {

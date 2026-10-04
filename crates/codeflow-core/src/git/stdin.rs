@@ -56,21 +56,49 @@ pub fn spawn_with_input(
     command: &mut Command,
     input: Vec<u8>,
 ) -> std::io::Result<(Child, InputWriter)> {
+    spawn_with_input_stopping(command, input, |child| {
+        let _ = child.kill();
+    })
+}
+
+/// [`spawn_with_input`], with `stop` run on the child when the writer thread
+/// cannot be created, for a caller whose child has descendants to stop too
+/// (a process group). The child is reaped after `stop`.
+///
+/// # Errors
+///
+/// Returns the error when the child cannot start or the writer thread cannot
+/// be created.
+pub fn spawn_with_input_stopping(
+    command: &mut Command,
+    input: Vec<u8>,
+    stop: impl FnOnce(&mut Child),
+) -> std::io::Result<(Child, InputWriter)> {
     let mut child = command.stdin(Stdio::piped()).spawn()?;
     let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
+        stop(&mut child);
         let _ = child.wait();
         return Err(std::io::Error::other("child stdin was not piped"));
     };
     // `stdin` drops with the thread, which closes the pipe and ends the input.
-    match std::thread::Builder::new().spawn(move || stdin.write_all(&input)) {
+    match start_writer(move || stdin.write_all(&input)) {
         Ok(writer) => Ok((child, InputWriter(writer))),
         Err(error) => {
-            let _ = child.kill();
+            stop(&mut child);
             let _ = child.wait();
             Err(error)
         }
     }
+}
+
+fn start_writer(
+    write: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+) -> std::io::Result<JoinHandle<std::io::Result<()>>> {
+    #[cfg(test)]
+    if tests::FAIL_WRITER_START.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("injected writer start failure"));
+    }
+    std::thread::Builder::new().spawn(write)
 }
 
 /// Run `command` with `input` on its stdin and capture its output.
@@ -96,4 +124,45 @@ pub fn output_with_input(command: &mut Command, input: &[u8]) -> std::io::Result
     let output = output?;
     written?;
     Ok(output)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Makes this thread's next writer starts fail, for the tests.
+        pub(crate) static FAIL_WRITER_START: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_that_cannot_start_stops_and_reaps_the_child() {
+        FAIL_WRITER_START.with(|flag| flag.set(true));
+        let stopped = Cell::new(false);
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let result = spawn_with_input_stopping(&mut command, vec![b'x'; 16], |child| {
+            stopped.set(true);
+            let _ = child.kill();
+        });
+        FAIL_WRITER_START.with(|flag| flag.set(false));
+        assert!(result.unwrap_err().to_string().contains("injected"));
+        assert!(stopped.get(), "the caller's stop ran on the child");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_default_stop_kills_a_child_whose_writer_cannot_start() {
+        FAIL_WRITER_START.with(|flag| flag.set(true));
+        let started = std::time::Instant::now();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let result = spawn_with_input(&mut command, vec![b'x'; 16]);
+        FAIL_WRITER_START.with(|flag| flag.set(false));
+        assert!(result.is_err());
+        // The child was killed and reaped, not waited out.
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
 }
