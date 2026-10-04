@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use codeflow_core::scaffold::release_pin::TRIPLES;
+use codeflow_core::scaffold::release_pin::{pinned_digests, PinnedDigests, TRIPLES};
 use codeflow_core::scaffold::sha256_hex;
 
 const STATE: &str = ".codeflow/project.toml";
@@ -189,6 +189,68 @@ fn update_pin_writes_only_the_version_and_the_checked_digests() {
     let mixed = fx.codeflow(&["update", "--pin", "99.0.0", "--force"]);
     assert_eq!(mixed.status.code(), Some(2), "{}", text(&mixed));
     assert_eq!(fx.changed(), "");
+}
+
+/// A project line the installers refuse (here a key named outside printable
+/// ASCII) stays as the project wrote it, so the pin refuses before writing
+/// and names it, doctor names the same line, and once it is renamed the pin
+/// writes a state the installers read.
+#[test]
+fn update_pin_refuses_a_state_the_installers_would_refuse() {
+    let fx = Fixture::new();
+    fx.publish("99.0.0");
+    let state = fx.read(STATE);
+    let commit = |message: &str| {
+        git(&fx.root(), &["add", "-A"]);
+        git(
+            &fx.root(),
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+        );
+    };
+    std::fs::write(
+        fx.root().join(STATE),
+        format!("{state}\n[notes]\n\"caf\u{e9}\" = \"kept\"\n"),
+    )
+    .unwrap();
+    commit("chore: a note");
+    let refused = fx.codeflow(&["update", "--pin", "99.0.0"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("a name with a character outside printable ASCII")
+            && text(&refused).contains("caf\u{e9}")
+            && text(&refused).contains("nothing was written"),
+        "{}",
+        text(&refused)
+    );
+    assert_eq!(fx.changed(), "");
+    let doctor = fx.codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(
+        text(&doctor).contains("rewrite or remove line"),
+        "{}",
+        text(&doctor)
+    );
+
+    std::fs::write(
+        fx.root().join(STATE),
+        format!("{state}\n[notes]\ncafe = \"kept\"\n"),
+    )
+    .unwrap();
+    commit("chore: an ASCII note");
+    let pinned = fx.codeflow(&["update", "--pin", "99.0.0"]);
+    assert!(pinned.status.success(), "{}", text(&pinned));
+    assert!(matches!(
+        pinned_digests(&fx.read(STATE)),
+        PinnedDigests::Table { ref missing, .. } if missing.is_empty()
+    ));
 }
 
 /// AC-2 and the AC-9 journey: `codeflow update` leaves the project setup

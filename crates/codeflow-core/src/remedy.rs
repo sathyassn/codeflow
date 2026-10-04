@@ -580,6 +580,9 @@ catalog! {
     /// A pinned release digest table the CI installers refuse.
     DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
         "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
+    /// A project state line the CI installers refuse to read.
+    DOCTOR_CI_DIGEST_LINE = Step::Edit(".codeflow/project.toml"),
+        "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than `codeflow update --pin` writes it)";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";

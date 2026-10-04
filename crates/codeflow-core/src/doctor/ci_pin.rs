@@ -12,7 +12,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::scaffold::release_pin::{is_table_header, pinned_digests, PinnedDigests, TABLE};
+use crate::scaffold::release_pin::{
+    is_table_header, pinned_digests, unread_line, PinnedDigests, TABLE,
+};
 use crate::scaffold::version::is_older;
 
 use super::Status;
@@ -119,17 +121,10 @@ fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
 pub(super) fn report(root: &Path) -> PinReport {
     let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
     let head_state = read(STATE);
-    if let Some(PinnedDigests::Unreadable(reason)) = head_state.as_deref().map(pinned_digests) {
-        let version = head_state.as_deref().and_then(pinned);
-        return PinReport {
-            status: Status::Warn(
-                remedy::DOCTOR_CI_DIGEST
-                    .with(&[("version", version.as_deref().unwrap_or("<version>"))]),
-            ),
-            message: format!(
-                "the [{TABLE}] table in {STATE} {reason}, so the CI install fails closed"
-            ),
-        };
+    if let Some(state) = head_state.as_deref() {
+        if let PinnedDigests::Unreadable(reason) = pinned_digests(state) {
+            return unreadable("", state, &reason);
+        }
     }
     let Some(head_pin) = head_state.as_deref().and_then(pinned) else {
         return PinReport {
@@ -234,6 +229,21 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
     }
 }
 
+/// The warning for a state whose digest table the installers refuse: the
+/// line they stop at, and the edit that clears it (`codeflow update --pin`
+/// keeps the project's own lines, so it cannot).
+fn unreadable(prefix: &str, state: &str, reason: &str) -> PinReport {
+    let (number, line) = unread_line(state).unwrap_or((0, "an unnamed line".to_string()));
+    PinReport {
+        status: Status::Warn(
+            remedy::DOCTOR_CI_DIGEST_LINE.with(&[("line", number.to_string().as_str())]),
+        ),
+        message: format!(
+            "{prefix}the [{TABLE}] table in {STATE} {reason} at {line}, so the CI install fails closed"
+        ),
+    }
+}
+
 /// The target's pin and what CI checks its release against, or the warning
 /// that stops the report. CI installs the target's pin first, checked against
 /// the target's table, whatever the checkout raises or lowers it to.
@@ -244,10 +254,8 @@ fn target_check(target: &str, state: &str) -> Result<(String, String), PinReport
     };
     // A table the installers refuse may not parse as TOML at all (one
     // declared twice), so name it before reading the pin.
-    if matches!(pinned_digests(state), PinnedDigests::Unreadable(_)) {
-        let version = pinned(state).unwrap_or_else(|| "<version>".to_string());
-        let problem = digest_mode(state, &version).err().unwrap_or_default();
-        return Err(digest_warning(&version, problem));
+    if let PinnedDigests::Unreadable(reason) = pinned_digests(state) {
+        return Err(unreadable(&format!("on {target}, "), state, &reason));
     }
     let Some(pin) = pinned(state) else {
         return Err(PinReport {

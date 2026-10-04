@@ -142,10 +142,12 @@ with a character outside printable ASCII, or a carriage return anywhere but
 just before a line feed (awk would read the lines it separates as one).
 These rules also catch a one-line value, an array element on
 its own line or a trailing comment that happens to match; nothing else
-outside the table counts. CodeFlow writes the state so it never trips them:
-a string that needs escapes is written on one line with every quote and
-backslash escaped, and an array whose elements could match is written on its
-key's line. A project that
+outside the table counts. CodeFlow writes every value it serializes so it
+never trips them: a string that needs escapes goes on one line with every
+quote and backslash escaped, and an array whose elements could match goes on
+its key's line. A name the project wrote (a key outside printable ASCII, say)
+is kept as written, so `codeflow update --pin` refuses to pin over a line
+the installers would refuse, and doctor names that line to rewrite. A project that
 has never pinned a table is checked against `sha256.sum` alone, and the job
 says so in a warning. `codeflow doctor --check ci-perimeter` names the check
 CI applies, read from the target since CI reads the table there, and says

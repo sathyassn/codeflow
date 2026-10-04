@@ -194,6 +194,25 @@ fn byte_line(line: &str) -> Result<Option<&str>, &'static str> {
     Ok(Some(trimmed))
 }
 
+/// The first line at which the installers stop reading `state` as a digest
+/// table they can use: its number from 1, and a label naming it with its
+/// escapes shown, or `None` when they read it.
+#[must_use]
+pub fn unread_line(state: &str) -> Option<(usize, String)> {
+    let mut end = 0;
+    for (index, line) in state.split_inclusive('\n').enumerate() {
+        end += line.len();
+        if matches!(pinned_digests(&state[..end]), PinnedDigests::Unreadable(_)) {
+            let shown: String = format!("{:?}", line.trim_end_matches(['\n', '\r']))
+                .chars()
+                .take(120)
+                .collect();
+            return Some((index + 1, format!("line {} ({shown})", index + 1)));
+        }
+    }
+    None
+}
+
 /// Reads the `[scaffold_sha256]` table from a project state's text exactly
 /// as the CI installers' awk reader does, line by line, so doctor reports
 /// what CI will check. The installers accept one strict form and fail
@@ -438,6 +457,15 @@ pub fn pin_release(
     state.insert(TABLE.into(), toml::Value::Table(table));
     let out =
         state_text(&state).map_err(|error| format!("cannot write {PROJECT_TOML}: {error}"))?;
+    // A line the project wrote that the installers refuse (a key named
+    // outside printable ASCII, say) stays as it was, and would fail every
+    // CI install, so the pin stops before writing and names it.
+    if let PinnedDigests::Unreadable(reason) = pinned_digests(&out) {
+        let line = unread_line(&out).map_or_else(String::new, |(_, text)| format!(" at {text}"));
+        return Err(format!(
+            "the [{TABLE}] table in {PROJECT_TOML} {reason}{line}; rename, rewrite or remove that line and pin again (nothing was written)"
+        ));
+    }
     write_record(root, PROJECT_TOML, out.as_bytes()).map_err(|error| error.to_string())?;
     Ok(PinReport {
         previous,

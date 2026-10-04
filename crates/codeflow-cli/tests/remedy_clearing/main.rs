@@ -199,6 +199,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_CI_PIN_LOWERED", Runs),
     ("DOCTOR_CI_PIN_ORDER", Runs),
     ("DOCTOR_CI_DIGEST", Runs),
+    ("DOCTOR_CI_DIGEST_LINE", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
@@ -2720,6 +2721,36 @@ fn clears_doctor_ci_digest() {
             assert!(
                 after.contains("(then: the release digests pinned"),
                 "{after}"
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_ci_digest_line() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    write(
+        &root,
+        STATE,
+        &format!("{state}\n[notes]\n\"caf\u{e9}\" = \"kept\"\n"),
+    );
+    prove(
+        "DOCTOR_CI_DIGEST_LINE",
+        "so the CI install fails closed",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let line = state.lines().count() + 3;
+            assert!(
+                printed.contains(&format!("rewrite or remove line {line} of")),
+                "{printed}"
+            );
+            write(
+                &root,
+                STATE,
+                &format!("{state}\n[notes]\ncafe = \"kept\"\n"),
             );
         },
     );
