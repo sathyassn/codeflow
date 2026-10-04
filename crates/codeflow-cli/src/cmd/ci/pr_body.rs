@@ -449,44 +449,75 @@ fn tag_end(html: &str) -> Option<usize> {
     None
 }
 
-/// Decode the character references an HTML block can carry. A reference
-/// this does not know stays as written.
+/// What the HTML character reference at the start of `rest` (which begins
+/// with `&`) stands for, and the bytes it takes. The named references cover
+/// the markup characters and every space the HTML specification names, so
+/// each separates words as it does on the page; any other reference stays
+/// as written.
+fn reference(rest: &str) -> Option<(&'static str, usize)> {
+    let end = rest.bytes().take(33).position(|byte| byte == b';');
+    if let Some(end) = end {
+        let named = match &rest[1..end] {
+            "amp" => Some("&"),
+            "lt" => Some("<"),
+            "gt" => Some(">"),
+            "quot" => Some("\""),
+            "apos" => Some("'"),
+            "nbsp" | "NonBreakingSpace" => Some("\u{a0}"),
+            "ensp" => Some("\u{2002}"),
+            "emsp" => Some("\u{2003}"),
+            "emsp13" => Some("\u{2004}"),
+            "emsp14" => Some("\u{2005}"),
+            "numsp" => Some("\u{2007}"),
+            "puncsp" => Some("\u{2008}"),
+            "thinsp" | "ThinSpace" => Some("\u{2009}"),
+            "hairsp" | "VeryThinSpace" => Some("\u{200a}"),
+            "MediumSpace" => Some("\u{205f}"),
+            "ThickSpace" => Some("\u{205f}\u{200a}"),
+            "Tab" => Some("\t"),
+            "NewLine" => Some("\n"),
+            _ => None,
+        };
+        if let Some(text) = named {
+            return Some((text, end + 1));
+        }
+        // A numeric reference, padded with zeros or not, that stands for a
+        // space; any other character stays as written.
+        let code = rest[1..end].strip_prefix('#').and_then(|digits| {
+            match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                None => digits.parse().ok(),
+            }
+        });
+        let spaced = code
+            .and_then(char::from_u32)
+            .filter(|ch| ch.is_whitespace());
+        if let Some(ch) = spaced {
+            return Some((
+                match ch {
+                    '\t' => "\t",
+                    '\n' => "\n",
+                    '\u{a0}' => "\u{a0}",
+                    _ => " ",
+                },
+                end + 1,
+            ));
+        }
+    }
+    // HTML also reads `&nbsp` with no semicolon.
+    rest.starts_with("&nbsp").then_some(("\u{a0}", 5))
+}
+
+/// Decode the character references an HTML block can carry.
 fn decode_entities(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        let decoded = rest.find(';').filter(|end| *end <= 10).and_then(|end| {
-            let name = &rest[1..end];
-            let ch = match name {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                "nbsp" => Some('\u{a0}'),
-                "ensp" => Some('\u{2002}'),
-                "emsp" => Some('\u{2003}'),
-                "numsp" => Some('\u{2007}'),
-                "puncsp" => Some('\u{2008}'),
-                "thinsp" => Some('\u{2009}'),
-                "hairsp" => Some('\u{200a}'),
-                "Tab" => Some('\t'),
-                "NewLine" => Some('\n'),
-                _ => name
-                    .strip_prefix('#')
-                    .and_then(|digits| match digits.strip_prefix(['x', 'X']) {
-                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
-                        None => digits.parse().ok(),
-                    })
-                    .and_then(char::from_u32),
-            };
-            ch.map(|ch| (ch, end))
-        });
-        if let Some((ch, end)) = decoded {
-            out.push(ch);
-            rest = &rest[end + 1..];
+        if let Some((decoded, taken)) = reference(rest) {
+            out.push_str(decoded);
+            rest = &rest[taken..];
         } else {
             out.push('&');
             rest = &rest[1..];
@@ -2007,6 +2038,51 @@ mod tests {
             words(BODY_WORD_LIMIT - 2)
         );
         assert!(length_message(&over, &sections(&over)).is_some());
+    }
+
+    /// Review round 3: every space the HTML specification names, however it
+    /// is written, separates words at the 1,000-word boundary.
+    #[test]
+    fn spaces_written_as_references_separate_words_at_the_boundary() {
+        let spaces = [
+            "&nbsp;",
+            "&NonBreakingSpace;",
+            "&ensp;",
+            "&emsp;",
+            "&emsp13;",
+            "&emsp14;",
+            "&numsp;",
+            "&puncsp;",
+            "&thinsp;",
+            "&ThinSpace;",
+            "&hairsp;",
+            "&VeryThinSpace;",
+            "&MediumSpace;",
+            "&ThickSpace;",
+            "&Tab;",
+            "&NewLine;",
+            "&#32;",
+            "&#x20;",
+            "&#x00000020;",
+            "&#00032;",
+            "&#9;",
+            "&#xA0;",
+            "&#160;",
+        ];
+        for space in spaces {
+            let body = format!(
+                "{}\n\n<div>one{space}two{space}three</div>",
+                words(BODY_WORD_LIMIT - 2)
+            );
+            assert_eq!(word_count(&body), BODY_WORD_LIMIT + 1, "{space}");
+            assert!(length_message(&body, &sections(&body)).is_some(), "{space}");
+        }
+        assert_eq!(word_count("<div>one&nbsptwo</div>"), 2, "legacy form");
+        assert_eq!(
+            word_count("<div>R&D &amp; Q&A</div>"),
+            3,
+            "a bare & is text"
+        );
     }
 
     #[test]
