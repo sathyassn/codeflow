@@ -1474,6 +1474,67 @@ fn project_organization_has_one_authority_and_honest_closeout() {
     assert!(epic.contains("Affected surfaces and interfaces"));
 }
 
+/// sathyassn/codeflow#40: the task template asks for each deliverable and
+/// its home right after the Description, the epic template for the homes
+/// its tasks write, and planning checks them against the project's
+/// structure authority before records are materialized.
+#[test]
+fn records_and_planning_name_deliverables_and_homes() {
+    let raw_task = read("assets/base/pm/task.md.tmpl");
+    let at = |heading: &str| {
+        raw_task
+            .find(heading)
+            .unwrap_or_else(|| panic!("task template lost {heading}"))
+    };
+    assert!(
+        at("\n## Description\n") < at("\n## Deliverables\n")
+            && at("\n## Deliverables\n") < at("\n## Acceptance Criteria\n"),
+        "the Deliverables section follows Description and precedes the criteria"
+    );
+    let task = normalize_whitespace(&raw_task);
+    for required in [
+        "Each output this task produces and its home",
+        "`- <output>: <path>`",
+        "files or a folder, a decision record, a research note, evidence, a record update or a human board",
+        "project's structure authority",
+        "mark it provisional and name what decides it",
+    ] {
+        assert!(
+            task.contains(required),
+            "task template lost deliverables marker: {required}"
+        );
+    }
+    let epic = normalize_whitespace(&read("assets/base/pm/epic.md.tmpl"));
+    for required in [
+        "Name the repository homes its tasks write",
+        "point to the project's structure authority",
+    ] {
+        assert!(
+            epic.contains(required),
+            "epic template lost homes marker: {required}"
+        );
+    }
+    let method = normalize_whitespace(&read("assets/base/claude/skills/cf-method/SKILL.md"));
+    for required in [
+        "Do not draft until you can state all six",
+        "6. **Deliverables and homes.**",
+        "Before materializing records, check every home against the project's structure authority",
+        "marked provisional with what decides it",
+    ] {
+        assert!(
+            method.contains(required),
+            "cf-method checklist lost deliverables marker: {required}"
+        );
+    }
+    let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
+    assert!(
+        plan.contains(
+            "Before materializing records, check that every task names its deliverables and their homes (checklist item 6) against the project's structure authority"
+        ),
+        "cf-plan lost the deliverables check"
+    );
+}
+
 #[test]
 fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
     // TSK-127: one writing reference serves every tier.

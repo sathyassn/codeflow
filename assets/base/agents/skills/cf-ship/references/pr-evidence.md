@@ -62,6 +62,10 @@ change, effect, limits, or the order of the flow); a summary that buries the
 anchor in detail fails, however short it is. The NEED YOUR ATTENTION heading
 of operator replies never appears in a PR body.
 
+`codeflow ci` checks the Summary's shape (`git.pr_summary`): one prose
+paragraph, then a list or table, then at most one closing paragraph. HTML
+comments count for nothing; whether the lead anchors stays with review.
+
 ## Release impact and evidence
 
 Assess the complete change under the project's adopted release policy
@@ -147,6 +151,10 @@ hosted checks green before landing, follow [PR checks](pr-checks.md): the
 bounded wait and the redness classes (assertion-red, red you cannot run
 locally, infrastructure-incomplete).
 
+A PR reported ready goes back to draft (`gh pr ready <n> --undo`) before
+any further change to its branch, and is reported ready again only once the
+new head has its review and checks.
+
 When the evidence is complete, send one readiness report without being
 asked. It opens with the result the change gives its consumer and where it
 stands. It gives the PR URL exactly as `gh pr create` or
@@ -166,24 +174,3 @@ SHA, and name each hosted job that never ran with the reason the tool gave. A
 required check with no completed result anywhere and no local equivalent is a
 missing gate: name it as the blocker, keep the PR draft where required
 evidence is missing, and continue other authorized work.
-
-
-## Release integration after landing
-
-Read the configured integration result after the landing; a task pull request
-never waits for release integration. Find the run for that landing with
-`gh run list --workflow <configured-workflow>`, then use
-`gh run view <run-id> --exit-status` and `gh run view <run-id> --log-failed`
-on failure. A pending run is missing evidence.
-
-Route a failure to the open task with `role: release-integration`; if none
-carries the role, report "no release-integration task to own it". Follow the
-result's local reproduction commands. The CodeFlow-only integration workflow
-and runner are not installed for adopters. For that workflow, reproduce the
-current result without pushing with
-`cargo run -p codeflow-cli --example release_integration -- --release <branch>`.
-Every surviving run catches up all verified lines; if a pending run was replaced,
-inspect the later run's result for the landed tip. Add `--line <line>` only to
-narrow a local investigation, not to reproduce the full workflow batch.
-Without a configured release argument and
-workflow, the runner reports no configured integration and does nothing.

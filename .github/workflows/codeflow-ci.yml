@@ -102,7 +102,7 @@ jobs:
           portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
           test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
           echo "version=$present" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
@@ -311,18 +311,446 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Run the gitleaks binary directly (pinned): the gitleaks-action wrapper
-      # requires a GitHub token/license and crashed with a RequestError here.
+      # The gitleaks step is the adopter template's (TSK-210);
+      # scripts/check-scaffold-gitleaks.sh keeps the two the same.
+      # Run the gitleaks binary directly (pinned) rather than the
+      # gitleaks-action wrapper, which requires a GitHub token/license. The
+      # archive is downloaded and unpacked under the runner's temp directory,
+      # never in the checkout, so a file or link a pull request commits at
+      # that name is not written through.
+      #
+      # Every exemption comes from the trusted commit: the pull request's
+      # base, or the pushed commit on a push. A pull request cannot exempt
+      # the leak it adds; a new exemption takes effect once its own pull
+      # request merges. The step fails before it scans when that commit is
+      # not in the checkout. It deletes the checkout's .gitleaksignore,
+      # .gitleaks.toml and .gitleaks.json (a link is removed, never
+      # followed) and gives gitleaks the trusted commit's copies, choosing
+      # the configuration as gitleaks does: GITLEAKS_CONFIG, then
+      # GITLEAKS_CONFIG_TOML, then .gitleaks.json beside .gitleaks.toml, then
+      # .gitleaks.toml, else the default rules. An inline gitleaks:allow
+      # comment counts only on a commit the trusted commit already holds.
+      #
+      # gitleaks resolves an [extend] path, and a relative GITLEAKS_CONFIG,
+      # against its working directory. It runs from a directory that holds
+      # the trusted commit's copy of each file the configuration extends and
+      # nothing else, so the pull request's copy is never read and a file the
+      # trusted commit lacks fails the step. Copying the chain keeps an
+      # existing extended configuration working, which refusing every
+      # [extend] path would break. An absolute path into the checkout is
+      # refused; name the file relative to the repository root instead. A
+      # file outside the checkout is read where it is, and
+      # [extend] useDefault = true needs no file.
+      #
+      # Nothing from the checkout runs or steers the scan. The Python
+      # helpers run isolated (python3 -I), so a module the pull request
+      # commits beside them is never imported; they need Python 3.11 or
+      # later, for tomllib. git reads .gitattributes from the trusted commit
+      # (GIT_ATTR_SOURCE, git 2.41 or later), so a pull request cannot mark
+      # its own files -diff to hide their changes.
+      # No step before this one runs code from the checkout: a step that
+      # did could write GITHUB_ENV or GITHUB_PATH for this one, so
+      # GITLEAKS_CONFIG and GITLEAKS_CONFIG_TOML here can only come from
+      # this workflow's own env. Keep it that way when you add steps. A
+      # workflow you customised before this protection may already run such
+      # a step; codeflow update keeps it and warns until you move it after
+      # this step or into another job.
+      #
+      # gitleaks' default git log leaves out what a merge itself adds, any
+      # file whose type changes and any file git judges binary, so a secret
+      # added in a merge resolution, in a file that replaces a link, or
+      # after a NUL byte would go unread. The scan names its own log
+      # options: --remerge-diff shows only what each merge adds beyond its
+      # automatic result, so a branch's commits are not reported twice; the
+      # diff filter keeps type changes; --text shows every file as text; and
+      # no external diff or textconv filter rewrites what git shows.
+      # gitleaks runs git from PATH, and the git it finds there drops the
+      # "remerge" notes that --remerge-diff writes into a conflicted file's
+      # header. gitleaks' patch parser does not know them and would name the
+      # file b/<path>, so an exemption for a real b/ path could apply to it.
+      # That git also pins the patch format whatever the runner's git
+      # configuration says: the a/ and b/ prefixes, quoted names, no colour,
+      # the medium format with full hashes and the root commit's diff. With
+      # diff.noprefix, for one, gitleaks would drop each path's first
+      # directory, and an exemption for leak.txt would cover dir/leak.txt.
+      #
+      # gitleaks reads the whole history of HEAD, the trusted commit's
+      # ancestors included: on a pull request, the pull request merged into
+      # its base; on a push, the pushed commit. That is narrower, on purpose,
+      # than a scan of every fetched branch and tag: a branch with no pull
+      # request, or a tag, is not scanned by this workflow until its commits
+      # become reachable from a scanned HEAD, so an unrelated ref can neither
+      # fail this scan nor hide a leak from it. A repository-wide audit needs
+      # a scan of its own. Before gitleaks runs, the step checks only the
+      # history the pull request brings, the commits HEAD holds and the
+      # trusted commit does not, for what gitleaks cannot read reliably, and
+      # names the commit and the refs that hold it. On a push that range is
+      # empty, since the pushed commit is the trusted commit, so a push scan
+      # reads its history without these refusals. git cannot show what an octopus merge (three or more
+      # parents) adds, so one in that range is refused; merge the branches one
+      # at a time. gitleaks' patch parser misreads some names that git
+      # quotes: it skips one that ends in a backslash without an error, and a
+      # newline in a name splits a conflicted merge's header into lines the
+      # wrapper cannot tell apart. So the step refuses a path with a
+      # backslash, a double quote or a control character that a commit in the
+      # range adds, changes, renames or copies, or that a merge in it changes
+      # beyond its automatic result. A conflicted merge's header can also name
+      # a file either side renamed or deleted, the trusted side included, so
+      # each merge's own sides count too: every path that differs between a
+      # merge base and either parent. Renaming the file in a later commit
+      # leaves the name in the earlier one, so the fix is to rewrite the pull
+      # request's commits, or, for a change on the trusted side, to rebase
+      # onto the base instead of merging it in. Names with spaces or
+      # non-ASCII letters are read correctly and pass, and gitleaks is not
+      # shown deleted files, so a pull request that merges nothing may delete
+      # such a file. History the trusted commit holds is not checked: it met
+      # these checks, or predates them, when it merged.
+      #
+      # The step then drops one known false positive from the report: the
+      # security-stage prose CodeFlow 3.0.0 seeded on line 209 of the
+      # pipeline workflow ("vulnerable/malicious deps"), which the
+      # generic-api-key rule mistakes for a key. Only a generic-api-key
+      # finding whose value and matched text are exactly that prose, in one
+      # of those two paths exactly, is dropped; anything else, on the same
+      # line included, fails the job. So does a scan that logs an error or
+      # reads no commit.
       - name: gitleaks
+        env:
+          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          case ${TRUSTED_SHA:-} in
+            '' | *[!0-9a-f]*)
+              echo "::error::no trusted commit to read exemptions from; refusing to scan"; exit 1 ;;
+          esac
+          if ! git cat-file -e "${TRUSTED_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::trusted commit ${TRUSTED_SHA} is not in the checkout; refusing to scan"; exit 1
+          fi
+          if ! git version | awk '{ split($3, v, "."); exit !(v[1] > 2 || (v[1] == 2 && v[2] >= 41)) }'; then
+            echo "::error::$(git version) cannot read .gitattributes from the trusted commit; upgrade git to 2.41 or later; refusing to scan"; exit 1
+          fi
+          export GIT_ATTR_SOURCE="$TRUSTED_SHA"
+          GITLEAKS_VERSION=8.30.1
+          GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tool=$(mktemp -d "$RUNNER_TEMP/gitleaks-tool.XXXXXX")
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$tool/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$tool/$archive" | sha256sum -c -
+          tar -xzf "$tool/$archive" -C "$tool" gitleaks
+          workspace=$(pwd -P)
+          trusted=$(mktemp -d "$RUNNER_TEMP/gitleaks-trusted.XXXXXX")
+          mkdir "$trusted/tree"
+          real_git=$(command -v git)
+          mkdir "$trusted/bin"
+          cat >"$trusted/bin/git" <<GIT
+          #!/bin/bash
+          set -o pipefail
+          pin=(-c core.quotePath=true -c diff.noprefix=false -c diff.mnemonicPrefix=false
+            -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ -c diff.relative=false -c color.ui=false
+            -c color.diff=false -c format.pretty=medium -c log.date=default -c log.decorate=false
+            -c log.abbrevCommit=false -c log.showSignature=false -c log.showRoot=true)
+          if [ "\$1" = -C ] && [ "\$3" = log ]; then
+            "$real_git" "\${pin[@]}" "\$@" | sed '/^remerge /d'
+            exit
+          fi
+          exec "$real_git" "\${pin[@]}" "\$@"
+          GIT
+          chmod +x "$trusted/bin/git"
+          export PATH="$trusted/bin:$PATH"
+          # Refuses what gitleaks cannot read reliably in the history the pull
+          # request brings: what HEAD holds and the trusted commit does not.
+          python3 -I - "$TRUSTED_SHA" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          sha = sys.argv[1]
+          unreadable = "gitleaks cannot read a backslash, double quote or control character in a path reliably"
+          rewrite = ("rewrite the pull request's commits so that none uses the name; "
+                     "renaming it in a later commit leaves it in this one")
+
+
+          def refuse(message):
+              print(f"::error::{message}; refusing to scan")
+              sys.exit(1)
+
+
+          def git(*args, codes=(0,)):
+              run = subprocess.run(["git", *args], capture_output=True, check=False)
+              if run.returncode not in codes:
+                  error = run.stderr.decode("utf-8", "replace").strip()
+                  refuse(f"git {args[0]} failed ({error}), so the step cannot check the history the pull request brings")
+              return run
+
+
+          def where(commit):
+              refs = git("for-each-ref", "--contains", commit, "--format=%(refname)").stdout.decode("utf-8", "replace").split()
+              more = f" and {len(refs) - 5} more" if len(refs) > 5 else ""
+              return f"{commit} (in {', '.join(['HEAD', *refs[:5]])}{more})"
+
+
+          def odd(name):
+              return any(c < 32 or c == 127 or c in b'"\\' for c in name)
+
+
+          def named(name):
+              return ascii(name.decode("utf-8", "replace"))[1:-1]
+
+
+          commits = [line.split() for line in git("rev-list", "--parents", "HEAD", "--not", sha).stdout.decode().splitlines()]
+          for commit, *parents in commits:
+              if len(parents) > 2:
+                  refuse(f"octopus merge {where(commit)} is not in the trusted commit, and git cannot show what it adds; "
+                         "rewrite the pull request's history to merge its branches one at a time")
+          # Each path a commit adds, changes, renames or copies, and each path
+          # a merge changes beyond its automatic result.
+          listing = git("log", "-z", "--format=%x01%H", "--name-status", "--diff-filter=uxdb", "--remerge-diff",
+                        "--no-ext-diff", "HEAD", "--not", sha).stdout.split(b"\0")
+          commit, names = None, 0
+          for token in listing:
+              if names:
+                  names -= 1
+                  if odd(token):
+                      refuse(f"commit {where(commit)} adds, changes or renames the path \"{named(token)}\"; {unreadable}; {rewrite}")
+                  continue
+              token = token.lstrip(b"\n")
+              if token.startswith(b"\x01"):
+                  commit = token[1:].decode()
+              elif re.fullmatch(rb"[RC][0-9]*", token):
+                  names = 2
+              elif re.fullmatch(rb"[A-Z][0-9]*", token):
+                  names = 1
+              elif token:
+                  refuse(f"cannot read git's list of the paths that commit {commit} changes")
+          # A conflicted merge's header can also name a path that either side
+          # changed since a merge base, the trusted side included.
+          empty = git("hash-object", "-t", "tree", "/dev/null").stdout.decode().strip()
+          for commit, *parents in commits:
+              if len(parents) != 2:
+                  continue
+              bases = git("merge-base", "--all", *parents, codes=(0, 1)).stdout.decode().split() or [empty]
+              for base in bases:
+                  for parent in parents:
+                      for name in git("diff-tree", "-r", "-z", "--name-only", base, parent).stdout.split(b"\0"):
+                          if odd(name):
+                              held = git("merge-base", "--is-ancestor", parent, sha, codes=(0, 1)).returncode == 0
+                              fix = "rebase the pull request onto the trusted commit instead of merging it in" if held else rewrite
+                              refuse(f"merge {where(commit)} joins a change to the path \"{named(name)}\" made on its "
+                                     f"parent {parent}; {unreadable}; {fix}")
+          PY
+          rm -f .gitleaksignore .gitleaks.toml .gitleaks.json
+          # Writes the trusted ignore file, the configuration when gitleaks
+          # needs one named, and each file that configuration extends.
+          python3 -I - "$TRUSTED_SHA" "$workspace" "$trusted" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import tomllib
+
+          sha, workspace, trusted = sys.argv[1:]
+          os.environ["GIT_LITERAL_PATHSPECS"] = "1"
+
+
+          def refuse(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          def in_checkout(path):
+              return any(p == workspace or p.startswith(workspace + os.sep)
+                         for p in (os.path.normpath(path), os.path.realpath(path)))
+
+
+          def blob(path):
+              """The trusted commit's regular file at a repository path, or None."""
+              listing = subprocess.run(["git", "ls-tree", "-z", sha, "--", path],
+                                       capture_output=True, check=True).stdout
+              entry = listing.split(b"\0")[0]
+              if not entry:
+                  return None
+              mode, kind, oid = entry.split(b"\t")[0].decode().split(" ")
+              if kind != "blob" or mode not in ("100644", "100755"):
+                  refuse(f"{path} on trusted commit {sha} is not a regular file; commit the file itself")
+              return subprocess.run(["git", "cat-file", "blob", oid],
+                                    capture_output=True, check=True).stdout
+
+
+          def in_repository(path, owner):
+              rel = os.path.normpath(path)
+              if rel == ".." or rel.startswith("../"):
+                  refuse(f"{owner} names {path}, outside the repository; use an absolute path")
+              data = blob(rel)
+              if data is None:
+                  refuse(f"{owner} names {rel}, which trusted commit {sha} does not hold; commit it there first")
+              return rel, data
+
+
+          def extended(text):
+              # Keys match without case, as gitleaks reads them. A file that
+              # does not parse is left to gitleaks, which fails to load it.
+              for parse in (tomllib.loads, json.loads):
+                  try:
+                      data = parse(text)
+                      break
+                  except ValueError:
+                      continue
+              else:
+                  return None
+              if not isinstance(data, dict):
+                  return None
+              extend = next((v for k, v in data.items() if k.lower() == "extend"), None)
+              if not isinstance(extend, dict):
+                  return None
+              path = next((v for k, v in extend.items() if k.lower() == "path"), None)
+              return path if isinstance(path, str) and path else None
+
+
+          def walk(text, owner):
+              seen = set()
+              while (path := extended(text)) is not None:
+                  if os.path.isabs(path):
+                      if in_checkout(path):
+                          refuse(f"{owner} extends {path}, a file in the checkout that the pull request can change; "
+                                 "name it relative to the repository root")
+                      if path in seen or not os.path.isfile(path):
+                          return
+                      seen.add(path)
+                      with open(path, encoding="utf-8", errors="replace") as handle:
+                          owner, text = path, handle.read()
+                      continue
+                  rel, data = in_repository(path, owner)
+                  if rel in seen:
+                      return
+                  seen.add(rel)
+                  target = os.path.join(trusted, "tree", rel)
+                  os.makedirs(os.path.dirname(target), exist_ok=True)
+                  with open(target, "wb") as handle:
+                      handle.write(data)
+                  owner, text = rel, data.decode("utf-8", "replace")
+
+
+          def use(data, owner):
+              with open(os.path.join(trusted, "config.toml"), "wb") as handle:
+                  handle.write(data)
+              walk(data.decode("utf-8", "replace"), owner)
+
+
+          ignore = blob(".gitleaksignore")
+          if ignore is not None:
+              with open(os.path.join(trusted, "ignore"), "wb") as handle:
+                  handle.write(ignore)
+          named = os.environ.get("GITLEAKS_CONFIG", "")
+          if named and os.path.isabs(named) and not in_checkout(named):
+              if os.path.isfile(named):
+                  with open(named, encoding="utf-8", errors="replace") as handle:
+                      walk(handle.read(), named)
+          elif named:
+              rel, data = in_repository(os.path.relpath(os.path.join(workspace, named), workspace), "GITLEAKS_CONFIG")
+              use(data, rel)
+          elif os.environ.get("GITLEAKS_CONFIG_TOML", ""):
+              walk(os.environ["GITLEAKS_CONFIG_TOML"], "GITLEAKS_CONFIG_TOML")
+          elif (toml := blob(".gitleaks.toml")) is not None:
+              beside = blob(".gitleaks.json")
+              if beside is None:
+                  use(toml, ".gitleaks.toml")
+              else:
+                  use(beside, ".gitleaks.json")
+          PY
+          set --
+          if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
+          # The report stays in the runner's temp directory; the log names
+          # each finding's rule, file, line and commit, never its value.
+          report="$RUNNER_TEMP/gitleaks-report.json"
+          log="$RUNNER_TEMP/gitleaks.log"
+          rc=0
+          (cd "$trusted/tree" && "$tool/gitleaks" detect --source "$workspace" "$@" \
+            --log-opts "--full-history --diff-filter=uxdb --remerge-diff --text --no-ext-diff --no-textconv HEAD" \
+            --gitleaks-ignore-path "$trusted/ignore" --ignore-gitleaks-allow \
+            --no-banner --log-level debug --exit-code 0 \
+            --report-format json --report-path "$report") 2>"$log" || rc=$?
+          # gitleaks exits 0 when git fails, even part way through, and logs
+          # git's failure only at debug level. Debug lines can quote decoded
+          # file content, so they stay in the temp file; the job log gets
+          # info and above. Each check reads only gitleaks' own message,
+          # which follows the time and level, so scanned text never matches.
+          plain=$(sed $'s/\033\\[[0-9;]*m//g' "$log")
+          printf '%s\n' "$plain" | grep -E '^[^ ]+ (INF|WRN|ERR|FTL) ' >&2 || true
+          scanned=$(printf '%s\n' "$plain" | sed -n 's/^[^ ]* INF \([0-9][0-9]*\) commits scanned\..*/\1/p' | tail -n 1)
+          if [ "$rc" -ne 0 ] || printf '%s\n' "$plain" | grep -qE '^[^ ]+ (ERR|FTL) |^[^ ]+ DBG command aborted' \
+            || [ "${scanned:-0}" -eq 0 ] || ! jq -e 'type == "array"' "$report" >/dev/null 2>&1; then
+            echo "::error::gitleaks did not complete a scan (exit ${rc}, ${scanned:-no} commits read)"
+            exit 1
+          fi
+          # The report holds no line text, so an inline gitleaks:allow is read
+          # from the commit that holds the finding, and only a commit the
+          # trusted commit already holds counts.
+          held=$(python3 -I - "$report" "$TRUSTED_SHA" <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          report, sha = sys.argv[1:]
+          held = []
+          with open(report, encoding="utf-8") as handle:
+              findings = json.load(handle)
+          for finding in findings:
+              commit = finding.get("Commit") or ""
+              if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+                  continue
+              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", commit, sha],
+                                        capture_output=True)
+              if ancestor.returncode:
+                  continue
+              shown = subprocess.run(["git", "cat-file", "blob", f"{commit}:{finding['File']}"],
+                                     capture_output=True)
+              start = max(finding["StartLine"], 1)
+              lines = shown.stdout.split(b"\n")[start - 1:max(finding["EndLine"], start)]
+              if shown.returncode == 0 and any(b"gitleaks:allow" in line for line in lines):
+                  held.append(finding["Fingerprint"])
+          print(json.dumps(held))
+          PY
+          )
+          if [ "$held" != "[]" ]; then
+            echo "Allowed $(printf '%s' "$held" | jq length) finding(s) marked gitleaks:allow on commits the trusted commit holds."
+          fi
+          findings="$RUNNER_TEMP/gitleaks-findings.json"
+          jq --argjson held "$held" '[.[] | select(.Fingerprint as $f | any($held[]; . == $f) | not)]' "$report" >"$findings"
+          # The text is split so this file does not hold the text it allows.
+          known='select(.RuleID == "generic-api-key" and .Secret == ("vulnerable/" + "malicious") and .Match == ("authz gaps, vulnerable/" + "malicious ") and (.File == ".claude/workflows/pipeline.workflow.js" or .File == ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js"))'
+          allowed=$(jq "[.[] | $known] | length" "$findings")
+          if [ "$allowed" -gt 0 ]; then
+            echo "Allowed ${allowed} finding(s) of the CodeFlow 3.0.0 pipeline prose \"vulnerable/malicious\"."
+          fi
+          leaks=$(jq "[.[] | select(([.] | map($known) | length) == 0)]" "$findings")
+          count=$(printf '%s' "$leaks" | jq length)
+          if [ "$count" -gt 0 ]; then
+            # Workflow-command properties escape %, CR, LF, : and , in names.
+            printf '%s' "$leaks" | jq -r '.[] | "::error file=\(.File | gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A") | gsub(":"; "%3A") | gsub(","; "%2C")),line=\(.StartLine)::gitleaks \(.RuleID) in commit \(.Commit[0:12])"'
+            echo "gitleaks found ${count} leak(s)."
+            exit 1
+          fi
+          echo "No leaks found."
+
+  # The pull request's own .gitleaks.toml still reports novel credentials
+  # (TSK-198). The check runs the pull request's own script, so it has a
+  # job of its own: a step before the scan in the secret-scan job could
+  # steer the scan through GITHUB_ENV or GITHUB_PATH.
+  gitleaks-canary:
+    name: gitleaks allowlist canary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: gitleaks allowlist canary
         run: |
           GITLEAKS_VERSION=8.30.1
           GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$archive"
-          printf '%s  %s\n' "$GITLEAKS_SHA256" "$archive" | sha256sum -c -
-          tar -xzf "$archive" gitleaks
-          sh scripts/check-gitleaks-allowlist.sh ./gitleaks
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          sh scripts/check-gitleaks-allowlist.sh "$RUNNER_TEMP/gitleaks"
 
   security-review:
     name: security review

@@ -12,7 +12,7 @@ use std::process::{Command, Output};
 use super::{codeflow, git};
 
 const LIGHT: &str =
-    "Task: TSK-001\n## Summary\n\nUpdate the contract.\n\n## Changes\n\n- Update one file.\n";
+    "Task: TSK-001\n## Summary\n\nUpdate the contract.\n\n- one file\n\n## Changes\n\n- Update one file.\n";
 
 /// A repository on `main` with the shipped required sections, Release
 /// impact at block, the `extra` policy keys and `files`, then a

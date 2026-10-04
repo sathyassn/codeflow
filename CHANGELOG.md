@@ -22,6 +22,27 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Pull request Summaries open with a prose lead, then bullets.**
+  `codeflow ci` now checks the shape of a pull request body's Summary under
+  a new policy key, `git.pr_summary`, which blocks by default: one prose
+  paragraph that anchors the reader, then the details as a list or a table,
+  then at most one closing paragraph. Only visible blocks count, so text in
+  an HTML comment never supplies the lead or the list, and a heading, code
+  block, quote or HTML block in the Summary fails. It judges shape, never a
+  word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn
+  while a kept PR template is diagnosed, a trusted automation profile skips
+  it, and a project lowers it by setting `git.pr_summary` to `warn` or
+  `off`. The PR template, `writing.md` "Summaries" and cf-ship's PR
+  evidence reference teach the shape. The shipped policy file does not list
+  the key, so neither `init` nor `update` writes it and an older binary
+  never meets it; a project that sets it runs 3.1.0 or later locally and in
+  CI.
+  cf-ship also says that a pull request already reported ready goes back
+  to draft before any further change to its branch, and its release
+  integration steps move to their own reference, read only after an
+  epic-line landing with a configured release branch.
+
+<!-- codeflow:release-impact minor -->
 - **`codeflow test --only` runs a gate in parts.** `--only <targets>` runs
   the named targets and their prerequisites, comma separated or repeated,
   so one gate can be split across parallel CI jobs. A limited run is
@@ -50,6 +71,52 @@ erratum below, never an edit of the section.
   path, such as `rm -r /tmp/scratch`: that path names no fixed place
   there, and a junction can send the delete anywhere. A relative path is
   judged as before.
+
+<!-- codeflow:release-impact minor -->
+- **`codeflow doctor --check grok` checks that Grok can run the CodeFlow
+  guards.** It warns, naming each file, about a CodeFlow hook command
+  Grok would skip because it carries a `$`, with the step that fixes it:
+  `codeflow update` where update's own steps rewrite the file or write a
+  `.new` merge beside it, and a hand edit for any other file, with the
+  reason update leaves it: a file update does not manage, such as
+  `.claude/settings.local.json`, a file it skips as a symlink or through
+  `[scaffold] ignore`, or an edit it keeps because the shipped version
+  has not changed. When both kinds of file are stale, it gives both
+  steps. When no exec-guard is bound at all, it offers `codeflow update`
+  only where update would bind the shipped guard again, and otherwise
+  quotes the shipped guard group to add to `.grok/hooks/codeflow.json`.
+  It names a `.new` file update left waiting. When the
+  shipped exec-guard handler (its command, timeout and environment) is
+  bound where Grok's shell tool hits it, matched as Grok matches, doctor
+  judges a fixed canary dangerous command in the payload Grok sends with
+  the handler `codeflow hook exec-guard --contract 3` runs, in its own
+  process under the catastrophic-command floor alone, reading no policy,
+  repository, working directory or environment and recording no
+  refusal, and warns unless it refuses with exit 2, a reason and Grok's
+  deny answer. Doctor executes nothing for the check, so no hook text,
+  hook environment, `codeflow` found on PATH or swapped binary can answer
+  for it: a customised handler is reported as unverified, and where PATH
+  resolves `codeflow` is reported, flagged when it lies inside the
+  repository or is not the binary doctor started from. The canary does
+  not exercise a shell, the command-line parsing, the `codeflow` on PATH
+  or Grok's own hook call; a live session's hook lines prove those.
+
+<!-- codeflow:release-impact minor -->
+- **Task records name their deliverables and where they go.** The task
+  template has a `## Deliverables` section after Description: each output
+  (files or a folder, a decision record, a research note, evidence, a
+  record update, a human board) and its home as a path in the project's
+  structure, or a provisional home with what decides it. The epic
+  template's "Affected surfaces and interfaces" asks for the homes the
+  epic's tasks write, or a pointer to the project's structure authority,
+  and the `cf-method` clarity checklist that `cf-plan` applies checks every
+  task's deliverables and homes against that authority before records are
+  materialized. `codeflow validate --docs` warns about an open task with
+  no filled section and no path in its Description; the warning never
+  blocks, has no policy key, and never reads a complete or cancelled
+  record. It errs toward silence: anything that plausibly names a path,
+  Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
+  `project-management/templates/` carries the new section.
 
 ### Changed
 
@@ -123,6 +190,42 @@ erratum below, never an edit of the section.
   do not change.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **The CodeFlow guards run in Grok sessions.** Grok expands `$name` and
+  `${...}` in a hook command itself and skips the hook, letting the tool
+  call through, when a name is unset. Every CodeFlow hook command in 3.0.0
+  carried shell variables, so in a Grok session git-guard, exec-guard,
+  edit-guard and session-orient never ran, and doctor reported only folder
+  trust. After `codeflow update`, the hook commands in
+  `.grok/hooks/codeflow.json`, `.claude/settings.json` (which Grok also
+  reads) and `.codex/hooks.json` carry no `$`: each runs
+  `codeflow hook <name> --contract 3` and exits 2 with a reason whenever
+  the hook fails, since Codex lets a call through on exit 2 with no
+  reason, naming the installer and `codeflow update` when the binary is
+  missing. A
+  binary older than 3.0.0 still blocks, now with its own usage error in
+  place of the install line. Grok 1.0.46 also sends each payload field
+  under both spellings (`toolName` and `tool_name`), which the guards took
+  for an unreadable payload and allowed; they now read it, and a payload
+  whose two spellings disagree is still reported as unreadable. Grok shows
+  only the first line of a hook's error output as the reason it denied a
+  call, so a guard refusing a Grok call also returns Grok's deny decision
+  with the whole refusal, the rule and its sanctioned path included.
+  `codeflow update` keeps your own edits to these files. It merges Claude
+  settings by their hook entries, and merges a Grok or Codex hook file
+  you edited by a 3-way merge that applies on its own when your edit does
+  not overlap the new commands. When it overlaps, update leaves the file
+  as it is and writes a `.new` file beside it holding the merge: resolve
+  its conflict markers in favour of the shipped CodeFlow hook commands,
+  replace your file with it and delete the `.new` file. Update never
+  touches a hook file it does not manage, such as
+  `.claude/settings.local.json`, which Grok also reads, nor one that is a
+  symlink, and it keeps an edit when the shipped version has not changed:
+  in such a file, replace any CodeFlow hook command that carries a `$`
+  with the shipped one, as `codeflow doctor --check grok` names.
+  Then run `codeflow doctor --check grok` and confirm that a live Grok
+  session refuses a dangerous shell command.
 
 <!-- codeflow:release-impact patch -->
 - **The pre-push hook judges a push by the default branch's policy.**
@@ -233,6 +336,59 @@ erratum below, never an edit of the section.
   runs gitleaks itself can add the entry the CI README shows.
 
 <!-- codeflow:release-impact patch -->
+- **A pull request can no longer exempt its own leak from the secret
+  scan.** The CI template's gitleaks step read `.gitleaksignore`,
+  `.gitleaks.toml`, a `.gitleaks.json` beside it and inline
+  `gitleaks:allow` comments from the pull request's checkout, so the change
+  that added a secret could add its exemption too and pass. The step now
+  reads every exemption from the trusted commit: the pull request's base,
+  or the pushed commit on a push. A new exemption takes effect once its own
+  pull request merges, and an inline `gitleaks:allow` comment counts only
+  on a commit the trusted commit already holds. A file your configuration
+  extends by `[extend] path`, and a `GITLEAKS_CONFIG` file in the
+  repository, are read from the trusted commit as well. The step fails
+  with a message naming the fix when the trusted commit is not in the
+  checkout, when it does not hold an extended file, or when an extended
+  file is named by an absolute path into the checkout. gitleaks is now
+  downloaded and unpacked under the runner's temp directory, so a file or
+  link a pull request commits at that name is not written through. Nothing
+  from the checkout runs or steers the scan: its Python helpers run
+  isolated (Python 3.11 or later), git reads `.gitattributes` from the
+  trusted commit (git 2.41 or later), and no step before the scan runs
+  code from the checkout. If you add a step to the secret-scan job, add it
+  after the scan. **If you customised the workflow and the secret-scan job
+  already runs a step of yours before the gitleaks step, move that step
+  after the scan or into another job when you update:** the 3-way merge
+  keeps it, and `codeflow update` now warns about it on every run until it
+  moves. If you renamed the scan step, update cannot check the order and
+  says on every run that the job's step order needs your review. gitleaks
+  now reads the whole history of HEAD, the base's
+  included (on a pull request, the pull request merged into its base; on
+  a push, the pushed commit), instead of every fetched branch and tag, so
+  an unrelated branch can no longer fail a pull request's scan. This
+  narrows coverage on purpose: a branch with no pull request, or a tag, is
+  not scanned by this workflow unless its commits become reachable from a
+  scanned HEAD, so a repository-wide audit needs a scan of its own. The
+  refusals below check only the commits a pull request brings; on a push
+  that range is empty, since the pushed commit is the trusted commit, so a
+  push scan reads its history without them. gitleaks also reads what a merge
+  itself adds, files whose type changes and files git judges binary, which
+  gitleaks' default history scan leaves out, so a secret added in a merge
+  resolution, in a file that replaces a link or after a NUL byte is
+  reported, under the file's own path. In the commits a pull request
+  brings, git cannot show what an octopus merge adds, so the step refuses
+  one; merge the branches one at a time. It also refuses a path with a
+  backslash, a double quote or a control character that one of those
+  commits changes, or that either side of a merge among them changes,
+  since gitleaks cannot read such names reliably. Each refusal names the
+  commit and the refs that hold it; rewrite the pull request's commits, or
+  rebase onto the base when the change is on the base's side, since a
+  later rename leaves the name in the earlier commit. Names with spaces or
+  non-ASCII letters pass. The scan pins git's patch format, so git
+  configuration on the runner, such as `diff.noprefix`, cannot move a
+  finding to another path.
+
+<!-- codeflow:release-impact patch -->
 - **A human's override covers protected commits and pushes.** The README
   says a human can override the git-hook plane with
   `CODEFLOW_HUMAN_OVERRIDE=1`, but the pre-commit and pre-push hooks
@@ -256,6 +412,48 @@ erratum below, never an edit of the section.
   and its `codeflow` binary must identify as the release version at the
   release commit with `dirty=false`. A dirty build, a build from another
   commit, or an archive without a binary stops the release.
+
+<!-- codeflow:release-impact patch -->
+- **Catch-up merges no longer count as extra pull requests.**
+  `codeflow validate --docs` warned that most completed standalone tasks
+  were "completed by N pull requests", because it counted every merge whose
+  subject names the task branch, including the merges of the target into
+  that branch that the rules ask for. It now counts only merges that brought
+  the task branch in. With the default merge subjects (GitHub's "Merge pull
+  request", git's and GitLab's "Merge branch"), a task that landed once
+  draws no warning and a task that really landed twice still does. A merge
+  with a custom subject may still be miscounted, and a task landed by
+  squash, rebase or `codeflow integrate`, which write no merge, is not
+  counted, as before.
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow present show` says when the browser is already open.** On a
+  session whose browser is still running, `show` exited 4 with
+  "presentation browser launch is not qualified". It now says the session's
+  browser is already open and tells you to switch to its window, or quit
+  that browser and run `show` again; `show --no-launch` prints the
+  session's address. The exit code is still 4.
+
+<!-- codeflow:release-impact patch -->
+- **A new task may change its criteria after a reopen in its own pull
+  request.** A standalone task whose record exists only on its branch,
+  completed, reopened and given another criterion there, could not be
+  completed again: `codeflow task status` and `codeflow ci` refused with
+  "a reopened task keeps its criteria as the anchored target has them",
+  though the target holds no criteria to keep. Such a task now completes
+  with its new criteria. A task the target already records still keeps
+  its criteria across a reopen, also when the branch moves its record to
+  another layout, renumbers it with its uid kept, or retargets it away
+  from `main` or from the integration line it was planned on, and
+  whether the target is read from a stale local branch, an upstream on
+  another remote or an older comparison base. A task is new only when no
+  other branch adds or edits its record, so rewriting the branch's own
+  history cannot hide a recorded task; the refusal names the branch that
+  records it. The default branch is the
+  one `origin/HEAD` names, else `main` or `master`. A clone that lacks a
+  target the task's record names or the default branch cannot tell, so
+  it refuses the change and names the branch to fetch, or explains how
+  to record `origin/HEAD` when it finds no default branch.
 
 <!-- codeflow:release-impact patch -->
 - **A follow-up of a standalone task can land.** `codeflow task new
@@ -292,6 +490,33 @@ erratum below, never an edit of the section.
   for an epic the pull request already completes, replace the block in
   its Closeout by hand in that pull request; an epic is never reopened.
   The cf-method project-organization reference states the same route.
+
+<!-- codeflow:release-impact patch -->
+- **A reviewed task can take its moved target without a new review.** The
+  release-impact check needs a pull request to contain the current target,
+  so after every merge to `main` a reviewed task merges `main` in. In a
+  clone whose local `main` lags `origin/main`, such as a root checkout that
+  is never pulled, `codeflow ci` and the pre-push hook then refused the
+  completion with `work.acceptance_binding`, because they read the task's
+  target from the stale local branch, took the merge for foreign work and
+  asked for a new review. The binding now checks the merge against the
+  target tip the run is judged against: the base `codeflow ci` is given,
+  which hosted CI sets to the pull request's base, and in the pre-push hook
+  also the destination default branch's advertised tip. A local branch, its
+  upstream configuration or a remote-tracking ref never decides it. A merge
+  whose second parent is on that tip's first-parent line, and whose
+  recorded result equals the conflict-free automatic merge of its parents,
+  keeps the binding. Any other merge, a merge of more than two parents, a
+  later commit beyond the record's status and Closeout, a graft or replace
+  ref, or a shallow cut on the walked chain refuses, even when the change
+  cancels out, and the refusal names that commit. For the reopen rule in
+  the entry on new tasks above, a landed record named `TSK-NNN.MD` counts
+  as on the target, since the record reader takes the `.md` extension in
+  any case, and only the target the run is judged against supplies the
+  criteria a reopened task keeps: a local branch or remote-tracking ref,
+  such as an `origin/main` or another remote's upstream pointed at the
+  task's own branch, can make the check stricter but never supplies
+  criteria.
 
 ## [3.0.0]
 

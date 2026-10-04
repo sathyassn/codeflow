@@ -2994,7 +2994,7 @@ fn the_release_fix_pull_request_binds_to_its_head() {
 /// policy asks of a code pull request into a protected branch.
 fn release_body(task: &str) -> String {
     format!(
-        "## Summary\nThe release.\n\nTask: {task}\n\n## Changes\n- the lines\n\n## Reviews\n- reviewed at the head\n\n## Testing\n- cargo test: 1 passed\n\n## Release impact\n- Impact: `patch`\n- Breaking: `no`\n- Rationale: the lines fix defects\n- Migration: none\n"
+        "## Summary\nThe release.\n\n- the lines\n\nTask: {task}\n\n## Changes\n- the lines\n\n## Reviews\n- reviewed at the head\n\n## Testing\n- cargo test: 1 passed\n\n## Release impact\n- Impact: `patch`\n- Breaking: `no`\n- Rationale: the lines fix defects\n- Migration: none\n"
     )
 }
 
@@ -4678,7 +4678,7 @@ fn an_own_task_amendment_landed_by_its_reviewed_pr_is_accepted() {
                 "--into",
                 LINE_A,
                 "--pr-body",
-                "## Summary\nA change.\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+                "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
             ])
             .current_dir(&fx.root)
             .output()

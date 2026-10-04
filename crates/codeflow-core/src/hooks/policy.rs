@@ -308,6 +308,14 @@ pub struct GitPolicy {
     /// Generic release declaration syntax, consistency and breaking commit floor.
     /// Defaults to warn; off/allow disables this independent check.
     pub pr_release_impact: PolicyLevel,
+    /// The shape of the PR body's Summary section, which `codeflow ci`
+    /// checks on a provided body: one prose paragraph that anchors the
+    /// reader, then a list or table, then at most one closing paragraph
+    /// (ADR-0071, note of 2026-10-03). Level (off/warn/allow/block); default
+    /// `block`, independent of `pr_sections`. It judges block shape, never a
+    /// word or sentence count. Runs at most at `warn` while a kept PR
+    /// template is diagnosed, and a trusted automation profile skips it.
+    pub pr_summary: PolicyLevel,
     /// Minimum impact level for incompatibility (major by default).
     /// Pre-1.0 projects can explicitly choose minor.
     pub pr_breaking_level: String,
@@ -351,9 +359,9 @@ pub struct GitPolicy {
     /// Trusted automation profiles (SPC-013 R-82). A profile applies in
     /// `codeflow ci` only when the actor the workflow passes and the head
     /// branch both match, and only as read from the target side of the
-    /// range. It skips branch naming and the commit message shape rules and
-    /// supplies content for the PR sections its bot omits; it never changes
-    /// a level. Default empty.
+    /// range. It skips branch naming, the commit message shape rules and the
+    /// PR Summary shape, and supplies content for the PR sections its bot
+    /// omits; it never changes another level. Default empty.
     pub automation_profiles: Vec<AutomationProfile>,
     /// The decision about a kept brownfield PR template (SPC-013 R-84,
     /// R-115). Absent by default; `init` and `update` write `diagnosed`
@@ -436,6 +444,7 @@ impl Default for GitPolicy {
             policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
+            pr_summary: PolicyLevel::Block,
             pr_breaking_level: "major".into(),
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
@@ -853,6 +862,7 @@ impl GitPolicy {
         self.policy_characters = PolicyLevel::Off;
         self.pr_sections = PolicyLevel::Off;
         self.pr_release_impact = PolicyLevel::Off;
+        self.pr_summary = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.conflict_markers = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
@@ -932,6 +942,9 @@ mod tests {
         // list would start blocking on a binary upgrade alone.
         assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
         assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
+        // The Summary shape blocks by default, by the operator's decision of
+        // 2026-10-03 (ADR-0071 note); a project lowers it with this key.
+        assert_eq!(g.pr_summary, PolicyLevel::Block);
         assert_eq!(g.work_records, PolicyLevel::Block);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
@@ -1000,6 +1013,7 @@ mod tests {
         );
         assert_eq!(from_asset.git.pr_sections, defaults.pr_sections);
         assert_eq!(from_asset.git.pr_release_impact, defaults.pr_release_impact);
+        assert_eq!(from_asset.git.pr_summary, defaults.pr_summary);
         assert_eq!(from_asset.git.pr_breaking_level, defaults.pr_breaking_level);
         // Release impact is conditional even in an older installed four-section
         // policy. WP2 removes it from the scaffold; the unconditional list is

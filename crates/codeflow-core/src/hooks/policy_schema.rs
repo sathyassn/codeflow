@@ -92,7 +92,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 64] = [
+pub const SCHEMA: [KeySpec; 65] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -365,6 +365,19 @@ pub const SCHEMA: [KeySpec; 64] = [
         notes: "Defaults to warn independently of pr_sections. Extra project fields are allowed; this check does not calculate versions or require release automation.",
     },
     KeySpec {
+        path: "git.pr_summary",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "The shape of the PR body's Summary: one prose paragraph that anchors the reader, then a list or table, then at most one closing paragraph (ADR-0071).",
+        notes: "Defaults to block independently of pr_sections. Judges the visible \
+                blocks of the one Summary section, never a word or sentence \
+                count; HTML comments and the `Task:` line are skipped, and a \
+                code block, quote, heading or HTML block in the Summary fails. \
+                Runs at most at warn while a kept PR template is diagnosed, and \
+                a trusted automation profile skips it. The shipped policy file \
+                does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
         path: "git.pr_breaking_level",
         kind: KeyKind::Enum(&["patch", "minor", "major"]),
         valid: "patch | minor | major",
@@ -419,7 +432,7 @@ pub const SCHEMA: [KeySpec; 64] = [
         path: "git.automation_profiles",
         kind: KeyKind::Profiles,
         valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}, task: optional task line}",
-        purpose: "Trusted bots whose pull requests skip branch naming and the commit message shape rules (SPC-013 R-82).",
+        purpose: "Trusted bots whose pull requests skip branch naming, the commit message shape rules and the PR Summary shape (SPC-013 R-82).",
         notes: "Applies in `codeflow ci` only when the actor the workflow passes \
                 and the head branch both match, read from the target side of \
                 the range. Locally and on fork pull requests the actor is \

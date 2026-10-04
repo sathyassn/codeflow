@@ -160,6 +160,85 @@ pub enum Transport {
     TaskLanding,
 }
 
+/// The two kinds of target authority a run hands the binding (TSK-220),
+/// kept as separate types in their own module so neither can be built from
+/// the other or from points the range itself supplies.
+mod authority {
+    use git2::Oid;
+
+    /// The fixed target tips one run is judged against (TSK-220): the base
+    /// `codeflow ci` is given (in hosted CI, the pull request's base) and the
+    /// pre-push hook's candidate authority, or, in the status verb, the task's
+    /// target as `work start` anchors it. They come from the run, never from
+    /// the range under judgement, and they are the only source of both sets
+    /// below, so neither can be built from anything else.
+    #[derive(Clone, Debug, Default)]
+    pub struct RunBases(Vec<Oid>);
+
+    impl RunBases {
+        /// The run's fixed target tips, deduplicated in order.
+        #[must_use]
+        pub fn new(tips: impl IntoIterator<Item = Oid>) -> Self {
+            let mut bases: Vec<Oid> = Vec::new();
+            for tip in tips {
+                if !bases.contains(&tip) {
+                    bases.push(tip);
+                }
+            }
+            Self(bases)
+        }
+
+        /// The tips whose first-parent lines may carry a clean merge after a
+        /// review. `with_own_line` may add a planning or line range's own
+        /// head.
+        #[must_use]
+        pub fn stacking(&self) -> StackingTips {
+            StackingTips(self.0.clone())
+        }
+
+        /// The bases that alone may supply a reopened task's criteria.
+        #[must_use]
+        pub fn criteria(&self) -> CriteriaBases {
+            CriteriaBases(self.0.clone())
+        }
+    }
+
+    /// Stacking authority: target tips whose first-parent lines may carry a
+    /// clean merge after a review. Only [`RunBases::stacking`] builds it and
+    /// only `with_own_line` extends it; it never supplies criteria.
+    #[derive(Clone, Debug, Default)]
+    pub struct StackingTips(Vec<Oid>);
+
+    impl StackingTips {
+        pub(super) fn tips(&self) -> &[Oid] {
+            &self.0
+        }
+
+        /// These tips and a planning or line range's own head, for a task that
+        /// targets that line (`with_own_line`).
+        pub(super) fn with_line_head(mut self, head: Oid) -> Self {
+            if !self.0.contains(&head) {
+                self.0.push(head);
+            }
+            self
+        }
+    }
+
+    /// Criteria authority: the run's fixed bases, the only points besides the
+    /// range anchor allowed to supply a reopened task's criteria. Only
+    /// [`RunBases::criteria`] builds it, so a range's own line head, which
+    /// stacks merges, can never join it.
+    #[derive(Clone, Debug, Default)]
+    pub struct CriteriaBases(Vec<Oid>);
+
+    impl CriteriaBases {
+        pub(super) fn bases(&self) -> &[Oid] {
+            &self.0
+        }
+    }
+}
+pub use authority::{CriteriaBases, RunBases, StackingTips};
+
 /// Bind a completion to its reviewed source. Only this record's status and
 /// Closeout may differ in the reviewed segment. A clean task landing can
 /// transport that segment onto a line; a reopening range always reviews its
@@ -176,6 +255,7 @@ pub fn bind_completion(
     transport: Transport,
     base: Option<Oid>,
 ) -> Vec<Finding> {
+    let run = RunBases::new(default_target);
     bind_completion_with_amendment(
         repo,
         task,
@@ -185,6 +265,8 @@ pub fn bind_completion(
         transport,
         base,
         None,
+        &run.stacking(),
+        &run.criteria(),
     )
 }
 
@@ -196,7 +278,13 @@ pub fn bind_completion(
 /// target, so a line and the release judge accept the same waiver under
 /// the target rule. `None`, or a range that reopens the task, keeps the
 /// target rule alone.
-#[allow(clippy::too_many_arguments)] // bind_completion's inputs and the own-range base.
+///
+/// After its review, a task pull request's chain may stack a clean merge
+/// only when the merge brings a commit on the first-parent line of one of
+/// the `stacking` tips; a reopened task's criteria come only from the range
+/// anchor and the `criteria` bases (TSK-220). Both derive from the run's
+/// [`RunBases`], never from a local branch or its upstream configuration.
+#[allow(clippy::too_many_arguments)] // bind_completion's inputs, the own-range base and the two authorities.
 pub(crate) fn bind_completion_with_amendment(
     repo: &Repository,
     task: &RecordView,
@@ -206,6 +294,8 @@ pub(crate) fn bind_completion_with_amendment(
     transport: Transport,
     base: Option<Oid>,
     own_range_base: Option<Oid>,
+    stacking: &StackingTips,
+    criteria: &CriteriaBases,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -229,12 +319,20 @@ pub(crate) fn bind_completion_with_amendment(
     // task landing may carry its review. Otherwise this range completed and
     // reopened the task itself.
     let mut recovered = false;
+    let mut unreadable = None;
     let reopen = (!on_target)
         .then_some(anchor)
         .flatten()
         .and_then(|anchor| {
-            let content = blob_at(repo, anchor, &task.path)?;
-            let old = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+            // By identity, wherever the anchored target holds the record
+            // (TSK-220); unreadable falls to the recovery below, which keeps
+            // the completed criteria.
+            let uid = record_uid(&task.content);
+            let Presence::Present(old) =
+                presence_at(repo, anchor, &task.id, uid.as_deref(), &own_file_name(task))
+            else {
+                return None;
+            };
             let reopened = old.status == "complete"
                 && (matches!(landing, Landing::Worktree { .. })
                     || super::lifecycle::is_recompletion(Some(&old), task)
@@ -245,20 +343,12 @@ pub(crate) fn bind_completion_with_amendment(
                         &Graph::default().with(task.clone()),
                     )
                     .contains(&task.id));
-            reopened.then_some((anchor, old))
+            reopened.then_some((anchor, *old))
         })
         .or_else(|| {
-            // The recovered completion supplies the archive and the old
-            // review boundary. Its criteria may predate a planning pull
-            // request that amended them on the target after the reopen
-            // (R-52), so the criteria are the anchored record's.
-            let (at, mut old) = previous_completion(repo, task, &block, landing)?;
-            if let Some(anchored) = anchor.and_then(|anchor| {
-                let content = blob_at(repo, anchor, &task.path)?;
-                RecordView::parse(RecordKind::Task, &task.path, &content).ok()
-            }) {
-                old.criteria = anchored.criteria;
-            }
+            let (at, old, note) =
+                recovered_completion(repo, task, &block, landing, anchor, criteria)?;
+            unreadable = note;
             recovered = true;
             Some((at, old))
         });
@@ -270,6 +360,7 @@ pub(crate) fn bind_completion_with_amendment(
         .is_some_and(|(at, _)| !recovered || !before_range(*at));
     let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
+    findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
     if let Some((_, old)) = &reopen {
         findings.extend(
             super::lifecycle::reopen_problems(Some(old), task)
@@ -296,10 +387,13 @@ pub(crate) fn bind_completion_with_amendment(
                     || !is_ancestor_or_same(repo, *at, reviewed)
             }) {
                 Some(format!("a reopened task's reviewed commit {reviewed} must lie inside the fix range, after its anchored base"))
-            } else if transport == Transport::TaskLanding && !reopens_range {
-                binding_problem(repo, task, landing, reviewed, transport)
             } else {
-                binding_problem(repo, task, landing, reviewed, Transport::Direct)
+                let carried = if reopens_range {
+                    Transport::Direct
+                } else {
+                    transport
+                };
+                binding_problem(repo, task, landing, reviewed, carried, stacking)
             };
             if let Some(problem) = problem {
                 bind(format!("{}: {problem}", task.id));
@@ -356,7 +450,9 @@ pub fn bind_epic_completion(
             block.reviewed
         )),
         Some(reviewed) => {
-            if let Some(problem) = reviewed_span_problem(repo, epic, landing, reviewed, false) {
+            if let Some(problem) =
+                reviewed_span_problem(repo, epic, landing, reviewed, Stacking::Never)
+            {
                 bind(problem);
             }
         }
@@ -527,32 +623,43 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
 
 /// Apply the one reviewed-span check, resolving task-landing transport only
 /// when the source and completion do not share a directly reviewed span.
+/// `stacking` holds the target tips a clean merge after the review must
+/// come from.
 fn binding_problem(
     repo: &Repository,
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
     transport: Transport,
+    stacking: &StackingTips,
 ) -> Option<String> {
     // A task landing's own span may stack (TSK-184): the task branch may
     // re-merge its integration target cleanly after the review. Direct
     // work, a reopening range and a completion bound at a head never stack.
-    let direct = reviewed_span_problem(
-        repo,
-        task,
-        landing,
-        reviewed,
-        transport == Transport::TaskLanding,
-    )?;
+    let stacking = if transport == Transport::TaskLanding {
+        Stacking::OnTarget(stacking)
+    } else {
+        Stacking::Never
+    };
+    let direct = reviewed_span_problem(repo, task, landing, reviewed, stacking)?;
     if transport == Transport::Direct {
         return Some(direct);
     }
     match task_landing(repo, task, landing, reviewed) {
         Landed::NoMerge => Some(direct),
-        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, false)
+        Landed::Span { merge, head } => reviewed_span_problem(repo, task, Landing::Commit(head), reviewed, Stacking::Never)
             .map(|problem| format!("the landing merge {merge} brings {head}, and {problem}; review the result that landed")),
         Landed::Refused(problem) => Some(problem),
     }
+}
+
+/// Whether a reviewed span may stack clean merges of the target.
+#[derive(Debug, Clone, Copy)]
+enum Stacking<'a> {
+    /// Direct work, a reopening range, a landed head and an epic.
+    Never,
+    /// A task pull request's own chain, judged against these target tips.
+    OnTarget(&'a StackingTips),
 }
 
 /// The only binding predicate: the reviewed commit is the source head or
@@ -566,7 +673,7 @@ fn reviewed_span_problem(
     task: &RecordView,
     landing: Landing<'_>,
     reviewed: Oid,
-    stacking: bool,
+    stacking: Stacking<'_>,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
         let outside: Vec<&str> = changed
@@ -597,11 +704,11 @@ fn reviewed_span_problem(
     // Reviewed stacking: after the review, the task branch may re-merge
     // its integration target cleanly, and its own commits may change only
     // this record's status and Closeout. Anything else is judged as the
-    // whole change from the reviewed commit to C.
-    let stack = if stacking {
-        stacked(repo, task, reviewed, at)
-    } else {
-        Stacked::No
+    // whole change from the reviewed commit to C, naming the commit that
+    // stopped the stack.
+    let stack = match stacking {
+        Stacking::OnTarget(tips) => stacked(repo, task, reviewed, at, tips),
+        Stacking::Never => Stacked::No(None),
     };
     match stack {
         Stacked::Clean => {
@@ -617,9 +724,24 @@ fn reviewed_span_problem(
         Stacked::Unclean(merge) => Some(format!(
             "merge {merge} is not a clean re-merge from the task's integration target; review the result again"
         )),
-        Stacked::No => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+        // Where stacking does not apply, the whole change from the review
+        // decides. A stopped stack refuses even when that change nets out
+        // (SPC-013 R-60: the task's own later commits change only this
+        // record's status and Closeout), leading with the net change when
+        // there is one and naming the commit that stopped it.
+        Stacked::No(None) => later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
             format!("{problem} after the reviewed commit {reviewed}; review the result again")
         }),
+        Stacked::No(Some(stop)) => {
+            let detail = match stop {
+                Stop::Commit { commit, changed } => format!("commit {commit}: {changed}"),
+                Stop::Other(why) => why,
+            };
+            Some(match later_change(repo, &task.path, &completed, reviewed, at) {
+                Some(problem) => format!("{problem} after the reviewed commit {reviewed} ({detail}); review the result again"),
+                None => format!("the history after the reviewed commit {reviewed} does not stack on it ({detail}); review the result again"),
+            })
+        }
     }
 }
 
@@ -631,37 +753,121 @@ enum Stacked {
     /// A merge from the integration target whose tree is not the clean
     /// re-merge of its parents.
     Unclean(Oid),
-    /// The reviewed commit is not on the chain, or a commit between changes
-    /// more than a clean re-merge or the record allows.
-    No,
+    /// The chain does not stack on the review, and where it stopped. `None`
+    /// where stacking does not apply.
+    No(Option<Stop>),
 }
 
-fn stacked(repo: &Repository, task: &RecordView, reviewed: Oid, at: Oid) -> Stacked {
-    let target = task_target(repo, task, None);
+/// Where a chain stopped stacking on the review.
+enum Stop {
+    /// A non-merge commit that changes more than this record's status and
+    /// Closeout, and what it changed.
+    Commit { commit: Oid, changed: String },
+    /// A merge from outside the target, or history that cannot be read.
+    Other(String),
+}
+
+/// Walk C's first-parent chain back to the reviewed commit. A merge whose
+/// second parent lies on the first-parent line of one of the run's target
+/// tips (`stacking`), with the tree git's clean merge of its parents
+/// gives, brings only target work: it stacks. A non-merge commit stacks only
+/// by changing this record's status and Closeout. Anything else stops the
+/// stack and is named: a merge from elsewhere, a merge of more than two
+/// parents, a history overlay (grafts or replace refs) that could fake the
+/// parents walked, a shallow boundary on the chain, or history that cannot
+/// be read.
+fn stacked(
+    repo: &Repository,
+    task: &RecordView,
+    reviewed: Oid,
+    at: Oid,
+    stacking: &StackingTips,
+) -> Stacked {
+    let authorities = stacking.tips();
+    let stop = |why: String| Stacked::No(Some(Stop::Other(why)));
+    match super::release_line::history_overlay(repo) {
+        Ok(None) => {}
+        Ok(Some(overlay)) => {
+            return stop(format!(
+                "this clone overlays its recorded history with {overlay}, so the parents a merge records cannot be trusted; remove it, or judge from a clone without it"
+            ))
+        }
+        Err(why) => return stop(why),
+    }
+    let shallow = match super::release_line::shallow_boundary(repo) {
+        Ok(shallow) => shallow,
+        Err(why) => return stop(why),
+    };
+    let tips = || {
+        authorities
+            .iter()
+            .map(Oid::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let mut cursor = at;
     while cursor != reviewed {
+        let unreadable = || {
+            stop(format!(
+                "the history from {at} to the reviewed commit cannot be read at {cursor}"
+            ))
+        };
+        if shallow.contains(&cursor) {
+            return stop(format!(
+                "this clone is shallow at {cursor}, so the history to the reviewed commit is cut; fetch it in full"
+            ));
+        }
         let Ok(commit) = repo.find_commit(cursor) else {
-            return Stacked::No;
+            return unreadable();
         };
         let Ok(parent) = commit.parent_id(0) else {
-            return Stacked::No;
+            return unreadable();
         };
-        if commit.parent_count() == 2 {
-            let from_target = target.is_some_and(|tip| {
-                commit
-                    .parent_id(1)
-                    .is_ok_and(|side| is_first_parent_ancestor(repo, side, tip))
-            });
-            if !from_target {
-                return Stacked::No;
+        if !is_ancestor_or_same(repo, reviewed, parent) {
+            return stop(format!(
+                "{cursor} brings the reviewed commit through a parent other than its first, so the reviewed commit is not on the head's first-parent chain"
+            ));
+        }
+        match commit.parent_count() {
+            1 => {
+                let changed = match blob_at(repo, cursor, &task.path) {
+                    None => Some(format!("{} was removed", task.path)),
+                    Some(content) => later_change(repo, &task.path, &content, parent, cursor),
+                };
+                if let Some(changed) = changed {
+                    return Stacked::No(Some(Stop::Commit {
+                        commit: cursor,
+                        changed,
+                    }));
+                }
             }
-            if !is_clean_remerge(repo, &commit).unwrap_or(false) {
-                return Stacked::Unclean(cursor);
+            2 => {
+                let Ok(side) = commit.parent_id(1) else {
+                    return unreadable();
+                };
+                if authorities.is_empty() {
+                    return stop(format!(
+                        "merge {cursor} cannot be checked: this run names no target tip"
+                    ));
+                }
+                if !authorities
+                    .iter()
+                    .any(|tip| is_first_parent_ancestor(repo, side, *tip))
+                {
+                    return stop(format!(
+                        "merge {cursor} brings {side}, which is not on the first-parent line of the target tip this run is judged against ({})",
+                        tips()
+                    ));
+                }
+                if !is_clean_remerge(repo, &commit).unwrap_or(false) {
+                    return Stacked::Unclean(cursor);
+                }
             }
-        } else if blob_at(repo, cursor, &task.path).is_none_or(|content| {
-            later_change(repo, &task.path, &content, parent, cursor).is_some()
-        }) {
-            return Stacked::No;
+            _ => {
+                return stop(format!(
+                    "merge {cursor} has more than two parents, so it is not a merge of the target"
+                ))
+            }
         }
         cursor = parent;
     }
@@ -837,6 +1043,593 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
         Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
         None => default_target,
     }
+}
+
+/// The completion this range reopened, recovered from the history below
+/// the landing, with the criteria a re-completion must keep. The recovered
+/// completion supplies the archive and the old review boundary. Its
+/// criteria may predate a planning pull request that amended them on the
+/// target after the reopen (R-52), so the criteria are the target's
+/// record's, found by identity in any layout. A task no reference point of
+/// its targets holds, and no branch outside the range records, is new in
+/// this range: its own pull request may change its criteria with the
+/// reopen (TSK-217). When a record that may be the task cannot be read, a
+/// target it names does not resolve, or a branch outside the range records
+/// it, the recovered criteria stay and a changed set gets the returned
+/// refusal. Only the anchor and the run's `criteria` bases supply the
+/// criteria to keep (TSK-220): a branch, a remote-tracking ref or a range's
+/// own line can only make the answer stricter.
+fn recovered_completion(
+    repo: &Repository,
+    task: &RecordView,
+    block: &AcceptanceBlock,
+    landing: Landing<'_>,
+    anchor: Option<Oid>,
+    criteria: &CriteriaBases,
+) -> Option<(Oid, RecordView, Option<String>)> {
+    let (at, mut old) = previous_completion(repo, task, block, landing)?;
+    let mut refusal = None;
+    if let Some(anchor) = anchor {
+        let range = Range {
+            anchor,
+            head: landing.commit(),
+        };
+        match target_record(repo, task, range, &old, criteria) {
+            Presence::Present(record) => old.criteria = record.criteria,
+            Presence::Absent => old.criteria = task.criteria.clone(),
+            Presence::Unreadable(reason) => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: cannot tell whether a target holds this task, so its criteria stay as they were: {reason}",
+                        task.id
+                    ));
+                }
+            }
+            Presence::Elsewhere { holder, commit } => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: `{holder}` records this task outside this range (commit {commit:.9} adds or changes its record), so the task is not new here and its criteria stay as they were; if `{holder}` is a stale copy, delete it, or merge it if it is newer work on this task, and run this again",
+                        task.id
+                    ));
+                }
+            }
+            Presence::Unjudged { reference, commit } => {
+                if old.criteria.signature() != task.criteria.signature() {
+                    refusal = Some(format!(
+                        "{}: `{reference}` (commit {commit:.9}) records this task, but it is not the target this run is judged against, so its criteria stay as they were; a reopened task keeps its criteria unless the judged target holds no record of it",
+                        task.id
+                    ));
+                }
+            }
+        }
+    }
+    Some((at, old, refusal))
+}
+
+/// The commits a completion is judged over: those `head` reaches and
+/// `anchor` does not, and the anchor itself.
+#[derive(Clone, Copy)]
+struct Range {
+    anchor: Oid,
+    head: Oid,
+}
+
+/// Whether a reference point holds a task, found by identity.
+enum Presence {
+    /// No record there carries the task's id or uid.
+    Absent,
+    /// The record that carries it.
+    Present(Box<RecordView>),
+    /// The answer is unknown: a required target does not resolve here, or
+    /// a record at the task's own path does not parse; the reason.
+    Unreadable(String),
+    /// No target point holds it, but a branch or remote-tracking ref
+    /// outside the range records it: `commit`, which `holder` reaches and
+    /// the range's head does not, adds or changes the task's record.
+    Elsewhere { holder: String, commit: Oid },
+    /// The judged target does not hold it, but a tip of one of its targets
+    /// that the run is not judged against does: `reference` at `commit`.
+    /// Such a tip is a local branch or a remote-tracking ref, which this
+    /// clone can move, so it never supplies criteria (TSK-220).
+    Unjudged { reference: String, commit: Oid },
+}
+
+/// The target's record of `task`, read at every reference point the verb or
+/// `codeflow ci` could judge it against, so neither an older range base, a
+/// stale local branch, an upstream on another remote, nor a retargeted
+/// record makes a task a target holds look new (TSK-217).
+///
+/// The targets are every integration target the task's record has named:
+/// the declared one, the recovered completion's, and each version of the
+/// record in the range, the anchor's version included. A record retargeted
+/// in this pull request still names its former target in an earlier
+/// version, and a branch cut from an integration line carries that line's
+/// version, so the record's own history supplies its provenance.
+///
+/// Only the judged points supply the criteria to keep (TSK-220): the
+/// range anchor, the record this range was cut from (R-52), then each of
+/// the run's `criteria` bases (the base `codeflow ci` is given and the
+/// pre-push candidate authority; in the verb, the task's target as `work
+/// start` anchors it). A planning amendment landed on the target after the
+/// reopen is on the judged base, so its criteria bind. A base the landing
+/// reaches beyond the anchor is the branch's own history, not a fixed
+/// target point, so it only joins the other tips. A range's own line head
+/// is stacking authority and never reaches here. Every other tip, of the
+/// declared target, each former target and the default target, is a local
+/// branch or a remote-tracking ref this clone can move: when one holds the
+/// task and no judged point does, the answer is [`Presence::Unjudged`],
+/// which keeps the recovered criteria and never supplies new ones.
+///
+/// It fails closed: a required target (each one the record names, and the
+/// default target) with no tip here makes the answer unreadable, never
+/// absent. And when no point holds the task, it is new only if no branch
+/// or remote-tracking ref outside the range records it ([`holder_outside`]):
+/// the range's own history is the branch's to rewrite, other refs are not.
+fn target_record(
+    repo: &Repository,
+    task: &RecordView,
+    range: Range,
+    recovered: &RecordView,
+    criteria: &CriteriaBases,
+) -> Presence {
+    let uid = record_uid(&task.content);
+    let mut index = RecordIndex::new(repo, &task.id, uid.clone());
+    let mut targets = Vec::new();
+    let mut add = |name: Option<&str>| {
+        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        if let Some(name) = name {
+            if !targets.iter().any(|known| known == name) {
+                targets.push(name.to_string());
+            }
+        }
+    };
+    add(task.integration_target.as_deref());
+    add(recovered.integration_target.as_deref());
+    match named_targets(repo, &mut index, range) {
+        Ok(names) => names.iter().for_each(|name| add(Some(name))),
+        Err(reason) => return Presence::Unreadable(reason),
+    }
+    let mut judged = vec![range.anchor];
+    let mut tips: Vec<(String, Oid)> = Vec::new();
+    for base in criteria.bases().iter().copied() {
+        let in_range = base != range.anchor
+            && (base == range.head || repo.graph_descendant_of(range.head, base).unwrap_or(false));
+        if in_range {
+            tips.push((base.to_string(), base));
+        } else {
+            judged.push(base);
+        }
+    }
+    for name in &targets {
+        let found = target_tips(repo, name);
+        if found.is_empty() {
+            return Presence::Unreadable(format!(
+                "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
+            ));
+        }
+        tips.extend(found);
+    }
+    match default_target_name(repo) {
+        Ok(name) => {
+            let found = target_tips(repo, &name.name);
+            if found.is_empty() {
+                return Presence::Unreadable(format!(
+                    "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
+                    name.name,
+                    if name.from_origin_head { ", which `origin/HEAD` names," } else { "" }
+                ));
+            }
+            tips.extend(found);
+        }
+        Err(reason) => return Presence::Unreadable(reason),
+    }
+    let mut seen = std::collections::HashSet::new();
+    judged.retain(|point| seen.insert(*point));
+    tips.retain(|(_, point)| seen.insert(*point));
+    let own_file = own_file_name(task);
+    let mut unreadable = None;
+    for point in judged {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            present @ Presence::Present(_) => return present,
+            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
+        }
+    }
+    let mut unjudged = None;
+    for (reference, point) in tips {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            Presence::Present(_) => {
+                unjudged.get_or_insert(Presence::Unjudged {
+                    reference,
+                    commit: point,
+                });
+            }
+            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
+        }
+    }
+    if let Some(reason) = unreadable {
+        return Presence::Unreadable(reason);
+    }
+    if let Some(unjudged) = unjudged {
+        return unjudged;
+    }
+    match holder_outside(repo, &mut index, range.head) {
+        Ok(Some((holder, commit))) => Presence::Elsewhere { holder, commit },
+        Ok(None) => Presence::Absent,
+        Err(reason) => Presence::Unreadable(reason),
+    }
+}
+
+/// The versions of one task's record, found by parsed identity (`id` or
+/// `uid`) in the task directories of every layout, read once per distinct
+/// `project-management` tree and once per record file.
+struct RecordIndex<'r> {
+    repo: &'r Repository,
+    id: String,
+    uid: Option<String>,
+    trees: std::collections::HashMap<Oid, Vec<Oid>>,
+    blobs: std::collections::HashMap<Oid, Option<RecordView>>,
+}
+
+impl<'r> RecordIndex<'r> {
+    fn new(repo: &'r Repository, id: &str, uid: Option<String>) -> Self {
+        Self {
+            repo,
+            id: id.to_string(),
+            uid,
+            trees: std::collections::HashMap::new(),
+            blobs: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The record files at `commit` that are this task, as sorted blob ids;
+    /// `None` when the commit or its tree cannot be read.
+    fn versions(&mut self, commit: Oid) -> Option<Vec<Oid>> {
+        let tree = self.repo.find_commit(commit).and_then(|c| c.tree()).ok()?;
+        let Some(records) = tree
+            .get_name("project-management")
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .map(|entry| entry.id())
+        else {
+            return Some(Vec::new());
+        };
+        if let Some(found) = self.trees.get(&records) {
+            return Some(found.clone());
+        }
+        let records_tree = self.repo.find_tree(records).ok()?;
+        let mut found = Vec::new();
+        for (path, blob) in task_entries_in(self.repo, &records_tree) {
+            if !self.blobs.contains_key(&blob) {
+                let record = self.read(&path, blob);
+                self.blobs.insert(blob, record);
+            }
+            if self.blobs.get(&blob).is_some_and(Option::is_some) {
+                found.push(blob);
+            }
+        }
+        found.sort();
+        found.dedup();
+        self.trees.insert(records, found.clone());
+        Some(found)
+    }
+
+    /// The record in `blob` when it is this task. Only a file that names
+    /// the id or uid literally, or holds an escape (a double-quoted YAML
+    /// value can spell either one with `\x` escapes), is parsed.
+    fn read(&self, path: &str, blob: Oid) -> Option<RecordView> {
+        let blob = self.repo.find_blob(blob).ok()?;
+        let content = String::from_utf8_lossy(blob.content());
+        let mentions = content.contains(self.id.as_str())
+            || self.uid.as_deref().is_some_and(|uid| content.contains(uid))
+            || content.contains('\\');
+        if !mentions {
+            return None;
+        }
+        let record = RecordView::parse(RecordKind::Task, path, &content).ok()?;
+        is_same_task(&record, &self.id, self.uid.as_deref()).then_some(record)
+    }
+
+    /// The task's record held in `blob`, once [`Self::versions`] found it.
+    fn record(&self, blob: Oid) -> Option<&RecordView> {
+        self.blobs.get(&blob).and_then(Option::as_ref)
+    }
+}
+
+/// A branch or remote-tracking ref that records the task outside the
+/// range ending at `head`: some commit it reaches and `head` does not adds
+/// the task's record or changes it from every parent's version. A copy
+/// inherited from the range's own commits (a branch stacked on this one,
+/// or this branch's remote copy with unrelated commits on top) adds
+/// nothing and does not count. Returns the ref's short name and the
+/// commit; an unreadable history is the reason returned, so the caller
+/// fails closed.
+fn holder_outside(
+    repo: &Repository,
+    index: &mut RecordIndex<'_>,
+    head: Oid,
+) -> Result<Option<(String, Oid)>, String> {
+    let unreadable =
+        |error: git2::Error| format!("cannot read the branches of this clone: {error}");
+    let mut refs = Vec::new();
+    for reference in repo.references().map_err(unreadable)? {
+        let reference = reference.map_err(unreadable)?;
+        let Ok(name) = reference.name() else { continue };
+        let tracked = name.starts_with("refs/heads/") || name.starts_with("refs/remotes/");
+        if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+        if let Ok(commit) = reference.peel_to_commit() {
+            let short = reference.shorthand().unwrap_or(name).to_string();
+            refs.push((name.to_string(), short, commit.id()));
+        }
+    }
+    refs.sort();
+    let mut walk = repo.revwalk().map_err(unreadable)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        .map_err(unreadable)?;
+    for (_, _, tip) in &refs {
+        walk.push(*tip).map_err(unreadable)?;
+    }
+    walk.hide(head).map_err(unreadable)?;
+    for commit in walk {
+        let commit = commit.map_err(unreadable)?;
+        let tree_error = || format!("cannot read the tree of {commit}");
+        let versions = index.versions(commit).ok_or_else(tree_error)?;
+        if versions.is_empty() {
+            continue;
+        }
+        let parents: Vec<Oid> = repo
+            .find_commit(commit)
+            .map_err(unreadable)?
+            .parent_ids()
+            .collect();
+        let mut inherited = std::collections::HashSet::new();
+        for parent in parents {
+            let parent_versions = index
+                .versions(parent)
+                .ok_or_else(|| format!("cannot read the tree of {parent}"))?;
+            inherited.extend(parent_versions);
+        }
+        if versions.iter().all(|version| inherited.contains(version)) {
+            continue;
+        }
+        let holder = refs
+            .iter()
+            .find(|(_, _, tip)| {
+                *tip == commit || repo.graph_descendant_of(*tip, commit).unwrap_or(false)
+            })
+            .map_or_else(|| commit.to_string(), |(_, short, _)| short.clone());
+        return Ok(Some((holder, commit)));
+    }
+    Ok(None)
+}
+
+/// The integration targets that versions of the task's record name in
+/// `range`, the anchor's version included, in first-seen order from the
+/// head back. A history that cannot be walked is the reason returned, so
+/// the caller fails closed.
+fn named_targets(
+    repo: &Repository,
+    index: &mut RecordIndex<'_>,
+    range: Range,
+) -> Result<Vec<String>, String> {
+    let unwalkable = |error: git2::Error| {
+        format!(
+            "cannot read the history from {} to {}: {error}",
+            range.anchor, range.head
+        )
+    };
+    let mut walk = repo.revwalk().map_err(unwalkable)?;
+    walk.push(range.head).map_err(unwalkable)?;
+    walk.hide(range.anchor).map_err(unwalkable)?;
+    let mut commits = walk.collect::<Result<Vec<_>, _>>().map_err(unwalkable)?;
+    commits.push(range.anchor);
+    let mut names = Vec::new();
+    for commit in commits {
+        let versions = index
+            .versions(commit)
+            .ok_or_else(|| format!("cannot read the tree of {commit}"))?;
+        for blob in versions {
+            let target = index
+                .record(blob)
+                .and_then(|record| record.integration_target.clone());
+            if let Some(target) = target {
+                if !names.contains(&target) {
+                    names.push(target);
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// The default target this check reads, and whether `origin/HEAD` named it.
+struct DefaultName {
+    name: String,
+    from_origin_head: bool,
+}
+
+/// The default target: the branch `origin/HEAD` names when this clone
+/// records one, else the first of `main` and `master` that resolves
+/// ([`super::work_start::default_work_target`]). Any other default branch is
+/// found only through `origin/HEAD`, so its absence is the refusal returned.
+fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
+    let origin_head = repo
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|head| {
+            head.symbolic_target()
+                .ok()
+                .flatten()
+                .and_then(|target| target.strip_prefix("refs/remotes/origin/"))
+                .map(str::to_string)
+        });
+    if let Some(name) = origin_head {
+        return Ok(DefaultName {
+            name,
+            from_origin_head: true,
+        });
+    }
+    repo.workdir()
+        .and_then(super::work_start::default_work_target)
+        .map(|name| DefaultName {
+            name: name.strip_prefix("origin/").unwrap_or(&name).to_string(),
+            from_origin_head: false,
+        })
+        .ok_or_else(|| {
+            "no default target is found here: discovery reads `origin/HEAD`, then `main` and `master`, and none resolves. \
+             If the default branch is `main` or `master`, fetch it (`git fetch origin main`); \
+             for another default branch, record it (`git remote set-head origin --auto`)"
+                .to_string()
+        })
+}
+
+/// Every tip of the target `name` this clone knows, with the reference
+/// that names it: the configured upstream of its local branch (on any
+/// remote), its `origin` tracking ref, and the local branch, in that
+/// order. Empty when none resolves.
+fn target_tips(repo: &Repository, name: &str) -> Vec<(String, Oid)> {
+    let mut names = Vec::new();
+    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
+        if let Ok(upstream) = upstream.as_str() {
+            names.push(upstream.to_string());
+        }
+    }
+    let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
+    candidates.reverse();
+    names.extend(candidates);
+    names
+        .iter()
+        .filter_map(|reference| {
+            repo.find_reference(reference)
+                .and_then(|found| found.peel_to_commit())
+                .ok()
+                .map(|commit| (reference.clone(), commit.id()))
+        })
+        .collect()
+}
+
+/// The task records in the tree at `at`, as path and blob, read only in the
+/// task directories of the supported layouts (`project-management/tasks/`
+/// and `project-management/epics/<EPC>/tasks/`). `None` when the tree
+/// cannot be read.
+fn task_entries(repo: &Repository, at: Oid) -> Option<Vec<(String, Oid)>> {
+    let tree = repo.find_commit(at).and_then(|commit| commit.tree()).ok()?;
+    let Some(records) = tree
+        .get_name("project-management")
+        .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+        .and_then(|entry| repo.find_tree(entry.id()).ok())
+    else {
+        return Some(Vec::new());
+    };
+    Some(task_entries_in(repo, &records))
+}
+
+/// The task records under one `project-management` tree, as path and blob.
+fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Vec<(String, Oid)> {
+    let subtree = |tree: &git2::Tree<'_>, name: &str| {
+        tree.get_name(name)
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .and_then(|entry| repo.find_tree(entry.id()).ok())
+    };
+    let mut directories = Vec::new();
+    if let Some(tasks) = subtree(records, "tasks") {
+        directories.push(("project-management/tasks".to_string(), tasks));
+    }
+    if let Some(epics) = subtree(records, "epics") {
+        for epic in &epics {
+            let Ok(name) = epic.name() else { continue };
+            let Some(epic_tree) = subtree(&epics, name) else {
+                continue;
+            };
+            if let Some(tasks) = subtree(&epic_tree, "tasks") {
+                directories.push((format!("project-management/epics/{name}/tasks"), tasks));
+            }
+        }
+    }
+    let mut entries = Vec::new();
+    for (directory, tasks) in directories {
+        for entry in &tasks {
+            let Ok(name) = entry.name() else { continue };
+            let path = format!("{directory}/{name}");
+            if super::work_start::record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
+                entries.push((path, entry.id()));
+            }
+        }
+    }
+    entries
+}
+
+/// Whether `record` is the task with `id` or `uid`, by parsed identity.
+fn is_same_task(record: &RecordView, id: &str, uid: Option<&str>) -> bool {
+    record.id == id || (uid.is_some() && record_uid(&record.content).as_deref() == uid)
+}
+
+/// Whether the tree at `at` holds a task record with `id` or `uid`, read
+/// in the task directories ([`task_entries`]). Identity is the parsed `id`
+/// and `uid` frontmatter values. A record that does not parse is this
+/// task's only when it sits at the task's own file name, and then the
+/// answer is unreadable, never absent.
+fn presence_at(
+    repo: &Repository,
+    at: Oid,
+    id: &str,
+    uid: Option<&str>,
+    own_file: &str,
+) -> Presence {
+    let Some(entries) = task_entries(repo, at) else {
+        return Presence::Unreadable(format!("cannot read the tree of {at}"));
+    };
+    let mut unreadable = None;
+    for (path, blob) in entries {
+        // The reader takes the `.md` extension in any case (TSK-220), so a
+        // broken `TSK-001.MD` is this task's own file as much as `.md` is.
+        let own = path
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case(own_file));
+        let Ok(blob) = repo.find_blob(blob) else {
+            if own {
+                unreadable.get_or_insert(format!("cannot read {path} at {at}"));
+            }
+            continue;
+        };
+        let content = String::from_utf8_lossy(blob.content());
+        match RecordView::parse(RecordKind::Task, &path, &content) {
+            Ok(record) if is_same_task(&record, id, uid) => {
+                return Presence::Present(Box::new(record));
+            }
+            Err(_) if own => {
+                unreadable.get_or_insert(format!("{path} at {at} does not parse"));
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    unreadable.map_or(Presence::Absent, Presence::Unreadable)
+}
+
+/// The file name of the task's own record, which [`presence_at`] treats as
+/// the task's even when it does not parse.
+fn own_file_name(task: &RecordView) -> String {
+    std::path::Path::new(&task.path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A record's `uid` as the frontmatter parser reads it, so every YAML
+/// form of one value (plain, single or double quoted) is the same uid.
+fn record_uid(content: &str) -> Option<String> {
+    let (data, _) = crate::validate::parse_frontmatter(content.as_bytes()).ok()?;
+    let uid = crate::validate::get_string_field(&data, "uid");
+    let uid = uid.trim();
+    (!uid.is_empty()).then(|| uid.to_string())
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
@@ -1192,7 +1985,10 @@ pub(super) fn reopened_ids(
 /// whose active block or archived review it changes, with provenance read
 /// before applying the shared binding rule.
 /// `default_target` stands in for a task that declares no integration
-/// target when its waivers are judged.
+/// target when its waivers are judged; `run` holds the fixed target tips
+/// the run is judged against, and `line` is the branch the range judges,
+/// whose own line a planning or line range adds to the stacking tips (never
+/// the criteria bases) for the tasks that target it.
 ///
 /// # Errors
 ///
@@ -1204,6 +2000,8 @@ pub fn completions_in_range(
     head: &str,
     default_target: Option<Oid>,
     criteria: &Criteria,
+    run: &RunBases,
+    line: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
     let amendable = *criteria == Criteria::Amendable;
     // The task a task pull request is for may waive a criterion by a
@@ -1226,6 +2024,7 @@ pub fn completions_in_range(
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let reopened_in_history =
         super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
+
     let mut findings = Vec::new();
     for task in after
         .records
@@ -1272,6 +2071,8 @@ pub fn completions_in_range(
                 Transport::TaskLanding,
                 Some(source_base.unwrap_or(anchor)),
                 (own_task == Some(task.id.as_str())).then_some(anchor),
+                &with_own_line(run.stacking(), line, task, amendable.then_some(head_oid)),
+                &run.criteria(),
             ));
         }
     }
@@ -1279,6 +2080,32 @@ pub fn completions_in_range(
         repo, &before, &after, head_oid, amendable,
     ));
     Ok(findings)
+}
+
+/// The target tips a completion in a range may stack merges from: the run's
+/// stacking tips, and, in a planning or line range (`line_head`), the range
+/// head's own line, but only for a task whose declared target is that line
+/// (`line`, the branch the range judges). A task bound for another target
+/// never takes that line's merges as its target's, and the line head is
+/// stacking authority only, never a criteria base (TSK-220).
+fn with_own_line(
+    stacking: StackingTips,
+    line: Option<&str>,
+    task: &RecordView,
+    line_head: Option<Oid>,
+) -> StackingTips {
+    let mut tips = stacking;
+    let declared = task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty());
+    if let (Some(head), Some(line), Some(declared)) = (line_head, line, declared) {
+        if super::work_start::logical_target(declared) == super::work_start::logical_target(line) {
+            tips = tips.with_line_head(head);
+        }
+    }
+    tips
 }
 
 /// The anchored base of the task landing that carried `introduced` onto
@@ -1399,6 +2226,28 @@ pub fn pull_request_findings(
     head: &str,
     criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
+    pull_request_findings_judged(repo_root, base, head, criteria, None, None)
+}
+
+/// [`pull_request_findings`] for a run that also names a candidate
+/// authority (the pre-push hook's destination default tip) and the branch
+/// it judges: a clean merge after a review may come from the first-parent
+/// line of the base or of that authority, and in a planning or line range
+/// from the range's own line for the tasks that target `branch`; never from
+/// what a local branch or its configuration says (TSK-220).
+///
+/// # Errors
+///
+/// Returns a message when a revision, the merge-base or a tree cannot be
+/// read.
+pub fn pull_request_findings_judged(
+    repo_root: &std::path::Path,
+    base: &str,
+    head: &str,
+    criteria: &Criteria,
+    authority: Option<&str>,
+    branch: Option<&str>,
+) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -1423,12 +2272,16 @@ pub fn pull_request_findings(
         };
         found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
     }
+    let candidate = authority.map(oid).transpose()?;
+    let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     found.extend(completions_in_range(
         &repo,
         base,
         head,
         Some(target_tip),
         criteria,
+        &run,
+        branch,
     )?);
     Ok(found)
 }
@@ -1468,6 +2321,128 @@ mod tests {
             "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// A task is found by its id or uid in any supported layout; a task
+    /// path that names it but does not parse is unreadable, never absent.
+    #[test]
+    fn presence_finds_a_task_by_identity_in_any_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let uid = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
+        let record = |id: &str| {
+            format!(
+                "---\nid: {id}\nuid: \"{uid}\"  # written once\nstatus: todo\n---\n\n# {id}: work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n"
+            )
+        };
+        // Every YAML form of one value is the same uid.
+        for form in [uid.to_string(), format!("'{uid}'"), format!("\"{uid}\"")] {
+            let text = format!("---\nid: TSK-001\nuid: {form}\nstatus: todo\n---\n");
+            assert_eq!(record_uid(&text).as_deref(), Some(uid), "{form}");
+        }
+        let commit = |path: &str, text: &str| {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+            git(root, &["add", "-A"]);
+            git(root, &["commit", "-qm", "record"]);
+            Repository::open(root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        let legacy = commit(
+            "project-management/epics/EPC-001/tasks/TSK-001.md",
+            &record("TSK-001"),
+        );
+        let repo = Repository::open(root).unwrap();
+        let at = |commit, id, uid, own| presence_at(&repo, commit, id, uid, own);
+        assert!(matches!(
+            at(legacy, "TSK-001", None, "TSK-001.md"),
+            Presence::Present(_)
+        ));
+        // The same uid under another number is the same record.
+        assert!(matches!(
+            at(legacy, "TSK-009", Some(uid), "TSK-009.md"),
+            Presence::Present(_)
+        ));
+        assert!(matches!(
+            at(legacy, "TSK-002", None, "TSK-002.md"),
+            Presence::Absent
+        ));
+        // A broken record that only mentions the task is not the task; one
+        // at the task's own file name is unreadable.
+        let mentions = commit(
+            "project-management/tasks/TSK-099.md",
+            "---\nid: TSK-099\nstatus: [unclosed\n---\nSee TSK-002.\n",
+        );
+        assert!(matches!(
+            at(mentions, "TSK-002", None, "TSK-002.md"),
+            Presence::Absent
+        ));
+        let broken = commit(
+            "project-management/tasks/TSK-002.md",
+            "---\nid: TSK-002\nstatus: [unclosed\n---\n",
+        );
+        assert!(matches!(
+            at(broken, "TSK-002", None, "TSK-002.md"),
+            Presence::Unreadable(_)
+        ));
+        // The reader takes `.md` in any case, so a broken landed `.MD` is
+        // the own file of a task whose current record is `.md` (TSK-220).
+        let upper = commit(
+            "project-management/tasks/TSK-003.MD",
+            "---\nid: TSK-003\nstatus: [unclosed\n---\n",
+        );
+        assert!(matches!(
+            at(upper, "TSK-003", None, "TSK-003.md"),
+            Presence::Unreadable(_)
+        ));
+    }
+
+    /// The record index finds a task whose id and uid are spelled with YAML
+    /// escapes, so no spelling hides a version from the history walks.
+    #[test]
+    fn the_record_index_reads_an_escaped_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        let path = root.join("project-management/tasks/TSK-003.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "---\nid: \"\\x54SK-003\"\nuid: \"\\x36f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d\"\nstatus: todo\nintegration_target: main\n---\n\n# Work\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n",
+        )
+        .unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-qm", "record"]);
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap().id();
+        for (id, uid) in [
+            ("TSK-003", None),
+            (
+                "TSK-777",
+                Some("6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d".to_string()),
+            ),
+        ] {
+            let mut index = RecordIndex::new(&repo, id, uid);
+            let versions = index.versions(head).unwrap();
+            assert_eq!(versions.len(), 1, "{id}");
+            assert_eq!(
+                index
+                    .record(versions[0])
+                    .and_then(|r| r.integration_target.clone()),
+                Some("main".to_string())
+            );
+        }
     }
 
     /// The merge rule takes a landing merge only when its tree is the clean

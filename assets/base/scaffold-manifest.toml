@@ -435,6 +435,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-ship/references/release-integration.md"
+dest = ".claude/skills/cf-ship/references/release-integration.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-ship/references/release-policy.md"
 dest = ".claude/skills/cf-ship/references/release-policy.md"
 ownership = "managed"
@@ -1212,6 +1218,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-ship/references/pr-checks.md"
 dest = ".agents/skills/cf-ship/references/pr-checks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-ship/references/release-integration.md"
+dest = ".agents/skills/cf-ship/references/release-integration.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

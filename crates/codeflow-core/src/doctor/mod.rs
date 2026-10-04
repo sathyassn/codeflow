@@ -23,6 +23,7 @@ use crate::scaffold::sha256_hex;
 use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
+mod grok_hooks;
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -86,6 +87,28 @@ type ExecCommandFn = fn(&str, &[&str]) -> Result<String, String>;
 /// Callback to execute a command with UTF-8 stdin.
 type ExecCommandStdinFn = fn(&str, &[&str], &str) -> Result<String, String>;
 
+/// Callback that judges a hook payload in this process with the exec-guard
+/// handler `codeflow hook exec-guard --contract 3` runs, under the
+/// catastrophic-command floor alone and with nothing else read or recorded.
+type GuardCanaryFn = fn(&str) -> CapturedRun;
+
+/// Callback that says what `codeflow update` would do with a file (relative
+/// to the project root), by update's own steps; `None` when update does not
+/// manage it.
+type UpdatePlanFn = fn(&Path, &str) -> Option<crate::scaffold::update::Decision>;
+
+/// How a run ended: its exit code (`None` when a signal ended it) and what
+/// it printed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapturedRun {
+    /// The exit code, or `None` when a signal ended the process.
+    pub code: Option<i32>,
+    /// Everything the process printed on stdout.
+    pub stdout: String,
+    /// Everything the process printed on stderr.
+    pub stderr: String,
+}
+
 /// Configuration for doctor checks.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -97,6 +120,23 @@ pub struct Options {
     pub exec_command: Option<ExecCommandFn>,
     /// Runs a command with text on stdin and returns its output.
     pub exec_command_stdin: Option<ExecCommandStdinFn>,
+    /// The exec-guard handler, judged in this process under the
+    /// catastrophic-command floor with fixed inputs: the grok guard canary.
+    /// The CLI supplies the handler `codeflow hook exec-guard` runs, with no
+    /// policy, repository, working directory or environment read and no
+    /// refusal recorded. `None` runs no canary. Doctor never executes a
+    /// binary to prove a refusal, since a path can be swapped between
+    /// finding the binary and running it.
+    pub guard_canary: Option<GuardCanaryFn>,
+    /// What `codeflow update` would do with a hook file, by update's own
+    /// steps (the shipped manifest, the installed record and baseline,
+    /// `[scaffold] ignore`, symlinks); the CLI supplies it from its
+    /// embedded assets. `None` says no file is repaired, so each gets the
+    /// hand edit.
+    pub update_plan: Option<UpdatePlanFn>,
+    /// The path the running doctor was started from, only to report
+    /// whether PATH resolves `codeflow` elsewhere; never executed.
+    pub codeflow_exe: Option<PathBuf>,
     /// User-owned `CodeFlow` home holding the personal catalog overlay and the
     /// recorded canary observations. `None` reads neither; the CLI supplies
     /// `CODEFLOW_HOME`. Never derived from `qualification_dir`.
@@ -954,7 +994,11 @@ fn snake_case(name: &str) -> String {
 /// folder is a Warn; a trusted or ungated one is a Note, "configured;
 /// runtime not verified", since a static reading never proves a hook runs
 /// (TSK-147 round 3). Warn, not fail: git hooks + CI bind a Grok session
-/// regardless.
+/// regardless. TSK-215: a `CodeFlow` hook command with a `$` warns, since
+/// grok skips it as an unset template; otherwise a shipped exec-guard
+/// bound where the shell tool hits it judges a canary in this process, and
+/// one that does not refuse warns. Doctor executes nothing for it: a
+/// customised guard is reported unverified.
 fn check_grok(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = Path::new(&opts.project_dir);
@@ -1016,12 +1060,255 @@ fn check_grok(opts: &Options) -> CheckResult {
             )
         }
     };
+    // Trust decides whether grok loads the hooks; these decide whether a
+    // loaded hook can run and refuse. A hook problem outranks trust: it
+    // stays after the folder is trusted.
+    let templated = grok_hooks::templated(root);
+    let (status, message) = if templated.is_empty() {
+        let note = grok_path_note(opts, root);
+        match grok_canary(opts, root) {
+            GrokCanary::Refused => (
+                status,
+                format!("{message}; canary: the shipped shell guard grok runs refused a dangerous command (exit 2 with a deny answer, judged in process by this doctor's exec-guard handler under the catastrophic-command floor, reading no policy, repository or environment; nothing was executed){note}"),
+            ),
+            GrokCanary::NotRun(why) => (status, format!("{message}; guard canary not run ({why}){note}")),
+            GrokCanary::Customised(files) => (
+                status,
+                format!("{message}; the CodeFlow shell guard in {files} differs from the shipped handler (its command, timeout or env), and doctor never runs hook text or environment from the repository, so it is unverified{note}"),
+            ),
+            GrokCanary::NoGuard => {
+                let (remedy, why) = missing_guard_repair(opts, root);
+                (
+                    Status::Warn(remedy),
+                    format!(".grok/hooks present, {presence}: no CodeFlow exec-guard is bound to PreToolUse in the hook files grok reads, so grok runs shell commands unguarded{why} (git hooks and CI enforce regardless)"),
+                )
+            }
+            GrokCanary::NotRefused(why) => (
+                Status::Warn(remedy::DOCTOR_GROK_HOOKS.with(&[("path", ".grok/hooks/codeflow.json")])),
+                format!(".grok/hooks present, {presence}: the shell guard grok runs did not refuse a canary dangerous command ({why}), so it does not protect a grok session (git hooks and CI enforce regardless){note}"),
+            ),
+        }
+    } else {
+        let files = templated.join(", ");
+        // `codeflow update` repairs a file only where its own steps rewrite
+        // it or propose a merge beside it; any other file is the adopter's
+        // to fix by hand, and the finding says why update leaves it.
+        let mut managed: Vec<&str> = Vec::new();
+        let mut unmanaged: Vec<&str> = Vec::new();
+        let mut left = String::new();
+        for path in &templated {
+            use crate::scaffold::update::Decision;
+            let decision = opts.update_plan.and_then(|plan| plan(root, path));
+            let repairs = match &decision {
+                Some(Decision::Rewrite(text)) => !grok_hooks::keeps_templates(text),
+                Some(Decision::ConflictProposal(_)) => true,
+                _ => false,
+            };
+            if repairs {
+                managed.push(path);
+            } else {
+                left.push_str(&update_leaves(
+                    root,
+                    path,
+                    decision.as_ref(),
+                    "a CodeFlow hook command with a `$` stays",
+                ));
+                unmanaged.push(path);
+            }
+        }
+        let pending: Vec<String> = managed
+            .iter()
+            .map(|path| format!("{path}.new"))
+            .filter(|new| root.join(new).is_file())
+            .collect();
+        let pending = if pending.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; `codeflow update` left the edited file as it was and wrote {}, which waits to be resolved",
+                pending.join(", ")
+            )
+        };
+        // Each file gets its own step: update for those it repairs, the
+        // hand edit for the rest, both when both kinds are present.
+        let by_update = remedy::DOCTOR_GROK_HOOKS.with(&[("path", &managed.join(", "))]);
+        let by_hand = remedy::DOCTOR_GROK_UNMANAGED_HOOKS.with(&[("path", &unmanaged.join(", "))]);
+        let remedy = match (managed.is_empty(), unmanaged.is_empty()) {
+            (false, false) => by_update.and(&by_hand),
+            (false, true) => by_update,
+            (true, _) => by_hand,
+        };
+        (
+            Status::Warn(remedy),
+            format!(".grok/hooks present, {presence}: grok skips the CodeFlow hook commands in {files}, since each carries a `$` grok reads as an unset environment variable, so those CodeFlow hooks do not run in a grok session{pending}{left} (git hooks and CI enforce regardless)"),
+        )
+    };
     CheckResult {
         name: "grok".into(),
         status,
         message,
         duration: start.elapsed(),
     }
+}
+
+/// Why `codeflow update` leaves a hook file grok reads unrepaired, as a
+/// `; ...` clause, by its own decision for the file; `consequence` says
+/// what stays wrong where update merges the project's edit.
+fn update_leaves(
+    root: &Path,
+    path: &str,
+    decision: Option<&crate::scaffold::update::Decision>,
+    consequence: &str,
+) -> String {
+    use crate::scaffold::update::Decision;
+    match decision {
+        Some(Decision::KeptUserModification) => {
+            let baseline = format!(".codeflow/.baseline/{path}");
+            let shipped = if root.join(&baseline).is_file() {
+                format!(", and {baseline} holds that shipped version")
+            } else {
+                String::new()
+            };
+            format!("; `codeflow update` leaves your edit to {path} as it is and writes no `.new`, since the shipped version has not changed since it was last installed{shipped}")
+        }
+        Some(Decision::Skipped(reason)) => format!("; `codeflow update` skips {path}: {reason}"),
+        Some(Decision::Rewrite(_)) => {
+            format!("; `codeflow update` merges {path} and keeps your edit, so {consequence}")
+        }
+        Some(Decision::ConflictProposal(_)) => format!(
+            "; the merge `codeflow update` proposes for {path} keeps your edit, so {consequence}"
+        ),
+        None if root.join(path).exists() => {
+            format!("; `codeflow update` does not manage {path}")
+        }
+        Some(Decision::Current) | None => String::new(),
+    }
+}
+
+/// The step that binds the shell guard again, with why update leaves each
+/// file: `codeflow update` where its own steps would bind a shipped guard
+/// in a file it manages (a rewrite, or a `.new` proposal holding it), else
+/// the hand edit that adds the shipped guard group, which the clause
+/// quotes.
+fn missing_guard_repair(opts: &Options, root: &Path) -> (remedy::Remedy, String) {
+    use crate::scaffold::update::Decision;
+    let mut why = String::new();
+    for path in grok_hooks::GUARD_FILES {
+        let decision = opts.update_plan.and_then(|plan| plan(root, path));
+        let restores = match &decision {
+            Some(Decision::Rewrite(text)) => grok_hooks::binds_shipped_guard(text),
+            Some(Decision::ConflictProposal(text)) => grok_hooks::proposes_shipped_guard(text),
+            _ => false,
+        };
+        if restores {
+            return (
+                remedy::DOCTOR_GROK_HOOKS.with(&[("path", path)]),
+                String::new(),
+            );
+        }
+        why.push_str(&update_leaves(
+            root,
+            path,
+            decision.as_ref(),
+            "the shell guard stays out of it",
+        ));
+    }
+    let path = grok_hooks::GUARD_FILES[0];
+    let group = grok_hooks::shipped_guard_group();
+    (
+        remedy::DOCTOR_GROK_MISSING_GUARD.with(&[("path", path)]),
+        format!("{why}; the shipped guard group is `{group}`"),
+    )
+}
+
+/// The outcome of checking the shell guard grok would run.
+enum GrokCanary {
+    /// The shipped guard refused the canary with the blocking contract.
+    Refused,
+    /// The shipped guard did not refuse; why, in one line.
+    NotRefused(String),
+    /// No `CodeFlow` exec-guard is bound where grok's shell tool hits it.
+    NoGuard,
+    /// Only customised exec-guard commands are bound, in these files;
+    /// doctor never runs repository hook text, so they stay unverified.
+    Customised(String),
+    /// Doctor could not run the canary here; why.
+    NotRun(String),
+}
+
+/// Check the exec-guard grok runs before a shell tool call without running
+/// anything the repository controls. When a shipped exec-guard handler is
+/// bound where the shell tool hits it, doctor judges a fixed canary payload
+/// with the handler `codeflow hook exec-guard --contract 3` runs, in this
+/// process and under the catastrophic-command floor alone, which no policy
+/// relaxes. No policy file, repository, working directory or environment is
+/// read and no refusal is recorded, so the judgement is a function of the
+/// fixed payload and runs to completion with no thread or timeout. No
+/// binary is executed, so no file swapped in on disk can answer for it. It
+/// counts as refused only on grok's blocking contract: exit 2, a reason on
+/// stderr and a JSON deny answer on stdout. It does not start grok.
+fn grok_canary(opts: &Options, root: &Path) -> GrokCanary {
+    match grok_hooks::shell_guard(root) {
+        grok_hooks::ShellGuard::Missing => return GrokCanary::NoGuard,
+        grok_hooks::ShellGuard::Customised(files) => {
+            return GrokCanary::Customised(files.join(", "))
+        }
+        grok_hooks::ShellGuard::Shipped => {}
+    }
+    let Some(canary) = opts.guard_canary else {
+        return GrokCanary::NotRun("this doctor carries no exec-guard to judge it with".into());
+    };
+    let run = canary(grok_hooks::CANARY_PAYLOAD);
+    let reason = run
+        .stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty());
+    let deny = grok_hooks::is_deny_answer(&run.stdout);
+    match (run.code, reason, deny) {
+        (Some(2), Some(_), true) => GrokCanary::Refused,
+        (Some(0), _, false) => GrokCanary::NotRefused("it allowed the command".into()),
+        (Some(2), Some(_), false) => {
+            GrokCanary::NotRefused("it exited 2 without the JSON deny answer grok reads".into())
+        }
+        (code, reason, _) => {
+            let ended = code.map_or_else(
+                || "a signal ended it".to_string(),
+                |code| format!("exit {code}"),
+            );
+            GrokCanary::NotRefused(match reason {
+                Some(reason) => format!("{ended}: {reason}"),
+                None => format!("{ended} with no reason on stderr"),
+            })
+        }
+    }
+}
+
+/// Where the PATH doctor runs with resolves `codeflow`, as information
+/// doctor does not verify and never runs: grok runs the shipped hooks'
+/// `codeflow` through its own PATH, which may differ.
+fn grok_path_note(opts: &Options, root: &Path) -> String {
+    let path = opts.env("PATH").unwrap_or_default();
+    let Some(found) = grok_hooks::path_codeflow(std::ffi::OsStr::new(&path), root) else {
+        return "; PATH resolves no codeflow, so a grok started with this PATH would block every shell command as a missing binary (unverified)".into();
+    };
+    let inside = if std::fs::canonicalize(root).is_ok_and(|root| found.starts_with(root)) {
+        ", inside this repository".to_string()
+    } else {
+        String::new()
+    };
+    let other = opts
+        .codeflow_exe
+        .as_ref()
+        .and_then(|exe| std::fs::canonicalize(exe).ok())
+        .filter(|own| *own != found)
+        .map(|own| format!(", not this doctor binary {}", own.display()))
+        .unwrap_or_default();
+    let flags = format!("{inside}{other}");
+    format!(
+        "; PATH resolves codeflow to {}{flags} (unverified; doctor does not run it)",
+        found.display()
+    )
 }
 
 /// Grok's decision for a project folder.
@@ -1487,18 +1774,50 @@ struct ProbeCapture {
     bytes: Vec<u8>,
 }
 
+/// Run `cmd` bounded by `timeout`: its stdout when it succeeds, else its
+/// stderr.
 fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+    let run = run_captured(cmd, args, timeout, None, None)?;
+    if run.code == Some(0) {
+        Ok(run.stdout)
+    } else {
+        Err(run.stderr)
+    }
+}
+
+/// Run `cmd`, killing its process tree after `timeout`, and capture how it
+/// ended. With `stdin` the child reads that text (otherwise it inherits
+/// doctor's stdin); with `cwd` it runs there. `Err` means it did not start
+/// or did not finish in time.
+fn run_captured(
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+    stdin: Option<&str>,
+    cwd: Option<&Path>,
+) -> Result<CapturedRun, String> {
     let mut command = crate::git::process(cmd);
     command
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if stdin.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        // A child that exits without reading closes the pipe; its exit
+        // status, not this write, is the result.
+        let _ = pipe.write_all(text.as_bytes());
+    }
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
     let started = Instant::now();
@@ -1529,11 +1848,11 @@ fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<St
             error
         }
     })?;
-    if status.success() {
-        Ok(String::from_utf8_lossy(&stdout.bytes).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&stderr.bytes).to_string())
-    }
+    Ok(CapturedRun {
+        code: status.code(),
+        stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
+        stderr: String::from_utf8_lossy(&stderr.bytes).to_string(),
+    })
 }
 
 fn probe_timeout_message(timeout: Duration) -> String {
@@ -3473,7 +3792,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("project");
         std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
-        std::fs::write(project.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        std::fs::write(
+            project.join(".grok/hooks/codeflow.json"),
+            SHIPPED_GROK_HOOKS,
+        )
+        .unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(home.join(".grok")).unwrap();
         let root = toml_path(&project);
@@ -3484,7 +3807,264 @@ mod tests {
         let mut opts = test_opts();
         opts.project_dir = project.to_string_lossy().into_owned();
         opts.harness_home = Some(home.clone());
+        // An exec-guard that refuses the canary with grok's blocking
+        // contract, and an update that repairs the shipped grok hook file,
+        // unless a test says otherwise.
+        opts.guard_canary = Some(|_| canary_refused());
+        opts.update_plan = Some(|_, path| {
+            (path == ".grok/hooks/codeflow.json")
+                .then(|| crate::scaffold::update::Decision::Rewrite(SHIPPED_GROK_HOOKS.to_string()))
+        });
         (dir, opts, home)
+    }
+
+    const SHIPPED_GROK_HOOKS: &str = include_str!("../../../../assets/base/grok/hooks.json");
+    const TRUSTED: &str = "[folders.\"<root>\"]\ntrusted = true\ndecided_at = 1\n";
+
+    /// What the real exec-guard answers to the canary payload: exit 2, the
+    /// refusal on stderr and the deny answer on stdout.
+    fn canary_refused() -> CapturedRun {
+        CapturedRun {
+            code: Some(2),
+            stdout: "{\"decision\":\"deny\",\"reason\":\"codeflow exec-guard: BLOCKED\"}\n".into(),
+            stderr: "policy source: working copy\ncodeflow exec-guard: BLOCKED — policy rule security.dangerous_commands (block)\n".into(),
+        }
+    }
+
+    /// TSK-215 AC-3: with the shipped guard bound, doctor judges the fixed
+    /// canary payload with the exec-guard in process (PR 35 review round 3,
+    /// finding 1), the payload carrying no working directory (round 4,
+    /// finding 1); it never executes a binary or looks `codeflow` up to run
+    /// it, and a refusal is reported beside the trust reading.
+    #[test]
+    fn a_grok_guard_that_refuses_the_canary_is_reported() {
+        let (_dir, mut opts, _) = grok_project(Some(TRUSTED));
+        opts.look_path = Some(|name| {
+            assert_ne!(
+                name, "codeflow",
+                "the canary never looks codeflow up on PATH"
+            );
+            Err("not found".into())
+        });
+        opts.exec_command = Some(|cmd, _| panic!("the canary executes nothing: {cmd}"));
+        opts.exec_command_stdin = Some(|cmd, _, _| panic!("the canary executes nothing: {cmd}"));
+        opts.guard_canary = Some(|payload| {
+            assert_eq!(payload, grok_hooks::CANARY_PAYLOAD);
+            canary_refused()
+        });
+        let r = check_grok(&opts);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
+        assert!(
+            r.message
+                .contains("canary: the shipped shell guard grok runs refused a dangerous command"),
+            "{}",
+            r.message
+        );
+        assert!(r.message.contains("judged in process"), "{}", r.message);
+    }
+
+    /// TSK-215 AC-3 and PR 35 review finding 4: a guard that allows the
+    /// canary or answers without grok's blocking contract (exit 2, a reason
+    /// and a deny answer) warns with the update step.
+    #[test]
+    fn a_grok_guard_that_does_not_refuse_the_canary_warns() {
+        type Judge = fn(&str) -> CapturedRun;
+        let allows: Judge = |_| CapturedRun {
+            code: Some(0),
+            ..CapturedRun::default()
+        };
+        let exits_1: Judge = |_| CapturedRun {
+            code: Some(1),
+            ..canary_refused()
+        };
+        let no_deny: Judge = |_| CapturedRun {
+            stdout: String::new(),
+            ..canary_refused()
+        };
+        let silent: Judge = |_| CapturedRun {
+            stderr: String::new(),
+            ..canary_refused()
+        };
+        for (judge, why) in [
+            (allows, "it allowed the command"),
+            (exits_1, "exit 1: policy source: working copy"),
+            (no_deny, "exited 2 without the JSON deny answer"),
+            (silent, "exit 2 with no reason on stderr"),
+        ] {
+            let (_dir, mut opts, _) = grok_project(Some(TRUSTED));
+            opts.guard_canary = Some(judge);
+            let r = check_grok(&opts);
+            let Status::Warn(remedy) = &r.status else {
+                panic!("{:?} {}", r.status, r.message);
+            };
+            assert!(remedy.contains("`codeflow update`"), "{remedy}");
+            assert!(
+                r.message.contains("did not refuse a canary"),
+                "{}",
+                r.message
+            );
+            assert!(r.message.contains(why), "{why}: {}", r.message);
+        }
+
+        // Without an in-process exec-guard doctor runs no canary at all,
+        // and a PATH with no codeflow is reported, unverified.
+        let (_dir, mut opts, _) = grok_project(Some(TRUSTED));
+        opts.guard_canary = None;
+        let r = check_grok(&opts);
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
+        assert!(
+            r.message.contains(
+                "guard canary not run (this doctor carries no exec-guard to judge it with)"
+            ),
+            "{}",
+            r.message
+        );
+        assert!(
+            r.message.contains("PATH resolves no codeflow"),
+            "{}",
+            r.message
+        );
+    }
+
+    /// TSK-215 AC-3 (issue 29): a `$` in a `CodeFlow` hook command grok reads
+    /// warns and names the file, even in a trusted folder, and no canary
+    /// runs.
+    #[test]
+    fn a_grok_hook_command_with_a_dollar_warns_and_names_the_file() {
+        let (dir, mut opts, _) = grok_project(Some(TRUSTED));
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            project.join(".claude/settings.json"),
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"codeflow hook git-guard --contract 3; codeflow_status=$?; exit 2"}]}]}}"#,
+        )
+        .unwrap();
+        opts.guard_canary = Some(|_| panic!("no canary runs while a hook is skipped"));
+        let r = check_grok(&opts);
+        let Status::Warn(remedy) = &r.status else {
+            panic!("{:?} {}", r.status, r.message);
+        };
+        assert!(remedy.contains(".claude/settings.json"), "{remedy}");
+        assert!(
+            r.message
+                .contains("grok skips the CodeFlow hook commands in .claude/settings.json"),
+            "{}",
+            r.message
+        );
+    }
+
+    /// PR 35 review rounds 2 and 3, finding 4 and 2: a hook file update
+    /// does not repair, by update's own rules, gets the hand edit; one it
+    /// repairs keeps the update step; and without those rules every file
+    /// gets the hand edit. The rules themselves are proven against the real
+    /// update in `remedy_clearing`.
+    #[test]
+    fn an_unmanaged_grok_hook_file_gets_the_hand_edit() {
+        let (dir, mut opts, _) = grok_project(Some(TRUSTED));
+        let project = dir.path().join("project");
+        let stale = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"codeflow hook git-guard --contract 3; codeflow_status=$?; exit 2"}]}]}}"#;
+        std::fs::write(project.join(".grok/hooks/custom.json"), stale).unwrap();
+        opts.guard_canary = Some(|_| panic!("no canary runs while a hook is skipped"));
+        let r = check_grok(&opts);
+        let Status::Warn(remedy) = &r.status else {
+            panic!("{:?} {}", r.status, r.message);
+        };
+        assert!(
+            remedy.contains("`codeflow update` does not rewrite .grok/hooks/custom.json"),
+            "{remedy}"
+        );
+        assert!(!remedy.contains("run `codeflow update`"), "{remedy}");
+
+        std::fs::write(project.join(".grok/hooks/codeflow.json"), stale).unwrap();
+        std::fs::remove_file(project.join(".grok/hooks/custom.json")).unwrap();
+        let r = check_grok(&opts);
+        let Status::Warn(remedy) = &r.status else {
+            panic!("{:?} {}", r.status, r.message);
+        };
+        assert!(remedy.contains("run `codeflow update`"), "{remedy}");
+
+        opts.update_plan = None;
+        let r = check_grok(&opts);
+        let Status::Warn(remedy) = &r.status else {
+            panic!("{:?} {}", r.status, r.message);
+        };
+        assert!(
+            remedy.contains("`codeflow update` does not rewrite .grok/hooks/codeflow.json"),
+            "{remedy}"
+        );
+    }
+
+    /// PR 35 review finding 1: doctor never runs hook text from the
+    /// repository. A customised exec-guard command that would also touch a
+    /// file outside the scratch directory leaves no marker, and the guard is
+    /// reported as unverified. Nothing here is mocked.
+    #[test]
+    fn doctor_never_runs_repository_hook_text() {
+        let (dir, mut opts, _) = grok_project(Some(TRUSTED));
+        opts.look_path = None;
+        opts.guard_canary = None;
+        let marker = dir.path().join("marker");
+        let hooks = serde_json::json!({"hooks": {"PreToolUse": [{
+            "matcher": "^(Bash|PowerShell)$",
+            "hooks": [{"type": "command", "command": format!(
+                "codeflow hook exec-guard --contract 3; touch {}", marker.display()
+            )}]
+        }]}});
+        std::fs::write(
+            dir.path().join("project/.grok/hooks/codeflow.json"),
+            hooks.to_string(),
+        )
+        .unwrap();
+        let r = check_grok(&opts);
+        assert!(!marker.exists(), "doctor ran repository hook text");
+        assert!(is_configured(&r), "{:?} {}", r.status, r.message);
+        assert!(
+            r.message.contains(
+                "the CodeFlow shell guard in .grok/hooks/codeflow.json differs from the shipped handler"
+            ),
+            "{}",
+            r.message
+        );
+        assert!(r.message.contains("unverified"), "{}", r.message);
+    }
+
+    /// PR 35 review finding 4: an exec-guard bound under a matcher grok's
+    /// shell tool never hits, or by a handler that is not a command, is not
+    /// the shell guard grok runs.
+    #[test]
+    fn a_guard_under_a_matcher_the_shell_tool_never_hits_is_not_counted() {
+        for (from, to) in [
+            ("^(Bash|PowerShell)$", "^Read$"),
+            (r#""type": "command""#, r#""type": "prompt""#),
+        ] {
+            let (dir, mut opts, _) = grok_project(Some(TRUSTED));
+            opts.guard_canary = Some(|_| panic!("no canary runs without a guard"));
+            let path = dir.path().join("project/.grok/hooks/codeflow.json");
+            let text = std::fs::read_to_string(&path).unwrap().replace(from, to);
+            std::fs::write(&path, text).unwrap();
+            let r = check_grok(&opts);
+            assert!(r.status.is_warn(), "{:?} {}", r.status, r.message);
+            assert!(
+                r.message.contains("no CodeFlow exec-guard is bound"),
+                "{}",
+                r.message
+            );
+        }
+    }
+
+    /// TSK-215 AC-3: without an exec-guard on `PreToolUse` grok runs shell
+    /// commands unguarded.
+    #[test]
+    fn a_grok_project_without_a_shell_guard() {
+        let (dir, opts, _) = grok_project(Some(TRUSTED));
+        std::fs::write(dir.path().join("project/.grok/hooks/codeflow.json"), "{}").unwrap();
+        let r = check_grok(&opts);
+        assert!(r.status.is_warn(), "{:?} {}", r.status, r.message);
+        assert!(
+            r.message.contains("no CodeFlow exec-guard is bound"),
+            "{}",
+            r.message
+        );
     }
 
     #[test]
@@ -3717,12 +4297,13 @@ mod tests {
             ],
         );
         std::fs::create_dir_all(linked.join(".grok/hooks")).unwrap();
-        std::fs::write(linked.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        std::fs::write(linked.join(".grok/hooks/codeflow.json"), SHIPPED_GROK_HOOKS).unwrap();
         let home = dir.path().join("home");
         std::fs::create_dir_all(home.join(".grok")).unwrap();
         let mut opts = test_opts();
         opts.project_dir = linked.to_string_lossy().into_owned();
         opts.harness_home = Some(home.clone());
+        opts.guard_canary = Some(|_| canary_refused());
         let grant = |folder: &Path| {
             std::fs::write(
                 home.join(".grok/trusted_folders.toml"),
@@ -3745,7 +4326,11 @@ mod tests {
         let (dir, mut opts, home) = grok_project(None);
         let managed = home.join(".grok/worktrees/repo/wt");
         std::fs::create_dir_all(managed.join(".grok/hooks")).unwrap();
-        std::fs::write(managed.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        std::fs::write(
+            managed.join(".grok/hooks/codeflow.json"),
+            SHIPPED_GROK_HOOKS,
+        )
+        .unwrap();
         std::fs::write(
             home.join(".grok/trusted_folders.toml"),
             format!("[folders.\"{}\"]\ntrusted = true\n", toml_path(&managed)),

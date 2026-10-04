@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use codeflow_core::doctor::{run_check, CheckResult, Options, Status};
+use codeflow_core::doctor::{run_check, CapturedRun, CheckResult, Options, Status};
 
 const CODEX_HASH: &str = "sha256:42d1067865f6352ae0975d92a473334f58d7748b8afb7a27e36b7dc834d204d3";
 const CODEX_HOOK: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"^(Bash|PowerShell)$","hooks":[{"type":"command","command":"codeflow hook git-guard","timeout":10}]}]}}"#;
@@ -25,6 +25,13 @@ fn opts(project: &Path, home: &Path) -> Options {
         harness_home: Some(home.to_path_buf()),
         look_path: Some(|_| Ok("synthetic-harness".into())),
         env_var: Some(|_| None),
+        // The grok guard canary (TSK-215) answers as a refusing guard; this
+        // file probes trust, not the guard.
+        guard_canary: Some(|_| CapturedRun {
+            code: Some(2),
+            stdout: r#"{"decision":"deny","reason":"codeflow exec-guard: BLOCKED"}"#.into(),
+            stderr: "codeflow exec-guard: BLOCKED".into(),
+        }),
         ..Options::default()
     }
 }
@@ -85,7 +92,11 @@ fn codex_case(base: &Path, label: &str) -> (PathBuf, PathBuf) {
 fn grok_case(project: &Path, home: &Path) {
     fs::create_dir_all(project.join(".grok/hooks")).unwrap();
     fs::create_dir_all(home.join(".grok")).unwrap();
-    fs::write(project.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+    fs::write(
+        project.join(".grok/hooks/codeflow.json"),
+        include_str!("../../../assets/base/grok/hooks.json"),
+    )
+    .unwrap();
     for name in ["config.toml", "managed_config.toml", "trusted_folders.toml"] {
         let _ = fs::remove_file(home.join(".grok").join(name));
     }

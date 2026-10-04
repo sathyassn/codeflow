@@ -87,6 +87,13 @@ impl Remedy {
     pub(crate) fn sanctioned(text: &str) -> Self {
         Self(text.to_string())
     }
+
+    /// This remedy and then `other`, for one finding whose parts clear in
+    /// different ways; each part keeps its own catalogued step.
+    #[must_use]
+    pub fn and(self, other: &Remedy) -> Self {
+        Self(format!("{}. Also, {}", self.0, other.0))
+    }
 }
 
 impl serde::Serialize for Remedy {
@@ -201,6 +208,9 @@ catalog! {
     /// A standalone task delivered by several pull requests.
     STANDALONE_SPLIT = Step::Edit("{path}"),
         "give {path} an `epic_id`: work that takes several pull requests belongs to an epic (SPC-013 R-66)";
+    /// An open task that names no deliverables (sathyassn/codeflow#40).
+    TASK_DELIVERABLES = Step::Edit("{path}"),
+        "in {path}, list each output and its home under `## Deliverables` as `- <output>: <path>`, or name the path the task changes in its Description; a home not known yet is marked provisional with what decides it";
     /// A documentation layer the project does not have.
     DOCS_LAYER_ABSENT = Step::Codeflow("codeflow update"),
         "run `codeflow update`, which restores {path} at this project's tier";
@@ -387,6 +397,9 @@ catalog! {
     /// A PR body over the presentation guidelines.
     PR_PRESENTATION = Step::Codeflow("codeflow ci"),
         "keep the body concise and link detailed evidence; retain necessary verification; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A Summary that is not one prose lead, then a list or table.
+    PR_SUMMARY_SHAPE = Step::Codeflow("codeflow ci"),
+        "open the Summary with one short prose paragraph that anchors the reader, put the details after it as `-` bullets or a table, and end with at most one closing paragraph (`.codeflow/rules/writing.md` \"Summaries\"); `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A Release impact section that does not declare the release.
     PR_RELEASE_IMPACT = Step::Codeflow("codeflow ci"),
         "declare Impact, Breaking, Rationale and Migration under Release impact using the project's breaking level; `codeflow ci --pr-body-file <body.md>` checks the new text";
@@ -506,6 +519,21 @@ catalog! {
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
+    /// Grok hook commands that grok skips in a file `codeflow update`
+    /// manages, or a grok shell guard that does not refuse the doctor
+    /// canary.
+    DOCTOR_GROK_HOOKS = Step::Codeflow("codeflow update"),
+        "install the current CodeFlow binary when `codeflow doctor --check hooks` reports it missing or older, then run `codeflow update` so the CodeFlow hook commands in {path} match the shipped ones, which carry no `$`. It keeps your own edits: Claude settings by merging their hook entries, other files by a 3-way merge that applies on its own when your edit does not overlap the shipped change. Where it overlaps, update leaves the file as it is and writes a `.new` file beside it holding the merge: resolve its conflict markers in favour of the shipped CodeFlow hook commands, keeping your own changes, replace your file with it and delete the `.new` file. Then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
+    /// Stale `CodeFlow` hook commands in a hook file grok reads that
+    /// `codeflow update` does not rewrite: one it does not manage, such as
+    /// `.claude/settings.local.json`, one it skips, or an edit it keeps.
+    DOCTOR_GROK_UNMANAGED_HOOKS = Step::Edit("{path}"),
+        "`codeflow update` does not rewrite {path}: in it, replace each CodeFlow hook command that carries a `$` with the matching command from the shipped hook file (.grok/hooks/codeflow.json, or .claude/settings.json for Claude settings), or remove it where that file already runs that hook; then `codeflow doctor --check grok` confirms it, and a dangerous shell command in a live grok session should be refused";
+    /// No `CodeFlow` exec-guard is bound where grok's shell tool hits it,
+    /// and `codeflow update` would not bind it again in any file it
+    /// manages.
+    DOCTOR_GROK_MISSING_GUARD = Step::Edit("{path}"),
+        "`codeflow update` does not restore the shell guard in {path}: in it, add the shipped guard group this finding quotes to the `PreToolUse` list under `hooks`, exactly as quoted, creating the file with that list if it does not exist; then `codeflow doctor --check grok` reruns the guard canary, and a dangerous shell command in a live grok session should be refused";
     /// A network doctor cannot reach.
     DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
         "restore network access to github.com, then `codeflow doctor --check network` confirms it";

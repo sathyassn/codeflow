@@ -30,7 +30,10 @@ when a single outcome becomes one standalone task.
    approved. Still ask every *live* operator-owned question the brief and the
    plan do not answer, all unblocked ones in one round. Check the request
    against `product.md` non-goals; surface conflicts instead of planning
-   around them.
+   around them. Before materializing records, check that every task names
+   its deliverables and their homes (checklist item 6) against the project's
+   structure authority where one exists, and that an epic names the homes
+   its tasks write.
 4. Use the exact approved plan; never add scope or design silently. In a
    recorded solo degradation, perform the same clarity and evidence work and
    name the missing cross-vendor assurance.

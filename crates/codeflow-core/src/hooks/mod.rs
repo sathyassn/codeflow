@@ -221,6 +221,7 @@ pub const LEVEL_KEYS: &[&str] = &[
     "policy_characters",
     "pr_sections",
     "pr_release_impact",
+    "pr_summary",
     "work_records",
     "work_planning",
     "branch_naming",
