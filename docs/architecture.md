@@ -161,16 +161,20 @@ profile and Claude's credential mask, is in
 Names, paths and process text that the operating system or git supplies are
 bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
 
-- **Compare bytes, or decode lossily, where the value is only compared or
-  shown.** A process argument, an index path, a listing line or a config value
-  is read with `String::from_utf8_lossy`, or compared as bytes, and never
-  turns a legal input into a failure. A lossy decode is safe for a match
-  because U+FFFD is part of no name the check looks for.
-- **Fail only where a wrong value would change a security or identity
-  decision**, and say why in a comment at that site, starting "OS text rule"
-  or "Kept strict". Refuse and do not skip: a name the check cannot read is
-  work or authority it cannot prove (a policy source ref, a remote name, a
-  worktree name, a state directory written into a hook command).
+- **Read it as bytes or lossily where the value is only compared or shown.** A
+  process argument, an index path, a listing line or a config value is
+  compared as bytes or read with `String::from_utf8_lossy`, and never turns a
+  legal input into a failure.
+- **Never decode a value that is an identity.** A lossy spelling can equal a
+  different valid name (an invalid byte and a real U+FFFD both read as
+  U+FFFD), so a process argument, a config key or a snapshot key is compared
+  as bytes, or keyed so that no valid name can equal it, or dropped from the
+  comparison. Where a decode cannot be exact, the read refuses.
+- **Fail where a wrong value would change a security or identity decision**,
+  and say why in a comment at that site, starting "OS text rule" or "Kept
+  strict". Refuse and do not skip: a name the check cannot read is work or
+  authority it cannot prove (a policy source ref, a remote name, a worktree
+  name, a state directory written into a hook command).
 - **A name that can only match a valid pattern is skipped.** A directory entry
   tested against a UUID or a `.tmp` suffix cannot match when it is not valid
   UTF-8, so the scan moves on.
