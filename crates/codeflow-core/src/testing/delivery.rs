@@ -69,9 +69,11 @@ pub fn revision(root: &Path) -> Option<String> {
 /// OS text rule (issue 79, `docs/architecture.md`): a path in the index is
 /// bytes, and the gate only reads it and hashes what it names, so a name that
 /// is not valid UTF-8 must not stop `codeflow test`. The file system path
-/// keeps the exact bytes where the platform allows it. The key is the lossy
-/// text and, for a name that is not valid UTF-8, the hex of its bytes, so two
-/// different names never share a key and hide a change of one of them.
+/// keeps the exact bytes where the platform allows it. The key is the name
+/// itself when it is valid UTF-8. Otherwise it is the lossy text, a NUL and the
+/// hex of the bytes: a path never holds a NUL, so no valid name can equal that
+/// key, and two different invalid names differ in their hex, so one name never
+/// hides a change of another in the snapshot.
 fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
     let key = if let Ok(name) = std::str::from_utf8(raw) {
         name.to_string()
@@ -80,7 +82,7 @@ fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
         for byte in raw {
             let _ = write!(hex, "{byte:02x}");
         }
-        format!("{} [bytes {hex}]", String::from_utf8_lossy(raw))
+        format!("{}\0{hex}", String::from_utf8_lossy(raw))
     };
     #[cfg(unix)]
     let path = {
@@ -515,7 +517,7 @@ mod tests {
             .keys()
             .find(|key| key.starts_with("caf"))
             .expect("the non-UTF-8 path is in the snapshot");
-        assert!(key.ends_with("[bytes 636166e92e747874]"), "{key}");
+        assert!(key.ends_with("\x00636166e92e747874"), "{key:?}");
         // A second snapshot of the same tree is equal, so the gate sees no
         // generation change for a name it cannot spell.
         assert_eq!(snapshot, tracked(dir.path()).unwrap());
@@ -528,6 +530,38 @@ mod tests {
         let (second, _) = tracked_entry(root, b"a\xff");
         assert_ne!(first, second);
         assert_eq!(tracked_entry(root, b"plain.txt").0, "plain.txt");
+        // Review finding: a valid name that spells the lossy text and the
+        // hex of an invalid one must not share its key.
+        let (valid, _) = tracked_entry(root, "a\u{fffd} [bytes 61ff]".as_bytes());
+        assert_ne!(second, valid);
+    }
+
+    /// Review finding: both names in one index must stay visible in the
+    /// snapshot, so a change to one of them is a generation change.
+    #[test]
+    fn a_valid_name_that_spells_an_invalid_ones_key_keeps_its_own_entry() {
+        let dir = repository_with_a_non_utf8_path();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        let id = repo.blob(b"other").unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100_644,
+                uid: 0,
+                gid: 0,
+                file_size: 5,
+                id,
+                flags: 0,
+                flags_extended: 0,
+                path: "caf\u{fffd} [bytes 636166e92e747874]".as_bytes().to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        assert_eq!(tracked(dir.path()).unwrap().len(), 3);
     }
 
     /// Kept strict on purpose: git output that is not valid UTF-8 is `None`,
