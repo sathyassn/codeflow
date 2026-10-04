@@ -107,7 +107,7 @@ impl ProjectState {
             }
             None => ours,
         };
-        let text = toml::to_string_pretty(&merged).map_err(|e| ScaffoldError::InvalidState {
+        let text = state_text(&merged).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
@@ -361,6 +361,78 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
         let _ = std::fs::remove_file(&temp_path);
     }
     result
+}
+
+/// Serializes a project state as `toml::to_string_pretty` does, with every
+/// string kept on one line. The managed CI installers read the state line
+/// by line and refuse a multi-line string, which could fake a digest table
+/// (TSK-225); the encoder writes a triple-quoted string for a value with a
+/// line break, with both quote kinds, or with a run of three quotes, so each
+/// such value is written instead as a single-line basic string with escapes.
+pub(crate) fn state_text(table: &toml::Table) -> Result<String, toml::ser::Error> {
+    fn needs_one_line(text: &str) -> bool {
+        text.contains(['\n', '\r'])
+            || (text.contains('"') && text.contains('\''))
+            || text.contains("\"\"\"")
+            || text.contains("'''")
+    }
+    fn hold(value: &mut toml::Value, marker: &str, held: &mut Vec<String>) {
+        match value {
+            toml::Value::String(text) if needs_one_line(text) => {
+                held.push(std::mem::replace(text, format!("{marker}{}", held.len())));
+            }
+            toml::Value::Array(items) => {
+                for item in items {
+                    hold(item, marker, held);
+                }
+            }
+            toml::Value::Table(table) => {
+                for (_, item) in table.iter_mut() {
+                    hold(item, marker, held);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// A basic string on one line: quotes, backslashes, line breaks and
+    /// other control characters escaped, and `'` too, so no run of three
+    /// quotes of either kind appears.
+    fn basic(text: &str) -> String {
+        let mut out = String::from("\"");
+        for c in text.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\'' => out.push_str("\\u0027"),
+                c if c.is_control() => {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "\\u{:04X}", u32::from(c));
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+    let plain = toml::to_string_pretty(table)?;
+    let mut marker = String::from("codeflow-one-line-");
+    while plain.contains(&marker) {
+        marker.push('x');
+    }
+    let mut copy = toml::Value::Table(table.clone());
+    let mut held = Vec::new();
+    hold(&mut copy, &marker, &mut held);
+    if held.is_empty() {
+        return Ok(plain);
+    }
+    let mut text = toml::to_string_pretty(&copy)?;
+    for (at, value) in held.iter().enumerate() {
+        text = text.replace(&format!("\"{marker}{at}\""), &basic(value));
+    }
+    Ok(text)
 }
 
 /// Writes a state record (a baseline copy, the manifest, `project.toml`)
@@ -1062,6 +1134,45 @@ pub(crate) fn set_exec(path: &Path, exec: bool) -> Result<(), ScaffoldError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TSK-225: the state stays readable by the CI installers' line reader
+    /// whatever its values hold, and means the same as before.
+    #[test]
+    fn state_text_keeps_every_string_on_one_line() {
+        let digest = "a".repeat(64);
+        let source = format!(
+            "scaffold_version = \"1.2.3\"\nnote = \"first line\\nsecond line\"\nboth = \"he said \\\"it's\\\"\"\nruns = \"a'''b\\\"\\\"\\\"c\"\ncontrol = \"a\\u0001b\\tc\"\nplain = \"x\"\n\n[nested]\nlines = [\"l1\\nl2\", \"ok\"]\n\n[scaffold_sha256]\nversion = \"1.2.3\"\naarch64-apple-darwin = \"{digest}\"\nx86_64-apple-darwin = \"{digest}\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"
+        );
+        let table: toml::Table = toml::from_str(&source).unwrap();
+        // The plain encoder writes triple quotes for these values.
+        let pretty = toml::to_string_pretty(&table).unwrap();
+        assert!(
+            pretty.contains("\"\"\"") || pretty.contains("'''"),
+            "{pretty}"
+        );
+
+        let text = state_text(&table).unwrap();
+        assert!(!text.contains("\"\"\"") && !text.contains("'''"), "{text}");
+        assert_eq!(
+            toml::from_str::<toml::Table>(&text).unwrap(),
+            table,
+            "{text}"
+        );
+        assert!(
+            matches!(
+                super::super::release_pin::pinned_digests(&text),
+                super::super::release_pin::PinnedDigests::Table { ref missing, .. } if missing.is_empty()
+            ),
+            "{text}"
+        );
+        // A state with nothing to hold is written exactly as before.
+        let simple: toml::Table =
+            toml::from_str("tier = \"minimal\"\nareas = [\"a\", \"b\"]\n").unwrap();
+        assert_eq!(
+            state_text(&simple).unwrap(),
+            toml::to_string_pretty(&simple).unwrap()
+        );
+    }
 
     #[test]
     fn project_state_round_trip_preserves_foreign_keys() {

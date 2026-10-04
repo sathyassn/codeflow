@@ -29,7 +29,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::hash::sha256_hex;
-use super::state::{read_beneath_root, write_record, PROJECT_TOML};
+use super::state::{read_beneath_root, state_text, write_record, PROJECT_TOML};
 use super::version::is_older;
 
 /// The release triples `CodeFlow` publishes for macOS and Linux, the ones the
@@ -365,8 +365,8 @@ pub fn pin_release(
         toml::Value::String(version.to_string()),
     );
     state.insert(TABLE.into(), toml::Value::Table(table));
-    let out = toml::to_string_pretty(&state)
-        .map_err(|error| format!("cannot write {PROJECT_TOML}: {error}"))?;
+    let out =
+        state_text(&state).map_err(|error| format!("cannot write {PROJECT_TOML}: {error}"))?;
     write_record(root, PROJECT_TOML, out.as_bytes()).map_err(|error| error.to_string())?;
     Ok(PinReport {
         previous,

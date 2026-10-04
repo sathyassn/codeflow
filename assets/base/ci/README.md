@@ -125,9 +125,12 @@ lines and comments. Anything else fails the job rather than reading as no
 table: another line in the table, a table declared twice, a key listed
 twice, the table written as a quoted header, an inline or dotted table or a
 sub-table, an escaped table name or key anywhere (an escape for one letter
-could spell the table's name), or a multi-line string anywhere in the file
-(its lines could read as a table or an entry). Outside the table, single-line
-values and trailing comments never count. A project that
+could spell the table's name), or three quote marks in a row (`"""` or
+`'''`) on any line but a full-line comment, since a multi-line string's lines
+could read as a table or an entry; this also refuses them inside a one-line
+value or a trailing comment. Outside the table, other values and trailing
+comments never count, and CodeFlow writes every string in the state on one
+line, with escapes, so a state it writes never trips this. A project that
 has never pinned a table is checked against `sha256.sum` alone, and the job
 says so in a warning. `codeflow doctor --check ci-perimeter` names the check
 CI applies, read from the target since CI reads the table there, and says

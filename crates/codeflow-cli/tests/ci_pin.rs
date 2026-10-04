@@ -534,6 +534,113 @@ fn comments_and_values_naming_the_table_are_not_declarations() {
     );
 }
 
+/// The state `codeflow update --pin` writes is one the installers read: a
+/// project value that needs more than one line, or both quote kinds, is
+/// written as an escaped one-line string, never a multi-line string the
+/// installers refuse, and doctor finds nothing CI would refuse. A pin also
+/// rewrites a multi-line string written by hand, which is the remedy doctor
+/// and the installers name.
+#[test]
+fn a_state_codeflow_writes_is_one_the_installers_read() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let workflows = work.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("codeflow-ci.yml"), CI).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "ci: the managed workflow"]);
+    let release = publish(&releases, "1.2.3");
+    let mut sums = std::fs::read_to_string(release.join("sha256.sum")).unwrap();
+    for triple in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+        let archive = release.join(format!("codeflow-cli-{triple}.tar.xz"));
+        std::fs::write(&archive, format!("{triple}\n")).unwrap();
+        sums.push_str(&sha256(&archive));
+        sums.push_str("  codeflow-cli-");
+        sums.push_str(triple);
+        sums.push_str(".tar.xz\n");
+    }
+    std::fs::write(release.join("sha256.sum"), sums).unwrap();
+    set_state(
+        &work,
+        &format!(
+            "{}note = \"first line\\nsecond line\"\nquoted = \"it's \\\"both\\\"\"\npoem = \"\"\"\nline one\nline two\"\"\"\n\n[notes]\ntext = \"a\\r\\nb '''\"\n",
+            project_toml("1.2.3")
+        ),
+        "chore: values that need more than one line",
+    );
+
+    let codeflow = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args(args)
+            .current_dir(&work)
+            .env("CODEFLOW_HOME", dir.path().join("home"))
+            .env(
+                "CODEFLOW_RELEASE_URL",
+                format!("file://{}", releases.display()),
+            )
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap()
+    };
+    let said = |out: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    // A multi-line string written by hand is refused, and doctor names the
+    // pin as the remedy.
+    let refused = run_install(&script, &work, "HEAD", &releases);
+    assert_eq!(refused.out.status.code(), Some(1), "{}", refused.stderr());
+    assert!(
+        refused
+            .stderr()
+            .contains("may be hidden by a multi-line string"),
+        "{}",
+        refused.stderr()
+    );
+    let before = codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(said(&before).contains("fails closed"), "{}", said(&before));
+
+    let pin = codeflow(&["update", "--pin", "1.2.3"]);
+    assert!(pin.status.success(), "{}", said(&pin));
+    let state = std::fs::read_to_string(work.join(".codeflow/project.toml")).unwrap();
+    assert!(
+        !state.contains("\"\"\"") && !state.contains("'''"),
+        "{state}"
+    );
+    let parsed: toml::Table = toml::from_str(&state).unwrap();
+    assert_eq!(parsed["note"].as_str(), Some("first line\nsecond line"));
+    assert_eq!(parsed["quoted"].as_str(), Some("it's \"both\""));
+    assert_eq!(parsed["notes"]["text"].as_str(), Some("a\r\nb '''"));
+    assert_eq!(parsed["poem"].as_str(), Some("line one\nline two"));
+    git(&work, &["commit", "-qam", "chore: pin 1.2.3"]);
+
+    let install = run_install(&script, &work, "HEAD", &releases);
+    assert!(install.out.status.success(), "{}", install.stderr());
+    assert!(
+        install.stderr().contains(
+            "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+        ),
+        "{}",
+        install.stderr()
+    );
+    let doctor = codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(
+        said(&doctor).contains("the release digests pinned in .codeflow/project.toml")
+            && !said(&doctor).contains("fails closed"),
+        "{}",
+        said(&doctor)
+    );
+}
+
 /// sathyassn/codeflow#47: with no digest pinned the release's `sha256.sum`
 /// stays the check, and the job says so as a warning.
 #[test]
