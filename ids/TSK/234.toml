@@ -1,0 +1,11 @@
+id = "TSK-234"
+uid = "e68a07b3-24a0-4656-84b8-662c4e7f7a60"
+kind = "TSK"
+title = "Unlanded work is judged as unlanded"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T16:20:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
