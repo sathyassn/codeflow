@@ -216,7 +216,9 @@ erratum below, never an edit of the section.
   the first character is read as zsh's exclusion, by the part before it;
   parentheses attached to a word or after a command word are part of the
   word, and the text inside them is also judged as commands, as Bash runs
-  `if(rm ...)`, and so is the code of a zsh `e` or `+` qualifier; a word with a
+  `if(rm ...)`, and so is the code of a zsh `e` or `+` qualifier, each
+  group read once per nesting level, with text nested more than 8 levels
+  deep refused; a word with a
   part filled in at run time is read by the names after that part, and a
   value assigned on the same line counts; `~+` is the current directory
   and other tilde prefixes are read by name; a line that turns on

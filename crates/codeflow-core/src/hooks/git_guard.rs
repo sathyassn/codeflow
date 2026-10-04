@@ -499,6 +499,19 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             continue;
         }
 
+        // Text nested deeper than the reader follows may hide any command.
+        if segment == NESTING_UNREAD {
+            if ctx.policy.hook_integrity.is_active() {
+                violations.push(hook_integrity_violation(
+                    ctx.policy.hook_integrity,
+                    format!(
+                        "the command nests groups or substitutions more than {NESTING_LIMIT} levels deep, past what the guard reads"
+                    ),
+                ));
+            }
+            continue;
+        }
+
         // Hook/policy integrity: writes or removes that would disarm or tamper
         // with the enforcement plane, evaluated on ANY command (not just git).
         let moved = line.moves_for(&shell, top_level, &tokens);
@@ -4188,8 +4201,13 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
 /// or a data substitution stored in a variable that is later `eval`ed.
 #[allow(clippy::too_many_lines)] // one character state machine
 fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_context: bool) {
-    if depth > 8 {
-        return; // bound pathological nesting
+    if depth > NESTING_LIMIT {
+        // Text nested deeper than the guard reads is never passed as read:
+        // the marker segment refuses the line (TSK-216 round 19).
+        if !out.iter().any(|s| s == NESTING_UNREAD) {
+            out.push(NESTING_UNREAD.to_string());
+        }
+        return;
     }
     let chars: Vec<char> = command.chars().collect();
     let mut cur = String::new();
@@ -4205,6 +4223,10 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     // `@(a)`), which is part of the word, never a subshell (TSK-216
     // round 17).
     let mut word_parens = 0usize;
+    // The end of the word group last judged as commands: a group nested
+    // inside it was judged by that call, so each character is read once per
+    // nesting level, never once per enclosing group (TSK-216 round 19).
+    let mut judged_until = 0usize;
     // Heredocs opened on the current line; their bodies follow its newline.
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut line = Line::default();
@@ -4323,10 +4345,13 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 // (`if(rm x)`), so the text inside is also judged as
                 // commands, and so is the code of a zsh `e` or `+`
                 // qualifier (TSK-216 round 18).
-                let (inner, _) = capture_word_group(&chars, i + 1);
-                split_into_segments(&inner, out, depth + 1, code_context);
-                for code in qualifier_code(&inner) {
-                    split_into_segments(&code, out, depth + 1, code_context);
+                if i >= judged_until {
+                    let (inner, end) = capture_word_group(&chars, i + 1);
+                    split_into_segments(&inner, out, depth + 1, code_context);
+                    for code in qualifier_code(&inner) {
+                        split_into_segments(&code, out, depth + 1, code_context);
+                    }
+                    judged_until = end;
                 }
                 word_parens += 1;
                 cur.push(c);
@@ -4573,6 +4598,14 @@ fn substitution_output_runs(prefix: &str) -> bool {
         }
     }
 }
+
+/// The deepest nesting of substitutions, shell bodies and word groups the
+/// command reader follows; deeper text refuses the line ([`NESTING_UNREAD`]).
+const NESTING_LIMIT: usize = 8;
+
+/// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
+/// It is not a command any shell runs, and the integrity check refuses it.
+pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -9989,6 +10022,34 @@ mod tests {
         }
     }
 
+    /// Nested word groups are read once per nesting level, so deep nesting
+    /// costs linear time, and text nested past the limit refuses the line
+    /// instead of passing unread (TSK-216 round 19).
+    #[test]
+    fn test_nested_word_groups_are_read_once_per_level() {
+        let nested = |n: usize| format!("{}x{}", "@(".repeat(n), ")".repeat(n));
+        let start = std::time::Instant::now();
+        let segments = expand_commands(&format!("bash -O extglob -c 'echo {}'", nested(24)));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+        assert!(segments.iter().any(|s| s == NESTING_UNREAD));
+        let shallow = expand_commands(&format!("echo {}", nested(6)));
+        assert!(!shallow.iter().any(|s| s == NESTING_UNREAD), "{shallow:?}");
+        let policy = default_policy();
+        let deep = format!("echo {}", nested(12));
+        let report = evaluate_report_at(&deep, &ctx(&policy, "task/x"), Path::new("."));
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity"),
+            "{deep}"
+        );
+    }
+
     /// Folder names above the word are never pattern syntax (TSK-216 round
     /// 18): a repository under a Windows short name such as `RUNNER~1`, or
     /// under `Program Files (x86)`, judges `build/*.o` by the build folder
@@ -10166,7 +10227,12 @@ mod tests {
     /// prints `ready`. On Windows `bash` may be a launcher with no Linux
     /// behind it, which answers with an error instead (TSK-216 round 18).
     fn shell_ready(program: &str) -> bool {
-        std::process::Command::new(program)
+        let mut command = if program == "zsh" {
+            std::process::Command::new("zsh")
+        } else {
+            std::process::Command::new("bash")
+        };
+        command
             .args(["-c", "echo ready"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
