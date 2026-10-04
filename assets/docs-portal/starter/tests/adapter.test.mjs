@@ -1238,7 +1238,8 @@ test("unverified retired claims are quarantined without regaining authority", { 
             // The product identifies a claim by device and inode. Deleting the file first lets a
             // filesystem that reuses freed inodes (ext4, tmpfs) give the replacement the same inode,
             // which is indistinguishable from the original. Build the replacement while the original
-            // still exists so the two inodes differ on every filesystem, then move it into place.
+            // still exists, so the two inodes cannot be equal on a filesystem that numbers coexisting
+            // files uniquely, then move it into place.
             const original = await lstat(retired, { bigint: true });
             const replacement = path.join(root, "swap-replacement.json");
             await writeFile(replacement, JSON.stringify(expected));

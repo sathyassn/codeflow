@@ -468,10 +468,12 @@ erratum below, never an edit of the section.
   released, and the test saw no error code. It failed once in hosted CI and
   passed on rerun. The test, in the shipped starter and in this repository's
   own copy, now builds the replacement while the original still exists, so
-  the two inodes differ on every filesystem, and asserts that. A portal
-  adopted earlier gets the fix when it reconciles the starter with
-  `codeflow portal setup`. The portal's runtime and its claim identity
-  check are unchanged.
+  the two inodes differ on a filesystem that numbers coexisting files
+  uniquely, and asserts that. A portal adopted earlier gets the fix when
+  `codeflow portal setup` reconciles the starter, with an updated binary
+  and managed files you have not edited; a portal whose ownership was
+  transferred, or whose managed test file was modified, is not updated.
+  The portal's runtime and its claim identity check are unchanged.
 
 ## [3.0.0]
 
