@@ -16,6 +16,10 @@ erratum below, never an edit of the section.
   identify different commits. The published archive is the release's source;
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
+- 2026-10-03, 3.0.0: the notes link to `docs/verification/` for the model
+  role quality diagnostic. The link opens in the repository but not in the
+  published `source.tar.gz`, which leaves that folder out. Read the evidence
+  at https://github.com/sathyassn/codeflow/tree/main/docs/verification.
 
 ## [3.1.0]
 
@@ -155,6 +159,23 @@ erratum below, never an edit of the section.
   wrote it. A project with no recorded baseline and its own `env` gets no
   keys added; the update report names them. The settings of delegated runs
   do not change.
+
+<!-- codeflow:release-impact patch -->
+- **The docs say plainly what CodeFlow is, and read in one order.**
+  `docs/product.md` now states what CodeFlow is, the problem it solves, who
+  it is for, what it does and what it is not, with a figure of the four
+  enforcement planes. The README opens from it and adds a table of the three
+  init tiers: what each installs and when to pick it. The docs are listed
+  in the order understand, start, use, configure, reference and maintain,
+  in the README and in the portal navigation, whose routes follow the new
+  groups (`understand/`, `start/`, `use/`, `configure/`, `reference/`,
+  `maintain/`). The other guides were swept for mannered prose and long
+  blocks, and gained text flows where a flow carries the point. No command,
+  flag, policy key or behavior changes. Links from the decision and task
+  records to `docs/verification/` now point at the copy on `main`, because
+  the source archive leaves that folder out. A workflow, `portal-pages.yml`,
+  builds the portal and deploys it to GitHub Pages once the repository owner
+  enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
 

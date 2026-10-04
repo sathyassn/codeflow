@@ -398,6 +398,92 @@ fn source_archive_leaves_out_only_retained_evidence() {
     );
 }
 
+/// The Markdown link targets of one file: inline links and reference
+/// definitions. Code spans and fences are not parsed, so a target quoted in
+/// code can only add a false match, never hide a real one.
+fn markdown_link_targets(text: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("](") {
+        rest = &rest[start + 2..];
+        let end = rest
+            .find(|c: char| c == ')' || c.is_whitespace())
+            .unwrap_or(rest.len());
+        targets.push(rest[..end].trim_matches(['<', '>']).to_string());
+    }
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.starts_with('[') {
+            if let Some((_, target)) = line.split_once("]:") {
+                if let Some(target) = target.split_whitespace().next() {
+                    targets.push(target.trim_matches(['<', '>']).to_string());
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// The repository path a relative link from `file` names, or `None` for an
+/// absolute URL, a mail link or a link within the page.
+fn linked_repository_path(file: &str, target: &str) -> Option<String> {
+    let target = target.split(['#', '?']).next().unwrap_or_default();
+    if target.is_empty() || target.contains(':') {
+        return None;
+    }
+    let mut parts: Vec<&str> = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        file.split('/').collect()
+    };
+    if !target.starts_with('/') {
+        parts.pop();
+    }
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+#[test]
+fn kept_markdown_does_not_link_into_the_evidence_the_archive_leaves_out() {
+    // `source.tar.gz` leaves out docs/verification/, so a relative link into
+    // it breaks for everyone who reads the archive. Point at the published
+    // copy on `main` instead. CHANGELOG.md is exempt: its published sections
+    // are frozen, and an erratum names where the evidence is read.
+    let tracked = workspace_output(
+        "git",
+        &["-c", "core.quotePath=false", "ls-files", "-z", "--", "*.md"],
+    );
+    let mut broken = Vec::new();
+    for file in tracked.split('\0').filter(|name| !name.is_empty()) {
+        if file.starts_with("docs/verification/") || file == "CHANGELOG.md" {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(workspace_root().join(file)) else {
+            continue;
+        };
+        for target in markdown_link_targets(&text) {
+            if let Some(path) = linked_repository_path(file, &target) {
+                if path.starts_with("docs/verification") {
+                    broken.push(format!("{file} -> {target}"));
+                }
+            }
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "these links point into docs/verification/, which the source archive leaves out; \
+         link to https://github.com/sathyassn/codeflow/blob/main/docs/verification/<file> instead: {broken:?}"
+    );
+}
+
 #[test]
 fn strict_repository_gate_installs_its_declared_coverage_tool() {
     let workflow = fs::read_to_string(workspace_root().join(".github/workflows/codeflow-ci.yml"))

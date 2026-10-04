@@ -21,7 +21,7 @@ state. The implementation must also remain one cross-platform Rust binary whose
 normal build and use do not require a JavaScript toolchain.
 
 The bounded S1–S5 spike in
-[`cf-present-runtime-spike-2026-08-01.md`](../verification/cf-present-runtime-spike-2026-08-01.md)
+[`cf-present-runtime-spike-2026-08-01.md`](https://github.com/sathyassn/codeflow/blob/main/docs/verification/cf-present-runtime-spike-2026-08-01.md)
 measured renderer alternatives, credential bootstrap, untrusted-content
 containment, event transport, anchor stability, and deterministic packaging.
 Its figures and limitations are part of this decision rather than performance
