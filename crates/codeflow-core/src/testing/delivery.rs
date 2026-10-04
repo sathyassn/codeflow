@@ -94,6 +94,19 @@ fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
     (key, path)
 }
 
+/// The bytes of a link target, exact where the platform allows it.
+fn link_target_bytes(target: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        target.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        target.to_string_lossy().into_owned().into_bytes()
+    }
+}
+
 /// Snapshot the bytes and modes of every tracked path, including dirty edits.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
     let Ok(repo) = git2::Repository::discover(root) else {
@@ -107,10 +120,9 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
     {
         let (name, path) = tracked_entry(root, &entry.path);
         let bytes = if path.is_symlink() {
-            std::fs::read_link(&path)?
-                .to_string_lossy()
-                .as_bytes()
-                .to_vec()
+            // The exact target bytes: a lossy spelling would give two
+            // different targets one hash and hide a change of the link.
+            link_target_bytes(&std::fs::read_link(&path)?)
         } else if path.exists() {
             std::fs::read(&path)?
         } else {
@@ -571,5 +583,45 @@ mod tests {
         let dir = repository_with_a_non_utf8_path();
         assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_none());
         assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_some());
+    }
+
+    /// Review finding: two link targets that differ only in invalid bytes must
+    /// hash differently, so a producer that retargets a tracked link is a
+    /// generation change. Runs where the file system accepts such a target.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_target_that_is_not_utf8_is_hashed_exactly() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o120_000,
+                uid: 0,
+                gid: 0,
+                file_size: 4,
+                id: repo.blob(b"base").unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: b"link".to_vec(),
+            })
+            .unwrap();
+        index.write().unwrap();
+        let link = dir.path().join("link");
+        let target = |bytes: &[u8]| {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(std::ffi::OsStr::from_bytes(bytes), &link)
+        };
+        if target(b"caf\xff").is_err() {
+            return;
+        }
+        let first = tracked(dir.path()).unwrap();
+        target(b"caf\xfe").unwrap();
+        assert_ne!(first, tracked(dir.path()).unwrap());
     }
 }
