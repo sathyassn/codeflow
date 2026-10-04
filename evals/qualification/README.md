@@ -313,16 +313,19 @@ changes restored before finish, or changes outside the listed coverage.
 Trials run one at a time. Any trial can start Codex and Grok, as its seat or
 as a peer, and both write their dedicated home's config during a trial (folder
 trust), so two trials at once change each other's config and both drift; this
-happened on 2026-10-04. Once `launch.json` exists and before any seat starts,
-`launch` takes an exclusive lock on the Codex and Grok evaluator homes, a
+happened on 2026-10-04. After its checks, once `launch.json` exists and
+before it prepares the peer launchers or starts any seat, `launch` takes an
+exclusive lock on the Codex and Grok evaluator homes, a
 record created with `O_EXCL` in `~/.codeflow-eval/trial-locks/`, and refuses a
 second launch while one is held, naming the trial that holds it. Taking,
 checking and freeing a lock record happen under an `flock` on that folder's
 `.guard` file, so a late or repeated release never frees a newer trial's
 lock. `launch.json` records the locks as `evaluator_locks`; `finish` frees
 them after its final config snapshot and records `evaluator_locks_released`,
-and a launch refused before any seat started frees them at once. Every
-refusal before the seat is recorded in `launch.json`. After a crash, run
+and a launch refused before it tried to start the native seat frees them at
+once. Every refusal or error before the seat is recorded in `launch.json`.
+A lock record is owned from the moment it is created, so a failed write
+leaves none behind. After a crash, run
 `finish` on that trial's output; remove a lock record by hand only when no
 trial is running.
 

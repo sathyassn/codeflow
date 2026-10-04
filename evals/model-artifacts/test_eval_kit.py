@@ -8945,6 +8945,12 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
                                                              side_effect=runner.Refused("peer launchers"))],
                 "tab create": [signed_in, patch.object(runner, "herdr",
                                                        side_effect=runner.Refused("herdr tab create failed"))],
+                "idle shell": [signed_in, patch.object(runner.time, "sleep"), patch.object(runner, "herdr", side_effect=(
+                    lambda *argv, **kwargs: {"result": {"tab": {"tab_id": "t"}, "root_pane": {"pane_id": "p"}}}
+                    if argv[:2] == ("tab", "create") else
+                    {"result": {"process_info": {"foreground_processes": [{"name": "login"}]}}}
+                    if argv[:2] == ("pane", "process-info") else
+                    self.fail(f"no seat may start: {argv[:2]}")))],
             }
             for label, patches in failures.items():
                 with self.subTest(label):
@@ -8960,8 +8966,62 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
                     if saved.get("evaluator_locks"):
                         self.assertEqual(sorted(lock["path"] for lock in saved["evaluator_locks"]),
                                          sorted(saved["evaluator_locks_released"]))
+                    if label == "idle shell":
+                        self.assertIn("idle shell", saved["error"])
+                        self.assertNotIn("native_start_attempted", saved)
             # The next trial takes the homes.
             runner.release_evaluator_locks(runner.acquire_evaluator_locks(env, root.parent / "next"))
+
+    def test_a_refused_duplicate_launch_leaves_the_running_trial_untouched(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            subject = root.parent / "subjects"
+            (subject / "t/repository").mkdir(parents=True)
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            running = runner.acquire_evaluator_locks(env, root.parent / "running")
+            tokens = {lock["path"]: lock["token"] for lock in running}
+            args = type("A", (), {"record": root.parent / "r.json", "output": root.parent / "duplicate", "workspace": "w2",
+                                  "harness": "codex", "codex_hook_trust": "review", "watch_dir": [],
+                                  "max_entries": 10, "snapshot_seconds": 1, "start_timeout": 1,
+                                  "native": ["--", "--model", "gpt-6-astra", "--ask-for-approval", "never",
+                                             "--sandbox", "danger-full-access"]})()
+            with patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
+                                                                    subject / "t/repository", [])), \
+                 patch.object(runner, "watch_directories", return_value=[]), \
+                 patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "prepare_peers") as peers, patch.object(runner, "herdr") as transport, \
+                 self.assertRaisesRegex(runner.Refused, "another trial holds"):
+                runner.launch(args)
+            # The running trial's peer launchers and context are never rewritten.
+            peers.assert_not_called()
+            transport.assert_not_called()
+            for path, token in tokens.items():
+                self.assertEqual(token, json.loads(Path(path).read_text())["token"])
+            saved = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual("refused", saved["status"])
+            self.assertNotIn("evaluator_locks", saved)
+            runner.release_evaluator_locks(running)
+
+    def test_a_failed_lock_write_leaves_no_orphan_record(self):
+        import errno
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            env = eval_kit.subject_environment(root.parent / "trial", root.parent / "bin/codeflow", [])
+            calls = []
+            real_dump = runner.json.dump
+            def full_disk(value, handle, *args, **kwargs):
+                calls.append(value)
+                if len(calls) == 2:  # the Grok record, after the Codex one was written
+                    raise OSError(errno.ENOSPC, "No space left on device")
+                return real_dump(value, handle, *args, **kwargs)
+            with patch.object(runner.json, "dump", side_effect=full_disk), \
+                 self.assertRaisesRegex(runner.Refused, "cannot write the evaluator lock record"):
+                runner.acquire_evaluator_locks(env, root.parent / "a")
+            folder = runner.evaluator_lock_path(Path(env["CODEX_HOME"])).parent
+            self.assertEqual([".guard"], sorted(path.name for path in folder.iterdir()))
+            runner.release_evaluator_locks(runner.acquire_evaluator_locks(env, root.parent / "b"))
 
     def test_launch_refuses_a_second_trial_and_finish_frees_the_homes(self):
         import argparse

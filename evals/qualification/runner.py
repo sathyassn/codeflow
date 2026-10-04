@@ -1365,6 +1365,7 @@ def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[d
     homes = [Path(os.path.realpath(environment[variable])) for variable in LOCKED_HOMES]
     paths = [evaluator_lock_path(home) for home in homes]
     held: list[dict] = []
+    created: list[Path] = []
     with lock_guard(paths):
         try:
             for home, path in zip(homes, paths):
@@ -1372,6 +1373,7 @@ def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[d
                           "pid": os.getpid(), "time": time.time(), "token": secrets.token_hex(16)}
                 try:
                     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    created.append(path)  # ours from here, even before its record is written
                 except FileExistsError:
                     try:
                         holder = read_lock(path).get("output", "unknown")
@@ -1383,8 +1385,12 @@ def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[d
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                     json.dump(record, handle)
                 held.append(record)
-        except BaseException:
-            _release_held(held)
+        except BaseException as exc:
+            # Under the guard, every file created here is still this launch's.
+            for path in created:
+                path.unlink(missing_ok=True)
+            if isinstance(exc, OSError):
+                raise Refused(f"cannot write the evaluator lock record: {exc}") from exc
             raise
     return held
 
@@ -2115,21 +2121,32 @@ def launch(args) -> None:
             hook_trust["flag_used"] = True
         elif args.harness == "codex":
             print(print_hook_review(args.record), end="")
+        # One trial at a time per Codex and Grok home, taken before anything
+        # of this trial changes, peer launchers included, and recorded at once;
+        # `finish` frees them. The fixture's own environment names the homes.
+        args.output.mkdir(parents=True)
+        write(args.output / "launch.json", {"harness": args.harness, "status": "preparing", "hook_trust": hook_trust})
+        locks = acquire_evaluator_locks(record["subject_environment"], args.output)
+        write(args.output / "launch.json", {"harness": args.harness, "status": "preparing", "hook_trust": hook_trust,
+                                           "evaluator_locks": locks})
         # After the native status checks, which must not meet the launchers.
         peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
-    except Refused as exc:
-        # Every refusal before the seat is recorded; no lock is held yet.
-        args.output.mkdir(parents=True)
-        write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
-                                           "refused_flag": exc.flag, "error": str(exc),
-                                           "hook_trust": hook_trust})
+    except BaseException as exc:
+        # Every refusal or error before the seat is recorded; no seat started,
+        # so any lock taken here is freed at once.
+        args.output.mkdir(parents=True, exist_ok=True)
+        refused = {"harness": args.harness, "status": "refused", "refused_flag": getattr(exc, "flag", None),
+                   "error": str(exc), "hook_trust": hook_trust}
+        if locals().get("locks"):
+            refused.update(evaluator_locks=locks, evaluator_locks_released=release_evaluator_locks(locks))
+        write(args.output / "launch.json", refused)
         raise
-    args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness, "workspace": args.workspace, "peers": peers,
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
            "claude_account_content": account_content,
+           "evaluator_locks": locks,
            "declared_mcp_servers": declared_mcp_servers(repository),
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
@@ -2140,11 +2157,6 @@ def launch(args) -> None:
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
-        # One trial at a time per Codex and Grok home, taken before any seat
-        # and recorded at once; `finish` frees them. The fixture's own
-        # environment names the dedicated homes.
-        run["evaluator_locks"] = acquire_evaluator_locks(record["subject_environment"], args.output)
-        write(args.output / "launch.json", run)
         argv = ["tab", "create", "--workspace", args.workspace, "--label",
                 f"eval-{record['case_id'][:30]}", "--cwd", str(repository), "--no-focus"]
         for key, value in environment.items():
@@ -2163,6 +2175,7 @@ def launch(args) -> None:
             time.sleep(0.5)
         start_args = ("agent", "start", f"eval-{trial.name}", "--kind",
                       args.harness, "--pane", run["pane"], "--", *native)
+        run["native_start_attempted"] = True
         try:
             run["launch_response"] = herdr(*start_args)
         except Refused as exc:
@@ -2240,7 +2253,7 @@ def launch(args) -> None:
         run["status"] = "started"
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         run.update(status="refused", error=str(exc))
-        if "pane" not in run and run.get("evaluator_locks"):
+        if not run.get("native_start_attempted") and run.get("evaluator_locks"):
             # No seat was started, so nothing can still write the homes.
             run["evaluator_locks_released"] = release_evaluator_locks(run["evaluator_locks"])
         if "pane" in run and "initial_agent" not in run:
