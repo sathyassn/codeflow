@@ -1332,13 +1332,27 @@ fn exec_guard_classifies_every_review_probe() {
 }
 
 #[test]
-fn exec_guard_lets_text_that_only_names_a_peer_through() {
-    // TSK-223 AC-3 (sathyassn/codeflow#52): a brief or commit message that
-    // names a peer and the word review, on a line of bare data commands that
-    // exec-guard cannot fully resolve (a here-string), is no headless run; a
-    // line with any other command keeps its raw text and still is.
+fn exec_guard_points_text_that_names_a_peer_to_a_file() {
+    // TSK-223 AC-3 (sathyassn/codeflow#52): text that only mentions a peer
+    // passes when it is written to a file and passed by path; the same text
+    // inline on a line exec-guard cannot fully parse is still refused, and
+    // the refusal names the file route.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"security": {"headless_peer_runs": "block"}}"#,
+    );
+    std::fs::write(
+        dir.path().join("msg.txt"),
+        "docs: record the review\n\nNo codex exec run was used.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("body.md"),
+        "The Codex review approved; codex exec was not used.\n",
+    )
+    .unwrap();
     let guard = |command: &str| {
         run_with_stdin(
             codeflow()
@@ -1348,9 +1362,9 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
         )
     };
     for command in [
-        "grep -c review <<< 'Codex review: approve'",
-        "cat > brief.md <<< 'Codex adversarial seat: please review'",
-        "git commit -F - <<< 'docs: record the Codex review'",
+        "git commit -F msg.txt",
+        "gh pr create --body-file body.md",
+        "gh api -X PATCH repos/o/r/pulls/1 -F body=@body.md",
     ] {
         let out = guard(command);
         let err = String::from_utf8_lossy(&out.stderr);
@@ -1358,28 +1372,22 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
         assert!(!err.contains("headless"), "{command}: {err}");
     }
     for command in [
-        "CMD=codex; $CMD exec x",
-        "printf -v CMD 'codex exec'; $CMD x",
+        "grep -c review <<< 'Codex review: approve'",
         "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
-        "shopt -s expand_aliases; printf -v 'BASH_ALIASES[echo]' command; X=true; $X; echo codex exec x",
-        "PATH=/tmp/review-bin:$PATH; $X; cat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
-        "printf '%ln' COUNT; grep -c review <<< 'Codex review: approve'",
-        "printf ?n COUNT; grep -c review <<< 'Codex review: approve'",
-        "printf \"%d\" \"COUNT=1\"\n# '\ngrep -c review <<< 'Codex review: approve'",
-        "git commit -m \"$(cat <<'EOF'\n EOF\n)\nEOF\ncodex exec x\n)\" <<< ''",
-        "cat <<$'EOF'\nEOF\nshopt -s expand_aliases; BASH_ALIASES[echo]=command; X=true; $X\n$EOF\necho codex exec x",
-        "printf '%s' \"${BASH_CMDS[cat]:=/usr/bin/python3}\"\ncat <<< 'import os; os.system(\"/opt/peer/bin/codex exec x\")'",
-        "printf '#!/usr/bin/python3\\nimport os\\nos.system(\"codex exec x\")\\n' > /tmp/review-bin/grep\ngrep <<< ''",
-        "cat > run.sh <<'EOF'\nCMD=codex\n$CMD exec x\nEOF\nbash run.sh",
-        "D=$PWD; cat > brief.md <<EOF\nCodex: review\nEOF\necho 'codex exec x' | $SHELL",
     ] {
         let out = guard(command);
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
-        assert!(
-            err.contains("security.headless_peer_runs"),
-            "{command}: {err}"
-        );
+        for part in [
+            "security.headless_peer_runs",
+            "could not be fully parsed",
+            "`git commit -F <file>`",
+            "`gh pr create --body-file <file>`",
+            "-F body=@<file>",
+            "refused by design",
+        ] {
+            assert!(err.contains(part), "{command}: missing {part}: {err}");
+        }
     }
 }
 

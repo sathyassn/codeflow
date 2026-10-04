@@ -619,7 +619,7 @@ catalog! {
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
     /// A headless peer run.
     HEADLESS_PEER_RUN = Step::Codeflow("codeflow delegate"),
-        "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md); {enforcement} (policy security.headless_peer_runs)";
+        "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md). Text that only mentions a peer, such as a brief, a commit message or a pull request body, goes in a file written with the editor tool and passed by path (`git commit -F <file>`, `gh pr create --body-file <file>`, `gh api … -F body=@<file>`); a heredoc or inline string that names a peer with a headless flag is refused by design whenever the line cannot be fully parsed; {enforcement} (policy security.headless_peer_runs)";
     /// A hook that could not evaluate and let the operation through.
     HOOK_UNEVALUATED = Step::Codeflow("codeflow doctor"),
         "fix the cause named above (a hook manager must pass git's arguments and stdin through to the codeflow shim), then rerun the git command; `codeflow doctor --check hooks` checks the hook wiring";

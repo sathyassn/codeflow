@@ -534,36 +534,19 @@ erratum below, never an edit of the section.
   tag counts only where it opens or closes the criterion.
 
 <!-- codeflow:release-impact patch -->
-- **exec-guard no longer refuses text that only names a peer.** When a line
-  held a command exec-guard could not resolve, such as a variable as the
-  program, it judged the raw text of the whole line, heredoc bodies and
-  commit messages included, and refused it as a headless run whenever a
-  peer name was followed anywhere later by a marker word: a review brief
-  written with `cat` that named Codex and, further on, the word review was
-  refused. When the whole line is data, its data is now left out of that
-  raw text: every simple command is a data command written by its bare
-  name (`cat`, `tee`, `echo`, `grep`, `jq`, `git commit`, `gh pr` and the
-  like) or `cd`, joined only by `;`, `&&`, `||` or newlines, with no
-  assignment, no other command, no path-qualified program, no pipe,
-  background job, subshell or process substitution, no substitution other
-  than a `$(cat <<'EOF' ...)` message whose plain-word delimiter closes
-  it exactly as the shell does, no `${...}`, `$[...]` or `$((...))`
-  expansion, no unquoted `*`, `?`, `[` or `{` (a pathname or brace
-  expansion supplies words the line does not show), no unquoted `#`,
-  `$'...'` string, carriage return or heredoc delimiter other than a plain
-  word, and no command after one that can write a file (`>`, `tee`, `git`, `gh` and the like), which
-  could replace the program or hook it then runs. `printf` is no data
-  command, since its formats can assign a variable. So
-  `grep -c review <<< 'Codex review: approve'` and
-  `git commit -F - <<< 'docs: record the Codex review'` pass. Any other
-  line keeps the 3.0.0 judgement of its whole text, so a commit message
-  beside `$EDITOR notes.md` is still refused, as in 3.0.0. The data left
-  out is also judged as a script, so a line in it that reads as a run is
-  still refused. A brief written with `cat` and a heredoc, a `git commit
-  -m` message and a `gh pr create --body` text on their own were already
-  allowed; a heredoc brief followed by another command on the same line
-  is judged as in 3.0.0. Of 1,618 headless run forms compared with 3.0.0,
-  none that 3.0.0 refused is let through.
+- **The exec-guard refusal names the file route for text that mentions a
+  peer.** On a line exec-guard cannot fully parse, such as one with a
+  variable as the program or a here-string, it judges the raw text, so a
+  heredoc or inline string that names a peer with a headless flag is
+  refused, and a review brief or commit message written that way was
+  refused with no way forward. That matching is unchanged and stays
+  refused by design: a reader that tried to leave such text out kept
+  missing shell forms that still run a peer. The refusal now says so and
+  names the route that works: write the text to a file with the editor
+  tool and pass it by path, as `git commit -F <file>`,
+  `gh pr create --body-file <file>` or `gh api ... -F body=@<file>`.
+  Verdicts are unchanged: 1,618 headless run forms and 12 text shapes
+  compared with 3.0.0 get the same verdict.
 
 <!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The
