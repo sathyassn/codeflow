@@ -2151,12 +2151,15 @@ fn check_network(opts: &Options) -> CheckResult {
     }
 }
 
-/// Bidirectional cross-vendor delegation readiness (ADR-0023). Optional by
-/// design, so a missing prerequisite warns — never fails. The Claude-host lane
-/// uses the official codex plugin; the Codex-host lane uses an interactive
-/// Claude CLI in tmux. This check verifies inspectable prerequisites only:
-/// live account/tool access still requires an interactive canary in each lane.
-/// `agy` is informational because it has no sanctioned interactive lane.
+/// Bidirectional cross-family seat readiness (ADR-0023, ADR-0077). Optional
+/// by design, so a missing prerequisite warns, never fails. Every
+/// cross-family seat is the other family's interactive CLI in a Herdr tab,
+/// with tmux as the last fallback when no Herdr server is reachable; the
+/// official Codex plugin is an optional fallback on a Claude Code host, so it
+/// is reported and never required. This check verifies inspectable
+/// prerequisites only: live account/tool access and a reachable Herdr server
+/// still need an interactive canary for each seat. `agy` is informational
+/// because it has no sanctioned interactive lane.
 fn check_delegates(opts: &Options) -> CheckResult {
     let start = Instant::now();
 
@@ -2174,6 +2177,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
     // so there a failed status that does not say "not logged in" leaves the
     // sign-in unconfirmed (TSK-216); it is quoted, never explained.
     let mut auth_unseen: Option<String> = None;
+    let mut plugin_note = "";
 
     match opts.do_look_path("codex") {
         Ok(codex_bin) => {
@@ -2197,23 +2201,23 @@ fn check_delegates(opts: &Options) -> CheckResult {
                 gaps.push("Claude MCP inventory unavailable (run `claude mcp list`)".to_string());
             }
 
-            match opts.do_exec(&claude_bin, &["plugin", "list", "--json"]) {
-                Ok(json) if codex_plugin_enabled(&json) => {}
-                Ok(_) => gaps.push(
-                    "codex@openai-codex plugin not enabled (install it in Claude Code and run /codex:setup)"
-                        .to_string(),
-                ),
-                Err(_) => gaps.push(
-                    "Claude plugin inventory unavailable (run `claude plugin list --json`)"
-                        .to_string(),
-                ),
+            if opts
+                .do_exec(&claude_bin, &["plugin", "list", "--json"])
+                .is_ok_and(|json| codex_plugin_enabled(&json))
+            {
+                plugin_note = "; the optional Codex plugin fallback is enabled";
             }
         }
         Err(_) => gaps.push("claude missing from PATH".to_string()),
     }
 
-    if opts.do_look_path("tmux").is_err() {
-        gaps.push("tmux missing from PATH".to_string());
+    // Herdr hosts every seat; tmux is the last fallback (ADR-0077).
+    if opts.do_look_path("herdr").is_err() {
+        if opts.do_look_path("tmux").is_ok() {
+            gaps.push("herdr missing from PATH (seats fall back to tmux)".to_string());
+        } else {
+            gaps.push("herdr and tmux missing from PATH (no seat host)".to_string());
+        }
     }
 
     if let (Some(error), true) = (&auth_unseen, gaps.is_empty()) {
@@ -2224,7 +2228,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
                 ("what", "the Codex sign-in"),
             ])),
             message: format!(
-                "Claude↔Codex prerequisites present; the Codex sign-in is unconfirmed: `codex login status` failed ({error}), and the settings preset denies sandboxed commands the Codex auth file; {SANDBOX_NOTE}{agy_note}"
+                "Claude↔Codex prerequisites present; the Codex sign-in is unconfirmed: `codex login status` failed ({error}), and the settings preset denies sandboxed commands the Codex auth file; {SANDBOX_NOTE}{plugin_note}{agy_note}"
             ),
             duration: start.elapsed(),
         };
@@ -2240,7 +2244,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
             name: "delegates".into(),
             status: Status::Pass,
             message: format!(
-                "Claude↔Codex bidirectional prerequisites present (Codex auth/MCP + Claude plugin/MCP + tmux); retain live interactive canaries. Grok-hosted Claude/Codex lanes use Herdr and are not claimed complete by this check{agy_note}"
+                "Claude↔Codex bidirectional prerequisites present (Codex auth/MCP + Claude MCP + herdr); retain live interactive canaries and check the Herdr server with `herdr status server`. Grok-hosted Claude/Codex seats are not claimed complete by this check{plugin_note}{agy_note}"
             ),
             duration: start.elapsed(),
         }
@@ -2257,7 +2261,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
             name: "delegates".into(),
             status: Status::Warn(remedy),
             message: format!(
-                "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{agy_note}",
+                "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{plugin_note}{agy_note}",
                 gaps.join("; ")
             ),
             duration: start.elapsed(),
@@ -5354,7 +5358,7 @@ mod tests {
             opts.env_var = Some(|_| None);
         }
         opts.look_path = Some(|name| match name {
-            "codex" | "claude" | "tmux" => Ok(format!("/usr/local/bin/{name}")),
+            "codex" | "claude" | "herdr" => Ok(format!("/usr/local/bin/{name}")),
             _ => Err("not found".into()),
         });
         opts.exec_command = Some(login);
@@ -5440,6 +5444,7 @@ mod tests {
             "codex" => Ok("/usr/local/bin/codex".into()),
             "claude" => Ok("/usr/local/bin/claude".into()),
             "tmux" => Ok("/usr/local/bin/tmux".into()),
+            "herdr" => Ok("/usr/local/bin/herdr".into()),
             _ => Err("not found".into()),
         });
         opts.exec_command = Some(|_, args| {
@@ -5457,6 +5462,13 @@ mod tests {
             result.message
         );
         assert!(result.message.contains("interactive canaries"));
+        assert!(
+            result
+                .message
+                .contains("optional Codex plugin fallback is enabled"),
+            "got: {}",
+            result.message
+        );
         assert!(
             result.message.contains("Grok-hosted"),
             "must not claim Grok-hosted lanes complete: {}",
@@ -5481,14 +5493,17 @@ mod tests {
             result.message
         );
         assert!(
-            result.message.contains("tmux missing"),
+            result.message.contains("herdr and tmux missing"),
             "got: {}",
             result.message
         );
     }
 
+    /// TSK-213: the Codex plugin is an optional fallback (ADR-0077), so a
+    /// disabled plugin is never a gap, and a missing Herdr is, with tmux
+    /// named as the last fallback.
     #[test]
-    fn test_check_delegates_reports_auth_mcp_and_plugin_gaps() {
+    fn test_check_delegates_reports_auth_mcp_and_host_gaps_never_the_plugin() {
         let mut opts = test_opts();
         opts.look_path = Some(|name| match name {
             "codex" => Ok("/usr/local/bin/codex".into()),
@@ -5521,7 +5536,14 @@ mod tests {
             result.message
         );
         assert!(
-            result.message.contains("plugin not enabled"),
+            !result.message.contains("plugin"),
+            "a disabled plugin is not a gap: {}",
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("herdr missing from PATH (seats fall back to tmux)"),
             "got: {}",
             result.message
         );
@@ -5541,6 +5563,7 @@ mod tests {
             "codex" => Ok("/usr/local/bin/codex".into()),
             "claude" => Ok("/usr/local/bin/claude".into()),
             "tmux" => Ok("/usr/local/bin/tmux".into()),
+            "herdr" => Ok("/usr/local/bin/herdr".into()),
             _ => Err("not found".into()),
         });
         opts.exec_command = Some(|_, args| match args {
@@ -5605,6 +5628,7 @@ mod tests {
             "codex" => Ok("/usr/local/bin/codex".into()),
             "claude" => Ok("/usr/local/bin/claude".into()),
             "tmux" => Ok("/usr/local/bin/tmux".into()),
+            "herdr" => Ok("/usr/local/bin/herdr".into()),
             "agy" => Ok("/usr/local/bin/agy".into()),
             _ => Err("not found".into()),
         });

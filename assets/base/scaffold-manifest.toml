@@ -471,6 +471,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-herdr/references/review-and-harvest.md"
+dest = ".claude/skills/cf-herdr/references/review-and-harvest.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".claude/skills/cf-model-orchestrator/SKILL.md"
 ownership = "managed"
@@ -605,6 +611,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/transport.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/transport.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -1246,6 +1258,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-herdr/references/review-and-harvest.md"
+dest = ".agents/skills/cf-herdr/references/review-and-harvest.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".agents/skills/cf-model-orchestrator/SKILL.md"
 ownership = "managed"
@@ -1380,6 +1398,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/transport.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/transport.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

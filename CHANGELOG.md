@@ -140,6 +140,39 @@ erratum below, never an edit of the section.
   --check model-bindings` also warns for GPT-6.1 Sol.
 
 <!-- codeflow:release-impact minor -->
+- **One rule for how one model family calls another.** The skills and
+  managed instructions gave hosts different answers (issues 30 and 31).
+  After `codeflow update`, the rule lives in one file,
+  `cf-model-orchestrator/resources/routing/transport.md`, and every other
+  skill, the CLAUDE.md and AGENTS.md rows and the exec-guard refusal cite
+  it (ADR-0077). Another family runs as its own interactive CLI in a Herdr
+  tab: Codex on its app-server, Claude with its turns tracked by
+  `codeflow delegate`, Grok through Grok Build. The same family runs as
+  native subagents, and print or exec modes stay refused. The official
+  Codex plugin becomes an optional fallback on a Claude Code host, and
+  tmux the last fallback when no Herdr server is reachable. `cf-herdr` now
+  drives any reachable Herdr server from any host, inside a Herdr pane or
+  not, with its anti-hijack rules unchanged. The seats' launch flags are
+  stated once, so an edit handoff to Claude now launches in the production
+  posture instead of auto mode, and a new seat's first-run prompts are
+  named: the caller answers folder trust for the task's own folder, the
+  operator answers every hook trust prompt (Grok's included), and a
+  self-update offer is skipped. A Grok builder seat is marked not qualified
+  until ADR-0075 D3's sandboxed route is proven, so building goes to a
+  Claude or Codex seat. A long
+  Codex reply and its observed model and effort are read from the seat's
+  session record. Review and consult briefs ask for one holistic pass over
+  the whole unit and its blast radius, earlier findings being checks within
+  it, and `cf-herdr` states how a review seat runs. `codeflow doctor
+  --check delegates` no longer warns about a missing Codex plugin and now
+  warns when `herdr` is missing, naming tmux as the fallback. Projects that
+  relied on the plugin keep it as the fallback; to use the default route,
+  install Herdr. Where a project customised these skills and its edits
+  overlap the new text, `codeflow update` leaves a `.new` proposal beside
+  the file; reconcile it so the project's routing prose agrees. "Any host"
+  adds no native Windows support: delegate state there still needs WSL2.
+
+<!-- codeflow:release-impact minor -->
 - **Claude sessions compact at half the context window by default.**
   `codeflow init` now writes `CLAUDE_CODE_AUTO_COMPACT_WINDOW` = `"1000000"`
   and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` = `"50"` into the `env` of
@@ -270,6 +303,22 @@ erratum below, never an edit of the section.
   such as `--force-c`, resolves `@{-1}` and `@{upstream}` in the target
   repository, and refuses a forced move it cannot resolve, or one whose
   expression an earlier git command on the same line may change.
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow present show` and `close` no longer fail on Linux because of an
+  unrelated process.** The scan for the presentation browser read the command
+  line of every process of the same user and refused the whole scan with
+  "browser identity is not UTF-8" when one was not UTF-8, or with an
+  "exceeded its bound" error when one was over 64 KiB, so a single such
+  process anywhere on the machine broke `present show`, `present close` and
+  the recovery of an interrupted launch (issue 60, seen in hosted CI). The
+  scan now reads each command line once, in fixed memory, and skips a process
+  that lacks an argument equal to the profile argument or one equal to the
+  instance argument of the browser it is looking for, whatever its other
+  bytes are. A process that has both is checked as strictly as before, and a
+  command line over 8 MiB, which the kernel does not allow a new process,
+  still fails the scan. macOS lists processes with `ps` and already
+  tolerated such lines.
 
 <!-- codeflow:release-impact patch -->
 - **The CodeFlow guards run in Grok sessions.** Grok expands `$name` and
@@ -597,6 +646,23 @@ erratum below, never an edit of the section.
   such as an `origin/main` or another remote's upstream pointed at the
   task's own branch, can make the check stricter but never supplies
   criteria.
+
+<!-- codeflow:release-impact patch -->
+- **The portal's claim quarantine test no longer fails at random.** The
+  docs-portal test "unverified retired claims are quarantined without
+  regaining authority" replaced the retired workflow claim by deleting it
+  and writing a new file. The portal identifies a claim by device and inode
+  number, so on a filesystem that hands a freed inode straight back (ext4,
+  tmpfs) the replacement could be taken for the original, the lease was
+  released, and the test saw no error code. It failed once in hosted CI and
+  passed on rerun. The test, in the shipped starter and in this repository's
+  own copy, now builds the replacement while the original still exists, so
+  the two inodes differ on a filesystem that numbers coexisting files
+  uniquely, and asserts that. A portal adopted earlier gets the fix when
+  `codeflow portal setup` reconciles the starter, with an updated binary
+  and managed files you have not edited; a portal whose ownership was
+  transferred, or whose managed test file was modified, is not updated.
+  The portal's runtime and its claim identity check are unchanged.
 
 ## [3.0.0]
 
