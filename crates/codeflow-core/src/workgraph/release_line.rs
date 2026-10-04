@@ -2065,7 +2065,7 @@ pub fn history_overlay_at(repo_root: &Path) -> Result<Option<String>, String> {
 /// # Errors
 ///
 /// Returns a message when a graft file or the refs cannot be read.
-fn history_overlay(repo: &Repository) -> Result<Option<String>, String> {
+pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, String> {
     let mut grafts = vec![
         repo.commondir().join("info").join("grafts"),
         repo.path().join("info").join("grafts"),
@@ -2124,7 +2124,7 @@ fn history_overlay(repo: &Repository) -> Result<Option<String>, String> {
 ///
 /// Returns a message when the clone is shallow but its boundary list
 /// cannot be read.
-fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
+pub(super) fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
     if !repo.is_shallow() {
         return Ok(HashSet::new());
     }
