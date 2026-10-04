@@ -959,6 +959,10 @@ fn authenticated_cleanup_outputs(
     };
     let mut removals = Vec::new();
     for name in staged {
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. Each
+        // staged name is looked up in the transaction's own list of outputs,
+        // so a name that is not valid UTF-8 is foreign state, and the cleanup
+        // refuses it instead of deleting around it.
         let name = name.to_str().ok_or_else(|| ScaffoldError::InvalidState {
             what: directory.into(),
             detail: "non-UTF-8 staged output name".into(),
@@ -1589,6 +1593,9 @@ fn plan_legacy_baseline_removal(
                 detail: "baseline directory contains too many entries".into(),
             });
         }
+        // Kept strict for the reason given for staged names above: an entry
+        // that is not valid UTF-8 is unknown content, and the migration
+        // preserves all content.
         let name = entry
             .into_string()
             .map_err(|_| ScaffoldError::InvalidState {

@@ -125,6 +125,10 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
         Ok(reference) => {
             // An existing HEAD names authority even if its target needs fetching.
             let reference = reference.resolve().map_err(recovery)?;
+            // OS text rule (issue 79, `docs/architecture.md`): kept strict. The
+            // name picks which tracking branch supplies policy, an authority
+            // decision, so a name that is not valid UTF-8 stops with the
+            // recovery text and is never replaced by a lossy spelling.
             Ok((vec![reference.name().map_err(recovery)?.to_owned()], false))
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {

@@ -2116,6 +2116,10 @@ fn git_tree_records(root: &Path, commit: &str) -> std::io::Result<Vec<GitTreeRec
         let metadata = std::str::from_utf8(&raw[..separator]).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
         })?;
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. The
+        // path is judged for portability and collisions, and published, so a
+        // path that is not valid UTF-8 is a finding about the tree, and a
+        // lossy spelling could merge two different paths into one.
         let path = std::str::from_utf8(&raw[separator + 1..]).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
         })?;
@@ -3407,6 +3411,8 @@ fn safe_path_text(value: &str) -> bool {
         && value.split('/').all(portable_segment)
 }
 
+// Kept strict for the reason given at the `ls-tree` decode (issue 79): a
+// segment that is not valid UTF-8 is not a portable path, so it yields `None`.
 fn portable_relative_path(path: &Path) -> Option<String> {
     let mut segments = Vec::new();
     for component in path.components() {

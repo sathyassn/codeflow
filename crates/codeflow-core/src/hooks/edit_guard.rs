@@ -374,6 +374,10 @@ fn covers(path: &str, pattern: &str) -> bool {
             .is_some_and(|parent| path == parent)
 }
 
+// OS text rule (issue 79, `docs/architecture.md`): kept strict. The rules that
+// protect a path are text globs, and this text decides whether an edit is
+// refused, so a path that is not valid UTF-8 is refused instead of matched
+// by a lossy spelling that might miss the protected pattern.
 fn path_text(path: &Path) -> Result<String, EditError> {
     path.to_str()
         .ok_or_else(|| EditError("non-UTF-8 enforcement path".into()))?;

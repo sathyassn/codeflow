@@ -1144,6 +1144,10 @@ fn inspect_continuations(
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let mut continuations: Vec<ContinuationState> = Vec::with_capacity(entries.len());
     for entry in entries {
+        // OS text rule (issue 79, `docs/architecture.md`): kept strict. Every
+        // entry here is a record this tool wrote under a validated id, so a
+        // name that is not valid UTF-8 is foreign state, and the state check
+        // stops on it rather than reading around it.
         let task_id = entry
             .file_name()
             .into_string()
@@ -1281,6 +1285,7 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let mut states = Vec::with_capacity(entries.len());
     for entry in entries {
+        // Kept strict for the reason given for continuation names above.
         let turn_id = entry
             .file_name()
             .into_string()
@@ -1734,6 +1739,10 @@ fn validate_absolute(path: &Path) -> Result<(), DelegateError> {
             "delegate state directory must be absolute",
         ));
     }
+    // OS text rule (issue 79, `docs/architecture.md`): kept strict. The path
+    // is written into the hook command line (`hook_command`) that the harness
+    // later runs, so a lossy spelling would make the hook read another
+    // directory.
     if path.to_str().is_none() {
         return Err(DelegateError::invalid(
             "delegate state directory must be valid UTF-8",

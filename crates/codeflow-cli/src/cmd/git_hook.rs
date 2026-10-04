@@ -266,6 +266,11 @@ fn run_reference_transaction_with_reader(
     }
 }
 
+// OS text rule (issue 79, `docs/architecture.md`): kept strict, by a recorded
+// decision that `remedy_clearing` pins (`HOOK_STDIN_UNREAD`). The refs git
+// passes name the branches whose protection is judged, and a ref name that is
+// not valid UTF-8 is reported with the rename that clears it, never judged
+// under a lossy name.
 fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
     let mut input = String::new();
     reader.read_to_string(&mut input)?;
