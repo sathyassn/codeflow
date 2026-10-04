@@ -2557,5 +2557,13 @@ class PublicationWorkflowTests(unittest.TestCase):
             release.verify_checks(args)
 
 
+class NonUtf8TextTests(unittest.TestCase):
+    """Issue 79: command output that is not UTF-8 is read lossily, never fatal."""
+
+    def test_output_that_is_not_utf8_does_not_stop_the_release_reader(self) -> None:
+        raw = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'fix: caf\\xe9')"]
+        self.assertEqual(release.run(raw).stdout, "fix: caf\ufffd")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -68,8 +68,10 @@ def fail(message: str) -> NoReturn:
 
 
 def run(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
+    # Git output can hold text that is not UTF-8, such as a commit message in
+    # another encoding (issue 79); it is only read, so it is decoded lossily.
     result = subprocess.run(
-        args, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        args, cwd=cwd, text=True, errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "no output"
