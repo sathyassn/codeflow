@@ -29,6 +29,15 @@ const OWNERS: [(&str, &str); 5] = [
     ),
 ];
 
+/// Variables whose names say RELEASE without opening the bridge, each with
+/// the one source allowed to read it and why: they choose where a release
+/// is downloaded from and skip no rule, table or check.
+const NOT_DOORS: [(&str, &str, &str); 1] = [(
+    "CODEFLOW_RELEASE_URL",
+    "codeflow-core/src/scaffold/release_pin.rs",
+    "where `codeflow update --pin` downloads a release; the archives are still checked against its sha256.sum",
+)];
+
 fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
@@ -84,9 +93,13 @@ fn no_flag_variable_or_policy_key_opens_the_bridge() {
             else {
                 continue;
             };
-            if ["RELEASE", "BASELINE", "BRIDGE"]
+            let allowed = NOT_DOORS
                 .iter()
-                .any(|word| name.contains(word))
+                .any(|(variable, owner, _)| *variable == name && *owner == relative);
+            if !allowed
+                && ["RELEASE", "BASELINE", "BRIDGE"]
+                    .iter()
+                    .any(|word| name.contains(word))
             {
                 found.push(format!("{relative} reads the variable {name}"));
             }

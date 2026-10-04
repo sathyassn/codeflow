@@ -110,19 +110,26 @@ pipelines:
               # this triple with "-" for a missing value, or nothing without a table.
               codeflow_digest() {
                 git show "$1:.codeflow/project.toml" 2>/dev/null | awk -v want="$triple" '
+                  function fail(why) { if (bad == "") bad = why }
+                  /^[[:space:]]*#/ { next }
                   /^[[:space:]]*\[/ {
                     inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+                    if (inside && table) fail("is declared twice")
+                    if (!inside && /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
                     if (inside) table = 1
                     next
                   }
+                  /scaffold_sha256/ { fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)") }
                   inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
                     key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+                    if (key in seen) fail("lists " key " twice")
+                    seen[key] = 1
                     value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
                     if (value == $0) value = ""; else sub(/".*/, "", value)
                     if (key == "version") version = value
                     if (key == want) digest = value
                   }
-                  END { if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }'
+                  END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }'
               }
               # Install release $1, pinned at commit $3, into directory $2. When $3 pins
               # the release's archive digests ([scaffold_sha256], written by `codeflow
@@ -136,6 +143,9 @@ pipelines:
                 asset="codeflow-cli-${triple}.tar.xz"
                 pinned=$(codeflow_digest "$3")
                 digest=
+                case "$pinned" in
+                  "!"*) codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin $1\` writes" ;;
+                esac
                 if [ -n "$pinned" ]; then
                   [ "${pinned%% *}" = "$1" ] ||
                     codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 pins the digests of codeflow ${pinned%% *}, not $1; run \`codeflow update --pin $1\` and land it with the pin"
@@ -207,6 +217,10 @@ pipelines:
               trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
               branch=$(git symbolic-ref --short -q HEAD || true)
               (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
+              # Refuse a lowered pin before the project's own code runs, so nothing the
+              # head brings can clear the refusal.
+              [ -z "$lowered" ] ||
+                codeflow_fail "the head lowers scaffold_version from ${pin} to ${lowered}; the pin only rises, one pull request at a time, then \`codeflow update\` in the next"
               # Project setup (optional): a change that holds .codeflow/ci-setup.sh has it
               # sourced here, after the install and before the test gate, under set -eu,
               # so the toolchain it installs and the variables it exports reach the gate
@@ -220,6 +234,4 @@ pipelines:
               fi
               codeflow test --strict
               codeflow validate --docs
-              [ -z "$lowered" ] ||
-                codeflow_fail "the head lowers scaffold_version from ${pin} to ${lowered}; the pin only rises, one pull request at a time, then \`codeflow update\` in the next"
               # <<< codeflow pinned run

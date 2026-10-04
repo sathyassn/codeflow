@@ -75,20 +75,30 @@ jobs:
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
           pinned=$(printf '%s\n' "$state" | awk -v want="$triple" '
+            function fail(why) { if (bad == "") bad = why }
+            /^[[:space:]]*#/ { next }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+              if (inside && table) fail("is declared twice")
+              if (!inside && /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
               if (inside) table = 1
               next
             }
+            /scaffold_sha256/ { fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)") }
             inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+              if (key in seen) fail("lists " key " twice")
+              seen[key] = 1
               value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
               if (value == $0) value = ""; else sub(/".*/, "", value)
               if (key == "version") version = value
               if (key == want) digest = value
             }
-            END { if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
+            END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
           digest=
+          case "$pinned" in
+            "!"*) echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin ${version}\` writes"; exit 1 ;;
+          esac
           if [ -n "$pinned" ]; then
             if [ "${pinned%% *}" != "$version" ]; then
               echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} pins the digests of codeflow ${pinned%% *}, not ${version}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
@@ -203,20 +213,30 @@ jobs:
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
           pinned=$(printf '%s\n' "$state" | awk -v want="$triple" '
+            function fail(why) { if (bad == "") bad = why }
+            /^[[:space:]]*#/ { next }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+              if (inside && table) fail("is declared twice")
+              if (!inside && /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
               if (inside) table = 1
               next
             }
+            /scaffold_sha256/ { fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)") }
             inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+              if (key in seen) fail("lists " key " twice")
+              seen[key] = 1
               value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
               if (value == $0) value = ""; else sub(/".*/, "", value)
               if (key == "version") version = value
               if (key == want) digest = value
             }
-            END { if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
+            END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
           digest=
+          case "$pinned" in
+            "!"*) echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin ${version}\` writes"; exit 1 ;;
+          esac
           if [ -n "$pinned" ]; then
             if [ "${pinned%% *}" != "$version" ]; then
               echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} pins the digests of codeflow ${pinned%% *}, not ${version}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
@@ -644,7 +664,10 @@ jobs:
           set --
           if [ -f "$trusted/config.toml" ]; then set -- --config "$trusted/config.toml"; fi
           if [ "$scan" != HEAD ]; then
-            changed=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan" | awk 'NF { n++ } END { print n + 0 }')
+            if ! files=$(git log --format= --name-only --diff-filter=uxdb --remerge-diff --no-ext-diff "$scan"); then
+              echo "::error::cannot list the file changes in ${scope}; refusing to skip the scan"; exit 1
+            fi
+            changed=$(printf '%s\n' "$files" | awk 'NF { n++ } END { print n + 0 }')
             if [ "$changed" -eq 0 ]; then
               echo "No file changes in ${scope}; nothing to scan."
               exit 0

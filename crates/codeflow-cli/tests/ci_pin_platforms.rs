@@ -713,6 +713,46 @@ fn the_shared_run_requires_the_pinned_release_digest() {
             text(&partial)
         );
         assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+
+        // A table written another way, or declared or keyed twice, fails
+        // closed even against a replaced archive and sha256.sum; it never
+        // reads as absent.
+        std::fs::write(&asset, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  codeflow-cli-{}.tar.xz\n", sha256(&asset), triple()),
+        )
+        .unwrap();
+        let path = fx.repo().join(".codeflow/project.toml");
+        let base = std::fs::read_to_string(&path).unwrap();
+        let base = base
+            .split("\n[scaffold_sha256]\n")
+            .next()
+            .unwrap()
+            .trim_end()
+            .to_string();
+        let t = triple();
+        let table =
+            format!("{base}\n\n[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n");
+        let form = "is written in a form the CI installers do not read";
+        for (state, reason) in [
+            (format!("{base}\nscaffold_sha256 = {{ version = \"1.2.3\", {t} = \"{reviewed}\" }}\n"), form.to_string()),
+            (format!("{base}\n\n[\"scaffold_sha256\"]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"), form.to_string()),
+            (format!("{base}\nscaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.{t} = \"{reviewed}\"\n"), form.to_string()),
+            (format!("{table}[other]\n[scaffold_sha256]\n"), "is declared twice".to_string()),
+            (format!("{table}{t} = \"{reviewed}\"\n"), format!("lists {t} twice")),
+        ] {
+            std::fs::write(&path, &state).unwrap();
+            let unread = fx.commit("chore: another table form");
+            let out = fx.run(platform, Some(&unread), &unread);
+            assert!(!out.status.success(), "{platform:?}: {state}");
+            assert!(
+                text(&out).contains(&format!("the [scaffold_sha256] table in .codeflow/project.toml at {unread} {reason}")),
+                "{platform:?}: {state}: {}",
+                text(&out)
+            );
+            assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+        }
     }
 }
 
@@ -859,6 +899,31 @@ fn the_target_pin_judges_every_change_to_the_pin() {
         let calls = fx.calls();
         assert!(ran(&calls, "1.2.3", "ci --base"), "{calls:?}");
         assert!(calls.iter().all(|c| !c.starts_with("1.0.0 ")), "{calls:?}");
+
+        // A setup hook in the head cannot clear the refusal: the pin is
+        // checked before the project's own code runs.
+        std::fs::write(
+            fx.repo().join(".codeflow/ci-setup.sh"),
+            format!(
+                "echo hook >> '{}'\nlowered=\ncodeflow_fail() {{ :; }}\n",
+                fx.log().display()
+            ),
+        )
+        .unwrap();
+        let cleared = fx.commit("ci: a hook that clears the refusal");
+        let out = fx.run(platform, Some(&target), &cleared);
+        assert!(!out.status.success(), "{platform:?}: {}", text(&out));
+        assert!(
+            text(&out).contains("lowers scaffold_version from 1.2.3 to 1.0.0"),
+            "{platform:?}: {}",
+            text(&out)
+        );
+        let calls = fx.calls();
+        assert!(
+            !calls.iter().any(|c| c == "hook"),
+            "{platform:?}: {calls:?}"
+        );
+        assert!(!ran(&calls, "1.2.3", "test"), "{platform:?}: {calls:?}");
     }
 }
 

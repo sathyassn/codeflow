@@ -389,7 +389,60 @@ fn a_pinned_release_digest_is_required_whatever_sha256_sum_says() {
             missing.stderr()
         );
         assert!(missing.installed_version().is_none());
+
+        // A table written in a form the installers do not read, or declared
+        // or keyed twice, fails closed, even with a replaced archive and a
+        // matching replaced sha256.sum: it never reads as absent.
+        std::fs::write(&archive, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  {ASSET}.tar.xz\n", sha256(&archive)),
+        )
+        .unwrap();
+        for (state, reason) in unread_tables(&reviewed) {
+            set_state(&work, &state, "chore: another table form");
+            let refused = run_install(&script, &work, "HEAD", &releases);
+            assert!(!refused.out.status.success(), "{prefix}: {state}");
+            assert!(
+                refused.stderr().contains(&format!(
+                    "the [scaffold_sha256] table in .codeflow/project.toml at HEAD {reason}"
+                )),
+                "{prefix}: {state}: {}",
+                refused.stderr()
+            );
+            assert!(refused.installed_version().is_none());
+        }
     }
+}
+
+/// States whose digest table the installers refuse to read, each with the
+/// reason they give.
+fn unread_tables(digest: &str) -> Vec<(String, String)> {
+    let form = "is written in a form the CI installers do not read".to_string();
+    let base = project_toml("1.2.3");
+    let table = pinned_state("1.2.3", "1.2.3", Some(digest));
+    vec![
+        (
+            format!("{base}\nscaffold_sha256 = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{digest}\" }}\n"),
+            form.clone(),
+        ),
+        (
+            format!("{base}\n[\"scaffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            form.clone(),
+        ),
+        (
+            format!("{base}\nscaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.x86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            form,
+        ),
+        (
+            format!("{table}[other]\n[scaffold_sha256]\n"),
+            "is declared twice".to_string(),
+        ),
+        (
+            format!("{table}x86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "lists x86_64-unknown-linux-gnu twice".to_string(),
+        ),
+    ]
 }
 
 /// sathyassn/codeflow#47: with no digest pinned the release's `sha256.sum`

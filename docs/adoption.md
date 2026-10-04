@@ -336,19 +336,9 @@ The version-skew warning is gone and no `.new` file remains.
 
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
-and verify it against that release's `sha256.sum`; a missing or wrong
-checksum fails the job and nothing unverified is installed. Since anyone who
-can replace a release asset can replace its `sha256.sum` too, pin the
-reviewed archive digests beside the version with
-`codeflow update --pin <version>` (3.1.0 and later). It downloads the
-release's `sha256.sum` and its Linux and macOS archives, refuses any archive
-that does not match, and writes only `scaffold_version` and a
-`[scaffold_sha256]` table holding the version and one digest per platform.
-Once the target pins that table, every installer requires the archive to
-match it, and a table left from another version or missing the runner's
-platform fails the job closed. Without a table the job checks `sha256.sum`
-alone and says so in a warning; `codeflow doctor --check ci-perimeter`
-names the mode. The commit and
+and verify it against that release's `sha256.sum` and the archive digests
+the target pins (below); a mismatch fails the job and nothing unverified is
+installed. The commit and
 PR-body standards run in `codeflow-policy.yml` on `pull_request_target`.
 GitHub runs that workflow from the default branch, so a pull request cannot
 edit the job that judges it, and the job checks out the pull request's base
@@ -356,10 +346,9 @@ commit, so a pull request into an integration branch is judged by that
 branch's pin and policy, not the default branch's. An upgrade therefore takes
 two pull requests, in order:
 
-1. Install the new binary locally, then land a pull request that raises only
-   `scaffold_version` and its digests: `codeflow update --pin <version>`
-   writes both. The target's current binary judges it, and the
-   `candidate codeflow` job tests the new one against the head's digests.
+1. Install the new binary locally, run `codeflow update --pin <version>`,
+   and land the pin it raises. The target's current binary judges it, and
+   the `candidate codeflow` job tests the new one.
 2. On a new branch, run `codeflow update` and land its new keys and files;
    the new binary judges them.
 
@@ -377,26 +366,19 @@ The other CI templates carry the same pin. `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
 CodeFlow repository; copy the one your host needs) run one shared script: it
 reads the pin from the target branch's current commit, installs that release
-with the same digest and checksum verification, and runs `codeflow ci` from a
+with the same verification, and runs `codeflow ci` from a
 checkout of that commit, so the target's policy judges the change.
 
-**Project setup before the gate.** The gate runs on the runner's default
-toolchain. A project that needs its own (a Node version with corepack and a
-frozen install, say) commits `.codeflow/ci-setup.sh` instead of editing the
-managed workflow or running a second gate. The GitHub gates job and the
-shared script of the other templates source it under `set -eu` after
-installing codeflow and just before `codeflow test --strict`, so what it
-exports reaches the gate and a failing command fails the job. `codeflow
-update` never writes it, and `codeflow doctor --check ci-perimeter` reports
-whether it exists, whether the CI file sources it, and its first command.
+| Managed CI, 3.1.0 | What it does |
+|---|---|
+| Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, because whoever can replace a release asset can replace `sha256.sum` too |
+| A table CI cannot use | One from another version, missing the runner's platform, declared or keyed twice, or written as a quoted header, an inline or dotted table or a sub-table fails the job closed. Keep the plain table `--pin` writes |
+| No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request that adds the table still pass |
+| Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
+| Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit |
+| `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
 
-**The secret scan reads the change's own commits.** On a pull request the
-gitleaks job scans only the commits the pull request brings, and on a push
-only the pushed range, so a finding already in the base, or on another
-branch, no longer fails every pull request. A weekly schedule and manual
-dispatch scan the full history of the default branch (the gates job stays
-off the schedule), and every run prints which history it read. Exemptions
-are still read only from the trusted commit.
+Details: `assets/base/ci/README.md`.
 
 | Host | Target commit |
 |---|---|

@@ -119,6 +119,18 @@ fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
 pub(super) fn report(root: &Path) -> PinReport {
     let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
     let head_state = read(STATE);
+    if let Some(PinnedDigests::Unreadable(reason)) = head_state.as_deref().map(pinned_digests) {
+        let version = head_state.as_deref().and_then(pinned);
+        return PinReport {
+            status: Status::Warn(
+                remedy::DOCTOR_CI_DIGEST
+                    .with(&[("version", version.as_deref().unwrap_or("<version>"))]),
+            ),
+            message: format!(
+                "the [{TABLE}] table in {STATE} {reason}, so the CI install fails closed"
+            ),
+        };
+    }
     let Some(head_pin) = head_state.as_deref().and_then(pinned) else {
         return PinReport {
             status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
@@ -155,10 +167,33 @@ pub(super) fn report(root: &Path) -> PinReport {
         };
     };
     if target_pin == head_pin {
+        // CI reads the digests from the target, so the target's table is
+        // what protects this install; the checkout's applies once it lands.
+        let target_state = show(STATE).unwrap_or_default();
+        let target_verified = match digest_mode(&target_state, &target_pin) {
+            Ok(verified) => verified,
+            Err(problem) => {
+                return PinReport {
+                    status: Status::Warn(
+                        remedy::DOCTOR_CI_DIGEST.with(&[("version", target_pin.as_str())]),
+                    ),
+                    message: format!("on {target}, {problem}"),
+                }
+            }
+        };
+        let changed = if table_lines(&target_state)
+            == table_lines(head_state.as_deref().unwrap_or_default())
+        {
+            String::new()
+        } else {
+            format!(
+                "; this checkout changes the [{TABLE}] table, which CI checks once it lands on {target} (then: {verified})"
+            )
+        };
         return PinReport {
             status: Status::Pass,
             message: format!(
-                "CI installs codeflow {target_pin}, the version {target} pins, verified against {verified}"
+                "CI installs codeflow {target_pin}, the version {target} pins, verified against {target_verified}{changed}"
             ),
         };
     }
@@ -200,6 +235,9 @@ pub(super) fn report(root: &Path) -> PinReport {
 /// names a table the installers refuse, so CI fails closed.
 fn digest_mode(state: &str, version: &str) -> Result<String, String> {
     match pinned_digests(state) {
+        PinnedDigests::Unreadable(reason) => Err(format!(
+            "the [{TABLE}] table in {STATE} {reason}, so the CI install fails closed"
+        )),
         PinnedDigests::Absent => Ok(format!(
             "its sha256.sum only: no release digest is pinned beside it (`codeflow update --pin {version}` pins one)"
         )),
@@ -222,6 +260,24 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
     }
 }
 
+/// The lines of a state's `[scaffold_sha256]` section, trimmed, without
+/// blanks and comments: equal lines pin the same digests.
+fn table_lines(state: &str) -> Vec<&str> {
+    let mut inside = false;
+    state
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            if line.starts_with('[') {
+                inside = line.trim_end_matches(|c: char| c != ']').replace(' ', "")
+                    == format!("[{TABLE}]");
+                return false;
+            }
+            inside && !line.is_empty() && !line.starts_with('#')
+        })
+        .collect()
+}
+
 /// The project-owned setup hook the managed CI sources before the test gate
 /// (sathyassn/codeflow#46).
 pub(super) const SETUP_HOOK: &str = ".codeflow/ci-setup.sh";
@@ -242,8 +298,20 @@ pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
     let what = first.map_or_else(
         || "it holds no command".to_string(),
         |command| {
-            let shown: String = command.chars().take(60).collect();
-            let more = if shown.len() < command.len() {
+            // The hook comes from the checkout, which may be untrusted: show
+            // control characters escaped so they never reach the terminal.
+            let shown: String = command
+                .chars()
+                .take(60)
+                .map(|c| {
+                    if c.is_control() {
+                        c.escape_default().to_string()
+                    } else {
+                        c.to_string()
+                    }
+                })
+                .collect();
+            let more = if command.chars().count() > 60 {
                 "..."
             } else {
                 ""
@@ -540,11 +608,12 @@ mod tests {
             STATE,
             &with_digests("1.2.3", "1.2.3", &crate::scaffold::release_pin::TRIPLES),
         );
+        // Main pins none, so the checkout's table applies once it lands.
         let pinned = report(dir.path());
         assert_eq!(pinned.status, Status::Pass, "{}", pinned.message);
         assert!(
             pinned.message.contains(
-                "verified against the release digests pinned in .codeflow/project.toml and its sha256.sum"
+                "(then: the release digests pinned in .codeflow/project.toml and its sha256.sum)"
             ),
             "{}",
             pinned.message
@@ -625,6 +694,122 @@ mod tests {
         );
         write(dir.path(), SETUP_HOOK, "# nothing yet\n");
         assert!(setup_note(dir.path(), "ci.yml", ci).contains("(it holds no command)"));
+        // A hook from an untrusted checkout never sends control characters
+        // to the terminal.
+        write(dir.path(), SETUP_HOOK, "echo \u{1b}[2Jcleared\u{7}\n");
+        let note = setup_note(dir.path(), "ci.yml", ci);
+        assert!(note.contains("`echo \\u{1b}[2Jcleared\\u{7}`"), "{note}");
+        assert!(!note.chars().any(char::is_control), "{note}");
+    }
+
+    /// Commits `state` on `main` of `dir` and returns to `feat/x` at it.
+    fn commit_on_main(dir: &Path, state: &str) {
+        git(dir, &["checkout", "-q", "main"]);
+        write(dir, STATE, state);
+        git(dir, &["add", "-A"]);
+        git(
+            dir,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "commit",
+                "-q",
+                "-m",
+                "chore: pin",
+            ],
+        );
+        git(dir, &["checkout", "-q", "feat/x"]);
+        git(dir, &["merge", "-q", "--ff-only", "main"]);
+    }
+
+    /// A digest table for `version` listing every triple.
+    fn table(version: &str) -> String {
+        let digest = "a".repeat(64);
+        format!(
+            "\n[scaffold_sha256]\nversion = \"{version}\"\naarch64-apple-darwin = \"{digest}\"\nx86_64-apple-darwin = \"{digest}\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"
+        )
+    }
+
+    #[test]
+    fn the_report_names_the_targets_digest_mode_not_the_checkouts() {
+        // The target pins no digests: a table added in the checkout does
+        // not protect CI until it lands.
+        let dir = project("1.2.3");
+        write(
+            dir.path(),
+            STATE,
+            &format!("{}{}", state("1.2.3"), table("1.2.3")),
+        );
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Pass, "{}", found.message);
+        assert!(
+            found.message.contains("verified against its sha256.sum only")
+                && found.message.contains(
+                    "this checkout changes the [scaffold_sha256] table, which CI checks once it lands on main (then: the release digests pinned"
+                ),
+            "{}",
+            found.message
+        );
+
+        // The target pins them and the checkout keeps them.
+        commit_on_main(dir.path(), &format!("{}{}", state("1.2.3"), table("1.2.3")));
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Pass, "{}", found.message);
+        assert!(
+            found.message.ends_with(&format!(
+                "verified against the release digests pinned in {STATE} and its sha256.sum"
+            )),
+            "{}",
+            found.message
+        );
+
+        // A broken table on the target warns even when the checkout's is fine.
+        let dir = project("1.2.3");
+        commit_on_main(dir.path(), &format!("{}{}", state("1.2.3"), table("1.2.2")));
+        write(
+            dir.path(),
+            STATE,
+            &format!("{}{}", state("1.2.3"), table("1.2.3")),
+        );
+        let found = report(dir.path());
+        assert!(matches!(found.status, Status::Warn(_)), "{}", found.message);
+        assert!(
+            found.message.starts_with(&format!(
+                "on main, the [scaffold_sha256] table in {STATE} pins the digests of codeflow 1.2.2, not 1.2.3"
+            )),
+            "{}",
+            found.message
+        );
+    }
+
+    #[test]
+    fn an_unreadable_table_warns_that_ci_fails_closed() {
+        let dir = project("1.2.3");
+        for (text, reason) in [
+            (
+                format!(
+                    "{}scaffold_sha256 = {{ version = \"1.2.3\" }}\n",
+                    state("1.2.3")
+                ),
+                "is written in a form the CI installers do not read",
+            ),
+            (
+                format!("{}{}{}", state("1.2.3"), table("1.2.3"), table("1.2.3")),
+                "is declared twice",
+            ),
+        ] {
+            write(dir.path(), STATE, &text);
+            let found = report(dir.path());
+            assert!(matches!(found.status, Status::Warn(_)), "{}", found.message);
+            assert!(
+                found
+                    .message
+                    .starts_with(&format!("the [scaffold_sha256] table in {STATE} {reason}"))
+                    && found.message.ends_with("so the CI install fails closed"),
+                "{}",
+                found.message
+            );
+        }
     }
 
     #[test]

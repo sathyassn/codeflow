@@ -103,16 +103,27 @@ pub enum PinnedDigests {
         listed: Vec<&'static str>,
         missing: Vec<&'static str>,
     },
+    /// A table the installers refuse to read, with the reason: declared
+    /// twice, a key listed twice, or written in a form they do not read.
+    Unreadable(String),
 }
+
+/// Why the installers refuse a table: it is declared twice.
+pub const TWICE: &str = "is declared twice";
+
+/// Why the installers refuse a table written another way.
+pub const OTHER_FORM: &str = "is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)";
 
 /// Reads the `[scaffold_sha256]` table from a project state's text exactly
 /// as the CI installers' awk reader does, line by line, so doctor reports
 /// what CI will check: a `[scaffold_sha256]` section header, then
 /// `key = "value"` lines with a bare or double-quoted key and a
-/// double-quoted value, up to the next header. A table written another way
-/// (inline, dotted keys, a quoted header, single-quoted values) is valid
-/// TOML that the installers do not read, so it reads as absent or missing
-/// here too; `codeflow update --pin` writes the form they read.
+/// double-quoted value, up to the next header. Comment lines are skipped.
+/// Any other line naming the table (a quoted header, an inline or dotted
+/// table, a sub-table), a second header or a key listed twice makes the
+/// table unreadable, and the installers fail closed on it rather than
+/// reading it as absent; single-quoted values read as missing.
+/// `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
     static HEADER: LazyLock<Regex> = LazyLock::new(|| {
@@ -124,15 +135,36 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
     let (mut inside, mut table) = (false, false);
     let mut version = None;
     let mut values = std::collections::BTreeMap::new();
+    let mut bad: Option<String> = None;
+    let mut flag = |reason: String| {
+        bad.get_or_insert(reason);
+    };
     for line in state.lines() {
-        if line.trim_start().starts_with('[') {
-            inside = header.is_match(line);
-            table |= inside;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
             continue;
+        }
+        if trimmed.starts_with('[') {
+            inside = header.is_match(line);
+            if inside {
+                if table {
+                    flag(TWICE.to_string());
+                }
+                table = true;
+            } else if line.contains(TABLE) {
+                flag(OTHER_FORM.to_string());
+            }
+            continue;
+        }
+        if line.contains(TABLE) {
+            flag(OTHER_FORM.to_string());
         }
         let Some(key) = inside.then(|| entry.captures(line)).flatten() else {
             continue;
         };
+        if (&key[1] == "version" && version.is_some()) || values.contains_key(&key[1]) {
+            flag(format!("lists {} twice", &key[1]));
+        }
         let rest = line
             .split_once('=')
             .map_or("", |(_, rest)| rest)
@@ -148,6 +180,9 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
                 values.insert(triple.to_string(), value);
             }
         }
+    }
+    if let Some(reason) = bad {
+        return PinnedDigests::Unreadable(reason);
     }
     if !table {
         return PinnedDigests::Absent;
@@ -428,16 +463,52 @@ mod tests {
                 missing: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
             }
         );
-        // Valid TOML the installers' reader does not see reads as they read
-        // it: an inline or dotted table as absent, a quoted header as
-        // absent, single-quoted values as missing.
+        // Valid TOML the installers do not read fails closed as they do:
+        // an inline or dotted table, a quoted header and a sub-table are
+        // unreadable, never absent; single-quoted values read as missing.
         for unread in [
             format!("scaffold_sha256 = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{DIGEST}\" }}\n"),
             format!("scaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.x86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
             format!("[\"scaffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
+            format!("[scaffold_sha256]\nversion = \"1.2.3\"\n[scaffold_sha256.extra]\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
+            format!("[tool]\nscaffold_sha256 = {{ version = \"1.2.3\" }}\n"),
         ] {
-            assert_eq!(pinned_digests(&unread), PinnedDigests::Absent, "{unread}");
+            assert_eq!(
+                pinned_digests(&unread),
+                PinnedDigests::Unreadable(OTHER_FORM.into()),
+                "{unread}"
+            );
         }
+        // A second header or a key listed twice is refused too, and a
+        // comment naming the table is not a declaration.
+        let twice = format!(
+            "[scaffold_sha256]\nversion = \"1.2.3\"\n[other]\n[scaffold_sha256]\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+        );
+        assert_eq!(
+            pinned_digests(&twice),
+            PinnedDigests::Unreadable(TWICE.into())
+        );
+        for (doubled, key) in [
+            (
+                "version = \"1.2.3\"\nversion = \"1.2.4\"\n".to_string(),
+                "version",
+            ),
+            (
+                format!(
+                    "x86_64-apple-darwin = \"{DIGEST}\"\n\"x86_64-apple-darwin\" = \"{DIGEST}\"\n"
+                ),
+                "x86_64-apple-darwin",
+            ),
+        ] {
+            assert_eq!(
+                pinned_digests(&format!("[scaffold_sha256]\n{doubled}")),
+                PinnedDigests::Unreadable(format!("lists {key} twice"))
+            );
+        }
+        assert_eq!(
+            pinned_digests("# [scaffold_sha256] is written by codeflow update --pin\nscaffold_version = \"1\"\n"),
+            PinnedDigests::Absent
+        );
         let single = format!(
             "[ scaffold_sha256 ] # pinned\nversion = '1.2.3'\n\"x86_64-unknown-linux-gnu\" = '{DIGEST}'\n"
         );

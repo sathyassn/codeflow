@@ -225,10 +225,12 @@ fn update_keeps_the_setup_hook_and_doctor_reports_hook_and_digests() {
     fx.publish(&version);
     let pinned = fx.codeflow(&["update", "--pin", &version]);
     assert!(pinned.status.success(), "{}", text(&pinned));
+    // Main still pins none, so doctor says the table applies once it lands.
     let doctor = fx.codeflow(&["doctor", "--check", "ci-perimeter"]);
     assert!(
-        text(&doctor)
-            .contains("verified against the release digests pinned in .codeflow/project.toml"),
+        text(&doctor).contains(
+            "this checkout changes the [scaffold_sha256] table, which CI checks once it lands on main (then: the release digests pinned in .codeflow/project.toml"
+        ),
         "{}",
         text(&doctor)
     );

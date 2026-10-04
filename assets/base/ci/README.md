@@ -118,9 +118,14 @@ target pins the table, every installer requires its `version` to equal
 `scaffold_version` and the archive to match the digest for the runner's
 platform, and still checks `sha256.sum`; a table left from another version,
 a missing entry or a different digest fails the job, even when the release's
-`sha256.sum` was replaced to match. A project that has never pinned a table
-is checked against `sha256.sum` alone, and the job says so in a warning
-(`codeflow doctor --check ci-perimeter` names the mode too). Requiring the
+`sha256.sum` was replaced to match. The installers read the table line by
+line, as `--pin` writes it: a table declared twice, a key listed twice, or
+the table written as a quoted header, an inline or dotted table or a
+sub-table fails the job too, rather than reading as no table. A project that
+has never pinned a table is checked against `sha256.sum` alone, and the job
+says so in a warning. `codeflow doctor --check ci-perimeter` names the check
+CI applies, read from the target since CI reads the table there, and says
+when the checkout changes the table. Requiring the
 table there would leave a fresh `codeflow init`, and the first upgrade that
 adds it, unable to pass, since the target they are judged by has no table
 yet. A missing checksum file, a missing entry or a mismatch fails the job;
@@ -179,11 +184,15 @@ managed and the gate runs once, on the project's toolchain:
   changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
   or `GITHUB_ENV`. A `cd` in it does not move the gate.
 - A failing command fails the job before the gate runs; `exit` ends the run.
-- It is the change's own file, as the test targets are: it runs in the
-  gates job, never in the secret-scan job or the enforcing policy job.
+- It is the change's own file, as the test targets are, and has the gate's
+  authority: it could redefine `codeflow` or end the run early, as an edited
+  test target could. It runs in the gates job, never in the secret-scan job
+  or the enforcing policy job, and in the shared run only after the
+  lowered-pin refusal and the target's `codeflow ci`, which it cannot undo.
 - The project owns it. `codeflow update` never writes, merges or removes
   it, and `codeflow doctor --check ci-perimeter` says whether it exists,
-  whether the CI file sources it, and its first command.
+  whether the CI file sources it, and its first command; doctor does not
+  audit what it does.
 
 ## Two planes, deliberately
 

@@ -137,11 +137,6 @@ Unmodified files are replaced. User-modified files get a three-way merge from
 Managed regions are updated in place, and user-owned schema-versioned files
 gain new keys with defaults. Update also installs in-tier manifest entries
 that are missing on disk. It never clobbers and never silently skips.
-`codeflow update --pin <version>` is the first step of an upgrade: it
-downloads that release's archives, checks each against its `sha256.sum`, and
-writes only `scaffold_version` and the `[scaffold_sha256]` digest table the
-CI installers check (TSK-225). Update never writes the project's CI setup
-hook, `.codeflow/ci-setup.sh`.
 
 | Policy scalar | On update |
 |---|---|
@@ -217,16 +212,6 @@ of override variables set in-session. Secret scanning fails closed.
 Agent sessions are judged by the landed policy on the remote, so a local
 edit, commit or branch cannot relax the session checks.
 
-The managed CI installs the codeflow release the target pins and, once the
-target pins its archive digests in `[scaffold_sha256]`, refuses an archive
-that does not match them whatever the release's own `sha256.sum` says; a
-digest table left from another version or missing the runner's platform
-fails closed, and a project with no table is checked against `sha256.sum`
-with a warning (TSK-225). The gates job sources a project-owned
-`.codeflow/ci-setup.sh` just before `codeflow test`, and the secret scan
-reads only the commits a pull request or push brings, with a weekly and
-manual full-history scan.
-
 Other checks on these planes:
 
 | Check | Key and default | What it judges |
@@ -235,6 +220,9 @@ Other checks on these planes:
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
 | Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
 | Pull request Summary shape (TSK-218) | `git.pr_summary`, block | The one Summary section, under its mapped heading: one prose paragraph, then a list or a table, then at most one closing paragraph, read from the visible blocks only, so an HTML comment never supplies the lead or the list. It judges shape, never a word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn while a kept PR template is diagnosed, and a trusted automation profile skips it |
+| Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form fails closed. With no table the install checks `sha256.sum` alone and warns |
+| Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
+| Managed CI secret scan range (TSK-225) | the gitleaks job of `codeflow-ci.yml` | A pull request's own commits or a push's pushed range; the full history on a weekly schedule, on manual dispatch, for a push that creates the branch and for one whose previous tip is gone. Exemptions come only from the trusted commit |
 | Local release state | `release.backend = "codeflow"` with `scripts/release.py`, for a project that adopted CodeFlow's release calculator | Pre-push runs the preflight for each pushed branch: a warning for a behaviour change with no pending entry, a block only for a push that breaks a tree its base kept valid. `codeflow integrate` runs the structural state check in its test stage. Both say what was not checked against the host, and the pull request's `release impact` job stays the gate. `codeflow ci` reads the Release impact block with the calculator's parser, and both pass one shared fixture set. The release jobs live in the project's own workflow, never in the managed CI file |
 
 | Refusal record and report | Behaviour |
