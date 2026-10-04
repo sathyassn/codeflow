@@ -66,10 +66,8 @@ when a single outcome becomes one standalone task.
      are reviewed together and land in one PR.
    - **Batched epic amendment:** follow-ups, re-sizing, reassignment and
      criteria changes of other tasks ride together in one amendment on a
-     `plan/` branch, reviewed by one other-lineage seat. One amendment may
-     span several epics and carry its docs and `AGENTS.md` project section
-     (`Task: EPC-001, EPC-002`, ADR-0078). A task's own criteria change
-     rides in its own PR.
+     `plan/` branch, reviewed by one other-lineage seat. A task's own criteria
+     change rides in its own PR.
    Add a spec only where interfaces, formats, or behavior need pinning down,
    and an ADR draft if a Tier-3 decision is involved. Do not hand-invent IDs.
    If another method owns product specs or task decomposition, link the
