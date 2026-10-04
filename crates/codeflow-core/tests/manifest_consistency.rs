@@ -1196,13 +1196,14 @@ fn portal_mirror_drift(
 }
 
 /// `.codeflow/docs-portal.json` records what `codeflow update` last installed
-/// from the shipped starter: its version, each file's ownership, and for a
-/// managed file the hash of the starter bytes. `codeflow update` rewrites any
-/// of these that no longer matches the starter, so a starter edit that leaves
-/// the state stale dirties the next update on `main`, and no check of the
-/// portal bytes (`portal_dogfood_runtime_matches_the_shipped_starter`) sees
-/// it. A user-owned file's hash is frozen provenance that update keeps while
-/// the starter changes, so only its presence is checked.
+/// from the shipped starter: its version and, for a managed file, the hash of
+/// the starter bytes. `codeflow update` rewrites a version or managed hash
+/// that no longer matches the starter, so a starter edit that leaves the state
+/// stale dirties the next update on `main`, and no check of the portal bytes
+/// (`portal_dogfood_runtime_matches_the_shipped_starter`) sees it. A
+/// user-owned hash is frozen provenance that update keeps while the starter
+/// changes, so only its form is checked, and ownership equal to the starter
+/// manifest's is an invariant of this repository that update does not repair.
 #[test]
 fn portal_state_matches_the_shipped_starter() {
     let root = repo_root();
