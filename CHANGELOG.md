@@ -790,9 +790,9 @@ erratum below, never an edit of the section.
   judged version; a deleted record added back reopened is a reopen. Otherwise `codeflow task status` and `codeflow ci`
   accept the change and CI prints it for the reviewer. A history that
   cannot prove the task never landed (a shallow clone, grafts or replace
-  refs, a record or tree that does not read or parse, one id with two
-  uids, or lines of history that disagree) refuses a criteria change and
-  nothing else. A landed task's criteria still change
+  refs, a record or tree that does not read, a task file that does not
+  parse and may name the task, one id with two uids, or lines of history
+  that disagree) refuses a criteria change and nothing else. A landed task's criteria still change
   only through a planning amendment that names its epic, which now flags
   any landed task and reads a record the target deleted from its history;
   a local branch or remote-tracking ref can still only make the check
