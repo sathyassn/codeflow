@@ -249,6 +249,9 @@ def trust_choice(screen: str, harness: str, repository: Path) -> str | None:
     header = {"claude": "Accessing workspace:", "codex": "Folder access"}.get(harness)
     suspicious = re.search(r"(?i)do you trust|trust (?:this|the) (?:folder|directory|project)|one you trust|folder access|accessing workspace:", screen)
     if not header or header not in lines:
+        if suspicious and harness == "grok":
+            raise Refused(f"Grok Build {grok_version(screen) or '(version not shown)'} trust dialog: "
+                          "unrecognized wording; no key sent")
         if suspicious:
             raise Refused("unrecognized trust dialog")
         return None

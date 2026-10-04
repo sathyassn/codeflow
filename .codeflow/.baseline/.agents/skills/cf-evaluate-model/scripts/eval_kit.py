@@ -3240,7 +3240,9 @@ def _write_codex_plugin_features(config: Path) -> list[str]:
     file is verified unchanged before it is replaced."""
     text, document = _codex_config_document(config)
     values = codex_plugin_features(config)
-    wrong = [name for name, value in values.items() if value not in (None, False)]
+    # Identity, not equality: 0 and 0.0 equal False in Python but are not
+    # the boolean Codex reads.
+    wrong = [name for name, value in values.items() if value is not None and value is not False]
     missing = [name for name, value in values.items() if value is None]
     if wrong:
         raise EvalError(f"{config} sets {', '.join(wrong)} under [features] to another value than false; "
@@ -3280,15 +3282,26 @@ def disable_codex_plugins(home: Path, moved_root: Path) -> list[str]:
     added = _write_codex_plugin_features(config)
     if added:
         report.append(f"Codex: wrote {' and '.join(f'{name} = false' for name in added)} under [features] in {config}")
-    if codex_plugin_features(config) != {name: False for name in CODEX_PLUGIN_FEATURES}:
+    if any(value is not False for value in codex_plugin_features(config).values()):
         raise EvalError(f"could not verify the plugin settings in {config}")
     stale = codex_remote_plugin_cache(home)
     if stale:
+        # The destination is a kit-owned sibling of the home: never follow a
+        # link there, so a move cannot leave the evaluator folder.
+        parent = home.parent
+        if moved_root.parent != parent or parent.is_symlink() or moved_root.is_symlink() or (
+                moved_root.exists() and not moved_root.is_dir()):
+            raise EvalError(f"refusing the plugin move destination {moved_root}: it must be a real folder "
+                            f"directly inside {parent}")
+        moved_root.mkdir(mode=0o700, exist_ok=True)
         target = moved_root / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4))
-        target.mkdir(mode=0o700, parents=True)
+        target.mkdir(mode=0o700)
+        if moved_root.is_symlink() or target.is_symlink() or target.resolve().parent != parent.resolve() / moved_root.name:
+            raise EvalError(f"refusing the plugin move destination {target}: it resolves outside {parent}")
         for path in stale:
             destination = target / path.relative_to(home)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            refuse_symlink_components(destination.parent, target)
             os.rename(path, destination)
             report.append(f"Codex: moved {path} to {destination}")
         report.append("Reason: account-managed plugins add the account's skills, apps and files "

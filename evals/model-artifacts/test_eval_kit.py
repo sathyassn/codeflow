@@ -6246,12 +6246,26 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual({"screen": True}, document["tui"])
             # Another value, or a form the kit cannot extend, refuses unchanged.
             for text, reason in [('[features]\nplugins = true\n', "another value than false"),
+                                 # 0 equals False in Python but is not Codex's boolean.
+                                 ('[features]\nplugins = 0\nremote_plugin = 0.0\n', "another value than false"),
                                  ('features.hooks = true\n', "does not extend"),
                                  ('features = { hooks = true }\n', "does not extend")]:
                 config.write_text(text)
                 with self.subTest(text=text), self.assertRaisesRegex(eval_kit.EvalError, reason):
                     eval_kit.prepare_eval_homes()
                 self.assertEqual(text, config.read_text())
+            # A linked move destination is refused before anything moves, so a
+            # cache can never be moved outside the evaluator folder.
+            config.write_text(settled)
+            remote.mkdir(parents=True)
+            outside = Path(temp) / "outside"
+            outside.mkdir()
+            shutil.rmtree(root / "removed-remote-plugins")
+            (root / "removed-remote-plugins").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(eval_kit.EvalError, "move destination"):
+                eval_kit.prepare_eval_homes()
+            self.assertTrue(remote.is_dir())
+            self.assertEqual([], list(outside.iterdir()))
 
     def test_every_codex_start_the_kit_builds_turns_off_plugins(self):
         runner = self.runner()
@@ -6315,6 +6329,8 @@ class ProcessRepairTests(unittest.TestCase):
             (trust.replace("Grok Build  1.0.46 [stable]", ""), r"Grok Build \(version not shown\) trust dialog"),
             (trust.replace(str(path), str(path) + "-other"), r"Grok Build 1\.0\.46 trust dialog: unrecognized wording or a different subject path"),
             (trust.replace("posing security risks.", "posing risks."), r"Grok Build 1\.0\.46 trust dialog: unrecognized wording"),
+            (trust.replace("Do you trust the contents of this directory?", "Do you trust this directory?"),
+             r"Grok Build 1\.0\.46 trust dialog: unrecognized wording"),
         ]:
             with self.subTest(message), patch.object(runner, "herdr", return_value=screen) as transport, \
                  self.assertRaisesRegex(runner.Refused, message):

@@ -59,13 +59,15 @@ whenever its `plugins` feature is on; `remote_plugin` alone turns off only the
 remote catalog. So the command writes `plugins = false` and
 `remote_plugin = false` under `[features]` in that home's `config.toml`,
 adding only what is missing and verifying that the rest of the file parses
-unchanged. It refuses a config that sets either one to another value, or that
-defines `[features]` in a form other than one table header. It then moves an
+unchanged. It refuses a config that sets either one to another value (a
+number included), or that defines `[features]` in a form other than one table
+header, and leaves the file as it was. It then moves an
 account-managed plugin cache out of the home (the `openai-curated-remote`
 marketplace, any marketplace holding Codex's remote-install marker, and a
 non-empty install staging folder) into
 `~/.codeflow-eval/removed-remote-plugins/<time>/`, printing each move and the
-reason. Delete that folder once it is no longer needed. Reading that config
+reason. A linked destination folder is refused before anything moves. Delete
+that folder once it is no longer needed. Reading that config
 needs Python 3.11 or newer, as the runner does. Every Codex start the
 kit builds (the trial seat, a peer's answer, the hook-review command and the
 setup helper) also passes `-c features.plugins=false -c
