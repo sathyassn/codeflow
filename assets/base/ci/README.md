@@ -136,9 +136,11 @@ name), or three quote marks in a row (`"""` or `'''`) on any line but a
 full-line comment, since a multi-line string's lines could read as a table
 or an entry, or a line whose first character after spaces and tabs is not
 printable ASCII (the installers read bytes, in the C locale, so a byte-order
-mark or a Unicode space in front of the header would hide it; a NUL byte
-counts as such a character), or a carriage return anywhere but just before
-a line feed (awk would read the lines it separates as one). These rules also catch a one-line value, an array element on
+mark or a Unicode space in front of the header would hide it), a control
+character other than a tab anywhere (a NUL included), a header or key name
+with a character outside printable ASCII, or a carriage return anywhere but
+just before a line feed (awk would read the lines it separates as one).
+These rules also catch a one-line value, an array element on
 its own line or a trailing comment that happens to match; nothing else
 outside the table counts. CodeFlow writes the state so it never trips them:
 a string that needs escapes is written on one line with every quote and

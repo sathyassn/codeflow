@@ -494,7 +494,15 @@ fn unread_tables(digest: &str) -> Vec<(String, String)> {
         ),
         (
             format!("{base}\n\0[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
-            start.clone(),
+            "may be hidden by a control character".to_string(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha\x00256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden by a control character".to_string(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha\u{200b}256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden behind a name with a character outside printable ASCII".to_string(),
         ),
         (
             format!("{base}\n[scaffold_sha256]\rversion = \"1.2.3\"\rx86_64-unknown-linux-gnu = \"{digest}\"\r"),

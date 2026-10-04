@@ -129,6 +129,16 @@ pub const MULTILINE: &str =
 pub const UNREAD_START: &str =
     "may be hidden by a line that starts with a character the CI installers do not read";
 
+/// Why the installers refuse a control character other than a tab
+/// anywhere: TOML allows none, and one inside a header could hide it.
+pub const UNREAD_CONTROL: &str =
+    "may be hidden by a control character, which the CI installers do not read";
+
+/// Why the installers refuse a header or key name holding a character
+/// outside printable ASCII: an invisible one inside the table's name would
+/// otherwise make the header read as another table.
+pub const NON_ASCII_NAME: &str = "may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read";
+
 /// Why the installers refuse a carriage return anywhere but at a line's
 /// end: awk reads only a line feed as a line break, so bare carriage
 /// returns fold the file into one line it would read as holding no table.
@@ -160,8 +170,14 @@ pub fn is_table_header(line: &str) -> bool {
 fn byte_line(line: &str) -> Result<Option<&str>, &'static str> {
     // `lines` drops a carriage return before the line feed, as the awk rule
     // `/\r[^\n]/` allows one at the end.
-    if line.strip_suffix('\r').unwrap_or(line).contains('\r') {
+    let body = line.strip_suffix('\r').unwrap_or(line);
+    if body.contains('\r') {
         return Err(UNREAD_CR);
+    }
+    // Any other control character but a tab, a NUL included (awk sees it
+    // as byte 1).
+    if body.chars().any(|c| c.is_ascii_control() && c != '\t') {
+        return Err(UNREAD_CONTROL);
     }
     let trimmed = line.trim_start_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r']);
     if trimmed.starts_with('#') {
@@ -236,6 +252,9 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
                 if name.contains('\\') {
                     flag(ESCAPED.to_string());
                 }
+                if !name.is_ascii() {
+                    flag(NON_ASCII_NAME.to_string());
+                }
             }
             continue;
         }
@@ -246,6 +265,9 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
             }
             if name.contains('\\') {
                 flag(ESCAPED.to_string());
+            }
+            if !name.is_ascii() {
+                flag(NON_ASCII_NAME.to_string());
             }
         }
         if !inside || trimmed.is_empty() {
@@ -579,7 +601,7 @@ mod tests {
         // A first character a byte reader does not read (a byte-order mark,
         // a no-break or em space, a control character) could hide the
         // header, so any is refused; one inside a value is read.
-        for start in ["\u{feff}", "\u{a0}", "\u{2003}", "\u{1}", "\0"] {
+        for start in ["\u{feff}", "\u{a0}", "\u{2003}"] {
             assert_eq!(
                 pinned_digests(&format!(
                     "{start}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
@@ -594,6 +616,25 @@ mod tests {
             )),
             PinnedDigests::Table { .. }
         ));
+        // A control character anywhere (a NUL reaches awk as byte 1), and a
+        // header or key name with a character outside printable ASCII, are
+        // refused wherever they sit.
+        for (text, reason) in [
+            ("\u{1}[scaffold_sha256]\n".to_string(), UNREAD_CONTROL),
+            ("\0[scaffold_sha256]\n".to_string(), UNREAD_CONTROL),
+            ("[scaffold_sha\x00256]\n".to_string(), UNREAD_CONTROL),
+            ("note = \"a\u{1}b\"\n".to_string(), UNREAD_CONTROL),
+            ("[scaffold_sha\u{200b}256]\n".to_string(), NON_ASCII_NAME),
+            ("\"caf\u{e9}\" = 1\n".to_string(), NON_ASCII_NAME),
+        ] {
+            assert_eq!(
+                pinned_digests(&format!(
+                    "{text}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+                )),
+                PinnedDigests::Unreadable(reason.into()),
+                "{text:?}"
+            );
+        }
         // Bare carriage returns fold the file into one awk line, so one
         // inside a line is refused; one before each line feed is read.
         let table = format!(

@@ -769,7 +769,15 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
             ),
             (
                 format!("{base}\n\n\0[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
-                start.to_string(),
+                "may be hidden by a control character".to_string(),
+            ),
+            (
+                format!("{base}\n\n[scaffold_sha\x00256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
+                "may be hidden by a control character".to_string(),
+            ),
+            (
+                format!("{base}\n\n[scaffold_sha\u{200b}256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
+                "may be hidden behind a name with a character outside printable ASCII".to_string(),
             ),
             (
                 format!("{base}\n\n[scaffold_sha256]\rversion = \"1.2.3\"\r{t} = \"{reviewed}\"\r"),
