@@ -1597,7 +1597,14 @@ pub(super) fn task_entries_in(
     }
     if let Some(epics) = subtree(records, "epics")? {
         for epic in &epics {
-            let Ok(name) = epic.name() else { continue };
+            // Any epic directory may hold task records, so one whose name
+            // cannot be read hides them: no answer, never an empty one.
+            let Ok(name) = epic.name() else {
+                return Err(format!(
+                    "the epic directory {} has a name that is not UTF-8, so its task records cannot be read",
+                    String::from_utf8_lossy(epic.name_bytes())
+                ));
+            };
             let Some(epic_tree) = subtree(&epics, name)? else {
                 continue;
             };
@@ -1609,6 +1616,8 @@ pub(super) fn task_entries_in(
     let mut entries = Vec::new();
     for (directory, tasks) in directories {
         for entry in &tasks {
+            // A task record's file name is its id (`TSK-NNN.md`), which is
+            // UTF-8, so a name that is not is no record.
             let Ok(name) = entry.name() else { continue };
             let path = format!("{directory}/{name}");
             if super::work_start::record_kind_for_tree_path(&path) == Some(RecordKind::Task) {

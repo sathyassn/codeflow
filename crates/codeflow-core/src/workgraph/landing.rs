@@ -497,45 +497,48 @@ impl<'r> RecordStore<'r> {
         // Each walk hides the newest holders found so far with their
         // history, so the next holder it meets is on another line.
         let mut hidden: Vec<Oid> = Vec::new();
-        // The newest version so far, its blob, and the holders that have it.
-        let mut found: Option<(Oid, RecordView, Vec<Oid>)> = None;
+        let mut holders: Vec<(Oid, Oid, RecordView)> = Vec::new();
         while let Some((commit, blob, record)) = self.first_holder(task, judged, &hidden)? {
             hidden.push(commit);
-            let Some((kept, version, holders)) = &mut found else {
-                found = Some((blob, record, vec![commit]));
-                continue;
+            holders.push((commit, blob, record));
+        }
+        // A holder's version is older when its line inherited it unchanged
+        // from a line that holds another version. The rest must agree,
+        // whatever order the walks met them in.
+        let mut newest: Vec<usize> = Vec::new();
+        for (index, (commit, blob, record)) in holders.iter().enumerate() {
+            let mut older = false;
+            for (other, _, version) in &holders {
+                if other != commit
+                    && !same_version(record, version)
+                    && self.inherited(task, *commit, *blob, *other)?
+                {
+                    older = true;
+                    break;
+                }
+            }
+            if !older {
+                newest.push(index);
+            }
+        }
+        let Some(&first) = newest.first() else {
+            return if holders.is_empty() {
+                Ok(None)
+            } else {
+                Err("the target no longer holds this task, and each line of its history holds a version another line replaced, so which one it keeps cannot be told".to_string())
             };
-            if *kept == blob || same_version(version, &record) {
-                holders.push(commit);
-                continue;
-            }
-            let (kept, holders) = (*kept, holders.clone());
-            let mut stale = false;
-            for holder in &holders {
-                if self.inherited(task, commit, blob, *holder)? {
-                    stale = true;
-                    break;
-                }
-            }
-            if stale {
-                continue;
-            }
-            let mut superseded = true;
-            for holder in &holders {
-                if !self.inherited(task, *holder, kept, commit)? {
-                    superseded = false;
-                    break;
-                }
-            }
-            if superseded {
-                found = Some((blob, record, vec![commit]));
-                continue;
-            }
+        };
+        let kept = &holders[first].2;
+        if let Some(&other) = newest
+            .iter()
+            .find(|&&index| !same_version(kept, &holders[index].2))
+        {
             return Err(format!(
-                "the target no longer holds this task, and lines of its history hold different versions of it (one at {commit:.9}), so which one it keeps cannot be told"
+                "the target no longer holds this task, and lines of its history hold different versions of it (one at {:.9}), so which one it keeps cannot be told",
+                holders[other].0
             ));
         }
-        Ok(found.map(|(_, record, _)| record))
+        Ok(Some(kept.clone()))
     }
 
     /// Whether the line ending at `holder` inherited its version (`blob`)

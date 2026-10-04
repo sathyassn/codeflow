@@ -4770,3 +4770,180 @@ fn a_merge_resolution_is_a_lines_own_version() {
         );
     }
 }
+
+/// TSK-234 review round 8: three lines keep A, change A to B, and change A
+/// to C and back to A written in other bytes; all delete the record and
+/// merge. The restored A is that line's own newest version, so it competes
+/// with B whatever order the lines merge in, and recreating the task with
+/// B's criteria is refused in every order.
+#[test]
+fn equal_versions_in_other_bytes_keep_their_own_history() {
+    use codeflow_core::workgraph::acceptance::{pull_request_findings_judged, Criteria};
+    let orders = [
+        ["a", "c", "b"],
+        ["a", "b", "c"],
+        ["b", "a", "c"],
+        ["b", "c", "a"],
+        ["c", "a", "b"],
+        ["c", "b", "a"],
+    ];
+    let restored = format!("{REOPEN_ADDS}- AC-4 When tested, it shall work.\n");
+    let mut accepted = Vec::new();
+    for order in orders {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let empty = head(root);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, LANDED),
+        );
+        commit(root, "docs: the original criteria A");
+        let origin = head(root);
+        for line in ["a", "b", "c"] {
+            git(root, &["switch", "-c", line, &origin]);
+            match line {
+                "a" => {
+                    write(root, "docs/a.md", "older unrelated work\n");
+                    commit(root, "docs: an older line");
+                }
+                "b" => {
+                    write(
+                        root,
+                        &record_path("TSK-001"),
+                        &task("TSK-001", "todo", REOPEN_ADDS, LANDED),
+                    );
+                    commit(root, "docs: choose criteria B");
+                }
+                _ => {
+                    write(
+                        root,
+                        &record_path("TSK-001"),
+                        &task("TSK-001", "todo", &restored, LANDED),
+                    );
+                    commit(root, "docs: choose criteria C");
+                    write(
+                        root,
+                        &record_path("TSK-001"),
+                        &task("TSK-001", "todo", OWN_JOURNEY, LANDED)
+                            .replace("Work.", "Work described."),
+                    );
+                    commit(root, "docs: restore criteria A on its own");
+                }
+            }
+            git(root, &["rm", "-q", &record_path("TSK-001")]);
+            commit(root, "docs: delete the record");
+        }
+        git(root, &["switch", "-c", "target", order[0]]);
+        for line in &order[1..] {
+            git(root, &["merge", "-q", "--no-ff", "--no-edit", line]);
+        }
+        git(root, &["switch", "-c", BRANCH, &empty]);
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+        );
+        commit(root, "docs: recreate it with B's criteria");
+        let findings = pull_request_findings_judged(
+            root,
+            "target",
+            "HEAD",
+            &Criteria::OwnTask("TSK-001".into()),
+            None,
+            Some(BRANCH),
+            &[],
+        )
+        .unwrap();
+        if !findings.iter().any(|found| !found.note) {
+            accepted.push(order);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "the restored A must compete with B: {accepted:?}"
+    );
+}
+
+/// TSK-234 review round 8: any epic directory may hold task records, so
+/// one whose name is not UTF-8 hides them; the history then proves no
+/// planned task, and the task's own pull request cannot change its
+/// criteria.
+#[cfg(unix)]
+#[test]
+fn an_epic_directory_named_in_other_bytes_is_no_proof_of_absence() {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::{Command, Stdio};
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let content = task("TSK-001", "todo", OWN_JOURNEY, LANDED);
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hash.stdin
+        .take()
+        .unwrap()
+        .write_all(content.as_bytes())
+        .unwrap();
+    let blob = String::from_utf8(hash.wait_with_output().unwrap().stdout).unwrap();
+    git(root, &["rm", "-q", &record_path("TSK-001")]);
+    let path = std::ffi::OsString::from_vec(
+        b"project-management/epics/EPC-\xff/tasks/TSK-001.md".to_vec(),
+    );
+    let out = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(&path)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(
+        root,
+        &[
+            "commit",
+            "-qm",
+            "docs: a completion under an epic directory",
+        ],
+    );
+    let out = Command::new("git")
+        .args(["update-index", "--force-remove"])
+        .arg(&path)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    git(root, &["add", &record_path("TSK-001")]);
+    git(root, &["commit", "-qm", "docs: move the record back"]);
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: change its criteria");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "a completion under an epic directory named in other bytes",
+        &["work.criteria_frozen", "not UTF-8"],
+    );
+}
