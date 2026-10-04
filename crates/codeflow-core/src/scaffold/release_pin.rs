@@ -129,6 +129,19 @@ pub const STRAY: &str =
 /// Why the installers refuse a table written another way.
 pub const OTHER_FORM: &str = "is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)";
 
+/// The `[scaffold_sha256]` header the installers read: the bare name in
+/// brackets, spaces or tabs around it, and an optional trailing comment.
+static HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$")
+        .expect("header pattern")
+});
+
+/// Whether `line` is the digest table's header as the installers read it.
+#[must_use]
+pub fn is_table_header(line: &str) -> bool {
+    HEADER.is_match(line)
+}
+
 /// Reads the `[scaffold_sha256]` table from a project state's text exactly
 /// as the CI installers' awk reader does, line by line, so doctor reports
 /// what CI will check. The installers accept one strict form and fail
@@ -140,14 +153,10 @@ pub const OTHER_FORM: &str = "is written in a form the CI installers do not read
 /// or key, or another table name or key naming the table (a quoted header,
 /// an inline or dotted table, a sub-table) is refused, as are a second
 /// header and a key listed twice. A table name runs to its first `]` and a
-/// key to its first `=`, so single-line values and trailing comments never
-/// count. `codeflow update --pin` writes the form they read.
+/// key to its first `=`, so what follows them counts only when it holds
+/// three quotes in a row. `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
-    static HEADER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$")
-            .expect("header pattern")
-    });
     static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
             r#"^[[:space:]]*"?([0-9A-Za-z_-]+)"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$"#,

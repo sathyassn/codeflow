@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::scaffold::release_pin::{pinned_digests, PinnedDigests, TABLE};
+use crate::scaffold::release_pin::{is_table_header, pinned_digests, PinnedDigests, TABLE};
 use crate::scaffold::version::is_older;
 
 use super::Status;
@@ -288,7 +288,8 @@ fn same_pin(
 }
 
 /// The lines of a state's `[scaffold_sha256]` section, trimmed, without
-/// blanks and comments: equal lines pin the same digests.
+/// blanks and comments: equal lines pin the same digests. The header is
+/// recognized as the installers recognize it.
 fn table_lines(state: &str) -> Vec<&str> {
     let mut inside = false;
     state
@@ -296,8 +297,7 @@ fn table_lines(state: &str) -> Vec<&str> {
         .map(str::trim)
         .filter(|line| {
             if line.starts_with('[') {
-                inside = line.trim_end_matches(|c: char| c != ']').replace(' ', "")
-                    == format!("[{TABLE}]");
+                inside = is_table_header(line);
                 return false;
             }
             inside && !line.is_empty() && !line.starts_with('#')
@@ -807,6 +807,31 @@ mod tests {
             "{}",
             found.message
         );
+    }
+
+    /// A header the installers read with tabs or a trailing comment holding
+    /// `]` is the table's header for the change note too.
+    #[test]
+    fn a_changed_table_is_noted_whatever_header_form_the_installers_read() {
+        for header in [
+            "[scaffold_sha256] # reviewed [digests]",
+            "\t[\tscaffold_sha256\t]\t",
+        ] {
+            let dir = project("1.2.3");
+            let pinned = table("1.2.3").replace("[scaffold_sha256]", header);
+            commit_on_main(dir.path(), &format!("{}{pinned}", state("1.2.3")));
+            let changed = pinned.replacen(&"a".repeat(64), &"b".repeat(64), 1);
+            write(dir.path(), STATE, &format!("{}{changed}", state("1.2.3")));
+            let found = report(dir.path());
+            assert_eq!(found.status, Status::Pass, "{header}: {}", found.message);
+            assert!(
+                found
+                    .message
+                    .contains("this checkout changes the [scaffold_sha256] table"),
+                "{header}: {}",
+                found.message
+            );
+        }
     }
 
     #[test]
