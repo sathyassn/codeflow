@@ -723,6 +723,23 @@ erratum below, never an edit of the section.
   transferred, or whose managed test file was modified, is not updated.
   The portal's runtime and its claim identity check are unchanged.
 
+<!-- codeflow:release-impact patch -->
+- **A semicolon before a word that only starts with a launcher name no
+  longer trips the privilege guard.** `exec-guard` refused any command line
+  containing a semicolon, a space and a launcher name as a raw substring, so
+  prose such as "supersedes", "summary", "such as" or "doasync" after a
+  semicolon in a heredoc or an `echo` was blocked as a chained `su`,
+  `sudo`, `doas`, `pkexec` or `runuser` (sathyassn/codeflow#66). The check
+  now also requires the launcher name to end at a word boundary: whitespace,
+  the end of the line, a control character, or a shell metacharacter or
+  expansion starter (`;`, `&`, `|`, `(`, `)`, `<`, `>`, a quote, a
+  backtick, `$`, a backslash, `{` or `*`). It still reads no quoting or heredoc
+  structure, so every launch the guard refused before is still refused, a
+  launcher inside a quoted string included: a pattern that ends exactly at
+  the launcher name, such as `grep '; su' file`, stays blocked, and
+  `grep '; supersedes' file` passes. The `&&`, `||` and pipe checks and the
+  `;su` form without a space are unchanged.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a

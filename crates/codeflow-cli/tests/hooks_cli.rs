@@ -177,6 +177,7 @@ fn json_string(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
             c => out.push(c),
         }
     }
@@ -1874,6 +1875,56 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
             &guard_payload(command, dir.path()),
         );
         assert!(out.status.success(), "should allow: {command}");
+    }
+}
+
+#[test]
+fn exec_guard_semicolon_launcher_check_stops_at_the_launcher_word() {
+    // TSK-233 AC-3 (sathyassn/codeflow#66), through the real hook: prose,
+    // a heredoc body and a grep pattern whose word only starts with a
+    // launcher name pass; every real launch after a semicolon still refuses.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "printf '%s\\n' 'first; such as this' > note.md",
+        "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
+        "grep -n '; supersedes' file.txt",
+        "echo 'a; doasync b'",
+    ] {
+        let out = guard(command);
+        assert_eq!(out.status.code(), Some(0), "should allow: {command}");
+        assert!(
+            out.stderr.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for command in [
+        "true; su -",
+        "true; su",
+        "true; su\t-",
+        "true; sudo -i",
+        "true; doas sh",
+        "true; pkexec id",
+        "true; runuser -u x id",
+        "echo supersedes; su -",
+        "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF\nls; sudo id",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        assert!(
+            err.contains("security.privilege_escalation"),
+            "{command}: {err}"
+        );
     }
 }
 

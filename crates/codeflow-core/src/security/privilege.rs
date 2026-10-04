@@ -133,7 +133,7 @@ fn check_priv_chaining(cmd: &str) -> Option<Verdict> {
             ));
         }
         // Semicolon chaining.
-        if cmd.contains(&format!("; {priv_cmd}")) {
+        if semicolon_chains_launcher(cmd, priv_cmd) {
             return Some(block(
                 "Privilege Escalation",
                 &format!("Semicolon chained {priv_cmd}"),
@@ -150,6 +150,35 @@ fn check_priv_chaining(cmd: &str) -> Option<Verdict> {
         }
     }
     None
+}
+
+/// True when `; {priv_cmd}` appears with the launcher name ending at a word
+/// boundary, so a launch such as `; su -` refuses but `; supersedes` and
+/// `; doasync` do not. The test stays on the raw line: it reads no quoting,
+/// heredoc or other text structure, so a launch inside a string is still
+/// refused as before.
+fn semicolon_chains_launcher(cmd: &str, priv_cmd: &str) -> bool {
+    let needle = format!("; {priv_cmd}");
+    cmd.match_indices(&needle).any(|(at, _)| {
+        cmd[at + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(ends_launcher_word)
+    })
+}
+
+/// A character after a launcher name that ends the word: whitespace, a
+/// control character, or a shell metacharacter or expansion starter that
+/// leaves the name as the program (`su;`, `su|`, `su$IFS`, `su{,}`, `su*`, or
+/// a quote, which can end the name as in an empty string `su` then two quotes).
+/// Any other character continues the word, as in `supersedes`.
+fn ends_launcher_word(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(
+            c,
+            ';' | '&' | '|' | '(' | ')' | '<' | '>' | '"' | '\'' | '`' | '$' | '\\' | '{' | '*'
+        )
 }
 
 fn check_direct_priv_esc(cmd: &str) -> Option<Verdict> {
@@ -294,6 +323,82 @@ mod tests {
         assert!(PrivilegeModule
             .check(&ctx("echo test; sudo rm file"))
             .is_some());
+    }
+
+    /// Every launcher chained after `; ` still refuses, whatever follows the
+    /// name: end of line, whitespace, a shell metacharacter or an expansion.
+    #[test]
+    fn test_semicolon_launchers_still_refuse_at_every_word_boundary() {
+        for launcher in PRIV_ESC_CMDS {
+            for tail in [
+                "", " ", " -", " -i", " id", "\t-", "\t", "\n", "\r\n", ";", "&", "&&", "|", ")",
+                "(id)", "<in", ">out", "''", "\"\"", "'", "\"", "`", "$IFS-", "${IFS}-", "\\\n-",
+                "{,}", "*", "\u{b}-",
+            ] {
+                for head in ["true", "ls -la", "cd /tmp", "echo ok && true", "(true"] {
+                    let cmd = format!("{head}; {launcher}{tail}");
+                    let v = PrivilegeModule
+                        .check(&ctx(&cmd))
+                        .unwrap_or_else(|| panic!("should refuse: {cmd:?}"));
+                    assert!(!v.allow, "{cmd:?}");
+                    assert_eq!(v.category, "Privilege Escalation", "{cmd:?}");
+                }
+            }
+        }
+    }
+
+    /// The refusal names the launcher it found: `sudo` before `su`.
+    #[test]
+    fn test_semicolon_refusal_reason_is_unchanged() {
+        for (cmd, reason, pattern) in [
+            ("true; su -", "Semicolon chained su", "; su"),
+            ("true; sudo -i", "Semicolon chained sudo", "; sudo"),
+            ("true; doas sh", "Semicolon chained doas", "; doas"),
+            ("true; pkexec id", "Semicolon chained pkexec", "; pkexec"),
+            (
+                "true; runuser -u x id",
+                "Semicolon chained runuser",
+                "; runuser",
+            ),
+            ("echo supersedes; su", "Semicolon chained su", "; su"),
+            (
+                "echo a; supersedes; sudo id",
+                "Semicolon chained sudo",
+                "; sudo",
+            ),
+        ] {
+            let v = PrivilegeModule.check(&ctx(cmd)).unwrap();
+            assert_eq!((v.reason.as_str(), v.pattern.as_str()), (reason, pattern));
+        }
+    }
+
+    /// A word that only starts with a launcher name is not a launch (issue
+    /// 66): prose, a heredoc body or a pattern after a semicolon.
+    #[test]
+    fn test_semicolon_before_a_word_that_starts_with_a_launcher_name_is_allowed() {
+        for cmd in [
+            "printf '%s\\n' 'first; such as this' > note.md",
+            "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
+            "grep -n '; supersedes' file.txt",
+            "grep -rn -i 'chained su\\|; summary' docs/",
+            "echo \"(...; supersedes A3's ...)\"",
+            "echo 'a; subtotal'",
+            "echo 'a; doasync b'",
+            "echo 'a; sudoku b'",
+            "echo 'a; sudoers file'",
+            "echo 'a; pkexecute'",
+            "echo 'a; runusers'",
+            "echo 'a; suit'",
+            "echo 'a; su-like'",
+            "echo 'a; su.'",
+            "echo 'a; su,'",
+            "echo 'a; sue'",
+            "echo 'a; sudo=1'",
+            "echo 'a; su#x'",
+            "true; supersedes",
+        ] {
+            assert!(PrivilegeModule.check(&ctx(cmd)).is_none(), "{cmd:?}");
+        }
     }
 
     #[test]
