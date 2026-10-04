@@ -315,6 +315,9 @@ catalog! {
     /// The hooks or their policy edited from a session.
     HOOK_INTEGRITY = Step::Codeflow("codeflow update"),
         "the enforcement hooks and their policy are not agent-editable: fix the cause a gate flags rather than disabling it; hooks and policy change through a human or `codeflow update` (ADR-0009)";
+    /// A recursive delete of a registered worktree or a directory holding one.
+    WORKTREE_DELETE = Step::Git("git worktree remove"),
+        "commit or save the worktree's work, then remove it with `git worktree remove <path>`, which refuses while it holds uncommitted changes; remove a directory that holds worktrees only after each of them is removed";
     /// A hook binary built from other hook or policy sources than the tree's.
     JUDGE_SOURCE_DRIFT = Step::Codeflow("codeflow doctor"),
         "rebuild the hook binary from the current hook and policy sources (`cargo build -p codeflow-cli`) and rerun; `codeflow doctor` reports the binary the hooks run; until then a human decides whether this judgment stands";
@@ -522,6 +525,12 @@ catalog! {
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
+    /// Directories a full gate writes that this process cannot write.
+    DOCTOR_GATE_DIRS = Step::Edit(".claude/settings.json"),
+        "make {paths} writable for the process that runs the full gate: inside the Claude Code sandbox the operator adds them to `sandbox.filesystem.allowWrite` in `.claude/settings.json` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs `codeflow test --mode full` outside the sandbox; then `codeflow doctor --check permissions` confirms it";
+    /// A state the sandbox hides from doctor.
+    DOCTOR_SANDBOX_UNSEEN = Step::Codeflow("codeflow doctor"),
+        "the operator runs `codeflow doctor --check {check}` outside the sandbox, in a separate terminal, to confirm {what}";
     /// Grok hook commands that grok skips in a file `codeflow update`
     /// manages, or a grok shell guard that does not refuse the doctor
     /// canary.
