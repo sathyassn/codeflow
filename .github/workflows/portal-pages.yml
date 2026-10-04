@@ -1,5 +1,7 @@
 # Builds the docs portal from the committed Markdown and deploys it to GitHub
-# Pages. It does not gate a merge and nothing else depends on it.
+# Pages on every push to main, because the portal figures also read AGENTS.md,
+# the rules, the scaffold assets, the CLI sources and the record folders. It
+# does not gate a merge and nothing else depends on it.
 #
 # The repository owner must first set Settings > Pages > Source to
 # "GitHub Actions". Until then the deploy job fails at configure-pages and the
@@ -12,10 +14,6 @@ name: portal-pages
 on:
   push:
     branches: [main]
-    paths:
-      - "docs/**"
-      - "docs-portal/**"
-      - ".github/workflows/portal-pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -34,7 +32,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           # The version pinned in docs-portal/.node-version.
           node-version-file: docs-portal/.node-version
@@ -51,7 +49,7 @@ jobs:
   deploy:
     name: deploy to GitHub Pages
     needs: build
-    if: github.repository == 'sathyassn/codeflow'
+    if: github.repository == 'sathyassn/codeflow' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write

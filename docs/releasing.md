@@ -483,7 +483,8 @@ exact-source marker and asset digests. A stable-looking prerelease, a draft, or
 a tag without a verified public release is never a baseline.
 
 3.0.0 is published, but `.release/config.json` still records the bounded
-v2.1.0 bootstrap as the baseline. It keeps v2.1.0's public source and tag
+v2.1.0 bootstrap as historical provenance. The automatic baseline is the
+highest verified public release, 3.0.0. It keeps v2.1.0's public source and tag
 mismatch as recorded facts.
 
 | Fact | Value |

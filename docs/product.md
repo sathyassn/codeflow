@@ -46,8 +46,10 @@ reason for a change survives the session that made it.
 
 ### What it does
 
-- **Scaffolds.** `init` and `update` lay down and refresh managed files, and
-  never overwrite your edits without a merge.
+- **Scaffolds.** `init` and `update` lay down and refresh managed files.
+  `update` regenerates only the marked blocks of shared files such as
+  `AGENTS.md`, merges a managed file you edited (a conflict is proposed in a
+  `.new` file), and replaces edited files only under `--force`.
 - **Enforces.** Four planes check the rules (see Architecture). An agent
   never merges into a protected branch; a human merges the pull request.
 - **Verifies.** `codeflow test` runs the project's test gate. `validate`
@@ -66,7 +68,7 @@ Planning is checked against each row.
 | It is not | What that rules out |
 |---|---|
 | Not a runtime harness, agent framework, or model router | No daemon and no autorun. Vendor sessions, plugins, tools, worktrees, memory, sandbox and permissions are used at the process boundary and never reimplemented (ADR-0023) |
-| Not a process-enforcement engine | No code orders phases, roles or reviews. A gate exists only where a mistake is irreversible or invisible |
+| Not a process-enforcement engine | CodeFlow does not run or schedule agents, and no code orders phases, roles or reviews. Its gates sit where a mistake is irreversible or invisible, such as work start, task completion and protected branches |
 | Not a graphical or terminal UI product | The one exception is `cf-present` (SPC-004): an explicit command opens a short-lived review page in an isolated browser window, served from a loopback-only, per-session service that stops itself. The opt-in docs portal is a generated static site, not an operated interface |
 | Not memory infrastructure | No embeddings, vector database or database as authority. Markdown and JSONL are the truth, with a full-text search cache over them |
 | Not an OS or harness security boundary | CodeFlow gives deterministic safety feedback and does not claim every harness contains an agent equally. Binaries ship for macOS, Linux (WSL2 uses the Linux binary) and, from 3.1.0, native Windows x86-64. Claude work that needs an OS sandbox on Windows runs in WSL2 or a container |

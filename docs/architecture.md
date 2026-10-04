@@ -90,8 +90,9 @@ A git-hook shim runs the `codeflow` binary whose command started git.
 
 - That command names itself in `CODEFLOW_HOOK_BINARY` for its git children
   only. The shim fails when the named binary is missing or not executable.
-- Git run outside codeflow uses the `codeflow` on PATH. The shim is a no-op
-  when there is none (SPC-013 R-85).
+- Git run outside codeflow uses the `codeflow` on PATH. The shim refuses the
+  operation, prints repair instructions and exits 1 when there is none or the
+  binary is too old (SPC-013 R-85).
 
 The test gate evaluates file and aggregate coverage rules through one verdict.
 

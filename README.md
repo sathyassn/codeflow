@@ -198,6 +198,7 @@ The docs are listed in reading order, by what the reader needs next.
 - [docs/capabilities.md](docs/capabilities.md): the registry of what the system does
 - [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
 - [docs/architecture/enforcement-planes.md](docs/architecture/enforcement-planes.md): what each plane catches
+- [docs/architecture/present.md](docs/architecture/present.md) and [docs/architecture/utility-presentation.md](docs/architecture/utility-presentation.md): how review pages and figures are built
 - [docs/decisions/](docs/decisions/) and [docs/decision-map.md](docs/decision-map.md): the decisions and why they were made
 
 **Maintain**
