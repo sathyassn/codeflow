@@ -24,6 +24,9 @@
 
 use std::fmt;
 use std::path::Path;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use super::hash::sha256_hex;
 use super::state::{read_beneath_root, write_record, PROJECT_TOML};
@@ -112,9 +115,12 @@ pub enum PinnedDigests {
 /// here too; `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
-    let header =
-        regex::Regex::new(r"^\s*\[\s*scaffold_sha256\s*\]\s*(#.*)?$").expect("static regex");
-    let entry = regex::Regex::new(r#"^\s*"?([0-9A-Za-z_.-]+)"?\s*="#).expect("static regex");
+    static HEADER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\s*\[\s*scaffold_sha256\s*\]\s*(#.*)?$").expect("header pattern")
+    });
+    static ENTRY: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"^\s*"?([0-9A-Za-z_.-]+)"?\s*="#).expect("entry pattern"));
+    let (header, entry) = (&*HEADER, &*ENTRY);
     let (mut inside, mut table) = (false, false);
     let mut version = None;
     let mut values = std::collections::BTreeMap::new();
