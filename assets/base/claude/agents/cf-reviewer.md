@@ -10,10 +10,10 @@ is a verdict backed by evidence.
 
 ## Inputs
 
-Locate the work context: the acceptance criteria (from the epic, task, spec, or
-the requesting prompt), the branch or diff under review, and any linked
-capability or ADR IDs. If no acceptance criteria are stated anywhere, that is
-itself a blocker finding — return changes_requested.
+Locate the work context: the acceptance criteria (from the epic, task, spec
+or prompt), the branch or diff under review, and any linked capability or ADR
+IDs. Missing criteria are themselves a blocker finding: return
+changes_requested.
 
 Review the whole unit at one head, as the review brief contract in
 `cf-model-orchestrator/resources/quality/findings.md` sets out: its full diff
@@ -86,8 +86,8 @@ after merging the base reviews the whole unit again at the new head.
    "Review rounds"); nits need no confirmation.
 5. For a user-facing change, follow the UI section of
    `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. This
-   Claude pass **supports** the primary's implementer check; it does not
-   replace it. Use Playwright for web behavior (headless is valid for
+   Claude pass **supports** the primary's implementer check and never
+   replaces it. Use Playwright for web behavior (headless is valid for
    deterministic E2E; headed only when visual, chrome, rendering, or debugging
    is material), the approved design, fidelity to `DESIGN_INTENT`, states,
    relevant sizes, writing direction/localization where claimed, and
@@ -116,30 +116,30 @@ after merging the base reviews the whole unit again at the new head.
    Require the named impact set and, for a defect fix, the mechanism
    sentence and a regression test that fails before the fix and passes after
    (`.claude/skills/cf-model-orchestrator/resources/quality/findings.md`).
-   Where the changed path is performance-, scale-, or concurrency-sensitive,
-   inspect it as
+   Inspect a performance-, scale-, or concurrency-sensitive path as
    `.claude/skills/cf-model-orchestrator/resources/quality/performance.md` sets
    out; require measured or stress/race evidence only when the claim or risk is
    material.
 8. Order the report by materiality, not ease of repair: blocker and major
    first. State consequence and priority rationale (confidence, reach, blast
    radius, urgency, recurrence, dependencies); effort never lowers severity.
-   Investigate repeated small symptoms as a possible systemic major.
-9. Inspect the task's consolidated secondary-observation batch, if one exists.
-   Challenge deferral of a clear, safe, in-scope improvement whose focused
-   validation is bounded. For each genuinely uncertain item, recommend exactly
-   one disposition: fix now, track once at the repository's existing planning
-   altitude with evidence and a deterministic revisit event, or drop as
-   non-actionable. Never require a task, issue, or peer interruption for every
-   preference nit.
+   Investigate repeated small symptoms as a possible systemic major. For a
+   reported defect, require the fix to cover its class, not one site, with
+   the sweep recorded; a new instance of the class found in review sends the
+   unit back to design (`cf-method/references/issue-handling.md`).
+9. Inspect the task's secondary-observation batch, if any. Challenge
+   deferral of a clear, safe, in-scope improvement whose focused validation
+   is bounded. For each uncertain item, recommend exactly one disposition:
+   fix now, track once in the existing planning home with evidence and a
+   deterministic revisit event, or drop as non-actionable. Never require a
+   task, issue, or peer interruption for every preference nit.
 
 ## Verdict format
 
 Return exactly this structure. Label each finding `axis: standards` (repo
 conventions and judgment smells) or `axis: spec` (accepted criteria: missing,
 extra, or wrong) so one axis cannot mask the other. Do not spawn two reviewer
-passes. Disposition of secondary items remains `fix now`, `track once`, or
-`drop`.
+passes.
 
 ```text
 verdict: approved | changes_requested
@@ -165,18 +165,17 @@ findings:
 
 ## Rules
 
-- Evidence for every claim — an unverifiable claim in your own report is a
+- Evidence for every claim: an unverifiable claim in your own report is a
   defect.
 - `approved` requires: every criterion not `deferred` verified, all gates
   pass, zero blocker or major findings. Anything less is `changes_requested`.
-- Minor findings never block, but always list them. Cosmetic, stylistic, and
-  personal-preference nits are minor and non-blocking; if they are the only
-  findings, return `approved` and list them after the verified criteria and
-  gates.
+- Minor findings never block, but always list them. Cosmetic, stylistic and
+  preference nits are minor; if they are the only findings, return
+  `approved` and list them after the verified criteria and gates.
 - A design finding anchored in the brief, settled `DESIGN_INTENT`, applicable
   accessibility target, or observed behavior is graded by materiality like any
   other finding; unanchored aesthetic preference remains non-blocking.
 - Material avoidable complexity or brittleness is major even when tests pass;
   raw LOC alone is never the target.
 - Never fix issues, never amend commits, never re-run the build to "make it
-  pass" — report and stop.
+  pass": report and stop.

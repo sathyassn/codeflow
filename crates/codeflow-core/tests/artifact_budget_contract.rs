@@ -1848,6 +1848,113 @@ fn reading_chain_keeps_the_findings_section_conditional() {
     );
 }
 
+/// TSK-240: the issue-handling reference is read from the lifecycle's repair
+/// bullet only when a reported defect is fixed, never on every task.
+#[test]
+fn reading_chain_keeps_issue_handling_conditional() {
+    const ISSUE_HANDLING: &str = "cf-method/references/issue-handling.md";
+    const LIFECYCLE: &str = "cf-method/references/workflow-lifecycle.md";
+    let base = skill_trees();
+    assert!(
+        base.contains_key(ISSUE_HANDLING),
+        "cf-method ships {ISSUE_HANDLING}"
+    );
+    assert!(
+        normalized(&base[LIFECYCLE]).contains(
+            "- implementation defect -> responsible primary and executor via `cf-develop`, \
+             a reported one first through `issue-handling.md`;"
+        ),
+        "the repair bullet lost its pointer to {ISSUE_HANDLING}"
+    );
+
+    let chain = reading::reading_chain(&base, &Inventory::SHIPPED);
+    assert!(chain.errors.is_empty(), "{:?}", chain.errors);
+    assert!(
+        !chain
+            .files
+            .iter()
+            .any(|file| file.path.ends_with(ISSUE_HANDLING)),
+        "issue handling must stay outside the per-task chain"
+    );
+
+    let mut files = base;
+    let lifecycle = files.get_mut(LIFECYCLE).expect("lifecycle");
+    *lifecycle = lifecycle.replace("a reported one first through", "always read");
+    let errors = reading::reading_chain(&files, &Inventory::SHIPPED).errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("issue-handling.md without a reviewed trigger")),
+        "{errors:?}"
+    );
+}
+
+/// TSK-240: the issue-handling reference keeps each step and the critical
+/// path the operator approved on 2026-10-04, written without em or en
+/// dashes, and the reviewer keeps its two checks for a reported defect.
+#[test]
+fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
+    let root = repo_root();
+    let reference = root.join("assets/base/claude/skills/cf-method/references/issue-handling.md");
+    assert_contains_all(
+        &reference,
+        &[
+            ("intake reproduces", "reproduces the report with a failing test or one bounded probe"),
+            ("intake severity", "says which one holds, or that none does"),
+            ("cause and class", "Name the mechanism with file:line and the defect class"),
+            ("sibling sweep", "Search the tree for the class and list every site"),
+            ("deferred sites tracked now", "each deferred site gets its own issue now, naming the class"),
+            ("group by cause", "become one unit with one design before anyone branches"),
+            (
+                "design first for rule mechanisms",
+                "A defect in a guard, parser, matcher, policy, acceptance rule, hook or CI gets a short design first",
+            ),
+            ("fail before, pass after", "fails before the fix and passes after"),
+            ("durable class check", "Add one durable check for the class where one can be written"),
+            (
+                "re-diagnosis trigger",
+                "A round that finds a new instance of the same class, rather than a regression of the fix",
+            ),
+            ("not a round count", "it is not a round count"),
+            ("release target", "names the release that carries the fix"),
+            ("closure note", "the sites deferred with their issues"),
+            ("critical: adopters", "blocks adopters"),
+            ("critical: security", "weakens a security boundary"),
+            ("critical: data", "loses or rewrites data, records or history"),
+            ("critical: deadlock", "deadlocks or hangs a gate, or blocks the tool's own fix path"),
+            ("critical label", "with the `critical` label where the host has labels"),
+            ("jump within the epic", "the primary, within the fix's own epic"),
+            ("jump across epics", "the operator, when it moves another epic's planned work"),
+            ("release route", "Only a route the project's release policy supports; agents never publish"),
+            ("no route under pressure", "never a step taken under pressure"),
+        ],
+    );
+    let text = read_text(&reference);
+    let dashes: Vec<_> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(['\u{2013}', '\u{2014}']))
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert!(
+        dashes.is_empty(),
+        "issue-handling.md carries em or en dashes on lines {dashes:?}"
+    );
+    assert_contains_all(
+        &root.join("assets/base/claude/agents/cf-reviewer.md"),
+        &[
+            (
+                "class covered",
+                "For a reported defect, require the fix to cover its class, not one site, with the sweep recorded",
+            ),
+            (
+                "re-diagnosis",
+                "a new instance of the class found in review sends the unit back to design (`cf-method/references/issue-handling.md`)",
+            ),
+        ],
+    );
+}
+
 /// TSK-150 AC-5: the passages the byte-cut audit found lost on this line are
 /// restored where they are read, and pinned so a later edit cannot cut them
 /// again unnoticed (`docs/verification/tsk-150-byte-cut-audit.md`).
