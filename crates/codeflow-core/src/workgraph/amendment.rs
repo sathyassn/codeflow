@@ -325,7 +325,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             ))
         }
     };
-    if let Some(problem) = entry_problem(repo, base, head) {
+    if let Some((_, problem)) = entry_problem(repo, base, head) {
         return Some(problem);
     }
     let mut instructions = false;
@@ -376,8 +376,9 @@ fn special(mode: i32) -> Option<&'static str> {
 /// stands between an entry and its check: a symbolic link or submodule on
 /// either side, or a name that is not UTF-8 or holds a backslash (a
 /// separator on Windows, a letter elsewhere). A range that cannot be read
-/// is refused.
-fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<String> {
+/// is refused. The fault comes with the path of the entry at fault, empty
+/// when the range cannot be read.
+fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, String)> {
     let from = repo.merge_base(base, head).unwrap_or(base);
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = tree(from)
@@ -388,23 +389,30 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<String> {
         .map_err(|error| error.message().to_string());
     let diff = match diff {
         Ok(diff) => diff,
-        Err(error) => return Some(format!("cannot read the range to classify it: {error}")),
+        Err(error) => {
+            return Some((
+                String::new(),
+                format!("cannot read the range to classify it: {error}"),
+            ))
+        }
     };
     for delta in diff.deltas() {
         for file in [delta.old_file(), delta.new_file()] {
             let Some(name) = file.path_bytes() else {
                 continue;
             };
-            let shown = String::from_utf8_lossy(name);
+            let shown = String::from_utf8_lossy(name).into_owned();
             if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
-                return Some(format!(
+                let message = format!(
                     "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
-                ));
+                );
+                return Some((shown, message));
             }
             if let Some(kind) = special(i32::from(file.mode())) {
-                return Some(format!(
+                let message = format!(
                     "a planning-only pull request changes the {kind} {shown}; a planning amendment carries regular files only"
-                ));
+                );
+                return Some((shown, message));
             }
         }
     }
@@ -526,6 +534,13 @@ pub(super) fn landing_problem(
         .collect();
     if range_problem(repo, parent, landing, &paths).is_none() {
         return Ok(None);
+    }
+    // An entry at fault is named as Git holds it; the per-path probe below
+    // would find the whole-range fault on every path.
+    if let Some((path, _)) = entry_problem(repo, parent, landing) {
+        return Ok(Some(path)
+            .filter(|path| !path.is_empty())
+            .or_else(|| paths.first().cloned()));
     }
     // Name the path at fault; a problem no single path shows (the policy
     // cannot be read) names the first.

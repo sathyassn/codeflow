@@ -632,9 +632,10 @@ fn an_amendment_behind_a_link_chain_stays_frozen_in_a_release() {
     );
 }
 
-/// TSK-229 review round 5: a planning landing that changes a link whose
-/// name holds a backslash stays frozen in a release, as its planning pull
-/// request was refused; the name is never rewritten before the check.
+/// TSK-229 review rounds 5 and 6: a planning landing that changes a link
+/// whose name holds a backslash stays frozen in a release, as its planning
+/// pull request was refused; the name is never rewritten before the check,
+/// and the refusal names the link, not a plan file beside it.
 #[cfg(unix)]
 #[test]
 fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
@@ -648,6 +649,7 @@ fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
     fx.git(&["switch", "-q", "-C", "plan/move-the-link", LINE_A]);
     let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
     fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+    fx.write("docs/plan/aaa.md", "A plan note.\n");
     std::fs::remove_file(&link).unwrap();
     symlink("two", &link).unwrap();
     fx.commit("docs(records): amend the criterion and move the link");
@@ -660,7 +662,7 @@ fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
         &[
             "work.criteria_frozen",
             &format!(
-                "TSK-003 changes its criteria on its line at {}",
+                "TSK-003 changes its criteria on its line at {}, which also changes project-management/ref\\alias",
                 &landing[..9]
             ),
         ],
