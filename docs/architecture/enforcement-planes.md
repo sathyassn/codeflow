@@ -11,14 +11,17 @@
 `.codeflow/policy.json` is the only place a rule is written, and four planes
 read it where each can see the work.
 
-No single harness is a required trust anchor. The git client hooks and the
-in-session guards give fast local feedback and can be edited;
-CI and remote protection are the authoritative perimeter where they are armed.
-This
-four-plane floor installs from the minimal tier up, and the tiers scale
-project management, never enforcement (architecture decision record ADR-0019).
-The planes read one source with no inline drift, through thin per-platform CI
-wrappers (ADR-0017).
+- No single harness is a required trust anchor.
+- The git client hooks and the in-session guards give fast local feedback and
+  can be edited.
+- CI and remote protection are the authoritative perimeter where they are
+  armed.
+- The enforcement floor installs from the minimal tier up: the hooks, guards
+  and CI as files, and remote protection as coverage the host still has to
+  arm. The tiers scale project management, never enforcement (architecture
+  decision record ADR-0019).
+- The planes read one source with no inline drift, through thin per-platform
+  CI wrappers (ADR-0017).
 
 ## Architecture
 
@@ -26,20 +29,41 @@ The planes cover different moments of one change, three of them can stop it
 at push, and only remote branch protection is a boundary, once the host arms
 it.
 
+```text
+  agent command  --->  in-session guards   git-guard, exec-guard, edit-guard
+        |
+        v
+  git operation  --->  git hooks           pre-commit, commit-msg,
+        |                                  pre-merge-commit,
+        |                                  reference-transaction, pre-push
+        v
+  push to host   --->  scaffolded CI       `codeflow ci` on the server
+        |
+        v
+  merge          --->  remote protection   host branch rules, human merge
+```
+
+The two local planes can be edited. CI and remote protection are the
+perimeter where they are armed.
+
 - Minimal installs the local floor and the CI scaffold, not remote branch
   protection (ADR-0019), so the remote plane is coverage the host still has to
   arm.
 - PR-content checks are git-guard and CI by design. A git hook never sees
-  `gh pr create` or `gh pr merge`, so attribution and emoji scans and the
-  protected-base check live in the Claude layer and in CI, not in the hooks.
+  `gh pr create` or `gh pr merge`. Attribution and emoji scans and the
+  protected-base check therefore live in the Claude layer and in CI, not in
+  the hooks.
 - The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate token
-  apply to the git-hook plane only. The git-guard never trusts them, because an
-  agent in a session cannot prove it is a human. In that plane they lift the
-  protected-branch commit, merge, push and local ref-update rules; they never
-  lift a force push or deletion of a protected branch, or the secret checks.
-  A protected branch moves only by a proven fast-forward: a push over a remote
-  tip that is not in the local repository is refused as a force push.
-- Host attribution has a fourth brake that is not a plane: the shipped Claude
+  apply to the git-hook plane only.
+  - git-guard never trusts them, because an agent in a session cannot prove
+    it is a human.
+  - In the git-hook plane they lift the protected-branch commit, merge, push
+    and local ref-update rules.
+  - They never lift a force push or deletion of a protected branch, or the
+    secret checks.
+  - A protected branch moves only by a proven fast-forward. A push over a
+    remote tip that is not in the local repository is refused as a force push.
+- Host attribution has a fourth brake that is not a plane. The shipped Claude
   settings preset turns the host's own injection off at the source
   (`includeCoAuthoredBy`, `attribution`), so the `commit-msg` hook catches only
   what a changed or absent preset lets through.
@@ -77,16 +101,19 @@ produced them (ADR-0007).
 | `reference-transaction` | fast-forward merges, `reset --hard`, `branch -D` on protected | the harness-agnostic backstop; needs git ≥ 2.28 |
 | `pre-push` | push, force-push and delete to protected | reports `codeflow pre-push: BLOCKED` against policy rule `git.push_to_protected` |
 
-`reference-transaction` on older git is absent and protection falls back to the
-other planes. With active protection, an unreadable or unevaluable prepared
-transaction blocks rather than silently skipping the check. The current input
-contract is UTF-8: non-UTF-8 input also blocks, including remote-only
-transactions, while valid UTF-8 remote-only input retains its fast path.
-Inspect the reported cause and the repository, tool and backend compatibility
-before retrying; preserve the work and repair the supported path rather than
-disabling the hook or automatically converting repository storage to evade it.
+- `reference-transaction` on older git is absent, and protection falls back to
+  the other planes.
+- With active protection, an unreadable or unevaluable prepared transaction
+  blocks rather than silently skipping the check.
+- The current input contract is UTF-8. Non-UTF-8 input also blocks, including
+  remote-only transactions. Valid UTF-8 remote-only input retains its fast
+  path.
+- After a block, inspect the reported cause and the repository, tool and
+  backend compatibility before retrying. Preserve the work and repair the
+  supported path. Do not disable the hook or automatically convert repository
+  storage to evade it.
 
-This plane needs no per-harness configuration: a Codex
+This plane needs no per-harness configuration. A Codex
 `git push --force origin main` against protected `main` is refused by the
 `pre-push` shim exactly as any agent's would be. Installed files still do not
 make these checks unbypassable: local hook files and Git configuration remain
@@ -102,6 +129,8 @@ Three PreToolUse handlers add fast, pre-git feedback.
 | `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads and interpreter literals refuse at their rule's level |
 | `edit-guard` | the action table's enforcement paths | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths refuse, including patch move sources and destinations |
 
+The handlers are wired per harness.
+
 | Harness | Wiring | Condition |
 |---|---|---|
 | Claude Code | `.claude/settings.json` | laid by the scaffold from `--minimal` up |
@@ -109,83 +138,106 @@ Three PreToolUse handlers add fast, pre-git feedback.
 | Grok Build | `.grok/hooks/codeflow.json`, with edit-guard | ADR-0008 analog; project hooks load only after `/hooks-trust` or `--trust` |
 | Headless `codex exec`, `grok -p` | none | project PreToolUse hooks do not run, so those invocations are not work-session lanes and rely on the git-hook plane |
 
-Agent sessions are judged by the landed policy. The guards read
-`.codeflow/policy.json` and project settings from the configured remote's
-default branch and the declared target, taking the stricter level key by key,
-so a local checkout, commit, rebase or stash cannot relax them. When the remote
-HEAD is not set, as after `git init`, `git remote add` and `git push -u`,
-every existing `main` and `master` tracking ref contributes, stricter wins, so
-a fetch that adds one cannot weaken them; a custom default branch needs the
-operator's `git remote set-head <remote> --auto`, which `doctor` names, and a
-dangling remote HEAD refuses. They read
-`HEAD` only when there is no remote or the remote has no tracking refs yet,
-and the working copy only on an unborn `HEAD`; every refusal and `doctor`
-name the source. Ref plumbing on `refs/remotes`, fetch or pull into an
-explicit tracking destination or from another source, remote identity
-changes, writes to transport configuration, the global Git config files and
-the common Git directory's refs and config cannot replace that authority.
-Fetch, pull and remote update compare each selected remote's effective URL
-with its configured URL. Once a tracking ref exists, missing authority
-refuses the call and names `git fetch`, or the operator's
-`git remote set-head <remote> --auto`. `doctor` and orient report the source
-and any local policy drift; they do not detect earlier movement of a
-tracking ref.
+**Policy authority.** Agent sessions are judged by the landed policy.
 
-Under the shipped defaults, the guards refuse the wrapped, flag-led and
-interpreter forms of privilege escalation, package or gist publishing,
-release and tag changes, repository or account changes, secret-store reads
-and user-level persistence. Commands inside opaque child programs are not
-inspected. Ordinary builds, a task-branch push and a single-file restore
-stay ordinary work.
+- The guards read `.codeflow/policy.json` and project settings from the
+  configured remote's default branch and the declared target, taking the
+  stricter level key by key. A local checkout, commit, rebase or stash cannot
+  relax them.
+- When the remote HEAD is not set, as after `git init`, `git remote add` and
+  `git push -u`, every existing `main` and `master` tracking ref contributes
+  and the stricter wins. A fetch that adds one cannot weaken them.
+- A custom default branch needs the operator's
+  `git remote set-head <remote> --auto`, which `doctor` names. A dangling
+  remote HEAD refuses.
+- The guards read `HEAD` only when there is no remote or the remote has no
+  tracking refs yet, and the working copy only on an unborn `HEAD`. Every
+  refusal and `doctor` name the source.
+- These cannot replace that authority: ref plumbing on `refs/remotes`, fetch or
+  pull into an explicit tracking destination or from another source, remote
+  identity changes, writes to transport configuration, the global Git config
+  files and the common Git directory's refs and config.
+- Fetch, pull and remote update compare each selected remote's effective URL
+  with its configured URL.
+- Once a tracking ref exists, missing authority refuses the call and names
+  `git fetch`, or the operator's `git remote set-head <remote> --auto`.
+- `doctor` and orient report the source and any local policy drift. They do not
+  detect earlier movement of a tracking ref.
 
-A refusal names the policy rule and the operator's route. Project relief is
-that rule's existing level, such as `security.privilege_escalation`,
-`security.outward_actions`, `security.secret_reads` or
-`git.discard_uncommitted`, landed through a reviewed change, together with
-any native deny that still applies; the native presets and the guards are
-separate checks, and the agent never edits enforcement files to clear its
-own refusal. `security.headless_peer_runs` is the only relief for a headless
-peer run; `security.headless_opt_in` is ignored with a warning and removed
-by `codeflow update`. The `security.dangerous_commands` floor cannot be
-lowered.
+**Shipped defaults.** The guards refuse the wrapped, flag-led and interpreter
+forms of privilege escalation, package or gist publishing, release and tag
+changes, repository or account changes, secret-store reads and user-level
+persistence. Commands inside opaque child programs are not inspected. Ordinary
+builds, a task-branch push and a single-file restore stay ordinary work.
 
-Contract-3 git shims exit 1 when the `codeflow` binary is missing or older,
-printing the installer and `codeflow update`, so install the new binary
-before running `codeflow update`. A harness wrapper is
-`codeflow hook <name> --contract 3`, then a fallback that exits 2 whenever
-the hook fails and always ends with a line saying it blocked, since Codex
-treats exit 2 with an empty stderr as a failed hook and lets the call
-through. A policy refusal prints the guard's message first; a missing
-binary also prints the installer and `codeflow update`; a binary too old to
-know `--contract` prints its own usage error, and one that knows the flag
-names the install step for a contract it does not support. The wrapper
-never calls the binary twice and carries no `$`: Grok expands `$name` and
-`${...}` in a hook command itself and skips, failing open, a hook whose
-variable is unset (issue 29). Grok shows only the first stderr line of a
-denying hook, so a guard refusing a Grok call also writes Grok's deny
-decision with the whole refusal on stdout. `codeflow doctor --check grok`
-names a CodeFlow hook command Grok would skip. When the shipped exec-guard
-handler (command, timeout and environment) is bound where Grok's shell
-tool hits it, matched as Grok matches, doctor judges a fixed canary with
-the handler `codeflow hook exec-guard --contract 3` runs, in its own
-process under the catastrophic-command floor alone, reading no policy,
-repository, working directory or environment and recording no refusal,
-and expects exit 2, a reason and Grok's deny answer. Doctor executes
-nothing for the check, so no hook text, hook environment, `codeflow` on
-PATH or swapped binary, any of which the repository could plant, answers
-for it: a customised handler is reported unverified, and where PATH
-resolves `codeflow` is reported without being run. The canary does not
-exercise a shell, the command-line parsing, the `codeflow` on PATH or
-Grok's own hook call; a live session's hook lines prove those.
-The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash); native
-PowerShell as the hook runner is unsupported.
+**Refusals and relief.** A refusal names the policy rule and the operator's
+route.
 
-The deterministic shell plane accepts both Bash and PowerShell payloads and
-keeps its catastrophic classifier non-relaxable across Unix and macOS roots and
-Windows drive, system, profile, disk, recovery, and permission operations.
-Another harness needs its own qualified event contract before it gets this
-plane. The consult, delegate and duo flows are interactive only, whether or not a
-headless mode can run hooks (ADR-0018).
+- Project relief is that rule's existing level, such as
+  `security.privilege_escalation`, `security.outward_actions`,
+  `security.secret_reads` or `git.discard_uncommitted`, landed through a
+  reviewed change, together with any native deny that still applies.
+- The native presets and the guards are separate checks. The agent never edits
+  enforcement files to clear its own refusal.
+- `security.headless_peer_runs` is the only relief for a headless peer run.
+  `security.headless_opt_in` is ignored with a warning and removed by
+  `codeflow update`.
+- The `security.dangerous_commands` floor cannot be lowered.
+
+**Hook wrappers.**
+
+- Contract-3 git shims exit 1 when the `codeflow` binary is missing or older.
+  They print the installer and `codeflow update`, so install the new binary
+  before running `codeflow update`.
+- A harness wrapper is `codeflow hook <name> --contract 3`, then a fallback
+  that exits 2 whenever the hook fails and always ends with a line saying it
+  blocked. Codex treats exit 2 with an empty stderr as a failed hook and lets
+  the call through.
+- The wrapper never calls the binary twice and carries no `$`. Grok expands
+  `$name` and `${...}` in a hook command itself and skips, failing open, a hook
+  whose variable is unset (issue 29).
+- Grok shows only the first stderr line of a denying hook, so a guard refusing
+  a Grok call also writes Grok's deny decision with the whole refusal on
+  stdout.
+- The wrappers need a POSIX shell (macOS, Linux, WSL or Git Bash). Native
+  PowerShell as the hook runner is unsupported.
+
+| Case | What prints |
+|---|---|
+| Policy refusal | the guard's message first |
+| Missing binary | the installer and `codeflow update`, as well |
+| Binary too old to know `--contract` | its own usage error |
+| Binary that knows the flag but not the contract | the install step for a contract it does not support |
+
+**Grok exec-guard canary.** `codeflow doctor --check grok` names a CodeFlow
+hook command Grok would skip.
+
+- When the shipped exec-guard handler (command, timeout and environment) is
+  bound where Grok's shell tool hits it, matched as Grok matches, doctor
+  judges a fixed canary with the handler `codeflow hook exec-guard --contract 3`
+  runs.
+- The canary runs in its own process under the catastrophic-command floor
+  alone. It reads no policy, repository, working directory or environment and
+  records no refusal.
+- Doctor expects exit 2, a reason and Grok's deny answer.
+- Doctor executes nothing for the check, so no hook text, hook environment,
+  `codeflow` on PATH or swapped binary, any of which the repository could
+  plant, answers for it.
+- A customised handler is reported unverified. Where PATH resolves `codeflow`
+  is reported without being run.
+- The canary does not exercise a shell, the command-line parsing, the
+  `codeflow` on PATH or Grok's own hook call. A live session's hook lines prove
+  those.
+
+**Shell plane.**
+
+- The deterministic shell plane accepts both Bash and PowerShell payloads. Its
+  catastrophic classifier stays non-relaxable across Unix and macOS roots and
+  Windows drive, system, profile, disk, recovery, and permission operations.
+- Another harness needs its own qualified event contract before it gets this
+  plane.
+- The consult, delegate and duo flows are interactive only, whether or not a
+  headless mode can run hooks (ADR-0018).
 
 ### CI
 
@@ -202,12 +254,14 @@ per-platform wrappers (ADR-0017).
 | attribution, emoji | no AI attribution and no emoji in commit content |
 | breaking footer, branch naming | the declared footer and branch conventions |
 
-CI also carries the **security-review** job (ADR-0016), whose deterministic floor is `osv-scanner`, stack-agnostic software
-composition analysis (SCA) across every
-lockfile ecosystem and the universal floor today, with the
-`cf-security-reviewer` dual-vendor red-team layered on top. Per-stack scanners
-such as `cargo audit`, `pip-audit`, `govulncheck` or `semgrep` are an optional
-future extension.
+CI also carries the **security-review** job (ADR-0016).
+
+- Its deterministic floor is `osv-scanner`, stack-agnostic software
+  composition analysis (SCA) across every lockfile ecosystem. It is the
+  universal floor today.
+- The `cf-security-reviewer` dual-vendor red-team is layered on top.
+- Per-stack scanners such as `cargo audit`, `pip-audit`, `govulncheck` or
+  `semgrep` are an optional future extension.
 
 | Gate | Policy key | Behavior |
 |---|---|---|
@@ -221,16 +275,17 @@ The job blocks when either `security_review` or `dep_audit` is `block`; otherwis
 
 The GitHub remote-protect adapter (`remote.rs`, surfaced as `codeflow remote`)
 arms the host's own branch rules where the host offers them. CI re-runs the
-checks and configured remote rules can require their results, so CI becomes a
-merge gate when the remote requires its result. The end state the planes exist
-for is a protected branch whose PRs are merged by a human on evidenced-green
-checks.
+checks, and configured remote rules can require their results, so CI becomes a
+merge gate when the remote requires its result.
+
+The end state the planes exist for is a protected branch whose PRs are merged
+by a human on evidenced-green checks.
 
 ### how far each plane reaches
 
-CodeFlow has two kinds of thing: **enforcement** (gates that block) and
+CodeFlow has two kinds of control: **enforcement** (gates that block) and
 **guidance** (instructions and skills that inform). They reach different
-distances, so be precise about what a given harness actually gets.
+distances, so the table says what a given harness actually gets.
 
 | Layer | Reaches | Depends on |
 |---|---|---|
@@ -240,9 +295,11 @@ distances, so be precise about what a given harness actually gets.
 | Workflow runtime (`pipeline.workflow.js`) | Claude Code only | |
 | A harness CodeFlow does not integrate, for example Google's Antigravity `agy` | the git-hook plane and CI, because those are harness-agnostic | it does not receive the in-session guards, the skills, or the `AGENTS.md` instructions (verified on `agy` 1.0.15); its reliable coverage is the configured, verified hook and CI plane |
 
-The one-line version: CodeFlow shares policy across harness-neutral checks;
-native guidance and in-session guards depend on the installed integration.
-Missing planes are disclosed without relaxing safety or review duties.
+In short:
+
+- CodeFlow shares policy across harness-neutral checks.
+- Native guidance and in-session guards depend on the installed integration.
+- Missing planes are disclosed without relaxing safety or review duties.
 
 In every mode, verify actual local hook execution and any required CI and
 remote rules rather than inferring protection from installed files. The runtime

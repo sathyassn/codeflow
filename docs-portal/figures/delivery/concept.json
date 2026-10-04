@@ -48,7 +48,7 @@
         "derive": "the standalone sentence",
         "check": {
           "kind": "contains",
-          "text": "record and code land in the same reviewed pull request"
+          "text": "whose record and code land in the"
         },
         "value": true
       },
@@ -58,7 +58,7 @@
         "derive": "the breakdown sentence",
         "check": {
           "kind": "contains",
-          "text": "broken down once into an epic and its tasks"
+          "text": "is broken down once into an"
         },
         "value": true
       },
@@ -68,7 +68,7 @@
         "derive": "the last sentence of the first paragraph",
         "check": {
           "kind": "contains",
-          "text": "a person merges there."
+          "text": "person merges there."
         },
         "value": true
       }

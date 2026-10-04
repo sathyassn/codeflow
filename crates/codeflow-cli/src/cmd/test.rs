@@ -193,7 +193,16 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
         return Ok(None);
     }
     let dirs = lock_dirs(root, codeflow_home().as_deref());
-    let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| held.to_string())?;
+    let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| {
+        let mut message = held.to_string();
+        if message.contains("gate lock unavailable") {
+            message.push_str(
+                "; `codeflow doctor --check permissions` names each directory the gate must write, \
+                 and inside the Claude Code sandbox the one to add to `sandbox.filesystem.allowWrite`",
+            );
+        }
+        message
+    })?;
     for note in &lock.notes {
         eprintln!("codeflow test: {note}");
     }

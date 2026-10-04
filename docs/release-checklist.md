@@ -5,10 +5,12 @@
 **This checklist is the approval record for every CodeFlow release.**
 
 Tick a box only when its evidence already exists, and record a link or pasted
-output for it. Work through the five sections in order. A named human makes the
-release decision; a green job, model agreement or peer approval is evidence for
-a box and never a substitute for that decision. Commands, rationale and policy
-live in [the release runbook](releasing.md).
+output for it. Work through the five sections in order.
+
+A named human makes the release decision. A green job, model agreement or peer
+approval is evidence for a box, never a substitute for that decision.
+
+Commands, rationale and policy live in [the release runbook](releasing.md).
 
 ## Architecture
 
@@ -16,7 +18,7 @@ Each section is bound to the runbook section that owns its procedure.
 
 | Section | What it must establish | Runbook |
 |---|---|---|
-| 1. Scope and version | One cumulative target that the notes, stamps, tag and proposed merge tree all agree on, with labelled pending entries, notes read before the tag and the ceremony report recorded | [codeflow's own releases](releasing.md#codeflows-own-releases), [pending entries, local checks and repairs](releasing.md#pending-entries-local-checks-and-repairs), [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
+| 1. Scope and version | One cumulative target that the notes, stamps, tag and proposed merge tree all agree on. Pending entries are labelled, the notes are read before the tag, and the ceremony report is recorded | [codeflow's own releases](releasing.md#codeflows-own-releases), [pending entries, local checks and repairs](releasing.md#pending-entries-local-checks-and-repairs), [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
 | 2. Source and security gates | The code gates pass from a clean checkout: format, workspace tests, clippy, rustdoc, the full CodeFlow test mode, documentation validation and the coverage floor. Scanning, audit, policy, integrity and provider-surface findings either pass or carry a documented human-approved disposition that never weakens a non-relaxable floor | [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication), [re-verification before tagging](releasing.md#re-verification-before-tagging) |
 | 3. Distribution and platform assurance | Every claimed archive, installer and platform has native evidence, and the publication guards fail closed | [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration), [when publication stops](releasing.md#when-publication-stops) |
 | 4. Harness and model qualification | The bindings and both interactive lanes are qualified for this release, with routing and review evidence per task | [re-verification before tagging](releasing.md#re-verification-before-tagging) |
@@ -48,8 +50,10 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases), [pendin
 | 1.2 | Conventional markers do not understate the version |
 | 1.4 | A clean result is not a fresh one, so recheck immediately before the human merge |
 | 1.5 | Documentation describes current behavior, never an aspiration |
-| 1.6 | The new-user read checks what the release does; the upgrade read checks what to do, in order. Rendering: step 3 of [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
-| 1.8 | The report informs the release decision and never blocks it. Procedure: [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
+| 1.6 | The new-user read checks what the release does. The upgrade read checks what to do, in order |
+| 1.6 | Rendering: step 3 of [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
+| 1.8 | The report informs the release decision and never blocks it |
+| 1.8 | Procedure: [ceremony check before a release](releasing.md#ceremony-check-before-a-release) |
 
 ### 2. Source and security gates
 
@@ -63,7 +67,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 - [ ] 2.6 Private vulnerability reporting is enabled before `docs/SECURITY.md`'s channel or a public release is advertised. Evidence: **Report a vulnerability** visible to a logged-out visitor or non-maintainer.
 - [ ] 2.7 Presentation schemas match the Rust contracts and adversarial fixtures, and the service matrices pass without exposing secrets or private state. Evidence: test output.
 - [ ] 2.8 The committed presentation web distribution rebuilds byte-identically and passes its integrity, budget, license, audit and binary-delta limits. Evidence: `npm run supply-chain` and `npm run check` output.
-- [ ] 2.9 CodeQL state is honest for the repository's visibility, as the [CodeQL row](releasing.md#re-verification-before-tagging) requires. Evidence: the tool status page.
+- [ ] 2.9 CodeQL state is honest for the repository's visibility, as the [CodeQL rows](releasing.md#re-verification-before-tagging) require. Evidence: the tool status page.
 - [ ] 2.10 Catastrophic-action blocked and allowed canaries pass for macOS, Linux and WSL2, and native Windows command forms, including supported privilege and shell launch wrappers. Evidence: canary output.
 - [ ] 2.11 Claude and Codex settings validate in their current native harnesses, and their secret-store denies, research access, prompts and sandbox match the documented contract. Evidence: validation output.
 
@@ -71,12 +75,22 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 | Box | Detail |
 |---|---|
-| 2.3 | The mirror inventories every remote branch and tag, hosted pull-request head and merge ref, and any other fetchable or servable ref. Record its ref digest, inventory forbidden runtime paths, run both raw and configured redacted Gitleaks scans, and reject broad path or directory allowlists that could hide a future secret |
-| 2.4 | For a sanitized public repository, keep the original remote as a sealed private archive and publish only selected clean refs, never a mirror push. For a history rewrite, separately purge retained hosted PR refs and caches. Rescan the resulting public refs and regenerated exact fingerprints instead of reusing pre-rewrite commit IDs |
+| 2.3 | The mirror inventories every remote branch and tag, hosted pull-request head and merge ref, and any other fetchable or servable ref |
+| 2.3 | Record its ref digest and inventory forbidden runtime paths |
+| 2.3 | Run both raw and configured redacted Gitleaks scans |
+| 2.3 | Reject broad path or directory allowlists that could hide a future secret |
+| 2.4 | For a sanitized public repository, keep the original remote as a sealed private archive and publish only selected clean refs, never a mirror push |
+| 2.4 | For a history rewrite, separately purge retained hosted PR refs and caches |
+| 2.4 | Rescan the resulting public refs and regenerated exact fingerprints instead of reusing pre-rewrite commit IDs |
 | 2.5 | An ordinary branch scan does not prove these provider-owned surfaces safe |
-| 2.6 | Open the repository's Security tab while logged out or as a non-maintainer. An API 404 leaves the feature state unverified; it is evidence of neither enabled nor disabled. `docs/SECURITY.md` never points reporters at a channel the repository has not enabled |
-| 2.7 | Document, token and history schemas match. Service request, auth, bootstrap, sandbox and export matrices, crash recovery, concurrent feedback, retention and identity-scoped cleanup pass |
-| 2.8 | The rebuild uses the exact lockfile and toolchain. The checks cover integrity hashes, Brotli and export budgets, the license inventory, the CycloneDX software bill of materials (SBOM), the package audit and release binary-delta limits. Consumer builds still need no Node toolchain. Commands: [presentation renderer assets](releasing.md#presentation-renderer-assets) |
+| 2.6 | Open the repository's Security tab while logged out or as a non-maintainer |
+| 2.6 | An API 404 leaves the feature state unverified. It is evidence of neither enabled nor disabled |
+| 2.6 | `docs/SECURITY.md` never points reporters at a channel the repository has not enabled |
+| 2.7 | Document, token and history schemas match |
+| 2.7 | Service request, auth, bootstrap, sandbox and export matrices, crash recovery, concurrent feedback, retention and identity-scoped cleanup pass |
+| 2.8 | The rebuild uses the exact lockfile and toolchain |
+| 2.8 | The checks cover integrity hashes, Brotli and export budgets, the license inventory, the CycloneDX software bill of materials (SBOM), the package audit and release binary-delta limits |
+| 2.8 | Consumer builds still need no Node toolchain. Commands: [presentation renderer assets](releasing.md#presentation-renderer-assets) |
 | 2.11 | The checks cover secret-store denies, public research access, permission prompts and the host-specific sandbox boundary |
 
 ### 3. Distribution and platform assurance
@@ -103,14 +117,24 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
 
 | Box | Detail |
 |---|---|
-| 3.2 | The latest exact-source main-push results come from `codeflow-ci` and `codeflow-release`; the release-state check runs in `codeflow-release` |
-| 3.3 | A dry run creates no draft and performs no hosting. Recheck timing and the one-publication-at-a-time rule are in [the Architecture bullets](releasing.md#architecture) |
+| 3.2 | The latest exact-source main-push results come from `codeflow-ci` and `codeflow-release` |
+| 3.2 | The release-state check runs in `codeflow-release` |
+| 3.3 | A dry run creates no draft and performs no hosting |
+| 3.3 | Recheck timing and the one-publication-at-a-time rule are in [the Architecture bullets](releasing.md#architecture) |
 | 3.4 | Every asset name, size and SHA-256 digest matches the same-run staged artifact set, with no missing, duplicate or extra asset |
 | 3.7 | These are static-analysis, compile and link evidence only ([cross-build toolchain](releasing.md#cross-build-toolchain)) |
-| 3.9 | The platform opens only a task-owned isolated browser and profile, passes the qualified Brotli and full review journey, preserves light, dark and system themes and accessibility behavior, exports offline, and proves close, crash and retention teardown. `--no-launch` remains usable |
+| 3.9 | The platform opens only a task-owned isolated browser and profile |
+| 3.9 | It passes the qualified Brotli and full review journey and preserves light, dark and system themes and accessibility behavior |
+| 3.9 | It exports offline and proves close, crash and retention teardown. `--no-launch` remains usable |
 | 3.11 | Budget exhaustion leaves escaped source and does not block feedback, export, close or cleanup |
-| 3.13 | The shell installer selects the correct macOS or Linux artifact, the PowerShell installer selects `codeflow.exe` on native Windows, and WSL2 selects the Linux artifact |
-| 3.15 | Portal starter bytes, archive-equivalent bytes and release-binary delta stay within ADR-0048. A non-adopter receives no portal workspace, lockfile or baseline. An adopter passes setup, update, conflict and idempotence; locked install, build, audit and upgrade; `validate --portal`; source and manifest negative fixtures; and Chromium, Firefox and WebKit accessibility journeys. CodeFlow itself runs the `docs-portal` target through `codeflow test --mode full --strict` locally and on Ubuntu, selected when its inputs change and always under `--all` at epic close, plus the authority and path suite on Windows. Generic consumer CI stays portal-free until adoption. These checks publish no generated output |
+| 3.13 | The shell installer selects the correct macOS or Linux artifact |
+| 3.13 | The PowerShell installer selects `codeflow.exe` on native Windows |
+| 3.13 | WSL2 selects the Linux artifact |
+| 3.15 | Portal starter bytes, archive-equivalent bytes and release-binary delta stay within ADR-0048 |
+| 3.15 | A non-adopter receives no portal workspace, lockfile or baseline |
+| 3.15 | An adopter passes setup, update, conflict and idempotence; locked install, build, audit and upgrade; `validate --portal`; source and manifest negative fixtures; and Chromium, Firefox and WebKit accessibility journeys |
+| 3.15 | CodeFlow itself runs the `docs-portal` target through `codeflow test --mode full --strict` locally and on Ubuntu, selected when its inputs change and always under `--all` at epic close, plus the authority and path suite on Windows |
+| 3.15 | Generic consumer CI stays portal-free until adoption. These checks publish no generated output |
 
 Presentation adversarial cases for box 3.12:
 
@@ -118,7 +142,8 @@ Presentation adversarial cases for box 3.12:
 |---|---|
 | Native paths | Invalid native-path bytes are handled |
 | Collection amplification | Per-block and aggregate amplification are bounded |
-| Project quotas | Impossible and concurrent quotas across create, update, runtime and feedback mutations; zero-growth retries and cleanup in a project already over its quota |
+| Project quotas | Impossible and concurrent quotas across create, update, runtime and feedback mutations |
+| Project over quota | Zero-growth retries and cleanup in a project already over its quota |
 | Feedback transitions | Malformed, duplicate, post-terminal and concurrent transitions |
 | Feedback re-anchoring | Exact, ambiguous and missing re-anchoring |
 | Resolution | Stale and cross-session resolution, and concurrent identical and conflicting terminal retries |
@@ -144,7 +169,7 @@ Runbook: [re-verification before tagging](releasing.md#re-verification-before-ta
 - [ ] 4.4 Whole-flow and concurrent-browser canaries cover every applicable changed boundary with isolated resources and proven teardown. Evidence: the canary records.
 - [ ] 4.5 The mixed closeout canary removes only the clean proven-landed worktree and retains every other entry. Evidence: canary output with ownership and recheck evidence.
 - [ ] 4.6 `codeflow status` classifies linked worktrees and unattached local branches as removable, preserve-dirty or retain-unproven without mutating anything. Evidence: its test output.
-- [ ] 4.7 The ensemble selectors, effort and worker policy and catalog entries match the [ensemble row](releasing.md#re-verification-before-tagging). Evidence: the ensemble record and native results.
+- [ ] 4.7 The ensemble selectors, effort and worker policy and catalog entries match the [ensemble rows](releasing.md#re-verification-before-tagging). Evidence: the ensemble record and native results.
 - [ ] 4.8 `codeflow doctor --check model-bindings` passes for each retained local promotion record, or records the native canary still needed. Evidence: doctor output.
 - [ ] 4.9 Both native interactive directions complete a scoped tool and Model Context Protocol (MCP) canary. Evidence: versions, effort, tool access and graceful degradation.
 - [ ] 4.10 Each task records its producer and cross-lineage reviewer, and every blocking finding is resolved or stops the release. Evidence: verified routing evidence per task.
@@ -154,11 +179,22 @@ Runbook: [re-verification before tagging](releasing.md#re-verification-before-ta
 
 | Box | Detail |
 |---|---|
-| 4.2 | The change updates its stable requirements, paired positive and non-ceremony cases, fixtures, packs and managed mirrors. Applicable new behavioral cases have retained native interactive Claude and Codex canary evidence. Deterministic corpus validation alone is never reported as model behavior |
-| 4.3 | The cases are proportional routing, operator-direction precedence, counterfactual evidence-grounded choice review, accessibility and fidelity. Rendered comparisons retain same-environment artifacts and blinded paired judgments. Taste or category familiarity alone is never reported as a defect |
-| 4.4 | The canaries exercise an affected journey through every applicable changed boundary, disclose controlled external seams, allocate an isolated browser, endpoints, data and artifacts per task, and prove teardown. A listening MCP port is required only for a listening transport. Headed evidence uses a test-owned browser and session, never the operator's existing browser or desktop |
-| 4.5 | The canary inventories active, proven-landed, dirty and unproven worktrees. Every retained entry carries ownership and recheck evidence. Age and `git worktree prune` metadata never stand in for merge proof |
-| 4.6 | Classification uses locally known ancestry and patch evidence. Tests cover squash-equivalent, dirty and unlanded states. The report does not replace the active-owner check |
+| 4.2 | The change updates its stable requirements, paired positive and non-ceremony cases, fixtures, packs and managed mirrors |
+| 4.2 | Applicable new behavioral cases have retained native interactive Claude and Codex canary evidence |
+| 4.2 | Deterministic corpus validation alone is never reported as model behavior |
+| 4.3 | The cases are proportional routing, operator-direction precedence, counterfactual evidence-grounded choice review, accessibility and fidelity |
+| 4.3 | Rendered comparisons retain same-environment artifacts and blinded paired judgments |
+| 4.3 | Taste or category familiarity alone is never reported as a defect |
+| 4.4 | The canaries exercise an affected journey through every applicable changed boundary and disclose controlled external seams |
+| 4.4 | They allocate an isolated browser, endpoints, data and artifacts per task, and prove teardown |
+| 4.4 | A listening MCP port is required only for a listening transport |
+| 4.4 | Headed evidence uses a test-owned browser and session, never the operator's existing browser or desktop |
+| 4.5 | The canary inventories active, proven-landed, dirty and unproven worktrees |
+| 4.5 | Every retained entry carries ownership and recheck evidence |
+| 4.5 | Age and `git worktree prune` metadata never stand in for merge proof |
+| 4.6 | Classification uses locally known ancestry and patch evidence |
+| 4.6 | Tests cover squash-equivalent, dirty and unlanded states |
+| 4.6 | The report does not replace the active-owner check |
 | 4.10 | Producers verify first, the other lineage reviews each unit independently, and the selected Claude judgment primary owns the integrated design and code judgment |
 | 4.11 | Usage state is observed, never inferred |
 
@@ -177,5 +213,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 
 | Box | Detail |
 |---|---|
-| 5.5 | The bad release can be marked or withdrawn without rewriting tag history. For CodeQL, rollback removes any required check before disabling default setup, and the findings and last healthy tool status stay linked in the release record |
+| 5.5 | The bad release can be marked or withdrawn without rewriting tag history |
+| 5.5 | For CodeQL, rollback removes any required check before disabling default setup |
+| 5.5 | The findings and last healthy tool status stay linked in the release record |
 | 5.6 | Agent OS is the companion repository that consumes CodeFlow |

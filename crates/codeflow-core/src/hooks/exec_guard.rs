@@ -125,7 +125,8 @@ pub(crate) fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Viola
                 ""
             } else {
                 " (the line could not be fully parsed; its text names the peer with a \
-                 headless flag)"
+                 headless flag, which inline text such as a heredoc or quoted message \
+                 may not do)"
             }
         ),
         crate::remedy::HEADLESS_PEER_RUN.with(&[("enforcement", enforcement)]),

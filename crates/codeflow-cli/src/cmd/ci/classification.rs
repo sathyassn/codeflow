@@ -18,7 +18,7 @@ use codeflow_core::workgraph::classify::{
 use codeflow_core::workgraph::{
     check_epic_line, declared_work_target, declared_work_target_at_revision,
     durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch,
+    task_id_from_branch, task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -262,6 +262,68 @@ pub(super) fn bodyless_line_check(
     }
     ran.push("classification");
     integration_line_eligible(root, branch, range, tagged);
+}
+
+/// A range judged without a pull request body, such as the pre-push run,
+/// whose branch carries its task (`task/TSK-NNN-…`): the journey rule
+/// (R-53) needs only that task's record at the head and the paths the
+/// range changes, so it runs here as it does for a tracked pull request,
+/// and a push reaches the verdict its pull request will (TSK-223). Other
+/// classification rules wait for the body.
+pub(super) fn branch_journey(
+    root: &Path,
+    git: &GitPolicy,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    let Some(range) = range else {
+        return;
+    };
+    // The task as the judged head carries it, so a run from another checkout
+    // (a push of a branch other than the one checked out) still finds it.
+    let Some(task_id) = task_id_from_branch_at(root, branch, range.head)
+        .or_else(|| task_id_from_branch(root, branch))
+    else {
+        return;
+    };
+    // Tracking as the judged head carries it too, so a run from a checkout
+    // without tracking (a push from `main`) still sees a head that adds it.
+    let tracking = match (
+        tracking_on(root, Some(range)),
+        durable_work_tracking_enabled_at(root, range.head),
+    ) {
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(here), Ok(at_head)) => Ok(here || at_head),
+    };
+    match tracking {
+        Ok(true) => {}
+        Ok(false) => return,
+        // The finding the pull request check gives for an unreadable state.
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            ran.push("journey");
+            return;
+        }
+    }
+    ran.push("journey");
+    match range_changes(root, range.base, range.head) {
+        Ok(changes) => {
+            let files: Vec<String> = changes.into_iter().map(|(_, path)| path).collect();
+            journey(root, git, &task_id, range.head, &files, tagged);
+        }
+        // The same finding the pull request check gives for that failure.
+        Err(error) => push(
+            tagged,
+            RULE,
+            format!("cannot list the paths the range changes: {error}"),
+            "pass --base and --head so CI can read the range",
+        ),
+    }
 }
 
 /// Where durable tracking is off: whether the body names exactly one unit

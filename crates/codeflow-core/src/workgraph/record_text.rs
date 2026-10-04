@@ -27,6 +27,14 @@ impl Criterion {
         self.has_tag("(journey)")
     }
 
+    /// Whether `(journey)` sits inside the text without opening or closing
+    /// it, so it is not a tag (R-50); the journey refusal names such a
+    /// criterion.
+    #[must_use]
+    pub fn has_inner_journey(&self) -> bool {
+        !self.is_journey() && self.text.contains("(journey)")
+    }
+
     /// A criterion observable only after release carries `(after release)`
     /// (R-62). It is not mandatory at build time: its result is `deferred`
     /// with an owner, a measurement window and a follow-up task.

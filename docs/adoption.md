@@ -4,48 +4,56 @@
 
 **You adopt CodeFlow by running one command at one of three tiers.**
 
-Every tier installs the same git-discipline floor, and the tier only decides
-how much working method comes with it. Minimal suits any repository, standard
-suits code projects, and full suits programs whose work outlives sessions. No
-tier changes how strictly the floor is enforced,
-and no tier installs remote branch protection. A project can start at minimal and move up later, and a
-lower-tier request never removes files.
+Every tier installs the same git-discipline floor. The tier only decides how
+much working method comes with it.
+
+- Minimal suits any repository, standard suits code projects, and full suits
+  programs whose work outlives sessions.
+- No tier changes how strictly the floor is enforced, and no tier installs remote branch protection.
+- A project can start at minimal and move up later. A lower-tier request
+  never removes files.
 
 ## Architecture
 
 **The tier sets what `init` installs, and the ownership class sets what a later
 `update` may change.**
 
-The tier is recorded in `.codeflow/project.toml`. Running `init` again at a
-higher tier is an idempotent additive upgrade. A lower-tier request is ignored,
-so the recorded tier stays active and no files are removed. Each tier is a clean
-superset of the one below, and the enforcement floor is the same at all three
-(architecture decision record ADR-0019). The tier alone does not decide whether
-durable-work checks are active, because historical CodeFlow task records in an
-existing repository can keep them on.
+- The tier is recorded in `.codeflow/project.toml`.
+- Running `init` again at a higher tier is an idempotent additive upgrade. A
+  lower-tier request is ignored, so the recorded tier stays active and no
+  files are removed.
+- Each tier is a clean
+  superset of the one below, and the enforcement floor is the same at all three
+  (architecture decision record ADR-0019).
+- The tier alone does not decide whether durable-work checks are active,
+  because historical CodeFlow task records in an existing repository can keep
+  them on.
 
 | Tier | Adds | For |
 |---|---|---|
-| `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the CI check, the in-session `git-guard`/`exec-guard` + orient/summary hooks (`.claude/settings.json` + the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md` | Any repo: doc-sets, config repos, small tools |
-| `--standard` (default) | + the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture, and harness integration | Code projects |
-| `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
+| `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the continuous integration (CI) check, the in-session `git-guard` and `exec-guard` plus the orient and summary hooks (`.claude/settings.json` and the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` and `CLAUDE.md` | Any repo: doc-sets, config repos, small tools |
+| `--standard` (default) | Everything in minimal, plus the develop-loop method (`cf-*` skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture and harness integration | Code projects |
+| `--full` | Everything in standard, plus `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
 
 Once the files are on disk, ownership decides what a later `update` may touch.
 Five classes cover every managed path.
 
 | Class | Examples | What `update` does |
 |---|---|---|
-| Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them; 3-way merged from `.codeflow/.baseline/` if you did, and conflicts land as `.new` plus a report |
+| Fully-managed | `.claude/` agents, skills; git-hook shims; CI template | Replaced if you never touched them. If you did, 3-way merged from `.codeflow/.baseline/`, with conflicts written as `.new` files plus a report |
 | Managed-region | `AGENTS.md` / `CLAUDE.md` markers; `.gitignore` markers; `.claude/settings.json` codeflow keys | Only the marked region or codeflow-owned keys are rewritten; everything else is yours |
 | User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml` | Only *new* keys are added with their defaults and reported; values you set are never mutated |
 | User-owned docs (write-once seeds) | all of `docs/`: product, architecture, capabilities, ADRs | Seeded once at init; `update` never mutates them, so they are yours to edit and own |
 | Engine-generated | `.codeflow/manifest.json`, `.codeflow/.baseline/`, `status` / `orient` views | Rewritten by the binary; never hand-edit |
 
-`docs/product.md` describes the consuming project's purpose, users, scope and
-non-goals. It does not describe the CodeFlow CLI. `docs/architecture.md` describes how that
-project is built. Common project facts, commands and constraints belong in
-`AGENTS.md`, and `CLAUDE.md` carries only Claude-specific differences. CodeFlow
-adds no competing `project.md` or `projects.md`.
+Where project facts live:
+
+- `docs/product.md` describes the consuming project's purpose, users, scope
+  and non-goals. It does not describe the CodeFlow CLI.
+- `docs/architecture.md` describes how that project is built.
+- `AGENTS.md` holds common project facts, commands and constraints.
+  `CLAUDE.md` carries only Claude-specific differences.
+- CodeFlow adds no competing `project.md` or `projects.md`.
 
 Runtime autonomy and harness settings are in
 [harness posture](harness-posture.md). Qualifying a new model or harness is in
@@ -97,10 +105,9 @@ Linux-native tooling or Claude sandboxing.
 
    Or pin one archive. Substitute the version you pin and your platform's
    target (the Windows archive is a `.zip`). Each archive unpacks to a
-   directory of the same name that holds the `codeflow` binary. The commands
-   run in a subshell that stops at the first failure, so nothing is extracted
-   or installed unless the download and the checksum pass; `D` must be a
-   directory on your `PATH`:
+   directory of the same name that holds the `codeflow` binary. The subshell
+   stops at the first failure, so nothing is extracted or installed unless the
+   download and the checksum pass. `D` must be a directory on your `PATH`:
 
    ```sh
    V=v3.0.0 A=codeflow-cli-aarch64-apple-darwin D="$HOME/.cargo/bin"
@@ -128,8 +135,8 @@ the project accepts.
    directory and do not look for a Git root.
 2. Inventory what exists: source and build units, deployables, release and data
    owners, instructions, docs, work tracking, hooks and CI.
-3. Pick a tier. Init does not rearrange product source, but it installs the
-   fixed homes in the table below, and no link or config setting relocates them.
+3. Pick a tier. Init does not rearrange product source. It installs the fixed
+   homes in the table below, and no link or config setting relocates them.
 4. For an existing repository, create an adoption branch and run
    `codeflow init --minimal` or a higher tier. For a new one, run:
 
@@ -142,7 +149,7 @@ the project accepts.
    content mechanically, but a skipped file or combined instruction file may
    still need reconciling by hand. Do not use `--force` to get past a collision.
 6. At standard or full, run `/cf-customize`. It verifies the installed harness
-   settings and tools, then walks the consuming project's `docs/product.md`,
+   settings and tools. It then walks the consuming project's `docs/product.md`,
    `docs/architecture.md`, `AGENTS.md`, `CLAUDE.md` differences, README and
    manifests, CI commands, policy, and required Model Context Protocol (MCP)
    servers. CodeFlow never invents these facts or silently changes global
@@ -173,10 +180,10 @@ the project accepts.
 | Case | What to know |
 |---|---|
 | The scaffold commit on a new repository | The one sanctioned commit before the gates guard the repository, so the first PR meets no policy wall. The secret scan is never relaxed, even for that commit |
-| Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing; you choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath`, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat it while `core.hooksPath` names CodeFlow's hooks and the files stay |
+| Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing. You choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath`, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat the report while `core.hooksPath` names CodeFlow's hooks and the files stay |
 | Update-ignore settings and `/cf-customize` | Update-ignore settings do not choose paths for the first scaffold, and `/cf-customize` runs after init without resolving collisions for you |
 | Unrelated files in a CodeFlow record home | They can make `validate --docs` report a collision even when durable-work tracking is inactive. Resolve the conflict |
-| Moving up later | Re-run `init` at `--standard`, then `--full`, as the work earns the weight. Each step is additive and idempotent. |
+| Moving up later | Re-run `init` at `--standard`, then `--full`, when the work needs more method. Each step is additive and idempotent. |
 | Where task work happens | The root checkout stays on its root branch and takes no task work, which happens in linked worktrees under `.worktrees/` |
 | An umbrella repository that holds several projects, each its own repository | Uses workspace mode instead: see [workspace mode](workspace-mode.md) and `codeflow init --workspace` |
 
@@ -221,11 +228,11 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | Profile rule | Behavior |
 |---|---|
 | When it applies | In `codeflow ci` only, when the actor the workflow passes (`--actor`) and the branch both match, and only as the target branch's policy states it, so a pull request cannot add a profile for itself |
-| What it skips | Branch naming, the commit message shape rules and the PR Summary shape (`git.pr_summary`), since the bot writes its body to its own format |
+| What it skips | Branch naming, the commit message shape rules and the pull request (PR) Summary shape (`git.pr_summary`), since the bot writes its body to its own format |
 | What still runs | Tests, the secret scan, AI attribution, emoji, the dash rule, the release declaration, and PR sections at their configured level; `sections` only supplies the headings the bot body leaves out |
-| Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request the actor is `unknown`, whatever `--actor` says, and no profile applies |
-| `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none; a profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
-| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, so a bot's unit name is refused there: a dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump; the bot's pull request is closed once that task lands |
+| Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request, the actor is `unknown` whatever `--actor` says, and no profile applies |
+| `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none. A profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
+| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, so a bot's unit name is refused there. A dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump. The bot's pull request is closed once that task lands |
 
 **A PR template you already have.**
 
@@ -294,8 +301,8 @@ Tell `codeflow test` which commands to run for each part of the project.
 ### Organize durable work
 
 At the full tier, durable work lives in `project-management/` as records with
-stable ids. How they move to `main` is on
-[how work moves to main](delivery.md); this table is the mechanics.
+stable ids. [How work moves to main](delivery.md) covers how they reach `main`;
+the table below gives the commands.
 
 | Record or step | How |
 |---|---|
@@ -316,7 +323,7 @@ Upgrade the binary once, then run `codeflow update` in each repository.
 | Upgrade the binary | Re-run an install path: the `curl \| sh` installer again, or `git pull` then `cargo install --path crates/codeflow-cli`, or download the newer archive (see Install). There is no self-updater (`install-updater = false`) | Improves every repo at once, because hooks call `codeflow` from `PATH` |
 | `codeflow update` per repo | Run it in the repository | Refreshes scaffold files. Until you do, every command prints a version-skew warning |
 
-1. Upgrade the `codeflow` on `PATH` first. The hooks run that binary, and one
+1. Upgrade the `codeflow` on `PATH` first. The hooks run that binary. A binary
    older than a new policy key rejects the policy file, which blocks every
    commit until you upgrade (for example `git.policy_characters`, ADR-0067).
 2. Run `codeflow update` in the repository. Add `--diff <FILE>` to write the
@@ -337,14 +344,18 @@ The version-skew warning is gone and no `.new` file remains.
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
 and verify it against that release's `sha256.sum` and the archive digests
-the target pins (below); a mismatch fails the job and nothing unverified is
-installed. The commit and
-PR-body standards run in `codeflow-policy.yml` on `pull_request_target`.
-GitHub runs that workflow from the default branch, so a pull request cannot
-edit the job that judges it, and the job checks out the pull request's base
-commit, so a pull request into an integration branch is judged by that
-branch's pin and policy, not the default branch's. An upgrade therefore takes
-two pull requests, in order:
+the target pins (below). A mismatch fails the job, and nothing unverified
+is installed.
+
+- The commit and PR-body standards run in `codeflow-policy.yml` on
+  `pull_request_target`.
+- GitHub runs that workflow from the default branch, so a pull request cannot
+  edit the job that judges it.
+- The job checks out the pull request's base commit, so a pull request into
+  an integration branch is judged by that branch's pin and policy, not the
+  default branch's.
+
+An upgrade therefore takes two pull requests, in order:
 
 1. Install the new binary locally, run `codeflow update --pin <version>`,
    and land the pin it raises. The target's current binary judges it, and
@@ -362,12 +373,12 @@ two pull requests, in order:
 | `codeflow doctor` | Reports the version CI installs and whether it is checked against pinned digests or `sha256.sum` alone, a digest table CI would refuse, a raise alone (step 1), a lowered pin, or new policy keys or schema carried before the raise has landed, with this order |
 | The git hook shims | Check the binary first and warn when it is older than they are, then run the checks it has |
 
-The other CI templates carry the same pin. `.gitlab-ci.yml`,
+The other CI templates carry the same pin: `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
-CodeFlow repository; copy the one your host needs) run one shared script: it
-reads the pin from the target branch's current commit, installs that release
-with the same verification, and runs `codeflow ci` from a
-checkout of that commit, so the target's policy judges the change.
+CodeFlow repository; copy the one your host needs). They run one shared
+script. It reads the pin from the target branch's current commit, installs
+that release with the same verification, and runs `codeflow ci` from
+a checkout of that commit, so the target's policy judges the change.
 
 | Managed CI, 3.1.0 | What it does |
 |---|---|
@@ -386,45 +397,70 @@ Details: `assets/base/ci/README.md`.
 | Bitbucket | `BITBUCKET_PR_DESTINATION_COMMIT`. Atlassian does not list that variable, so when it is unset the step fetches `BITBUCKET_PR_DESTINATION_BRANCH` from `origin` and fails when it cannot. Bitbucket merges the destination branch into the working tree before the step, so `codeflow test` and `validate --docs` run on that merge while `codeflow ci` judges `BITBUCKET_COMMIT` against the target |
 | `ci-generic.sh` | Its first argument; it refuses to run without one |
 
-The pin does not defend the CI file itself. On a GitHub `pull_request` event,
-and on every GitLab and Bitbucket pipeline, the job file runs from the pull
-request, so a pull request that edits it can change its own install step.
-Only `codeflow-policy.yml`, which also carries the id registry check, runs
-from the default branch. Require review of your CI files (`.github/workflows/`,
-`.gitlab-ci.yml`, `bitbucket-pipelines.yml`) and `.codeflow/` in your host's
-rules, for example with a code owners file and a branch rule that requires
-code owner review; CodeFlow does not configure those settings.
+The pin does not defend the CI file itself.
+
+- On a GitHub `pull_request` event, and on every GitLab and Bitbucket
+  pipeline, the job file runs from the pull request, so a pull request that
+  edits it can change its own install step.
+- Only `codeflow-policy.yml`, which also carries the id registry check, runs
+  from the default branch.
+
+Require review of your CI files (`.github/workflows/`, `.gitlab-ci.yml`,
+`bitbucket-pipelines.yml`) and `.codeflow/` in your host's rules, for example
+with a code owners file and a branch rule that requires code owner review.
+CodeFlow does not configure those settings.
 
 **Keys `codeflow update` adds for records and checks.** A value the project
 set is kept.
 
 | Key | Values | Effect |
 |---|---|---|
-| `git.work_records` | `block` or `warn` | An `off` from an unreleased build is rewritten to `warn` with a notice. In a project that already has epic, spec or task records, `update` also records `work_records_baseline` in `.codeflow/project.toml` once, as the current commit. Records whose bytes are unchanged since that commit keep the rules they were written under; a status change, a criteria change or a new record follows the status verbs' rules. A task completed before that commit, with no acceptance block, reopens with `codeflow task status <id> todo --reason <text>`, which keeps its Closeout and adds the line `- reopened: <text>` |
+| `git.work_records` | `block` or `warn` | An `off` from an unreleased build is rewritten to `warn` with a notice. In a project that already has epic, spec or task records, `update` also records `work_records_baseline` in `.codeflow/project.toml` once, as the current commit. Records whose bytes are unchanged since that commit keep the rules they were written under. A status change, a criteria change or a new record follows the status verbs' rules. A task completed before that commit, with no acceptance block, reopens with `codeflow task status <id> todo --reason <text>`, which keeps its Closeout and adds the line `- reopened: <text>` |
 | `git.work_planning` | `block` or `warn`, default `block` | The level at which `work start` and `codeflow ci` report the planning checks: a valid workgraph, a record for the task the branch carries, and that record anchored on its target. Pre-commit does not run them |
 | `git.conflict_markers` | default `block` | Reported as added. The pre-commit hook and `codeflow ci` refuse an unresolved conflict marker on a line a change adds to a text file; existing lines are not judged. A file that must hold markers, such as a test fixture or a page about git, sets `conflict-marker-size` for its path in `.gitattributes` to a length its markers do not have. A team that wants a softer start sets the key to `warn` or `off` in a reviewed policy change |
 
 ### Refusals and operator relief
 
 Agent sessions are judged by the landed policy on the remote, so a local
-edit cannot relax it. A refusal names the rule and the operator's route;
-relief is that rule's level, landed through a reviewed change. Install the
-new binary before `codeflow update`. Detail:
+edit cannot relax it. A refusal names the rule and the operator's route.
+Relief means setting that rule's level in a reviewed change. Install the new
+binary before `codeflow update`. Detail is in
 [enforcement planes](architecture/enforcement-planes.md#in-session-guards)
 and, for Codex hook trust, [harness posture](harness-posture.md).
 
 ### The daily flow
 
-One task, one pull request, and a check at every step.
+Each task follows these steps, and each step has a check.
+
+```text
+  codeflow orient
+        |
+        v
+  task, branch and worktree        task/TSK-NNN-<slug>, never the root
+        |
+        v
+  small commits                    hooks check every commit, merge, push
+        |
+        v
+  one PR with a Task: line         codeflow ci and the test gate
+        |
+        v
+  one review by the other lineage  material findings fixed in the same PR
+        |
+        v
+  land on the integration line     or a human merges into main
+```
+
+With no remote, `codeflow integrate` replaces the pull request.
 
 1. **Orient and route.** Read the SessionStart digest, or run `codeflow orient`,
    for branch and worktree state, work counts, recent ADR titles, gate status
    and pointers. Read the pointed docs for depth. The paths a change touches
-   decide its entry: an adopter-facing path (product code, managed
+   decide its entry. An adopter-facing path (product code, managed
    instructions, hooks, policy, CI, shipped templates, watched contracts), or
    plan, design, security or irreversible work, starts with
    `/cf-model-orchestrator`, which says so when a native peer seat is
-   unavailable; other edits go direct.
+   unavailable. Other edits go direct.
 2. **Attach to a task and branch in a worktree.** Every change names a task
    before substantive work starts, an existing one or a new one. Work on a
    `task/TSK-NNN-<slug>` branch, or another `{prefix}/{kebab-name}`, in a
@@ -440,8 +476,8 @@ One task, one pull request, and a check at every step.
    only into a protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
    whole change once, and a material finding is fixed in the same PR. The
-   reviewed head lands with the next batch on the integration line, or, when
-   the PR targets `main`, a human merges it when the required checks are
+   reviewed head lands with the next batch on the integration line. When
+   the PR targets `main`, a human merges it once the required checks are
    evidenced green. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
@@ -455,10 +491,10 @@ One task, one pull request, and a check at every step.
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
-The PR shows green required checks, and a human merges it. How a batch of
-reviewed tasks lands with one full gate, how an epic closes into `main`, and
-what happens when something changes midway are on
-[how work moves to main](delivery.md).
+The PR shows green required checks, and a human merges it. [How work moves to
+main](delivery.md) covers how a batch of reviewed tasks lands with one full
+gate, how an epic closes into `main`, and what happens when something changes
+midway.
 
 ### Related guides
 
