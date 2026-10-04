@@ -22,6 +22,29 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Guidance for working while something is uncertain (issue 70).** The
+  autonomy reference gains "While a question is open": while an operator
+  question is open, dependent work continues on a working default when the
+  recommended answer is reversible, labelled where it lands with what
+  reverses it, or holds the conservative state when it is not or a fact
+  cannot be verified yet, stated with what clears it; neither interim state
+  takes the operator-owned step, and one that another task, a reviewer or a
+  later session relies on is recorded where the work is tracked with its
+  evidence, reversal and status. Three decision-table rows carry the same
+  rule. `workflow-discipline.md` states it at every tier in "Navigate
+  blockers", adds under "Claims need evidence" that how far a change reaches
+  is a claim (list and check every consumer of the changed thing) and that a
+  rule encoding the operator's guidance adds nothing the operator never
+  gave, and adds under "Planning" that operator feedback during work is a
+  request like any other: attached to its unit, placed in the plan's order,
+  acted on after a read of the whole aspect, closed with evidence.
+  `writing.md` asks for a qualifier on a word the project uses for several
+  things, `project-organization.md` names the record home for an interim
+  state, and `cf-reviewer` checks a reach claim, a working default's label
+  and encoded guidance. The per-task reading chain does not grow: the full
+  rule sits in the reference read only when a step may need the operator.
+
+<!-- codeflow:release-impact minor -->
 - **Pull request Summaries open with a prose lead, then bullets.**
   `codeflow ci` now checks the shape of a pull request body's Summary under
   a new policy key, `git.pr_summary`, which blocks by default: one prose

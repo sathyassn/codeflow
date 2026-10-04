@@ -413,7 +413,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "09690f4fdc3dd66c1df685fa9291e9c39977a7109d4697dd0c23faed7d5d4f74",
+      "sha256": "81a0248878c8eb22c8a030cf58720f5464c185585b3f108591257d624bb2b899",
       "exec": false
     },
     ".agents/skills/cf-method/references/delivery-process.md": {
@@ -425,7 +425,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "045053339774f4f8d699e06452dd38ed51a86c30d1b6d074aeb16e7015db96fc",
+      "sha256": "b771c09cbf0c6dd3c69d690dd6490039a3594716e249913b820d1c471bc542d2",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -821,7 +821,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "1048bd5cdd8caf2105355c61f9de78b37ff76f37bd1f39bbfea3323c2716b6a8",
+      "sha256": "6162daf20dfc69c04ad4647357dcf0281bda3abbeb5547035d6cc76426a8dbdb",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -1247,7 +1247,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "09690f4fdc3dd66c1df685fa9291e9c39977a7109d4697dd0c23faed7d5d4f74",
+      "sha256": "81a0248878c8eb22c8a030cf58720f5464c185585b3f108591257d624bb2b899",
       "exec": false
     },
     ".claude/skills/cf-method/references/delivery-process.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "045053339774f4f8d699e06452dd38ed51a86c30d1b6d074aeb16e7015db96fc",
+      "sha256": "b771c09cbf0c6dd3c69d690dd6490039a3594716e249913b820d1c471bc542d2",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1709,7 +1709,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "4f9587b9bada8527f1e956375213bbd3d6370de4481f23cb84ad2fb2d4dce8ee",
+      "sha256": "a65f62683d9e540108051034ca89b38b9f5a23f07c5376d51ef3cb9131da47a4",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "4c3eb772bf43b55ee6b463ad6cdaf634bc00dddd75852e7176e6775a319eaa39",
+      "sha256": "b8b2d76b52ef7f192c840e4fdc765a39456c87ff241a049ace45656c0e216297",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {

@@ -2113,6 +2113,90 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
     assert!(report.contains("per-task reading chain"), "{report}");
 }
 
+/// TSK-235 AC-4 (journey): a fresh standard project carries the guidance
+/// for working while something is uncertain where an agent reads it on the
+/// trigger. The every-tier discipline file states the interim-state rule and
+/// points at the autonomy reference's section; the installed orchestrator
+/// names that reference on the moment a step may need the operator; both
+/// skill trees install the section byte for byte; the reference stays
+/// outside the per-task chain; and the reading report stays clean. At the
+/// minimal tier the discipline file carries the rule with no reference.
+#[test]
+fn a_fresh_standard_project_carries_the_uncertainty_guidance_on_its_trigger() {
+    use codeflow_core::reading::{self, Inventory, SkillFiles};
+
+    const INTERIM_RULE: &str = "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state";
+    const POINTER: &str = "`autonomy.md` \"While a question is open\" has the rule";
+    const TRIGGER: &str = "Before deciding whether to ask the operator, escalate or stop";
+    const SECTION: &str = "## While a question is open";
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let (_tmp, root) = fresh("--standard");
+
+    let discipline = words(&read(&root, ".codeflow/rules/workflow-discipline.md"));
+    assert!(discipline.contains(INTERIM_RULE), "{discipline}");
+    assert!(discipline.contains(POINTER), "{discipline}");
+
+    let orchestrator = words(&read(
+        &root,
+        ".claude/skills/cf-model-orchestrator/SKILL.md",
+    ));
+    let trigger_sentence = orchestrator
+        .split(". ")
+        .find(|sentence| sentence.contains(TRIGGER))
+        .expect("the orchestrator carries the autonomy trigger");
+    assert!(
+        trigger_sentence.contains("cf-method/references/autonomy.md"),
+        "{trigger_sentence}"
+    );
+
+    let claude = read(&root, ".claude/skills/cf-method/references/autonomy.md");
+    let agents = read(&root, ".agents/skills/cf-method/references/autonomy.md");
+    assert_eq!(claude, agents, "the two skill trees differ");
+    assert!(claude.contains(SECTION), "{claude}");
+    assert!(words(&claude).contains(
+        "| An operator question is open and your recommended answer is reversible | 1: continue the dependent work on it as a working default"
+    ));
+    assert!(words(&claude).contains("Neither interim state takes the operator-owned step."));
+    assert_eq!(
+        claude,
+        read(
+            &repo_root(),
+            "assets/base/claude/skills/cf-method/references/autonomy.md"
+        ),
+        "the installed reference is not the shipped source"
+    );
+
+    let mut installed = SkillFiles::new();
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed);
+    let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
+    assert!(chain.errors.is_empty(), "{:?}", chain.errors);
+    assert!(
+        !chain
+            .files
+            .iter()
+            .any(|file| file.path.ends_with("references/autonomy.md")),
+        "the autonomy reference joined the per-task chain"
+    );
+    let report = codeflow(&root, &["doctor", "--check", "reading"]);
+    let text = output_text(&report);
+    assert_eq!(report.status.code(), Some(0), "{text}");
+    assert!(
+        text.starts_with("ok    reading: within guidelines:"),
+        "{text}"
+    );
+
+    let (_tmp, minimal) = fresh("--minimal");
+    let discipline = words(&read(&minimal, ".codeflow/rules/workflow-discipline.md"));
+    assert!(discipline.contains(INTERIM_RULE), "{discipline}");
+    assert!(
+        !minimal
+            .join(".claude/skills/cf-method/references/autonomy.md")
+            .exists(),
+        "the minimal tier installs no autonomy reference"
+    );
+}
+
 /// The `codeflow` commands a text names in code spans, each as its command
 /// path (up to two lower-case words) and the long flags written with it.
 fn named_commands(text: &str) -> Vec<(Vec<String>, Vec<String>)> {

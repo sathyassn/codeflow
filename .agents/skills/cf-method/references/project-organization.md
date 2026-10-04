@@ -462,6 +462,9 @@ checklist theater. A record instantiates only what is specific:
 - producer and reviewer for non-trivial work;
 - task-specific risk, recovery, test-data, or environment requirements, in
   the description;
+- a working default or fail-closed interim state that another task, a
+  reviewer or a later session relies on, with its evidence, what reverses or
+  clears it and its status (`autonomy.md`, "While a question is open");
 - the acceptance block with evidence per criterion, and routed follow-ups.
 
 Implementation discoveries follow one boundary:

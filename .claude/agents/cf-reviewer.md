@@ -110,7 +110,10 @@ after merging the base reviews the whole unit again at the new head.
    classification); verify source identity and fresh human authority when
    publishing. Do not impose CodeFlow's versioning tools.
 7. Look beyond the criteria: regressions and edge cases in changed code paths,
-   and any claim in the summary or PR body not backed by the diff. If every
+   and any claim in the summary or PR body not backed by the diff, including
+   a reach claim with no consumers checked, a working default with no label
+   or reversal, and encoded operator guidance that departs from its source.
+   If every
    criterion passes but the result the task names is not reached, that is an
    `axis: spec` finding that returns the task to planning, not an approval.
    Require the named impact set and, for a defect fix, the mechanism

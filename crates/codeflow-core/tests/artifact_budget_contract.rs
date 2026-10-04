@@ -1327,6 +1327,129 @@ fn autonomy_reference_has_no_unwaited_spend_or_policy_dashes() {
     );
 }
 
+/// TSK-235 (issue 70): the guidance for working while something is
+/// uncertain, each rule in the home that loads it. The interim-state rule
+/// lives in the autonomy reference, read only on its trigger, with its
+/// summary in the every-tier discipline file; the reach claim, the encoded
+/// guidance rule, the operator feedback rule, the record home, the reviewer
+/// check and the qualified-term rule each sit in their owner.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
+    let root = repo_root();
+    assert_contains_all(
+        &root.join("assets/base/claude/skills/cf-method/references/autonomy.md"),
+        &[
+            ("section", "## While a question is open"),
+            (
+                "working default",
+                "When your recommended answer is reversible, continue the dependent work on it.",
+            ),
+            (
+                "labelled with its reversal",
+                "as a working default pending the operator's answer, and name what reverses it.",
+            ),
+            (
+                "fail closed",
+                "When the recommended answer is not reversible, or a fact you need cannot be verified yet, hold the conservative state",
+            ),
+            ("what clears it", "State what clears it and continue the work that does not depend on it."),
+            (
+                "never the operator-owned step",
+                "Neither interim state takes the operator-owned step.",
+            ),
+            (
+                "the step waits",
+                "the step the question names waits for the answer, and the question stays in the one round",
+            ),
+            (
+                "recorded where tracked",
+                "record it where that work is tracked: the task record, the epic's planning notes for a cross-task choice, or the pull request body of a standalone task.",
+            ),
+            (
+                "entry fields",
+                "The entry carries the choice, its evidence, what reverses or clears it, and its status (working default, fail closed, or settled).",
+            ),
+            (
+                "open question row",
+                "| An operator question is open and your recommended answer is reversible | 1: continue the dependent work on it as a working default",
+            ),
+            (
+                "unverifiable fact row",
+                "| A fact cannot be verified yet, or the pending answer is not reversible | 1: hold the conservative state",
+            ),
+            (
+                "relied-on state row",
+                "| A working default or interim state that another task, a reviewer or a later session relies on | 2: record it where that work is tracked",
+            ),
+        ],
+    );
+    assert_contains_all(
+        &root.join("assets/base/rules/workflow-discipline.md"),
+        &[
+            (
+                "interim state at every tier",
+                "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state: a working default when the recommended answer is reversible, labelled where it lands with what reverses it, or the conservative state when it is not, stated with what clears it.",
+            ),
+            (
+                "never the operator-owned step",
+                "Neither takes the operator-owned step, and an interim state that others rely on is recorded where the work is tracked",
+            ),
+            (
+                "pointer to the full rule",
+                "`autonomy.md` \"While a question is open\" has the rule",
+            ),
+            (
+                "reach is a claim",
+                "How far a change reaches is a claim like any other: before stating it, list every consumer of the changed thing (each base, branch, environment or reader that loads it) and check each",
+            ),
+            (
+                "encoded guidance matches its source",
+                "A rule or record that encodes the operator's guidance quotes or closely paraphrases it; a restriction the operator never gave is an invented fact.",
+            ),
+            (
+                "operator feedback is a request",
+                "Operator feedback that arrives during work is a request like any other: it attaches to its unit, takes its place in the plan's order, is acted on after a read of the whole aspect it touches, and closes with evidence.",
+            ),
+            ("no reflex edit", "Do not edit on the spot in reply to a remark; take it through the plan."),
+        ],
+    );
+    assert_contains_all(
+        &root.join("assets/base/rules/writing.md"),
+        &[(
+            "qualify an overloaded term",
+            "When one word names several things in the project, such as `versioning` for an API and for a map, qualify it at every use.",
+        )],
+    );
+    assert_contains_all(
+        &root.join("assets/base/claude/skills/cf-method/references/project-organization.md"),
+        &[(
+            "record home for an interim state",
+            "a working default or fail-closed interim state that another task, a reviewer or a later session relies on, with its evidence, what reverses or clears it and its status",
+        )],
+    );
+    assert_contains_all(
+        &root.join("assets/base/claude/agents/cf-reviewer.md"),
+        &[(
+            "reviewer checks the three claims",
+            "a reach claim with no consumers checked, a working default with no label or reversal, and encoded operator guidance that departs from its source",
+        )],
+    );
+    // The interim-state rule never becomes a second list of operator-owned
+    // axes: the section and its rows name no axis beside an ask.
+    let autonomy =
+        read_text(&root.join("assets/base/claude/skills/cf-method/references/autonomy.md"));
+    let section = autonomy
+        .split("## While a question is open")
+        .nth(1)
+        .and_then(|rest| rest.split("## Trust prompts").next())
+        .expect("the section sits before Trust prompts");
+    assert_eq!(
+        second_ask_list_problems("autonomy.md While a question is open", section),
+        Vec::<String>::new()
+    );
+}
+
 #[test]
 fn typed_contracts_are_proportionate_and_runtime_aware() {
     let root = repo_root();
