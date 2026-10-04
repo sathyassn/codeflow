@@ -18,10 +18,8 @@ and Changes. The rest appear only when their condition holds.
 Every PR names its work on a `Task:` line: `TSK-NNN` or `EPC-NNN` where
 durable tracking is active (judged from the tracking state, not the
 installed tier), and a non-empty unit name where it is not. It names its
-task, or its epic for the breakdown PR and the PR to main. A planning
-amendment names every epic it changes, `Task: EPC-001, EPC-002` (ADR-0078);
-a task id never takes a list. A missing, empty, malformed, repeated or
-mismatched `Task:` line is refused.
+task, or its epic for the breakdown PR and the PR to main. A missing, empty,
+malformed, repeated or mismatched `Task:` line is refused.
 
 | Section | When | Content |
 |---|---|---|
@@ -46,6 +44,13 @@ mismatched `Task:` line is refused.
 - `codeflow ci` warns on unclosed HTML and on a Testing section with no
   `Not tested:` line. Keep the body short by linking records instead of
   copying them; never drop evidence to shorten it.
+- `codeflow ci` also warns, and never blocks, when the body passes 1,000
+  words as a reader sees it: HTML comments are left out, fenced blocks and
+  tables count. The warning names the count and the three largest `##`
+  sections. A body grows when each review round is appended. Write it to its
+  final state instead: replace it on each update, link records instead of
+  copying them, keep one results block at the head and one review row per
+  reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope and the verdict, nothing more; the verdict and its native
   provenance live on the PR and findings live in the linked record. A review

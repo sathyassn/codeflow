@@ -50,11 +50,13 @@ fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
             // live cwd check on resume stays.
             "pane `cwd` is `$PWD`",
             "intended worktree",
-            "Default production launch is ADR-conformant",
-            "--always-approve",
-            "--reasoning-effort <effort>",
-            "bypassPermissions",
-            "danger-full-access",
+            // TSK-213 (ADR-0077): any host drives a reachable Herdr server,
+            // and the launch flags live in the transport rule's posture
+            // table, which the native args cite.
+            "herdr status server",
+            "from any host, inside a Herdr pane or outside one",
+            "routing/transport.md",
+            "--reasoning-effort <effort> <posture flags>",
             "same topic",
             "herdr pane send-text",
             "name namespace",
@@ -88,12 +90,12 @@ fn consult_and_delegate_descriptions_do_not_scent_on_herdr() {
 }
 
 #[test]
-fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
+fn consult_and_delegate_route_through_herdr_whenever_a_server_is_reachable() {
     assert_contains(
         CONSULT,
         &[
             "cf-herdr",
-            "HERDR_ENV=1",
+            "From any host with a reachable Herdr server",
             "axis: standards",
             // TSK-184: consult points at cf-delegate for the launch; the
             // lifecycle lane (below) owns the Herdr delivery command.
@@ -107,7 +109,7 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
         DELEGATE_LIFECYCLE_LANE,
         &[
             "cf-herdr",
-            "tmux is the degraded TTY host",
+            "tmux only as the last fallback",
             "idle`/`done` is not turn completion",
             "herdr pane send-text",
         ],

@@ -1581,7 +1581,7 @@
         "CF-MM-011",
         "CF-MM-013"
       ],
-      "prompt": "Draft the exact first lines of the bounded prompt a Claude host should send through the official Codex plugin for an independent T3 review. Explain what native evidence must return.",
+      "prompt": "Draft the exact first lines of the bounded prompt a Claude host should deliver to the interactive Codex seat in its Herdr tab for an independent T3 review. Explain what native evidence must return.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",

@@ -18,9 +18,9 @@ direction, implementation/execution and fidelity judgment under `cf-design`,
 subject only to the scoped-qualified Claude route and explicit operator-override
 rules above. Default UI assignment is Claude as responsible primary and
 executor (**implementer check**) and Codex as reviewer (**independent interactive
-QA**). Codex QAs through Computer Use on the official app-server
-(preferred plugin or qualified official native client per `cf-delegate`,
-with actual Computer Use access verified). If Codex produces a UI unit, Claude
+QA**). Codex QAs through Computer Use in the Codex seat that
+[cross-family transport](transport.md) names, with actual Computer Use
+access verified. If Codex produces a UI unit, Claude
 is the independent reviewer and performs Computer Use QA in Claude Code;
 Codex executor verification is not independent QA. Playwright remains the
 deterministic web driver; Computer Use is not a default web driver and not

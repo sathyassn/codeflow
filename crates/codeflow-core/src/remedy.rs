@@ -401,6 +401,9 @@ catalog! {
     /// A PR body over the presentation guidelines.
     PR_PRESENTATION = Step::Codeflow("codeflow ci"),
         "keep the body concise and link detailed evidence; retain necessary verification; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A PR body over the word limit.
+    PR_BODY_LENGTH = Step::Codeflow("codeflow ci"),
+        "rewrite the body to its final state (replace it, never append review rounds), link records instead of copying them, keep one results block at the head and one review row per reviewer; `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A Summary that is not one prose lead, then a list or table.
     PR_SUMMARY_SHAPE = Step::Codeflow("codeflow ci"),
         "open the Summary with one short prose paragraph that anchors the reader, put the details after it as `-` bullets or a table, and end with at most one closing paragraph (`.codeflow/rules/writing.md` \"Summaries\"); `codeflow ci --pr-body-file <body.md>` checks the new text";
@@ -620,7 +623,7 @@ catalog! {
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
     /// A headless peer run.
     HEADLESS_PEER_RUN = Step::Codeflow("codeflow delegate"),
-        "delegate through an interactive seat instead: Claude Code to Codex through the Codex plugin, Codex to Claude through `codeflow delegate` over the interactive `claude` CLI, or a named Herdr tab (cf-delegate); {enforcement} (policy security.headless_peer_runs)";
+        "run the peer as an interactive seat instead: the other family's own CLI in a named Herdr tab, a Claude seat's turns tracked with `codeflow delegate` (cf-delegate; the rule is cf-model-orchestrator's resources/routing/transport.md); {enforcement} (policy security.headless_peer_runs)";
     /// A hook that could not evaluate and let the operation through.
     HOOK_UNEVALUATED = Step::Codeflow("codeflow doctor"),
         "fix the cause named above (a hook manager must pass git's arguments and stdin through to the codeflow shim), then rerun the git command; `codeflow doctor --check hooks` checks the hook wiring";

@@ -465,13 +465,17 @@ class StubDeliveryTests(unittest.TestCase):
             self.assertIn("nothing was sent", done.stderr)
             self.assertIn("relaunch", done.stderr)
 
-    def test_an_oversized_prompt_takes_the_degraded_path(self) -> None:
+    def test_an_oversized_prompt_names_a_brief_file_not_tmux(self) -> None:
+        # TSK-213: tmux is the last fallback only when no Herdr server is
+        # reachable, so an oversized prompt in a Herdr seat goes to a file.
         seat = self.seat()
         seat.prompt.write_text("x" * (256 * 1024 + 1), encoding="utf-8")
         done = seat.deliver()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(seat.sent("send-text"), [])
         self.assertIn("256 KiB", done.stderr)
+        self.assertIn("outside the repository", done.stderr)
+        self.assertNotIn("tmux", done.stderr)
 
     def test_resume_and_cleanup_name_the_seat_folder(self) -> None:
         skill = words(HERDR_SKILL.read_text(encoding="utf-8"))
