@@ -30,21 +30,25 @@
 //! the message says the line was not fully parsed, and a project that needs
 //! such a run sets `security.headless_peer_runs` to `warn`.
 //!
-//! The raw text leaves out what the line only writes as data (TSK-223): a
-//! heredoc body read by a data command (`cat > brief.md <<EOF`,
-//! `git commit -F - <<EOF`), and a data command that feeds no pipe and runs
-//! no substitution, such as `echo '…'` or `git commit -m '…'` (a
-//! `$(cat <<EOF …)` message included). That data is still judged as a
-//! script the line may run later (`cat > run.sh <<EOF`, then `bash
-//! run.sh`): its commands are read with shell quoting, and a peer counts
-//! only in command position, followed by its headless flag, or by its
-//! headless subcommand as the first word after its options. A brief that
-//! says "Codex adversarial seat: please review" is data; a line in it that
-//! reads `codex exec …` or "Codex review: …" is still a run.
+//! The raw text leaves out what the line only writes as data, when nothing
+//! that may run after it can run that data (TSK-223). Data is a heredoc
+//! body read by a data command (`cat > brief.md <<EOF`), and a data
+//! command written as the program itself, feeding no pipe and running no
+//! substitution, such as `echo '…'`, `git commit -m '…'` (a
+//! `$(cat <<EOF …)` message included) or `gh pr create --body '…'`. It is
+//! left out only when every command after it is inert (`cat`, `grep`,
+//! `ls` and the like, with no assignment before them); in a line with a
+//! pipe, a background job, a process substitution, a loop, a function, a
+//! trap, an alias, `source`, `eval`, `exec` or a `PATH`-like assignment,
+//! every other command must be inert, which keeps all the data. So `$EDITOR notes.md; git commit -m '…'` drops
+//! its message, while `cat > run.sh <<EOF … EOF` followed by `bash run.sh`
+//! or `$EDITOR run.sh` is judged whole, as before. The data left out is
+//! still judged as a script, read with shell quoting: a peer counts only in
+//! command position, with its headless flag, or with its headless
+//! subcommand as the first word after its options, and a command the
+//! script cannot resolve sends its whole text to the raw matcher.
 
-use crate::hooks::git_guard::{
-    command_argv, shell_tokens, simple_commands, strip_launchers, strip_reserved_words,
-};
+use crate::hooks::git_guard::{command_argv, shell_tokens, simple_commands, strip_reserved_words};
 
 /// A headless peer run found in a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,32 +105,79 @@ fn fallback_run(command: &str) -> Option<HeadlessRun> {
 
 /// Programs whose arguments, here-strings and heredoc bodies are data: they
 /// never run what they read or are given. Tools that can run their input
-/// (`awk` `system()`, GNU `sed e`, interpreters, shells) are left out.
+/// or a program they name (`awk` `system()`, GNU `sed e`, `sort
+/// --compress-program`, `rg --pre`, interpreters, shells) are left out.
 const DATA_COMMANDS: &[&str] = &[
-    "cat", "tee", "echo", "printf", "grep", "egrep", "fgrep", "rg", "head", "tail", "wc", "sort",
-    "uniq", "tr", "cut", "diff", "jq", "base64", "true", ":",
+    "cat", "tee", "echo", "printf", "grep", "egrep", "fgrep", "head", "tail", "wc", "uniq", "tr",
+    "cut", "diff", "jq", "base64", "true", ":",
 ];
 
-/// Whether a simple command's words are a data command: one of
-/// [`DATA_COMMANDS`] (`printf -v` assigns, so it is not), `git` in a
-/// subcommand that takes a message or patch with no `-c` or
-/// `--config-env` (either can make the subcommand an alias that runs a
-/// shell), or `gh` in a subcommand that takes a body. Returns whether its
-/// arguments are also judged as a script: a message never is.
+/// Programs that can follow written data without running it: they read
+/// files and text, or change nothing, and never run a program a file or
+/// argument names.
+const INERT_COMMANDS: &[&str] = &[
+    "cat", "echo", "printf", "grep", "egrep", "fgrep", "head", "tail", "wc", "uniq", "tr", "cut",
+    "diff", "jq", "base64", "true", "false", ":", "ls", "pwd", "cd", "mkdir", "touch", "test", "[",
+];
+
+/// Words that make a line's commands run in another order than they are
+/// written (a loop runs an earlier command again, a function or trap runs
+/// it later, a coprocess beside it), or change what a later command name
+/// runs (an alias, a sourced or evaluated definition, `exec` redirection,
+/// a hashed path, a builtin switched off).
+const REORDERING_WORDS: &[&str] = &[
+    "while", "until", "for", "select", "function", "trap", "coproc", "alias", "unalias", "source",
+    ".", "eval", "exec", "hash", "enable",
+];
+
+/// Variables that change which program a name runs, or what runs beside
+/// it.
+const RUN_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "PROMPT_COMMAND",
+    "PS4",
+    "IFS",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+];
+
+/// Whether `words` assign one of [`RUN_ENVIRONMENT`], anywhere
+/// (`PATH=…`, `export PATH=…`, `env PATH=… cat`).
+fn sets_run_environment(words: &[String]) -> bool {
+    words.iter().any(|w| {
+        is_assignment(w)
+            && w.split_once('=')
+                .is_some_and(|(name, _)| RUN_ENVIRONMENT.contains(&name))
+    })
+}
+
+/// Whether a simple command's words are a data command, written as the
+/// program itself with no assignment or launcher before it: one of
+/// [`DATA_COMMANDS`] (`printf -v` assigns, so it is not), `git commit`,
+/// `tag` or `notes` with no global option but `-C <dir>` (a `-c` in any
+/// spelling can make the subcommand an alias that runs a shell) and no
+/// `-e`/`--edit` (which opens the editor), or `gh` in a subcommand that
+/// takes a body. Returns whether its arguments are also judged as a
+/// script: a message never is.
 fn data_command(words: &[String]) -> Option<bool> {
-    let (program, args) = strip_launchers(words)?;
+    let (program, args) = words.split_first()?;
     match basename(program).as_str() {
         "git" => {
-            let configured = args
-                .iter()
-                .any(|a| a == "-c" || a.starts_with("--config-env"));
-            let sub = args.iter().find(|a| !a.starts_with('-'))?;
-            (!configured
-                && matches!(
-                    sub.as_str(),
-                    "commit" | "tag" | "notes" | "hash-object" | "apply" | "am"
-                ))
-            .then_some(false)
+            let mut at = 0;
+            while args.get(at).is_some_and(|a| a == "-C") {
+                at += 2;
+            }
+            let sub = args.get(at)?;
+            let edits = args[at..].iter().any(|a| {
+                a == "--edit" || (a.starts_with('-') && !a.starts_with("--") && a.contains('e'))
+            });
+            (!edits && matches!(sub.as_str(), "commit" | "tag" | "notes")).then_some(false)
         }
         "gh" => args
             .first()
@@ -138,68 +189,146 @@ fn data_command(words: &[String]) -> Option<bool> {
     }
 }
 
+/// Whether a simple command cannot run data the line wrote before it: no
+/// words, only assignments, or one of [`INERT_COMMANDS`] with no
+/// assignment before it (an environment such as `LD_PRELOAD` can make
+/// any program load a written file).
+fn inert(words: &[String]) -> bool {
+    match words.first() {
+        None => true,
+        Some(_) if words.iter().all(|w| is_assignment(w)) => true,
+        Some(program) => INERT_COMMANDS.contains(&basename(program).as_str()),
+    }
+}
+
 /// A heredoc opened in the current simple command, waiting for its body.
 struct PendingDoc {
     delimiter: String,
     strip_tabs: bool,
     /// An unquoted delimiter: the body's substitutions run.
     expands: bool,
-    /// Its reader is a data command that feeds no pipe.
-    data: bool,
+    /// The simple command that reads it.
+    owner: usize,
+}
+
+/// One simple command of the line, as [`split_data`] read it.
+struct Segment {
+    text: String,
+    /// `Some(judge_args)` when it is a data command that feeds no pipe and
+    /// runs no substitution of its own.
+    data: Option<bool>,
+    inert: bool,
+}
+
+/// The line in order: text that always stays in the code, a simple
+/// command, or a heredoc body with the command that reads it.
+enum Piece {
+    Code(String),
+    Segment(usize),
+    Body {
+        owner: usize,
+        text: String,
+        /// Closed, and runs no substitution.
+        quiet: bool,
+    },
+}
+
+/// What [`split_data`] learns while it reads the line.
+#[derive(Default)]
+struct LineShape {
+    segments: Vec<Segment>,
+    pieces: Vec<Piece>,
+    /// A pipe, a background job, a process substitution, or a
+    /// [`REORDERING_WORDS`] word or [`RUN_ENVIRONMENT`] assignment:
+    /// commands may run in another order than they are written, or a name
+    /// may run another program.
+    reordered: bool,
+}
+
+impl LineShape {
+    /// Close the simple command in `span`.
+    fn flush(&mut self, span: &mut String, runs: &mut bool, docs: &mut [PendingDoc], piped: bool) {
+        let mut words = command_argv(span);
+        let reorders = |words: &[String]| {
+            words
+                .iter()
+                .find(|w| !is_assignment(w))
+                .is_some_and(|w| REORDERING_WORDS.contains(&w.as_str()))
+        };
+        let environment = sets_run_environment(&words);
+        if reorders(&words) || environment {
+            self.reordered = true;
+        }
+        strip_reserved_words(&mut words);
+        if reorders(&words) {
+            self.reordered = true;
+        }
+        let owner = self.segments.len();
+        for doc in docs.iter_mut().filter(|doc| doc.owner == usize::MAX) {
+            doc.owner = owner;
+        }
+        self.segments.push(Segment {
+            text: std::mem::take(span),
+            data: data_command(&words).filter(|_| !piped && !*runs),
+            inert: !*runs && !environment && inert(&words),
+        });
+        self.pieces.push(Piece::Segment(owner));
+        *runs = false;
+    }
+
+    /// A substitution that spans lines, other than a `$(cat <<EOF …)`
+    /// message, may hold a heredoc this reader does not follow: keep all
+    /// the data.
+    fn substitution_text(&mut self, text: &[char], message: bool) {
+        if !message && text.contains(&'\n') {
+            self.reordered = true;
+        }
+    }
+
+    /// Whether the data command at `at` can be left out of the code: no
+    /// command that may run after it can run what it wrote. In a line
+    /// read in order that is every later command; in a reordered line,
+    /// every other command.
+    fn removable(&self, at: usize) -> bool {
+        self.segments[at].data.is_some()
+            && self
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| if self.reordered { *i != at } else { *i > at })
+                .all(|(_, segment)| segment.inert)
+    }
 }
 
 /// Split `command` into the text that can run and the data it only
 /// writes. A simple command is data when [`data_command`] says so, it
-/// feeds no pipe, and it runs no substitution other than a `$(cat <<EOF …)`
-/// message; its heredoc bodies are data with it, unless an unquoted body
-/// runs a substitution. The data returned is each judged piece: a body,
-/// and a data command's arguments, joined and one by one, unless they are
-/// a message. Quotes, `$(…)` and backticks are tracked so a separator
-/// inside them splits nothing; anything this reader cannot place stays in
-/// the code.
+/// feeds no pipe, it runs no substitution other than a `$(cat <<EOF …)`
+/// message, and no command that may run after it can run what it wrote
+/// ([`LineShape::removable`]); its heredoc bodies are data with it, unless
+/// an unquoted body runs a substitution. The data returned is each judged
+/// piece: a body, and a data command's arguments, joined and one by one,
+/// unless they are a message. Quotes, `$(…)` and backticks are tracked so
+/// a separator inside them splits nothing; anything this reader cannot
+/// place stays in the code.
 #[allow(clippy::too_many_lines)] // one character state machine
 fn split_data(command: &str) -> (String, Vec<String>) {
     let chars: Vec<char> = command.chars().collect();
-    let mut code = String::new();
-    let mut data: Vec<String> = Vec::new();
+    let mut shape = LineShape::default();
     let mut span = String::new();
     // Whether the span runs a substitution this reader does not clear.
     let mut runs = false;
     let mut docs: Vec<PendingDoc> = Vec::new();
-    let mut pending: Vec<PendingDoc> = Vec::new();
     let mut quote: Option<char> = None;
     let mut i = 0;
-    let flush = |span: &mut String,
-                 runs: &mut bool,
-                 docs: &mut Vec<PendingDoc>,
-                 pending: &mut Vec<PendingDoc>,
-                 piped: bool,
-                 code: &mut String,
-                 data: &mut Vec<String>| {
-        let mut words = command_argv(span);
-        strip_reserved_words(&mut words);
-        let judged = data_command(&words).filter(|_| !piped && !*runs);
-        for mut doc in docs.drain(..) {
-            doc.data = judged.is_some();
-            pending.push(doc);
-        }
-        if let Some(judge_args) = judged {
-            if judge_args {
-                // Every word, a here-string's included, as written.
-                let tokens = shell_tokens(span);
-                data.push(tokens.join(" "));
-                data.extend(tokens);
-            }
-            code.push(' ');
-        } else {
-            code.push_str(span);
-        }
-        span.clear();
-        *runs = false;
-    };
     while i < chars.len() {
         let c = chars[i];
         if let Some(open) = quote {
+            if c == '`' && open == '"' {
+                let end = backtick(&chars, i, &mut span, &mut runs);
+                shape.substitution_text(&chars[i..end], false);
+                i = end;
+                continue;
+            }
             span.push(c);
             if c == '\\' && open == '"' {
                 if let Some(&next) = chars.get(i + 1) {
@@ -211,7 +340,10 @@ fn split_data(command: &str) -> (String, Vec<String>) {
             if c == open {
                 quote = None;
             } else if open == '"' && c == '$' && chars.get(i + 1) == Some(&'(') {
-                i = substitution(&chars, i, &mut span, &mut runs);
+                let message = cat_heredoc_substitution(&chars, i).is_some();
+                let end = substitution(&chars, i, &mut span, &mut runs);
+                shape.substitution_text(&chars[i..end], message);
+                i = end;
                 continue;
             }
             i += 1;
@@ -225,15 +357,21 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                     i += 1;
                 }
             }
-            '\'' | '"' | '`' => {
-                if c == '`' {
-                    runs = true;
-                }
+            '`' => {
+                let end = backtick(&chars, i, &mut span, &mut runs);
+                shape.substitution_text(&chars[i..end], false);
+                i = end;
+                continue;
+            }
+            '\'' | '"' => {
                 quote = Some(c);
                 span.push(c);
             }
             '$' if chars.get(i + 1) == Some(&'(') => {
-                i = substitution(&chars, i, &mut span, &mut runs);
+                let message = cat_heredoc_substitution(&chars, i).is_some();
+                let end = substitution(&chars, i, &mut span, &mut runs);
+                shape.substitution_text(&chars[i..end], message);
+                i = end;
                 continue;
             }
             '<' if chars.get(i + 1) == Some(&'<')
@@ -247,24 +385,30 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                 continue;
             }
             '<' | '>' if chars.get(i + 1) == Some(&'(') => {
-                // A process substitution runs its text.
+                // A process substitution runs its text, beside the command.
                 runs = true;
+                shape.reordered = true;
                 span.push(c);
             }
+            '&' if matches!(chars.get(i + 1), Some('>')) => span.push(c),
+            '&' if i > 0 && matches!(chars[i - 1], '>' | '<') => span.push(c),
             ';' | '&' | '|' | '(' | ')' | '\n' => {
-                let piped = c == '|' && chars.get(i + 1) != Some(&'|');
-                flush(
-                    &mut span,
-                    &mut runs,
-                    &mut docs,
-                    &mut pending,
-                    piped,
-                    &mut code,
-                    &mut data,
-                );
-                code.push(c);
-                if c == '\n' && !pending.is_empty() {
-                    i = heredoc_bodies(&chars, i + 1, &mut pending, &mut code, &mut data);
+                let prev = i.checked_sub(1).map(|at| chars[at]);
+                let next = chars.get(i + 1).copied();
+                let piped = c == '|' && next != Some('|') && prev != Some('|');
+                let background = c == '&' && next != Some('&') && !matches!(prev, Some('&' | '|'));
+                let function = c == '('
+                    && chars[i + 1..]
+                        .iter()
+                        .find(|x| !x.is_whitespace())
+                        .is_some_and(|x| *x == ')');
+                if piped || background || function {
+                    shape.reordered = true;
+                }
+                shape.flush(&mut span, &mut runs, &mut docs, piped);
+                shape.pieces.push(Piece::Code(c.to_string()));
+                if c == '\n' && !docs.is_empty() {
+                    i = heredoc_bodies(&chars, i + 1, &mut docs, &mut shape.pieces);
                     continue;
                 }
             }
@@ -272,17 +416,64 @@ fn split_data(command: &str) -> (String, Vec<String>) {
         }
         i += 1;
     }
-    flush(
-        &mut span,
-        &mut runs,
-        &mut docs,
-        &mut pending,
-        false,
-        &mut code,
-        &mut data,
-    );
+    shape.flush(&mut span, &mut runs, &mut docs, false);
     // A heredoc with no body line yet: its operator stays in the code.
+    let removed: Vec<bool> = (0..shape.segments.len())
+        .map(|at| shape.removable(at))
+        .collect();
+    let mut code = String::new();
+    let mut data: Vec<String> = Vec::new();
+    for piece in shape.pieces {
+        match piece {
+            Piece::Code(text) => code.push_str(&text),
+            Piece::Segment(at) => {
+                let segment = &shape.segments[at];
+                if !removed[at] {
+                    code.push_str(&segment.text);
+                    continue;
+                }
+                if segment.data == Some(true) {
+                    // Every word, a here-string's included, as written.
+                    let tokens = shell_tokens(&segment.text);
+                    data.push(tokens.join(" "));
+                    data.extend(tokens);
+                }
+                code.push(' ');
+            }
+            Piece::Body { owner, text, quiet } => {
+                if removed[owner] && quiet {
+                    data.push(text);
+                } else {
+                    code.push_str(&text);
+                }
+            }
+        }
+    }
     (code, data)
+}
+
+/// Consume the backtick substitution at `start` into `span`, returning
+/// the index after its closing backtick. It runs.
+fn backtick(chars: &[char], start: usize, span: &mut String, runs: &mut bool) -> usize {
+    *runs = true;
+    span.push('`');
+    let mut i = start + 1;
+    while i < chars.len() {
+        let c = chars[i];
+        span.push(c);
+        if c == '\\' {
+            if let Some(&next) = chars.get(i + 1) {
+                span.push(next);
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+        if c == '`' {
+            return i;
+        }
+    }
+    chars.len()
 }
 
 /// Consume the `$(…)` at `start` into `span`, returning the index after
@@ -406,20 +597,19 @@ fn heredoc_operator(chars: &[char], start: usize) -> (Option<PendingDoc>, usize)
         delimiter,
         strip_tabs,
         expands,
-        data: false,
+        owner: usize::MAX,
     });
     (doc, i)
 }
 
-/// Consume the bodies of `pending`, in order, from `start`: a data body
-/// goes to `data`, any other body stays in `code`. Returns the index after
+/// Consume the bodies of `pending`, in order, from `start`, into
+/// `pieces`, each with the command that reads it. Returns the index after
 /// the last body read.
 fn heredoc_bodies(
     chars: &[char],
     start: usize,
     pending: &mut Vec<PendingDoc>,
-    code: &mut String,
-    data: &mut Vec<String>,
+    pieces: &mut Vec<Piece>,
 ) -> usize {
     let mut i = start;
     for doc in pending.drain(..) {
@@ -445,12 +635,12 @@ fn heredoc_bodies(
             body.push('\n');
         }
         let runs = doc.expands && (body.contains("$(") || body.contains('`'));
-        if doc.data && closed && !runs {
-            data.push(body);
-        } else {
-            code.push_str(&body);
-        }
-        code.push('\n');
+        pieces.push(Piece::Body {
+            owner: doc.owner,
+            text: body,
+            quiet: closed && !runs,
+        });
+        pieces.push(Piece::Code("\n".to_string()));
     }
     i
 }
@@ -475,7 +665,10 @@ fn data_run(text: &str, depth: usize) -> Option<HeadlessRun> {
             _ => {
                 return match classify(argv, depth + 1) {
                     Found::Run(run) => Some(unparsed(run)),
-                    _ => None,
+                    // A program the data cannot resolve: its whole text is
+                    // read as the 3.0.0 raw matcher reads a line.
+                    Found::Unresolved => raw_run(text),
+                    Found::Nothing => None,
                 };
             }
         };
@@ -1543,14 +1736,15 @@ mod tests {
     #[test]
     fn text_that_only_names_a_peer_is_not_a_run() {
         for command in [
-            "D=$PWD; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF\n$EDITOR brief.md",
-            "cat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\n\"$EDITOR\" brief.md",
+            "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF",
+            "\"$EDITOR\" notes.md\ncat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ncat brief.md",
+            "$EDITOR x; echo \"`date`\"; echo 'Codex review: done'",
             "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
             "M=$(date); $PAGER notes.md; git commit -m \"docs: record the Codex review\"",
             "$EDITOR x; git commit -m \"$(cat <<'EOF'\nfix: apply the Codex review\n\nClaude -p was not used.\nEOF\n)\"",
             "grep -c review <<< 'Codex review: approve'",
             "bash run.sh; echo 'Codex adversarial seat: please review the page'",
-            "source .venv/bin/activate && echo 'Grok, the agent seat, and Claude will review it'",
+            "$PAGER notes.md && echo 'Grok, the agent seat, and Claude will review it'",
             "$RUN; gh pr create --body 'the Codex review approved'",
         ] {
             assert_eq!(found(command), None, "{command}");
@@ -1592,6 +1786,35 @@ mod tests {
             "echo 'codex exec x' > run.sh; bash run.sh",
             "cat <<< 'grok agent' > run.sh; source run.sh",
             "function peer { claude -p x; }; peer",
+            // Round two of review: data a later command can run.
+            "cat > run.sh <<'EOF'\nCMD=codex\n$CMD exec x\nEOF\nbash run.sh",
+            "cat > run.sh <<-'EOF'\n\tCMD=codex\n\t$CMD exec x\n\tEOF\nsource run.sh",
+            "cat > run.sh <<\\EOF\nshopt -s expand_aliases\nalias a=codex\nalias b=a\nb exec x\nEOF\nbash run.sh",
+            "printf '%s %s\\n' codex exec > run.sh; bash run.sh",
+            "echo codex > peer; CMD=$(cat peer); $CMD exec x",
+            "read CMD < <(echo codex); $CMD exec x",
+            "git commit -m 'fix: note' -m 'codex exec x'\ngit log -1 --format=%b | bash",
+            "echo \"`CMD=codex; $CMD exec x`\"",
+            "echo \"`printf '%s %s' codex exec | $SHELL`\"",
+            "source /dev/null\nGIT_EDITOR='codex exec' git commit --allow-empty",
+            "source /dev/null\ngit -ccore.editor='codex exec' commit --allow-empty",
+            "source /dev/null\nGH_EDITOR='codex exec' gh gist edit 1",
+            "nice printf '%s %s\\n' codex exec > run.sh; bash run.sh",
+            "$X; cat > run.sh <<'EOF'\ncodex exec x\nEOF\n$EDITOR run.sh",
+            "for i in 1 2; do bash run.sh; $X; echo 'codex exec x' > run.sh; done",
+            "$SHELL run.sh & echo 'codex exec x' > run.sh",
+            "trap 'bash run.sh' EXIT; $X; echo 'codex exec x' > run.sh",
+            "f() { bash run.sh; }; $X; echo 'codex exec x' > run.sh; f",
+            "PRELOAD=./x.so cat run.sh; $X; echo 'codex exec x' > run.sh",
+            "$X; echo 'codex exec x' > run.sh; sort --compress-program=./run.sh big.txt",
+            "$X; rg --pre 'codex exec' x",
+            "alias cat='bash -s'; $X; cat <<'EOF'\ncodex exec x\nEOF",
+            "source lib.sh; $X; git commit -m 'codex exec x'",
+            "PATH=./bin:$PATH; $X; cat <<'EOF'\ncodex exec x\nEOF",
+            "export BASH_ENV=run.sh; $X; echo 'codex exec x' > run.sh",
+            "exec > >(bash); $X; echo 'codex exec x'",
+            "$X; R=$(bash <<'true'\nx)\necho 'codex exec x'\ntrue\n)",
+            "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
         ] {
             assert!(found(command).is_some(), "{command}");
         }

@@ -478,21 +478,28 @@ erratum below, never an edit of the section.
   commit messages included, and refused it as a headless run whenever a
   peer name was followed anywhere later by a marker word: a review brief
   written with `cat` that named Codex and, further on, the word review was
-  refused. The raw text now leaves out what the line only writes as data:
-  a heredoc body read by a data command such as `cat`, `tee` or
-  `git commit -F -`, and a data command that feeds no pipe and runs no
+  refused. The raw text now leaves out what the line only writes as data,
+  when nothing that may run after it can run that data. Data is a heredoc
+  body read by a data command such as `cat` or `tee`, and a data command
+  written as the program itself that feeds no pipe and runs no
   substitution, such as `echo '...'`, `git commit -m '...'` (a
   `$(cat <<'EOF' ...)` message included) or `gh pr create --body '...'`.
-  That data is still judged as a script the line may run later, read with
-  shell quoting: a peer counts only in command position, followed by its
-  headless flag or by its headless subcommand as the first word after its
-  options. A brief that says "Codex adversarial seat: please review" is
-  data, while a written script line `codex exec ...` is still refused.
-  The rest of the line, and interpreter code, are judged as before. A
-  data line that reads as a run, such as "Grok agent seat too." in a
-  brief written beside an unresolved command, is still refused. Of 1,093
-  headless run forms compared with 3.0.0, none that 3.0.0 refused is
-  let through.
+  Every command after it must be inert, such as `cat`, `grep` or `ls`;
+  with a pipe, a background job, a loop, a function or a trap on the
+  line, every other command must be. So `$EDITOR notes.md; git commit -m
+  'docs: record the Codex review'` passes, while a brief written with
+  `cat` and then opened with `$EDITOR brief.md` is still judged whole, as
+  in 3.0.0, because the guard cannot tell that `$EDITOR` will not run
+  it. The data left out is also judged as a script, so a line in it that
+  reads as a run, such as "Grok agent seat too.", is still refused. The
+  rest of the line, and interpreter code, are judged as before. A line
+  that defines an alias or function, sources, evaluates or `exec`s, or
+  sets `PATH` or a similar variable keeps all its data. Of 1,552 headless
+  run forms compared with 3.0.0, none that 3.0.0 refused is let through.
+  The guard reads the line's text; a run hidden behind a command it
+  cannot resolve that redefines a later data command, such as a `$X`
+  that is `eval`, is outside what it can see, as an encoded run already
+  was.
 
 <!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The

@@ -1335,7 +1335,8 @@ fn exec_guard_classifies_every_review_probe() {
 fn exec_guard_lets_text_that_only_names_a_peer_through() {
     // TSK-223 AC-3 (sathyassn/codeflow#52): a brief or commit message that
     // names a peer and the word review, on a line with a variable program,
-    // is no headless run; the same line that runs the peer still is.
+    // is no headless run when nothing after it can run it; a line that runs
+    // the peer, or runs what it wrote, still is.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
     let guard = |command: &str| {
@@ -1347,7 +1348,7 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
         )
     };
     for command in [
-        "D=$PWD; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF\n$EDITOR brief.md",
+        "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF",
         "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
         "grep -c review <<< 'Codex review: approve'",
     ] {
@@ -1359,6 +1360,7 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
     for command in [
         "CMD=codex; $CMD exec x",
         "printf -v CMD 'codex exec'; $CMD x",
+        "cat > run.sh <<'EOF'\nCMD=codex\n$CMD exec x\nEOF\nbash run.sh",
         "D=$PWD; cat > brief.md <<EOF\nCodex: review\nEOF\necho 'codex exec x' | $SHELL",
     ] {
         let out = guard(command);
