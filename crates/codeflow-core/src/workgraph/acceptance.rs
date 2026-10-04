@@ -1169,8 +1169,8 @@ pub(super) fn later_change(
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|changed| changed.to_string_lossy().replace('\\', "/"))
-        .filter(|changed| changed.as_str() != path)
+        .filter(|changed| exact_path(changed) != Some(path))
+        .map(|changed| changed.to_string_lossy().into_owned())
         .collect();
     if let Some(changed) = other.first() {
         return Some(format!("{changed} changed"));
@@ -1812,9 +1812,17 @@ pub(super) fn non_planning_change(
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .find(|path| !is_planning_path(path));
+        .find(|path| !exact_path(path).is_some_and(is_planning_path))
+        .map(|path| path.to_string_lossy().into_owned());
     Ok(outside)
+}
+
+/// A path git reports, as the text a decision compares, or `None` when it
+/// is not UTF-8 or holds a backslash. Git separates directories with `/`,
+/// so such a path is a file of its own name, never a record or planning
+/// path, however it reads once converted (TSK-234).
+pub(super) fn exact_path(path: &std::path::Path) -> Option<&str> {
+    path.to_str().filter(|text| !text.contains('\\'))
 }
 
 /// The epic journey criterion a task serves, when it has no journey of its
@@ -1921,10 +1929,9 @@ pub fn frozen_criteria(
         .filter(|record| record.kind == RecordKind::Task && changed_paths.contains(&record.path))
     {
         let same = |other: &RecordView| other.criteria.signature() == record.criteria.signature();
+        // Equality is judged against the authority, never one base: a newer
+        // run base may hold criteria the target tip does not.
         let tip = target.records.get(&record.id);
-        if tip.is_some_and(same) {
-            continue;
-        }
         let own = exempt.contains(&record.id);
         if !own {
             if let Some(stack) = stacked
@@ -1947,7 +1954,24 @@ pub fn frozen_criteria(
         let unknown = judgement.landing_unknown();
         let authority = match &judgement.criteria {
             Authority::Held(kept) => Some(kept.as_ref()),
-            Authority::Absent | Authority::Unknown(_) => tip,
+            Authority::Absent => None,
+            Authority::Unknown(reason) => {
+                found.push(finding(
+                    FROZEN_RULE,
+                    if tip.is_none() {
+                        format!(
+                            "{} is a record this branch adds, but whether the target held it cannot be told ({reason}), so its criteria cannot be judged new",
+                            record.id
+                        )
+                    } else {
+                        format!(
+                            "{} changes its record, but which criteria the target holds for it cannot be told ({reason}), so its criteria cannot be judged unchanged",
+                            record.id
+                        )
+                    },
+                ));
+                continue;
+            }
         };
         if authority.is_some_and(same) {
             continue;
@@ -1986,14 +2010,6 @@ pub fn frozen_criteria(
             }
         } else if authority.is_some() {
             found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or by a planning amendment that names its epic (ADR-0078)", record.id)));
-        } else if let Authority::Unknown(reason) = &judgement.criteria {
-            found.push(finding(
-                FROZEN_RULE,
-                format!(
-                    "{} is a record this branch adds, but whether the target held it cannot be told ({reason}), so its criteria cannot be judged new",
-                    record.id
-                ),
-            ));
         }
     }
     found

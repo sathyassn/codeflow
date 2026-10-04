@@ -2026,11 +2026,13 @@ pub fn changed_paths(
         repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options))
     }
     .map_err(|error| format!("cannot diff from {base}: {}", error.message()))?;
+    // Git separates directories with `/`; a backslash is part of a file's
+    // name, so it is kept, and such a path never reads as a record's.
     let mut paths: Vec<String> = diff
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map(|path| path.to_string_lossy().into_owned())
         .collect();
     paths.sort();
     paths.dedup();

@@ -267,11 +267,10 @@ impl<'r> RecordStore<'r> {
                 }
                 Read::Parsed(_) => {}
                 Read::Broken(content) => {
-                    let literal = content.contains(task.id.as_str())
-                        || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
-                    if own || literal {
-                        held.doubt
-                            .get_or_insert(format!("{path} at {commit} does not parse"));
+                    if own || may_spell(&content, task) {
+                        held.doubt.get_or_insert(format!(
+                            "{path} at {commit} does not parse, so whether it is this task cannot be told"
+                        ));
                     }
                 }
                 // Any task file may be this task under another name.
@@ -477,9 +476,10 @@ impl<'r> RecordStore<'r> {
 
     /// The newest version of the task's record in the history of `judged`,
     /// for a task the judged points no longer hold: the newest version on
-    /// every line of that history. A line's version that another line's
-    /// history already held is older there, so it never competes; lines
-    /// that hold different versions otherwise give no answer.
+    /// every line of that history. A line's version is older than another
+    /// line's only when that line inherited it unchanged: every commit that
+    /// introduced it on the line is an ancestor of the other line's newest
+    /// version. Lines that hold different versions otherwise give no answer.
     ///
     /// # Errors
     ///
@@ -509,17 +509,25 @@ impl<'r> RecordStore<'r> {
                 holders.push(commit);
                 continue;
             }
-            let mut older = false;
-            for holder in holders.clone() {
-                if self.held_in_history(task, holder, blob)? {
-                    older = true;
+            let (kept, holders) = (*kept, holders.clone());
+            let mut stale = false;
+            for holder in &holders {
+                if self.inherited(task, commit, blob, *holder)? {
+                    stale = true;
                     break;
                 }
             }
-            if older {
+            if stale {
                 continue;
             }
-            if self.held_in_history(task, commit, *kept)? {
+            let mut superseded = true;
+            for holder in &holders {
+                if !self.inherited(task, *holder, kept, commit)? {
+                    superseded = false;
+                    break;
+                }
+            }
+            if superseded {
                 found = Some((blob, record, vec![commit]));
                 continue;
             }
@@ -530,25 +538,60 @@ impl<'r> RecordStore<'r> {
         Ok(found.map(|(_, record, _)| record))
     }
 
-    /// Whether some commit in the history of `from` holds the task's record
-    /// as `blob`.
-    fn held_in_history(&mut self, task: &Identity, from: Oid, blob: Oid) -> Result<bool, String> {
+    /// Whether the line ending at `holder` inherited its version (`blob`)
+    /// unchanged from the line of `newer`: every commit in its history that
+    /// introduced `blob` (holds it while no parent does) is an ancestor of
+    /// `newer`, which holds a later version.
+    fn inherited(
+        &mut self,
+        task: &Identity,
+        holder: Oid,
+        blob: Oid,
+        newer: Oid,
+    ) -> Result<bool, String> {
         let unreadable =
             |error: git2::Error| format!("cannot read the history: {}", error.message());
-        let mut walk = self.repo.revwalk().map_err(unreadable)?;
-        walk.push(from).map_err(unreadable)?;
-        for commit in walk {
-            let commit = commit.map_err(unreadable)?;
-            if self
+        let holds = |store: &mut Self, commit: Oid| -> Result<bool, String> {
+            Ok(store
                 .held_at(commit, task)?
                 .records
                 .iter()
-                .any(|(held, _)| *held == blob)
+                .any(|(held, _)| *held == blob))
+        };
+        let mut walk = self.repo.revwalk().map_err(unreadable)?;
+        walk.push(holder).map_err(unreadable)?;
+        let mut introduced = false;
+        for commit in walk {
+            let commit = commit.map_err(unreadable)?;
+            if !holds(self, commit)? {
+                continue;
+            }
+            let parents: Vec<Oid> = self
+                .repo
+                .find_commit(commit)
+                .map_err(unreadable)?
+                .parent_ids()
+                .collect();
+            let mut from_parent = false;
+            for parent in parents {
+                if holds(self, parent)? {
+                    from_parent = true;
+                    break;
+                }
+            }
+            if from_parent {
+                continue;
+            }
+            introduced = true;
+            if !self
+                .repo
+                .graph_descendant_of(newer, commit)
+                .map_err(unreadable)?
             {
-                return Ok(true);
+                return Ok(false);
             }
         }
-        Ok(false)
+        Ok(introduced)
     }
 
     /// The first commit, newest first, that `judged` reaches and `hide`
@@ -732,6 +775,28 @@ impl<'r> RecordStore<'r> {
         }
         Ok(None)
     }
+}
+
+/// Whether a task file that does not parse may still name `task`: its
+/// text holds the task's id or uid, or its frontmatter holds a backslash,
+/// with which a double-quoted YAML value can spell either by escapes. YAML
+/// has no other way to build a value from text that does not hold it, so
+/// a file with none of these is another task's (TSK-234 review round 6).
+fn may_spell(content: &str, task: &Identity) -> bool {
+    let literal = content.contains(task.id.as_str())
+        || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
+    literal || frontmatter_text(content).contains('\\')
+}
+
+/// The frontmatter of a file that may not parse: from its opening `---`
+/// to the closing one, or to the end when it never closes; the whole text
+/// when it does not open with one.
+fn frontmatter_text(content: &str) -> &str {
+    let text = content.trim_start_matches('\u{feff}').trim_start();
+    let Some(rest) = text.strip_prefix("---") else {
+        return content;
+    };
+    rest.find("\n---").map_or(rest, |end| &rest[..end])
 }
 
 /// Whether two versions of a task's record keep the same authority: the

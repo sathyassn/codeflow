@@ -1249,3 +1249,44 @@ fn a_reopened_predecessor_is_not_ready_without_a_pin() {
     assert!(!claim.status.success(), "{}", text(&claim));
     assert!(text(&claim).contains("TSK-001"), "{}", text(&claim));
 }
+
+/// TSK-234 review round 6: a file literally named
+/// `project-management\tasks\TSK-001.md` is not the task's record, so a pin
+/// that adds it after the review changed more than the record's status and
+/// Closeout, and the claim refuses it.
+#[cfg(unix)]
+#[test]
+fn a_pin_cannot_add_a_path_that_reads_like_the_record() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (reviewed, _) = reviewed_predecessor(root, branch);
+    git(root, &["switch", branch]);
+    write(
+        root,
+        r"project-management\tasks\TSK-001.md",
+        "an unreviewed file\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: add an unrelated file"]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    review_tool_naming(bin.path(), branch, &pin, &reviewed);
+    git(root, &["switch", "main"]);
+    let out = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(
+        !out.status.success(),
+        "the pin changed a file outside the record after review:\n{}",
+        text(&out)
+    );
+}

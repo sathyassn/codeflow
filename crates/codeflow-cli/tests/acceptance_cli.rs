@@ -4478,3 +4478,151 @@ fn deleted_histories_that_disagree_give_no_authority() {
         );
     }
 }
+
+/// TSK-234 review round 6: two judged lines each held two versions of a
+/// reopened task, in opposite orders, and then deleted it. Each newest
+/// version also appears in the other line's history, but neither line
+/// inherited it from the other, so neither is the target's authority.
+#[test]
+fn crossed_versions_on_two_lines_give_no_authority() {
+    use codeflow_core::workgraph::acceptance::{pull_request_findings_judged, Criteria};
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let origin = head(root);
+    for (branch, first, last) in [
+        ("base-a", OWN_JOURNEY, REOPEN_ADDS),
+        ("base-b", REOPEN_ADDS, OWN_JOURNEY),
+    ] {
+        git(root, &["switch", "-c", branch, &origin]);
+        for criteria in [first, last] {
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "todo", criteria, LANDED),
+            );
+            commit(root, "docs: a version on a target");
+        }
+        git(root, &["rm", "-q", &record_path("TSK-001")]);
+        commit(root, "docs: delete the task on a target");
+    }
+    git(root, &["switch", "-c", BRANCH, &origin]);
+    for criteria in [OWN_JOURNEY, REOPEN_ADDS] {
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", criteria, "Pending.\n"),
+        );
+        commit(root, "docs: add the record again");
+        let findings = pull_request_findings_judged(
+            root,
+            "base-a",
+            "HEAD",
+            &Criteria::OwnTask("TSK-001".into()),
+            Some("base-b"),
+            Some(BRANCH),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            findings.iter().any(|found| !found.note),
+            "added again with {criteria:?}: {findings:?}"
+        );
+    }
+}
+
+/// TSK-234 review round 6: a historical task file that does not parse but
+/// spells the task's id by a YAML escape may be the task, so the history
+/// proves no planned task.
+#[test]
+fn an_escaped_record_that_does_not_parse_gives_no_planned_answer() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let broken = "---\nid: \"\\x54SK-001\"\nstatus: complete\nbroken: [\n---\n";
+    write(root, "project-management/tasks/TSK-999.md", broken);
+    commit(root, "docs: a task file that does not parse");
+    git(root, &["rm", "-q", "project-management/tasks/TSK-999.md"]);
+    commit(root, "docs: drop it");
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: loosen its criteria");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "a task file that does not parse and may be the task",
+        &["work.criteria_frozen", "does not parse"],
+    );
+}
+
+/// TSK-234 review round 6: the criteria a landed task keeps come from the
+/// newest judged point. The target holds the reopened task with two
+/// criteria; a newer run base adds a third through planning. The task's
+/// branch keeps the target's two, which still changes the authority's
+/// criteria, so it is refused by the core check and by `codeflow ci`.
+#[test]
+fn a_newer_run_base_holds_the_criteria_to_keep() {
+    use codeflow_core::workgraph::acceptance::{pull_request_findings_judged, Criteria};
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, LANDED),
+    );
+    commit(root, "docs: the target holds a reopened task");
+    let origin = head(root);
+    git(root, &["switch", "-c", "candidate"]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, LANDED),
+    );
+    commit(root, "docs: a planning amendment adds a criterion");
+    git(root, &["switch", "-c", BRANCH, &origin]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, LANDED).replace("Work.", "Work described."),
+    );
+    commit(root, "docs: the task keeps the older criteria");
+    let findings = pull_request_findings_judged(
+        root,
+        "main",
+        "HEAD",
+        &Criteria::OwnTask("TSK-001".into()),
+        Some("candidate"),
+        Some(BRANCH),
+        &[],
+    )
+    .unwrap();
+    assert!(
+        findings.iter().any(|found| !found.note),
+        "the newer base's criteria: {findings:?}"
+    );
+    let out = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            BRANCH,
+            "--policy-from",
+            "candidate",
+            "--pr-body",
+            "## Summary\nA change.\n\n- one change\n\nTask: TSK-001\n\n## Changes\n- one\n\n## Testing\n- test\n",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success(), "CI accepted it:\n{text}");
+    assert!(text.contains("work.criteria_frozen"), "{text}");
+}

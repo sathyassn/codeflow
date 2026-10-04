@@ -976,3 +976,28 @@ fn an_amendment_cannot_reopen_a_deleted_landed_task_with_new_criteria() {
         ],
     );
 }
+
+/// TSK-234 review round 6: a file literally named
+/// `project-management\tasks\TSK-001.md` is not a record, so a planning
+/// amendment that carries it carries a path outside the planning records,
+/// however the name reads once converted. The class check refuses it first;
+/// the planning paths read raw names too, so no later check takes it for one.
+#[cfg(unix)]
+#[test]
+fn a_planning_amendment_refuses_a_path_that_reads_like_a_record() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "-c", PLAN]);
+    two_epic_amendment(root);
+    write(
+        root,
+        r"project-management\tasks\TSK-001.md",
+        "not a record\n",
+    );
+    commit(root, "docs(records): add a file named like a record");
+    assert_blocks(
+        &ci(root, PLAN, BOTH),
+        "a file named like a record",
+        &["work.classification", "holds a backslash"],
+    );
+}
