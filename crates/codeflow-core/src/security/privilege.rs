@@ -152,48 +152,35 @@ fn check_priv_chaining(cmd: &str) -> Option<Verdict> {
     None
 }
 
-/// True when `; {priv_cmd}` appears with the launcher name ending at a word
-/// boundary, so a launch such as `; su -` refuses but `; supersedes` and
-/// `; doasync` do not. The test stays on the raw line: it reads no quoting,
-/// heredoc or other text structure, so a launch inside a string is still
-/// refused as before.
+/// Launchers that start with a listed name and still escalate: `sudoedit`
+/// edits as root, `sudo-rs` is the Rust `sudo`, `su-exec` runs as another
+/// user. A semicolon before one of these is a launch, not a longer word.
+const LAUNCHER_VARIANTS: &[&str] = &["sudoedit", "sudoreplay", "sudo-rs", "su-exec"];
+
+/// True when `; {priv_cmd}` appears and the launcher name is not just the
+/// start of a longer word, so `; su -` refuses but `; supersedes` and
+/// `; doasync` do not. Only a letter, digit, underscore or hyphen after the
+/// name continues the word, and a word that is a launcher variant still
+/// matches. Whitespace, the end of the line and every other character match:
+/// punctuation, quotes, and the glob and expansion characters a shell can use
+/// to reach the launcher (`su*`, `su[d]o`, `su@(do)`, `su$IFS`). The test stays
+/// on the raw line: it reads no quoting, heredoc or other text structure, so a
+/// launch inside a string is still refused as before.
 fn semicolon_chains_launcher(cmd: &str, priv_cmd: &str) -> bool {
     let needle = format!("; {priv_cmd}");
     cmd.match_indices(&needle).any(|(at, _)| {
-        cmd[at + needle.len()..]
-            .chars()
-            .next()
-            .is_none_or(ends_launcher_word)
+        let rest = &cmd[at + needle.len()..];
+        let run = rest
+            .find(|c: char| !continues_launcher_word(c))
+            .unwrap_or(rest.len());
+        run == 0 || LAUNCHER_VARIANTS.contains(&format!("{priv_cmd}{}", &rest[..run]).as_str())
     })
 }
 
-/// A character after a launcher name that ends the word: whitespace, a
-/// control character, or a shell metacharacter or expansion starter that
-/// leaves the name as the program (`su;`, `su|`, `su$IFS`, `su{,}`, a glob such
-/// as `su*`, `su??` or `su[d]o` that can expand to a launcher file, or a quote,
-/// which can end the name as in an empty string `su` then two quotes).
-/// Any other character continues the word, as in `supersedes`.
-fn ends_launcher_word(c: char) -> bool {
-    c.is_whitespace()
-        || c.is_control()
-        || matches!(
-            c,
-            ';' | '&'
-                | '|'
-                | '('
-                | ')'
-                | '<'
-                | '>'
-                | '"'
-                | '\''
-                | '`'
-                | '$'
-                | '\\'
-                | '{'
-                | '*'
-                | '?'
-                | '['
-        )
+/// A character after a launcher name that makes it a longer word, as in
+/// `supersedes`, `su1`, `su_x` or `su-like`.
+fn continues_launcher_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-'
 }
 
 fn check_direct_priv_esc(cmd: &str) -> Option<Verdict> {
@@ -340,15 +327,17 @@ mod tests {
             .is_some());
     }
 
-    /// Every launcher chained after `; ` still refuses, whatever follows the
-    /// name: end of line, whitespace, a shell metacharacter or an expansion.
+    /// Every launcher chained after `; ` still refuses unless a letter, digit,
+    /// underscore or hyphen continues the name: end of line, whitespace, any
+    /// punctuation, metacharacter, glob or expansion character.
     #[test]
     fn test_semicolon_launchers_still_refuse_at_every_word_boundary() {
         for launcher in PRIV_ESC_CMDS {
             for tail in [
                 "", " ", " -", " -i", " id", "\t-", "\t", "\n", "\r\n", ";", "&", "&&", "|", ")",
                 "(id)", "<in", ">out", "''", "\"\"", "'", "\"", "`", "$IFS-", "${IFS}-", "\\\n-",
-                "{,}", "*", "?", "??", "[d]o", "[a]", "\u{b}-",
+                "{,}", "*", "?", "??", "[d]o", "[a]", "\u{b}-", ".", ".exe", ",", ":", "/x", "=1",
+                "#", "#x", "!", "!(x)", "}", "~", "~x*", "@(do)", "+(do)", "^x", "%", "[", "]",
             ] {
                 for head in ["true", "ls -la", "cd /tmp", "echo ok && true", "(true"] {
                     let cmd = format!("{head}; {launcher}{tail}");
@@ -359,6 +348,24 @@ mod tests {
                     assert_eq!(v.category, "Privilege Escalation", "{cmd:?}");
                 }
             }
+        }
+    }
+
+    /// A listed launcher's own variants are launches, not longer words.
+    #[test]
+    fn test_semicolon_launcher_variants_still_refuse() {
+        for cmd in [
+            "true; sudoedit /etc/hosts",
+            "true; sudoreplay -l",
+            "true; sudo-rs -i",
+            "true; su-exec nobody id",
+            "echo a; supersedes; sudoedit f",
+            "echo 'x; su-exec'",
+        ] {
+            let v = PrivilegeModule
+                .check(&ctx(cmd))
+                .unwrap_or_else(|| panic!("should refuse: {cmd:?}"));
+            assert_eq!(v.category, "Privilege Escalation", "{cmd:?}");
         }
     }
 
@@ -405,11 +412,11 @@ mod tests {
             "echo 'a; runusers'",
             "echo 'a; suit'",
             "echo 'a; su-like'",
-            "echo 'a; su.'",
-            "echo 'a; su,'",
+            "echo 'a; su1'",
+            "echo 'a; su_x'",
+            "echo 'a; sudo-x'",
             "echo 'a; sue'",
-            "echo 'a; sudo=1'",
-            "echo 'a; su#x'",
+            "echo 'a; sudoeditor'",
             "true; supersedes",
         ] {
             assert!(PrivilegeModule.check(&ctx(cmd)).is_none(), "{cmd:?}");

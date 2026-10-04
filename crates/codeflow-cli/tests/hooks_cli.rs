@@ -1917,6 +1917,11 @@ fn exec_guard_semicolon_launcher_check_stops_at_the_launcher_word() {
         "true; runuser -u x id",
         "touch sudo; su?? -n id",
         "touch sudo; su[d]o -n id",
+        "shopt -s extglob\ntouch sudo; su@(do) -n id",
+        "setopt extendedglob; touch sudo; su^x -n id",
+        "setopt extendedglob; touch su; su# -",
+        "true; sudoedit /etc/hosts",
+        "true; sudo-rs -i",
         "echo supersedes; su -",
         "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF\nls; sudo id",
     ] {
