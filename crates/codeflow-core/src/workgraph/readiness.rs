@@ -808,7 +808,7 @@ impl StackHints {
         root: &Path,
         task_id: &str,
         target: &str,
-        lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
+        lookup: &super::work_start::ReviewLookup<'_>,
     ) -> Result<Vec<String>, String> {
         use super::work_start::{reviewed_pins_in, stack_base_in, PinBranches};
         let target_tip = self.target_tip(root, target)?;
@@ -837,11 +837,11 @@ impl StackHints {
         if values.is_empty() {
             return Err("no unlanded code dependencies".into());
         }
-        let reviewed = |branch: &str, sha: &str| {
+        let reviewed = |branch: &str, sha: &str, named: &[String]| {
             self.reviews
                 .borrow_mut()
                 .entry((branch.to_string(), sha.to_string()))
-                .or_insert_with(|| lookup(branch, sha))
+                .or_insert_with(|| lookup(branch, sha, named))
                 .clone()
         };
         // Only whether every pin holds matters here, so review evidence,

@@ -95,16 +95,21 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         let Ok(hints) = hints.as_mut() else {
             break;
         };
-        if let Ok(pins) = hints.hint(&root, &entry.task_id, &entry.target, &|branch, sha| {
-            let repository = repositories
-                .get_or_init(|| {
-                    codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
-                })
-                .as_ref()
-                .map_err(Clone::clone)?
-                .repository(branch)?;
-            reviewed(&root, &repository, branch, sha)
-        }) {
+        if let Ok(pins) = hints.hint(
+            &root,
+            &entry.task_id,
+            &entry.target,
+            &|branch, sha, named| {
+                let repository = repositories
+                    .get_or_init(|| {
+                        codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .repository(branch)?;
+                reviewed(&root, &repository, branch, sha, named)
+            },
+        ) {
             let noun = if pins.len() == 1 {
                 "that pin is"
             } else {
@@ -315,18 +320,33 @@ fn resolve_pins(
     root: &std::path::Path,
     on: &[String],
 ) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
-    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha| {
-        let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
-        reviewed(root, &repository, branch, sha)
+    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, named| {
+        review_lookup(root, branch, sha, named)
     })
 }
 
-/// Whether the pull request of `branch` in `repository` names `sha` reviewed.
+/// The review lookup `work claim`, `work start` and `codeflow ci` share
+/// (SPC-013 R-42): the hosted repository of `branch`, then [`reviewed`].
+pub(super) fn review_lookup(
+    root: &std::path::Path,
+    branch: &str,
+    sha: &str,
+    named: &[String],
+) -> Result<bool, String> {
+    let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
+    reviewed(root, &repository, branch, sha, named)
+}
+
+/// Whether the pull request of `branch` in `repository` has `sha` as its
+/// head and an approving review row naming one of `named`: the head
+/// itself, or a commit the head follows only by the predecessor's status
+/// and Closeout.
 fn reviewed(
     root: &std::path::Path,
     repository: &str,
     branch: &str,
     sha: &str,
+    named: &[String],
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
     if proof["headRefName"].as_str() != Some(branch)
@@ -340,11 +360,10 @@ fn reviewed(
     let (policy, _) = Policy::load_effective(root);
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
-    Ok(super::ci::pr_body::review_names_revision(
-        proof["body"].as_str().unwrap_or_default(),
-        &headings[0],
-        sha,
-    ))
+    let body = proof["body"].as_str().unwrap_or_default();
+    Ok(named
+        .iter()
+        .any(|revision| super::ci::pr_body::review_names_revision(body, &headings[0], revision)))
 }
 
 /// Bound provider lifetime and response size; a regular output file means a

@@ -22,12 +22,14 @@ use super::classification::{range_changes, root_branch_at, Class, Range};
 /// Run the checks when durable work tracking is on at the target or at the
 /// head, and a range resolves. `class` is the pull request's validated
 /// class, when it was classified.
+#[allow(clippy::too_many_arguments)] // The run's shared state and the stacked heads, passed once.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
     range: Option<&Range<'_>>,
     names: &super::Names<'_>,
     class: Option<&Class>,
+    stacked: &[codeflow_core::workgraph::work_start::ReviewedPin],
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -50,6 +52,7 @@ pub(super) fn dispatch(
                 &criteria,
                 names.candidate,
                 Some(names.branch),
+                stacked,
             )
         }),
     };

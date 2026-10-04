@@ -275,6 +275,7 @@ pub(super) fn branch_journey(
     git: &GitPolicy,
     branch: &str,
     range: Option<&Range<'_>>,
+    stacked: &[codeflow_core::workgraph::work_start::ReviewedPin],
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -311,9 +312,26 @@ pub(super) fn branch_journey(
         }
     }
     ran.push("journey");
-    match range_changes(root, range.base, range.head) {
-        Ok(changes) => {
-            let files: Vec<String> = changes.into_iter().map(|(_, path)| path).collect();
+    // A branch stacked on reviewed predecessor heads (issue #69) answers
+    // only for the paths it changes after them: the predecessors' own pull
+    // requests answer for theirs.
+    let own = match codeflow_core::workgraph::work_start::stack_base(root, stacked) {
+        Ok(Some(base)) => range_changes(root, &base.to_string(), range.head).map(Some),
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
+    };
+    match range_changes(root, range.base, range.head)
+        .and_then(|changes| own.map(|own| (changes, own)))
+    {
+        Ok((changes, own)) => {
+            let files: Vec<String> = changes
+                .into_iter()
+                .map(|(_, path)| path)
+                .filter(|path| {
+                    own.as_ref()
+                        .is_none_or(|own| own.iter().any(|(_, changed)| changed == path))
+                })
+                .collect();
             journey(root, git, &task_id, range.head, &files, tagged);
         }
         // The same finding the pull request check gives for that failure.

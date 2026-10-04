@@ -7,8 +7,9 @@
 //! the source of that same reviewed span ([`bind_completion`]); `task status
 //! complete` and `codeflow ci` share that judge; a waiver names the planning amendment on the
 //! target or in its own reviewed range that changed that criterion. The
-//! task may amend its own criteria until complete; reopened criteria stay
-//! frozen. A range touching the
+//! task may amend its own criteria until its completion lands on the
+//! target; a landed task's criteria stay frozen when it is reopened. A
+//! range touching the
 //! adopter-facing path set belongs to a task with a journey criterion.
 //!
 //! The checker proves structure and binding only ([`SCOPE_NOTE`]). It does
@@ -346,15 +347,15 @@ pub(crate) fn bind_completion_with_amendment(
             reopened.then_some((anchor, *old))
         })
         .or_else(|| {
-            let (at, old, note) =
-                recovered_completion(repo, task, &block, landing, anchor, criteria)?;
-            unreadable = note;
+            let found = recovered_completion(repo, task, &block, landing, anchor, criteria)?;
+            unreadable = found.refusal;
             recovered = true;
-            Some((at, old))
+            Some((found.at, found.old))
         });
     let before_range = |at: Oid| anchor.is_some_and(|base| is_ancestor_or_same(repo, at, base));
     // A reopening range reviews its own work: no task landing or clean line
-    // merge stacks on its review, and no own-range waiver (R-60).
+    // merge stacks on its review, and no own-range waiver (R-60). Only its
+    // criteria follow whether the reopened completion landed (issue #67).
     let reopens_range = reopen
         .as_ref()
         .is_some_and(|(at, _)| !recovered || !before_range(*at));
@@ -997,7 +998,7 @@ pub(super) fn is_clean_remerge(
 /// Why the diff from `reviewed` to `head` is more than the status and
 /// Closeout of the record at `path`, which reads `completed` at `head`, if
 /// it is.
-fn later_change(
+pub(super) fn later_change(
     repo: &Repository,
     path: &str,
     completed: &str,
@@ -1050,13 +1051,14 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
 /// completion supplies the archive and the old review boundary. Its
 /// criteria may predate a planning pull request that amended them on the
 /// target after the reopen (R-52), so the criteria are the target's
-/// record's, found by identity in any layout. A task no reference point of
-/// its targets holds, and no branch outside the range records, is new in
-/// this range: its own pull request may change its criteria with the
-/// reopen (TSK-217). When a record that may be the task cannot be read, a
-/// target it names does not resolve, or a branch outside the range records
-/// it, the recovered criteria stay and a changed set gets the returned
-/// refusal. Only the anchor and the run's `criteria` bases supply the
+/// record's, found by identity in any layout. A task whose completion
+/// never landed is still in its own pull request: no reference point of
+/// its targets and no branch outside the range shows a completion of it.
+/// Its pull request may change its criteria with the reopen, whether the
+/// target records the task (issue #67) or not (TSK-217). When a record
+/// that may be the task cannot be read, a target it names does not
+/// resolve, or a ref outside the range shows a completion of it, the
+/// recovered criteria stay and a changed set gets the returned refusal. Only the anchor and the run's `criteria` bases supply the
 /// criteria to keep (TSK-220): a branch, a remote-tracking ref or a range's
 /// own line can only make the answer stricter.
 fn recovered_completion(
@@ -1066,7 +1068,7 @@ fn recovered_completion(
     landing: Landing<'_>,
     anchor: Option<Oid>,
     criteria: &CriteriaBases,
-) -> Option<(Oid, RecordView, Option<String>)> {
+) -> Option<Recovered> {
     let (at, mut old) = previous_completion(repo, task, block, landing)?;
     let mut refusal = None;
     if let Some(anchor) = anchor {
@@ -1074,9 +1076,14 @@ fn recovered_completion(
             anchor,
             head: landing.commit(),
         };
-        match target_record(repo, task, range, &old, criteria) {
+        match target_record(repo, task, range, &old, criteria, at) {
             Presence::Present(record) => old.criteria = record.criteria,
-            Presence::Absent => old.criteria = task.criteria.clone(),
+            // Nothing outside this range shows a completion of the task, so
+            // the completion this range reopened never landed (issue #67):
+            // the range is still the task's own pull request before its
+            // first landing, and R-52's own-task allowance applies. CI
+            // prints the change against the target for the reviewer.
+            Presence::Absent | Presence::Unlanded => old.criteria = task.criteria.clone(),
             Presence::Unreadable(reason) => {
                 if old.criteria.signature() != task.criteria.signature() {
                     refusal = Some(format!(
@@ -1088,7 +1095,7 @@ fn recovered_completion(
             Presence::Elsewhere { holder, commit } => {
                 if old.criteria.signature() != task.criteria.signature() {
                     refusal = Some(format!(
-                        "{}: `{holder}` records this task outside this range (commit {commit:.9} adds or changes its record), so the task is not new here and its criteria stay as they were; if `{holder}` is a stale copy, delete it, or merge it if it is newer work on this task, and run this again",
+                        "{}: `{holder}` records a completion of this task outside this range (commit {commit:.9} adds or changes its record), so the task may have landed and its criteria stay as they were; if `{holder}` is a stale copy, delete it, or merge it if it is newer work on this task, and run this again",
                         task.id
                     ));
                 }
@@ -1096,14 +1103,25 @@ fn recovered_completion(
             Presence::Unjudged { reference, commit } => {
                 if old.criteria.signature() != task.criteria.signature() {
                     refusal = Some(format!(
-                        "{}: `{reference}` (commit {commit:.9}) records this task, but it is not the target this run is judged against, so its criteria stay as they were; a reopened task keeps its criteria unless the judged target holds no record of it",
+                        "{}: `{reference}` (commit {commit:.9}) records a completion of this task, but it is not the target this run is judged against, so its criteria stay as they were; a reopened task keeps its criteria once a completion of it has landed",
                         task.id
                     ));
                 }
             }
         }
     }
-    Some((at, old, refusal))
+    Some(Recovered { at, old, refusal })
+}
+
+/// A completion a range reopened, recovered from the history below its
+/// landing ([`recovered_completion`]).
+struct Recovered {
+    /// The commit that last held the completion.
+    at: Oid,
+    /// The completed record, with the criteria a re-completion must keep.
+    old: RecordView,
+    /// Why the criteria to keep could not be decided, when they could not.
+    refusal: Option<String>,
 }
 
 /// The commits a completion is judged over: those `head` reaches and
@@ -1114,23 +1132,30 @@ struct Range {
     head: Oid,
 }
 
-/// Whether a reference point holds a task, found by identity.
+/// Whether a reference point holds a task, found by identity, and for
+/// [`target_record`] whether a completion of it has landed.
 enum Presence {
     /// No record there carries the task's id or uid.
     Absent,
-    /// The record that carries it.
+    /// The record that carries it: for [`target_record`], the judged
+    /// target's record of a task a completion of which has landed.
     Present(Box<RecordView>),
+    /// A judged point records the task, but nothing outside the range
+    /// shows a completion of it: it is planned, not landed (issue #67).
+    Unlanded,
     /// The answer is unknown: a required target does not resolve here, or
     /// a record at the task's own path does not parse; the reason.
     Unreadable(String),
     /// No target point holds it, but a branch or remote-tracking ref
-    /// outside the range records it: `commit`, which `holder` reaches and
-    /// the range's head does not, adds or changes the task's record.
+    /// outside the range records a completion of it: `commit`, which
+    /// `holder` reaches and the range's head does not, adds or changes the
+    /// task's record to a version that shows a completion.
     Elsewhere { holder: String, commit: Oid },
-    /// The judged target does not hold it, but a tip of one of its targets
-    /// that the run is not judged against does: `reference` at `commit`.
-    /// Such a tip is a local branch or a remote-tracking ref, which this
-    /// clone can move, so it never supplies criteria (TSK-220).
+    /// The judged target shows no completion of it, but a tip of one of its
+    /// targets that the run is not judged against does: `reference` at
+    /// `commit`. Such a tip is a local branch or a remote-tracking ref,
+    /// which this clone can move, so it only refuses, never supplies
+    /// criteria (TSK-220).
     Unjudged { reference: String, commit: Oid },
 }
 
@@ -1160,17 +1185,31 @@ enum Presence {
 /// task and no judged point does, the answer is [`Presence::Unjudged`],
 /// which keeps the recovered criteria and never supplies new ones.
 ///
+/// Whether a completion of the task has landed (issue #67) is read from the
+/// same points: a judged point or a target tip that reaches the recovered
+/// completion `at`, or holds a record of the task that shows a completion
+/// ([`shows_completion`]), and a ref outside the range that adds such a
+/// version ([`holder_outside`]). A judged point that records the task with
+/// none of these is [`Presence::Unlanded`]. A tip or ref can only make the
+/// answer stricter: it never supplies criteria and never makes a landed
+/// task look unlanded. A base the range reaches beyond its anchor is the
+/// branch's own history, which shows the range's own completion, so it is
+/// never evidence of a landing.
+///
 /// It fails closed: a required target (each one the record names, and the
 /// default target) with no tip here makes the answer unreadable, never
-/// absent. And when no point holds the task, it is new only if no branch
-/// or remote-tracking ref outside the range records it ([`holder_outside`]):
-/// the range's own history is the branch's to rewrite, other refs are not.
+/// absent, and a point that cannot be read keeps a recorded task's
+/// criteria. And when no point holds the task, it is new only if no branch
+/// or remote-tracking ref outside the range records a completion of it
+/// ([`holder_outside`]): the range's own history is the branch's to
+/// rewrite, other refs are not.
 fn target_record(
     repo: &Repository,
     task: &RecordView,
     range: Range,
     recovered: &RecordView,
     criteria: &CriteriaBases,
+    at: Oid,
 ) -> Presence {
     let uid = record_uid(&task.content);
     let mut index = RecordIndex::new(repo, &task.id, uid.clone());
@@ -1189,17 +1228,8 @@ fn target_record(
         Ok(names) => names.iter().for_each(|name| add(Some(name))),
         Err(reason) => return Presence::Unreadable(reason),
     }
-    let mut judged = vec![range.anchor];
+    let (mut judged, own_history) = judged_points(repo, range, criteria);
     let mut tips: Vec<(String, Oid)> = Vec::new();
-    for base in criteria.bases().iter().copied() {
-        let in_range = base != range.anchor
-            && (base == range.head || repo.graph_descendant_of(range.head, base).unwrap_or(false));
-        if in_range {
-            tips.push((base.to_string(), base));
-        } else {
-            judged.push(base);
-        }
-    }
     for name in &targets {
         let found = target_tips(repo, name);
         if found.is_empty() {
@@ -1227,30 +1257,35 @@ fn target_record(
     judged.retain(|point| seen.insert(*point));
     tips.retain(|(_, point)| seen.insert(*point));
     let own_file = own_file_name(task);
+    let reaches = |point: Oid| is_ancestor_or_same(repo, at, point);
     let mut unreadable = None;
+    let mut found = None;
+    let mut landed = false;
     for point in judged {
+        landed |= reaches(point);
         match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
             Presence::Unreadable(reason) => {
                 unreadable.get_or_insert(reason);
             }
-            present @ Presence::Present(_) => return present,
-            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
+            Presence::Present(record) => {
+                landed |= shows_completion(&record);
+                found.get_or_insert(record);
+            }
+            _ => {}
         }
     }
-    let mut unjudged = None;
-    for (reference, point) in tips {
-        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
-            Presence::Unreadable(reason) => {
-                unreadable.get_or_insert(reason);
+    let unjudged = landing_at_tips(repo, task, at, &own_history, tips, &mut unreadable);
+    if let Some(record) = found {
+        // A recorded task keeps the judged target's criteria whenever any
+        // point shows a landing or cannot be read.
+        return if landed || unjudged.is_some() || unreadable.is_some() {
+            Presence::Present(record)
+        } else {
+            match holder_outside(repo, &mut index, range.head) {
+                Ok(None) => Presence::Unlanded,
+                Ok(Some(_)) | Err(_) => Presence::Present(record),
             }
-            Presence::Present(_) => {
-                unjudged.get_or_insert(Presence::Unjudged {
-                    reference,
-                    commit: point,
-                });
-            }
-            Presence::Absent | Presence::Elsewhere { .. } | Presence::Unjudged { .. } => {}
-        }
+        };
     }
     if let Some(reason) = unreadable {
         return Presence::Unreadable(reason);
@@ -1263,6 +1298,82 @@ fn target_record(
         Ok(None) => Presence::Absent,
         Err(reason) => Presence::Unreadable(reason),
     }
+}
+
+/// The first target tip that shows a landing of `task` ([`Presence::Unjudged`]):
+/// a tip that reaches the recovered completion `at` or holds a record of the
+/// task that shows a completion. The branch's own history (`own_history`)
+/// shows this range's own completion, never a landing, so it is read only
+/// for a record that does not parse. A record that cannot be read at any of
+/// them sets `unreadable`.
+fn landing_at_tips(
+    repo: &Repository,
+    task: &RecordView,
+    at: Oid,
+    own_history: &[(String, Oid)],
+    tips: Vec<(String, Oid)>,
+    unreadable: &mut Option<String>,
+) -> Option<Presence> {
+    let uid = record_uid(&task.content);
+    let own_file = own_file_name(task);
+    for (_, point) in own_history {
+        if let Presence::Unreadable(reason) =
+            presence_at(repo, *point, &task.id, uid.as_deref(), &own_file)
+        {
+            unreadable.get_or_insert(reason);
+        }
+    }
+    let mut unjudged = None;
+    for (reference, point) in tips {
+        match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
+            Presence::Unreadable(reason) => {
+                unreadable.get_or_insert(reason);
+            }
+            Presence::Present(record)
+                if shows_completion(&record) || is_ancestor_or_same(repo, at, point) =>
+            {
+                unjudged.get_or_insert(Presence::Unjudged {
+                    reference,
+                    commit: point,
+                });
+            }
+            _ => {}
+        }
+    }
+    unjudged
+}
+
+/// Whether a record of a task shows a completion of it: it is complete,
+/// keeps an acceptance block (active or superseded), or records a reopen.
+/// A record only reaches a target this way by a completion landing there,
+/// so on a target it is evidence that the task landed (issue #67).
+fn shows_completion(record: &RecordView) -> bool {
+    record.status == "complete"
+        || !acceptance_blocks(&record.body).is_empty()
+        || !super::record_text::reopen_reasons(&record.body).is_empty()
+}
+
+/// The points a run judges a task against (TSK-220): the range anchor, then
+/// each of the run's `criteria` bases. A base the range's head reaches
+/// beyond the anchor is the branch's own history, not a fixed target point,
+/// so it is returned apart, as a tip that can only make an answer stricter.
+fn judged_points(
+    repo: &Repository,
+    range: Range,
+    criteria: &CriteriaBases,
+) -> (Vec<Oid>, Vec<(String, Oid)>) {
+    let mut judged = vec![range.anchor];
+    let mut tips: Vec<(String, Oid)> = Vec::new();
+    for base in criteria.bases().iter().copied() {
+        let in_range = base != range.anchor
+            && (base == range.head || repo.graph_descendant_of(range.head, base).unwrap_or(false));
+        if in_range {
+            tips.push((base.to_string(), base));
+        } else {
+            judged.push(base);
+        }
+    }
+    (judged, tips)
 }
 
 /// The versions of one task's record, found by parsed identity (`id` or
@@ -1340,9 +1451,11 @@ impl<'r> RecordIndex<'r> {
     }
 }
 
-/// A branch or remote-tracking ref that records the task outside the
-/// range ending at `head`: some commit it reaches and `head` does not adds
-/// the task's record or changes it from every parent's version. A copy
+/// A branch or remote-tracking ref that records a completion of the task
+/// outside the range ending at `head`: some commit it reaches and `head`
+/// does not adds the task's record, or changes it from every parent's
+/// version, to a version that shows a completion ([`shows_completion`]). A
+/// planned record held elsewhere is no landing (issue #67). A copy
 /// inherited from the range's own commits (a branch stacked on this one,
 /// or this branch's remote copy with unrelated commits on top) adds
 /// nothing and does not count. Returns the ref's short name and the
@@ -1395,7 +1508,9 @@ fn holder_outside(
                 .ok_or_else(|| format!("cannot read the tree of {parent}"))?;
             inherited.extend(parent_versions);
         }
-        if versions.iter().all(|version| inherited.contains(version)) {
+        if versions.iter().all(|version| {
+            inherited.contains(version) || !index.record(*version).is_some_and(shows_completion)
+        }) {
             continue;
         }
         let holder = refs
@@ -1839,12 +1954,17 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
 }
 
 /// Records of the range whose criteria differ from the target's (R-52).
+/// A predecessor's record whose criteria equal its record at the reviewed
+/// head this branch stacks on (`stacked`, SPC-013 R-42, issue #69) changed
+/// in that predecessor's own reviewed pull request, which judges it: it is
+/// printed as a note, never frozen here.
 #[must_use]
 pub fn frozen_criteria(
     head: &Graph,
     target: &Graph,
     changed_paths: &[String],
     exempt: Option<&str>,
+    stacked: &[StackedHead],
 ) -> Vec<Finding> {
     let mut found = Vec::new();
     for record in head
@@ -1889,6 +2009,19 @@ pub fn frozen_criteria(
                     note: true,
                 });
             }
+        } else if let Some(stack) = stacked.iter().find(|stack| {
+            stack.task_id == record.id
+                && stack.record.criteria.signature() == record.criteria.signature()
+        }) {
+            found.push(Finding {
+                epic_record: None,
+                rule: FROZEN_RULE,
+                message: format!(
+                    "{} changes its criteria in its own reviewed pull request, at {}, which this branch stacks on; that pull request's check judges the change",
+                    record.id, stack.pin
+                ),
+                note: true,
+            });
         } else if before.is_some() {
             found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or the epic amendment", record.id)));
         }
@@ -2006,10 +2139,15 @@ pub(super) fn reopened_ids(
 /// whose own line a planning or line range adds to the stacking tips (never
 /// the criteria bases) for the tasks that target it.
 ///
+/// `stacked` are the reviewed predecessor heads a pushed task branch stacks
+/// on (issue #69): a predecessor completed there, unchanged since, is bound
+/// as its own pull request binds it.
+///
 /// # Errors
 ///
 /// Returns a message when a revision, the merge-base or a tree cannot be
 /// read.
+#[allow(clippy::too_many_arguments)] // The range, the run's authorities and the stacked heads.
 pub fn completions_in_range(
     repo: &Repository,
     base: &str,
@@ -2018,6 +2156,7 @@ pub fn completions_in_range(
     criteria: &Criteria,
     run: &RunBases,
     line: Option<&str>,
+    stacked: &[StackedHead],
 ) -> Result<Vec<Finding>, String> {
     let amendable = *criteria == Criteria::Amendable;
     // The task a task pull request is for may waive a criterion by a
@@ -2033,8 +2172,9 @@ pub fn completions_in_range(
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
     let head_oid = oid(head)?;
+    let base_oid = oid(base)?;
     let anchor = repo
-        .merge_base(oid(base)?, head_oid)
+        .merge_base(base_oid, head_oid)
         .map_err(|error| error.message().to_string())?;
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
@@ -2048,6 +2188,25 @@ pub fn completions_in_range(
         .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
     {
         let block = active_block(task);
+        // A predecessor completed in its own reviewed pull request, whose
+        // head this branch stacks on unchanged (issue #69), is judged as
+        // that pull request judges it: bound at the stacked head, from that
+        // head's own merge-base with the base.
+        if let Some(stack) = stacked.iter().find(|stack| {
+            stack.task_id == task.id
+                && stack.record.status == "complete"
+                && stack.record.content == task.content
+        }) {
+            findings.extend(bind_stacked(
+                repo,
+                stack,
+                base_oid,
+                default_target,
+                &with_own_line(run.stacking(), line, task, None),
+                &run.criteria(),
+            )?);
+            continue;
+        }
         let reopened = super::lifecycle::is_recompletion(before.records.get(&task.id), task)
             || reopened_in_history.contains(&task.id);
         let unchanged = before
@@ -2242,7 +2401,7 @@ pub fn pull_request_findings(
     head: &str,
     criteria: &Criteria,
 ) -> Result<Vec<Finding>, String> {
-    pull_request_findings_judged(repo_root, base, head, criteria, None, None)
+    pull_request_findings_judged(repo_root, base, head, criteria, None, None, &[])
 }
 
 /// [`pull_request_findings`] for a run that also names a candidate
@@ -2251,6 +2410,11 @@ pub fn pull_request_findings(
 /// line of the base or of that authority, and in a planning or line range
 /// from the range's own line for the tasks that target `branch`; never from
 /// what a local branch or its configuration says (TSK-220).
+///
+/// `pins` are the reviewed predecessor heads a pushed task branch stacks on
+/// (SPC-013 R-42, issue #69), as `work_start::stacked_pins` honoured them
+/// after a review row named each; the commits up to each are that
+/// predecessor's reviewed pull request, judged as that pull request is.
 ///
 /// # Errors
 ///
@@ -2263,8 +2427,10 @@ pub fn pull_request_findings_judged(
     criteria: &Criteria,
     authority: Option<&str>,
     branch: Option<&str>,
+    pins: &[super::work_start::ReviewedPin],
 ) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    let stacked = stacked_heads(&repo, pins)?;
     let oid = |revision: &str| {
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
@@ -2286,7 +2452,9 @@ pub fn pull_request_findings_judged(
             Criteria::OwnTask(id) => Some(id.as_str()),
             _ => None,
         };
-        found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
+        found.extend(frozen_criteria(
+            &at_head, &at_target, &paths, exempt, &stacked,
+        ));
     }
     let candidate = authority.map(oid).transpose()?;
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
@@ -2298,8 +2466,82 @@ pub fn pull_request_findings_judged(
         criteria,
         &run,
         branch,
+        &stacked,
     )?);
     Ok(found)
+}
+
+/// Bind a predecessor's completion as its own reviewed pull request binds
+/// it (issue #69): at the stacked head, from that head's own merge-base
+/// with `base`, with that pull request's own-range waiver route.
+fn bind_stacked(
+    repo: &Repository,
+    stack: &StackedHead,
+    base: Oid,
+    default_target: Option<Oid>,
+    stacking: &StackingTips,
+    criteria: &CriteriaBases,
+) -> Result<Vec<Finding>, String> {
+    let own_anchor = repo
+        .merge_base(base, stack.pin)
+        .map_err(|error| error.message().to_string())?;
+    let mut findings = vec![Finding {
+        epic_record: None,
+        rule: BINDING_RULE,
+        message: format!(
+            "{} completion is its own reviewed pull request's, bound at {}, which this branch stacks on",
+            stack.task_id, stack.pin
+        ),
+        note: true,
+    }];
+    findings.extend(bind_completion_with_amendment(
+        repo,
+        &stack.record,
+        &stack.graph,
+        Landing::Commit(stack.pin),
+        default_target,
+        Transport::TaskLanding,
+        Some(own_anchor),
+        Some(own_anchor),
+        stacking,
+        criteria,
+    ));
+    Ok(findings)
+}
+
+/// A reviewed predecessor head a range stacks on, with that predecessor's
+/// record and the records graph there (issue #69). Built only from a
+/// [`super::work_start::ReviewedPin`], which a review row named.
+pub struct StackedHead {
+    task_id: String,
+    pin: Oid,
+    record: RecordView,
+    graph: Graph,
+}
+
+/// The stacked heads of `pins`, each read at its pin.
+fn stacked_heads(
+    repo: &Repository,
+    pins: &[super::work_start::ReviewedPin],
+) -> Result<Vec<StackedHead>, String> {
+    pins.iter()
+        .map(|pin| {
+            let graph = Graph::from_revision(repo, &pin.revision().to_string())?;
+            let record = graph.records.get(pin.task_id()).cloned().ok_or_else(|| {
+                format!(
+                    "{} is not recorded at its reviewed head {}",
+                    pin.task_id(),
+                    pin.revision()
+                )
+            })?;
+            Ok(StackedHead {
+                task_id: pin.task_id().to_string(),
+                pin: pin.revision(),
+                record,
+                graph,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

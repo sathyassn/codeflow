@@ -2952,25 +2952,129 @@ fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
     }
 }
 
-/// A task the target already records keeps its criteria across a reopen in
-/// its own range, by the verb as by CI.
+/// A task whose completion landed on the target keeps its criteria across
+/// a reopen in its own range, by the verb as by CI, whether the fix branch
+/// reopens it or a separate reopen landed first (issue #67 keeps the freeze
+/// for every landed task).
 #[test]
-fn a_task_on_the_target_keeps_its_criteria_on_reopen() {
-    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
-    let root = dir.path();
-    let reviewed = code_change(root, "task/TSK-001-fix", "pub fn initial() {}\n");
-    let old = fix_block(&reviewed);
-    complete(root, "TSK-001", OWN_JOURNEY, &old);
-    for result in reopen_with_criteria(root, "TSK-001", &old, REOPEN_ADDS) {
-        assert_blocks(
-            &result,
-            "a reopen of a task the target records",
-            &["reopened task keeps its criteria"],
+fn a_landed_task_keeps_its_criteria_on_reopen() {
+    for separate_reopen in [false, true] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, BRANCH, "pub fn initial() {}\n");
+        let old = fix_block(&reviewed);
+        complete(root, "TSK-001", OWN_JOURNEY, &old);
+        git(root, &["switch", "main"]);
+        git(
+            root,
+            &["merge", "--no-ff", "-m", "chore: land the task", BRANCH],
         );
+        if separate_reopen {
+            let archived = old.replace(
+                "acceptance:\n",
+                "acceptance_superseded:\n  reason: one more criterion\n",
+            );
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+            );
+            commit(root, "docs: reopen the landed task");
+        }
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        for result in reopen_with_criteria(root, "TSK-001", &old, REOPEN_ADDS) {
+            assert_blocks(
+                &result,
+                &format!("a landed task (separate reopen: {separate_reopen})"),
+                &["reopened task keeps its criteria"],
+            );
+        }
     }
 }
 
+/// Issue #67: a task the target records, never landed, adds a criterion on
+/// its own branch and completes; CI prints the delta as a note. The line
+/// then moves, so the task is reopened to take a line merge, the merge is
+/// reviewed, and the task completes again. The verb and CI accept the same
+/// criterion they accepted one completion earlier, still printing the
+/// delta for the reviewer.
+#[test]
+fn a_reopen_to_take_a_line_merge_keeps_an_unlanded_criterion() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    write(root, "src/lib.rs", "pub fn rerun() {}\n");
+    let first = commit(root, "feat: work with one more criterion");
+    let old = three_criteria_block(&first);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, &old),
+    );
+    assert_passes(&status_complete(root, "TSK-001"), "the first completion");
+    commit(root, "docs(records): complete the task");
+    let first_ci = ci(root, BRANCH, "TSK-001");
+    assert_passes(&first_ci, "the first completion in CI");
+    assert!(
+        first_ci.1.contains("TSK-001 criteria delta"),
+        "{}",
+        first_ci.1
+    );
+
+    git(root, &["switch", "main"]);
+    write(root, "src/line.rs", "pub fn line() {}\n");
+    commit(root, "feat: advance the line");
+    git(root, &["switch", BRANCH]);
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: take the line\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, &archived),
+    );
+    commit(root, "docs(records): reopen to take the line");
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore: merge the line", "main"],
+    );
+    let reviewed = head(root);
+    let closeout = format!("{archived}{}", three_criteria_block(&reviewed));
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, &closeout),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_passes(&verb, "the verb after a reopen to take the line");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "complete", REOPEN_ADDS, &closeout),
+    );
+    commit(root, "docs(records): complete the task again");
+    let result = ci(root, BRANCH, "TSK-001");
+    assert_passes(&result, "CI after a reopen to take the line");
+    assert!(result.1.contains("TSK-001 criteria delta"), "{}", result.1);
+    assert!(
+        !result.1.contains("reopened task keeps its criteria"),
+        "{}",
+        result.1
+    );
+}
+
 const FIXED_UID: &str = "6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d";
+
+/// The Closeout of a task whose earlier completion landed and was reopened
+/// before acceptance blocks existed: evidence that the task landed (issue
+/// #67), so a reopen keeps its criteria.
+const LANDED: &str = "- reopened: an earlier completion landed\n";
 
 /// `record` for TSK-001 as a standalone task with a fixed uid.
 fn standalone_one(record: &str) -> String {
@@ -3053,19 +3157,26 @@ fn complete_reopen_complete_with(
             .current_dir(root)
             .output()
             .unwrap();
-        assert!(admitted.status.success());
+        assert!(
+            admitted.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&admitted.stdout),
+            String::from_utf8_lossy(&admitted.stderr)
+        );
     }
     [verb, ci_on(root, base, &branch, "Task: TSK-001")]
 }
 
 /// A record moved to another supported layout is the same task: the
-/// target's copy keeps its criteria, by the verb as by CI (TSK-217).
+/// target's copy of a landed task keeps its criteria, by the verb as by CI
+/// (TSK-217, issue #67).
 #[test]
 fn a_moved_record_keeps_the_target_criteria_on_reopen() {
     let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
     let root = dir.path();
     let original = record_path("TSK-001");
-    let planned = standalone_one(&std::fs::read_to_string(root.join(&original)).unwrap());
+    let planned = standalone_one(&std::fs::read_to_string(root.join(&original)).unwrap())
+        .replace("Pending.\n", LANDED);
     write(root, &original, &planned);
     commit(root, "docs: plan the standalone task");
     git(root, &["switch", "-c", "task/TSK-001-fix"]);
@@ -3141,9 +3252,10 @@ fn a_stopped_stack_refuses_even_when_the_change_nets_out() {
 }
 
 /// TSK-220 (TSK-213's refusal): a task completed, reopened and given a new
-/// criterion inside its own unmerged branch completes again when its record
-/// is not on the target, since no landed criteria exist to protect; the
-/// same reopen of a task whose record is on the target still refuses.
+/// criterion inside its own unmerged branch completes again, since no
+/// landed criteria exist to protect. Issue #67: that holds also when the
+/// target records the task, so long as its completion never landed there;
+/// `a_landed_task_keeps_its_criteria_on_reopen` keeps the landed refusal.
 #[test]
 fn an_unlanded_task_may_change_its_criteria_when_reopened_in_its_range() {
     const EXTENDED: &str = "- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n- AC-3 When reopened, the system shall still work.\n";
@@ -3204,20 +3316,14 @@ fn an_unlanded_task_may_change_its_criteria_when_reopened_in_its_range() {
             &standalone("TSK-001", "todo", "main", &closeout).replace(OWN_JOURNEY, EXTENDED),
         );
         let verb = status_complete(root, "TSK-001");
-        if on_target {
-            assert_ne!(verb.0, 0, "a landed record keeps its criteria: {}", verb.1);
-            assert!(
-                verb.1.contains("a reopened task keeps its criteria"),
-                "{}",
-                verb.1
-            );
-            continue;
-        }
         assert_passes(&verb, "the verb on an unlanded in-range reopen");
         commit(root, "docs(records): complete the task again");
-        // The fixture has no id registry, so CI refuses the added record
-        // under `work.id_registry`; the binding and the freeze accept it.
+        // The fixture has no id registry, so CI refuses a record the range
+        // adds under `work.id_registry`; the binding and the freeze accept it.
         let result = ci(root, BRANCH, "TSK-001");
+        if on_target {
+            assert_passes(&result, "an unlanded task the target records");
+        }
         for rule in ["work.acceptance_binding", "work.criteria_frozen (block)"] {
             assert!(!result.1.contains(rule), "{rule}: {}", result.1);
         }
@@ -3452,8 +3558,9 @@ fn a_landed_record_with_an_uppercase_extension_keeps_its_criteria() {
 }
 
 /// Neither a stale local target, nor an older comparison base, nor a record
-/// retargeted to a branch that predates it makes a task the target holds
-/// look new: the verb and CI both refuse the changed criteria (TSK-217).
+/// retargeted to a branch that predates it makes a task that landed on the
+/// target look unlanded: the verb and CI both refuse the changed criteria
+/// (TSK-217, issue #67).
 #[test]
 fn every_anchor_sees_the_target_record_on_reopen() {
     let mut accepted = Vec::new();
@@ -3465,7 +3572,7 @@ fn every_anchor_sees_the_target_record_on_reopen() {
         write(
             root,
             &path,
-            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, LANDED)),
         );
         let planned = commit(root, "docs: plan the standalone task");
         git(root, &["branch", "alternate", &early]);
@@ -3575,8 +3682,8 @@ fn wrongly_accepted(case: &str, results: [(i32, String); 2], needle: &str) -> Ve
 }
 
 /// The target's tip on a configured upstream of another remote holds the
-/// task, while the local target branch is stale: the verb reads that
-/// upstream as CI does (TSK-217).
+/// landed task, while the local target branch is stale: the verb reads that
+/// upstream as CI does (TSK-217, issue #67).
 #[test]
 fn a_configured_upstream_on_another_remote_holds_the_task() {
     let dir = repo(&[], "");
@@ -3586,7 +3693,7 @@ fn a_configured_upstream_on_another_remote_holds_the_task() {
     write(
         root,
         &path,
-        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, LANDED)),
     );
     let planned = commit(root, "docs: plan the standalone task");
     git(root, &["switch", "-c", "task/TSK-001-fix"]);
@@ -3633,8 +3740,8 @@ fn a_clone_without_the_default_target_fails_closed() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
-/// The target's TSK-002, renumbered TSK-001 with its uid kept, is the same
-/// record in every YAML form of that uid (TSK-217).
+/// The target's landed TSK-002, renumbered TSK-001 with its uid kept, is the
+/// same record in every YAML form of that uid (TSK-217, issue #67).
 #[test]
 fn a_kept_uid_matches_in_every_yaml_form() {
     let mut wrong = Vec::new();
@@ -3645,7 +3752,7 @@ fn a_kept_uid_matches_in_every_yaml_form() {
         write(
             root,
             &old_path,
-            &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n")),
+            &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, LANDED)),
         );
         commit(root, "docs: plan the standalone task");
         git(root, &["switch", "-c", "task/TSK-001-fix"]);
@@ -3670,8 +3777,8 @@ fn a_kept_uid_matches_in_every_yaml_form() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
-/// A task planned on an integration line that `main` predates keeps the
-/// line's criteria however its record is later retargeted: kept on the
+/// A task landed on an integration line that `main` predates keeps the
+/// line's criteria however its record is later retargeted (issue #67): kept on the
 /// line, retargeted to `main` from the first commit of its branch, or
 /// retargeted after its first completion. The record's own history in the
 /// range names the line, so the verb and CI both read it (TSK-217).
@@ -3693,7 +3800,7 @@ fn a_task_planned_on_an_integration_line_keeps_its_criteria_on_retarget() {
         write(
             root,
             &path,
-            &on_line(task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+            &on_line(task("TSK-001", "todo", OWN_JOURNEY, LANDED)),
         );
         commit(root, "docs: plan the task on the integration line");
         let admitted = codeflow()
@@ -3777,9 +3884,10 @@ fn a_custom_default_branch_is_found_through_origin_head() {
 }
 
 /// The task's planning commit rewritten on the branch with its target
-/// changed to `main` cannot hide the original on its integration line:
-/// another branch adds the record outside this range, so the verb and CI
-/// both refuse the changed criteria and name that branch (TSK-217).
+/// changed to `main` cannot hide a landing on its integration line: another
+/// branch adds a completed record outside this range, so the verb and CI
+/// both refuse the changed criteria and name that branch (TSK-217, issue
+/// #67).
 #[test]
 fn a_rewritten_planning_commit_cannot_hide_the_line_record() {
     let line = "integration/EPC-001-source";
@@ -3792,7 +3900,7 @@ fn a_rewritten_planning_commit_cannot_hide_the_line_record() {
         write(
             root,
             &path,
-            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")).replace(
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, LANDED)).replace(
                 "integration_target: main",
                 &format!("integration_target: {line}"),
             ),
@@ -3820,43 +3928,58 @@ fn a_rewritten_planning_commit_cannot_hide_the_line_record() {
         let needle = if case == "kept" {
             "reopened task keeps its criteria"
         } else {
-            "`integration/EPC-001-source` records this task outside this range"
+            "`integration/EPC-001-source` records a completion of this task outside this range"
         };
         wrong.extend(wrongly_accepted(case, results, needle));
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
-/// A stale branch that adds the task's record outside the range keeps a
-/// new task from changing its criteria on reopen; both paths name it, so a
-/// human can delete it if it is abandoned (TSK-217).
+/// A stale branch that adds a completed copy of the task's record outside
+/// the range keeps a new task from changing its criteria on reopen; both
+/// paths name it, so a human can delete it if it is abandoned (TSK-217). A
+/// branch holding only a planned copy shows no landing, so it no longer
+/// stops the change (issue #67).
 #[test]
 fn a_stale_branch_holding_the_record_is_named() {
-    let dir = repo(&[], "");
-    let root = dir.path();
-    let path = record_path("TSK-001");
-    git(root, &["switch", "-c", "planning-draft"]);
-    write(
-        root,
-        &path,
-        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "A draft.\n")),
-    );
-    commit(root, "docs: draft the task");
-    let admitted = codeflow()
-        .args(["ids", "admit", &path])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    assert!(admitted.status.success());
-    git(root, &["switch", "-c", "task/TSK-001-fix", "main"]);
-    let shape = |record: String| standalone_one(&record);
-    let results = complete_reopen_complete(root, &path, &shape, "main", false);
-    let wrong = wrongly_accepted(
-        "stale branch",
-        results,
-        "`planning-draft` records this task outside this range",
-    );
-    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+    for completed in [true, false] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let path = record_path("TSK-001");
+        git(root, &["switch", "-c", "planning-draft"]);
+        write(
+            root,
+            &path,
+            &standalone_one(&task(
+                "TSK-001",
+                "todo",
+                OWN_JOURNEY,
+                if completed { LANDED } else { "A draft.\n" },
+            )),
+        );
+        commit(root, "docs: draft the task");
+        let admitted = codeflow()
+            .args(["ids", "admit", &path])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(admitted.status.success());
+        git(root, &["switch", "-c", "task/TSK-001-fix", "main"]);
+        let shape = |record: String| standalone_one(&record);
+        let results = complete_reopen_complete(root, &path, &shape, "main", false);
+        if !completed {
+            for (who, result) in ["verb", "ci"].into_iter().zip(results) {
+                assert_eq!(result.0, 0, "a planned copy, {who}: {}", result.1);
+            }
+            continue;
+        }
+        let wrong = wrongly_accepted(
+            "stale branch",
+            results,
+            "`planning-draft` records a completion of this task outside this range",
+        );
+        assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+    }
 }
 
 /// Copies of the task's record that came from this range's own commits do
@@ -3895,7 +4018,7 @@ fn copies_from_the_range_leave_a_new_task_new() {
 }
 
 /// TSK-220, merged-head review: only the target the run is judged against
-/// supplies a reopened task's criteria. The task is published on `main`;
+/// supplies a reopened task's criteria. The landed task is on `main`;
 /// its branch, cut before that, completes it, reopens it and adds a
 /// criterion. With local `main` stale, pointing `origin/main` or `main`'s
 /// configured upstream on another remote at the branch's own commit never
@@ -3917,7 +4040,7 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
         write(
             root,
             &path,
-            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n")),
+            &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, LANDED)),
         );
         let published = commit(root, "docs(records): publish the task on main");
         git(root, &["switch", "-q", "-c", "task/TSK-001-fix", &early]);
@@ -3945,7 +4068,10 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
             }
         };
         let shape = |record: String| standalone_one(&record);
-        let [_, ci] = complete_reopen_complete_with(root, &path, &shape, &published, true, &spoof);
+        // The landed record on `main` and the branch's own copy differ, so
+        // the id registry cannot seed them as one record; the binding is
+        // what this judges.
+        let [_, ci] = complete_reopen_complete_with(root, &path, &shape, &published, false, &spoof);
         if ci.0 == 0 {
             passed.push(case);
         } else {
@@ -3964,7 +4090,7 @@ fn only_the_judged_target_supplies_a_reopened_tasks_criteria() {
 
 /// TSK-220, re-review of the judged-target fix: a line range's own head may
 /// carry merges for the tasks that target the line, but it never supplies
-/// a reopened task's criteria. The task is planned on the line; its branch,
+/// a reopened task's criteria. The task has landed on the line; its branch,
 /// cut before that planning, completes it, reopens it and adds a
 /// criterion, which the verb and CI refuse there. Carrying the same
 /// completion onto the line, with no criteria amendment, still refuses on
@@ -3986,7 +4112,7 @@ fn a_lines_own_head_never_supplies_a_reopened_tasks_criteria() {
     write(
         root,
         &path,
-        &standalone_one(&line_task("TSK-001", "todo", "Pending.\n")),
+        &standalone_one(&line_task("TSK-001", "todo", LANDED)),
     );
     commit(root, "docs(records): plan the task on the line");
     land(root, "plan/add-task");
@@ -3997,7 +4123,7 @@ fn a_lines_own_head_never_supplies_a_reopened_tasks_criteria() {
             &format!("integration_target: {LINE}"),
         )
     };
-    let [verb, ci] = complete_reopen_complete(root, &path, &shape, LINE, true);
+    let [verb, ci] = complete_reopen_complete(root, &path, &shape, LINE, false);
     assert_ne!(verb.0, 0, "the verb on the task branch: {}", verb.1);
     assert_ne!(ci.0, 0, "CI on the task branch: {}", ci.1);
     let completed = std::fs::read_to_string(root.join(&path)).unwrap();
@@ -4013,4 +4139,30 @@ fn a_lines_own_head_never_supplies_a_reopened_tasks_criteria() {
         "the carried completion on the line",
         &["work.acceptance_binding", "TSK-001", "keeps its criteria"],
     );
+}
+
+/// Issue #69: `follow_ups: none: <reason>` is not valid YAML, so a block a
+/// reviewer loads with a YAML parser may quote it. The quoted form completes
+/// by the verb and passes CI, as the plain form still does.
+#[test]
+fn a_quoted_follow_ups_completes_by_the_verb_and_in_ci() {
+    for follow_ups in ["\"none: nothing deferred\"", "none: nothing deferred"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, BRANCH, "pub fn quoted() {}\n");
+        let closeout = block(
+            &reviewed,
+            &["AC-1: verified | unit", "AC-2: verified | journey"],
+            "verified | journey",
+            follow_ups,
+        );
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", OWN_JOURNEY, &closeout),
+        );
+        assert_passes(&status_complete(root, "TSK-001"), follow_ups);
+        complete(root, "TSK-001", OWN_JOURNEY, &closeout);
+        assert_passes(&ci(root, BRANCH, "TSK-001"), follow_ups);
+    }
 }
