@@ -9,6 +9,7 @@ import axe from "axe-core";
 import { validateWindowsQualificationConfinement } from "./windows-qualification-scope.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 import { codeflowBinary } from "./codeflow-binary.mjs";
+import { closeWaitMs } from "./browser-close-bound.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -800,7 +801,9 @@ async function closeBrowserContext(openContext, profiles, knownProcesses, phase)
   try {
     await bounded(
       closePromise,
-      injectTimeout ? INJECTED_CLOSE_HANG_BOUND_MS : BROWSER_CLOSE_TIMEOUT_MS,
+      injectTimeout
+        ? INJECTED_CLOSE_HANG_BOUND_MS
+        : closeWaitMs(BROWSER_CLOSE_TIMEOUT_MS, qualificationDeadline - Date.now()),
       phase,
     );
   } catch (error) {

@@ -14,7 +14,7 @@ const committedAssets = join(crateRoot, "assets");
 
 run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
-run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs"]);
+run("node", ["--test", "scripts/toolchain.test.mjs", "scripts/likeness.test.mjs", "scripts/codeflow-binary.test.mjs", "scripts/browser-close-bound.test.mjs"]);
 await checkSelectorOffsets();
 await checkEntityLabelParity();
 await checkAnswerRuleParity();
