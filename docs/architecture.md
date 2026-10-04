@@ -22,6 +22,19 @@ service.
 A three-crate Cargo workspace builds one binary with the scaffold and the
 presentation renderer embedded.
 
+```text
+  codeflow <command>
+        |
+        v
+  codeflow-cli        main.rs (clap) -> cmd/ handler; embedded.rs
+        |
+        +--> codeflow-core
+        |
+        +--> codeflow-present
+```
+
+The binary holds all three crates and the embedded `assets/` tree.
+
 - `codeflow-core` owns the discipline engine and `codeflow-present` owns
   bounded local review sessions.
 - `codeflow-cli` is a thin dispatcher: `main.rs` is the clap command
@@ -52,28 +65,33 @@ Core modules grouped by responsibility.
 | Records and knowledge | `models/`, `ledger/`, `workgraph/`, `validate/`, `capability.rs`, `recall.rs`, `registry.rs` | frontmatter models, the JSONL ledger, the work graph, `validate` and its `--docs` referential-integrity lint, including structural task dependency identity, reference and cycle checks, the capability registry parser, full-text search (FTS5) recall, and the cross-repo registry |
 | Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs`, `reading.rs` | the doctor check table (20 checks: hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit), the progressive reading map (`reading.rs`: the per-task reading chain, the conditional reads and their triggers, the orphan check and the size guideline numbers, shared with `artifact_budget_contract`), including bidirectional delegate readiness (Codex auth and Model Context Protocol (MCP) servers, the Claude plugin, and tmux prerequisites; live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
 
-The shell plane reads a composed deletion as scoped shell. Each variable,
-positional parameter and the working directory carry every value they may hold
-through subshells, branches, loops and function calls, and the deletion is
-refused when any of them reaches a protected location. The reader is
-closed-world. Its module doc lists the grammar it models, traps and zsh hook
-functions included. Anything else in command position or between commands (a
-sourced file, a name reference, an unmodelled builtin or option, zsh-only
-syntax, a command named by an unknown value) makes the state unknown, so a
-deletion that depends on it is refused as unproven (TSK-141).
+The shell plane reads a composed deletion as scoped shell.
 
-`session-orient` is also the advisory entry for `UserPromptSubmit`. It reads
-the payload's event and adds the kernel guidance block after a compaction,
-resume or fork, or one rule line to a prompt that asks for a duration, a status
-or a complex explanation (`hooks/guidance.rs`, TSK-128). Contract 3 refuses
-an older binary on either event. The guards never pass through it. Grok Build
-ignores these events' output, so it wires only the guards.
+- Each variable, positional parameter and the working directory carry every
+  value they may hold through subshells, branches, loops and function calls.
+- The deletion is refused when any of them reaches a protected location.
+- The reader is closed-world. Its module doc lists the grammar it models, traps
+  and zsh hook functions included.
+- Anything else in command position or between commands makes the state
+  unknown: a sourced file, a name reference, an unmodelled builtin or option,
+  zsh-only syntax, or a command named by an unknown value. A deletion that
+  depends on it is refused as unproven (TSK-141).
 
-A git-hook shim runs the `codeflow` binary whose command started git. That
-command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and
-the shim fails when the named binary is missing or not executable. Git run
-outside codeflow uses the `codeflow` on PATH, and the shim is a no-op when there
-is none (SPC-013 R-85).
+`session-orient` is also the advisory entry for `UserPromptSubmit`.
+
+- It reads the payload's event. After a compaction, resume or fork it adds the
+  kernel guidance block. For a prompt that asks for a duration, a status or a
+  complex explanation it adds one rule line (`hooks/guidance.rs`, TSK-128).
+- Contract 3 refuses an older binary on either event.
+- The guards never pass through it. Grok Build ignores these events' output, so
+  it wires only the guards.
+
+A git-hook shim runs the `codeflow` binary whose command started git.
+
+- That command names itself in `CODEFLOW_HOOK_BINARY` for its git children
+  only. The shim fails when the named binary is missing or not executable.
+- Git run outside codeflow uses the `codeflow` on PATH. The shim is a no-op
+  when there is none (SPC-013 R-85).
 
 The test gate evaluates file and aggregate coverage rules through one verdict.
 
@@ -97,11 +115,14 @@ ADR-0036 and ADR-0037.
 
 A Claude Code task notice for work the turn backgrounded is admitted as a
 continuation of that turn when the session transcript shows the turn launched
-the task. Its record keeps the notice's `prompt_id` and byte digest, and the
-Stop that closes it writes a result only after the transcript proves the prompt
-was a native task notice with those bytes; a typed copy poisons the run. The
-model may still act on a forged notice within that turn. The check keeps it
-from being recorded as a clean result.
+the task.
+
+- Its record keeps the notice's `prompt_id` and byte digest.
+- The Stop that closes it writes a result only after the transcript proves the
+  prompt was a native task notice with those bytes. A typed copy poisons the
+  run.
+- The model may still act on a forged notice within that turn. The check keeps
+  it from being recorded as a clean result.
 
 Records follow the Markdown-truth design.
 
@@ -122,23 +143,28 @@ Records follow the Markdown-truth design.
 | out of scope | scheduling and status mutation remain Plan and native-harness concerns (ADR-0040, ADR-0046) |
 
 Three areas outgrew this file and are graduated, with the pointer left behind:
-interactive presentation (`codeflow-present`, ADR-0049, ADR-0050, ADR-0052) to
-[architecture/present.md](architecture/present.md), the four enforcement planes
-to [architecture/enforcement-planes.md](architecture/enforcement-planes.md),
-and the shared design system to
-[architecture/utility-presentation.md](architecture/utility-presentation.md).
+
+- Interactive presentation (`codeflow-present`, ADR-0049, ADR-0050,
+  ADR-0052): [architecture/present.md](architecture/present.md).
+- The four enforcement planes:
+  [architecture/enforcement-planes.md](architecture/enforcement-planes.md).
+- The shared design system:
+  [architecture/utility-presentation.md](architecture/utility-presentation.md).
+
 The runtime posture each harness receives, including the Codex permission
 profile and Claude's credential mask, is in
 [harness posture](harness-posture.md).
 
 ### scaffold: `assets/`
 
-`assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates
-rendered from the `rule-map.toml` kernel by `scaffold::rule_map`, the
-`.codeflow/rules/` references, the `claude/` artifacts, policy.json, git-hook shims, docs and pm templates), and
-`assets/docs-portal/` holds the optional portal starter. Each area below is
-owned by an accepted decision; the mirrored skills and the capability registry
-carry the operating detail.
+- `assets/base/` holds the shipped scaffold: the AGENTS.md and CLAUDE.md
+  templates rendered from the `rule-map.toml` kernel by `scaffold::rule_map`,
+  the `.codeflow/rules/` references, the `claude/` artifacts, `policy.json`,
+  git-hook shims, docs and pm templates.
+- `assets/docs-portal/` holds the optional portal starter.
+
+Each area below is owned by an accepted decision. The mirrored skills and the
+capability registry carry the operating detail.
 
 | Area | Owning ADR(s) | Consequence |
 |---|---|---|

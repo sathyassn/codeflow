@@ -48,7 +48,7 @@
         "derive": "step 2",
         "check": {
           "kind": "contains",
-          "text": "holds the document only, without notes or review controls."
+          "text": "the copy holds the document only, without notes or review"
         },
         "value": true
       }

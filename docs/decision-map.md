@@ -18,10 +18,13 @@ before relying on it.
 
 ## Architecture
 
-A later decision can replace an earlier one or narrow it. The earlier record
-stays in place with its `superseded_by` field naming its successor, so a chain
-always ends at the decision that binds today. ADR-0058 narrows ADR-0048 rather
-than replacing it, so ADR-0048 still binds for what ADR-0058 did not change.
+A later decision can replace an earlier one or narrow it. A replaced record
+stays in place, and its `superseded_by` field names its successor, so a chain
+always ends at the decision that binds today.
+
+ADR-0058 narrows ADR-0048 rather than replacing it, so ADR-0048 still binds for
+what ADR-0058 did not change. Each line below names a record, then the record
+that replaced or narrowed it:
 
 - ADR-0002, then ADR-0006
 - ADR-0010, then ADR-0012, then ADR-0061, then ADR-0062
@@ -31,17 +34,20 @@ than replacing it, so ADR-0048 still binds for what ADR-0058 did not change.
 - ADR-0048, then ADR-0058
 
 The release chain is the longest. Some records in these chains still read
-`accepted`, because a record is not rewritten when a later one narrows it; the
+`accepted`, because a record is not rewritten when a later one narrows it. The
 `superseded_by` link is what counts.
 
 ## Technical
 
-68 decisions, 3 with `status: superseded`. A
-decision is proposed, then accepted, and may later be superseded; its
+68 decisions, 3 with `status: superseded`. A decision is proposed, then
+accepted, and may later be superseded. Its
 content is never rewritten, and only `superseded_by` or a dated note is added.
-[Architecture](architecture.md) links each area to its consequence, and the
-[capability registry](capabilities.md) links each capability to the decisions
-that shaped it.
+
+Two pages link back to the decisions:
+
+- [Architecture](architecture.md) links each area to its consequence.
+- The [capability registry](capabilities.md) links each capability to the
+  decisions that shaped it.
 
 | Area | Decision | Title | Status | Superseded by |
 |---|---|---|---|---|

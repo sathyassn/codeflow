@@ -29,8 +29,8 @@
 The registry lists each CodeFlow capability once, with its status and the page
 that owns its detail. It is for a contributor who needs to know whether a
 capability already exists and what it touches. A capability's group says what
-it is for. It does not say which tier installs it; the tier table on the
-[adoption](adoption.md) page does.
+it is for, not which tier installs it. The tier table on the
+[adoption](adoption.md) page says that.
 
 ## Architecture
 
@@ -47,12 +47,14 @@ capability id (CAP-###).
   file, and a shipped entry needs a non-empty `verified_by`.
 - `codeflow status` and `codeflow orient` also parse the fences.
 
-`Area` is the `area` field of the yaml fence, naming the part of the codebase
-that owns the capability. The six headings in Technical are the reading groups
-instead, so the two answer different questions. Five rows read under one word
-and carry another: CAP-017 reads under Scaffold with area `engine`, and
-CAP-009, CAP-010, CAP-013 and CAP-015 read under Delegate and Present with area
-`scaffold`.
+`Area` is the `area` field of the yaml fence. It names the part of the codebase
+that owns the capability. The six headings in Technical are reading groups, so
+the two answer different questions. Five rows sit under a group that differs
+from their area:
+
+- CAP-017 reads under Scaffold with area `engine`.
+- CAP-009, CAP-010, CAP-013 and CAP-015 read under Delegate and Present with
+  area `scaffold`.
 
 | Capability | Name | Area | Status |
 |---|---|---|---|
@@ -77,11 +79,13 @@ CAP-009, CAP-010, CAP-013 and CAP-015 read under Delegate and Present with area
 Statuses run planned, then building, then shipped, then deprecated. Entries are
 deprecated, never deleted. Each entry's full field set, including the epics,
 decisions and test tags that prove it, is the definition table beside its
-summary in Technical. Two capabilities explain a subsystem large enough to
-carry its own page:
-[duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md) and
-the [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md).
-Both keep their registry entry here.
+summary in Technical.
+
+Two capabilities cover a subsystem large enough to carry its own page. Both
+keep their registry entry here:
+
+- [duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md)
+- the [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md)
 
 ## Technical
 
@@ -103,13 +107,18 @@ adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
 `codeflow init [--minimal|--standard|--full] [--yes]` lays the discipline layer
-into a repository. `--minimal` installs the complete four-plane enforcement
-floor; `--standard` adds the method skills, reviewer agents, pipeline and docs
-spine; `--full` adds `project-management/` (ADR-0019). Init is idempotent,
-non-destructive and offline, and it preserves conflicting existing content for
-explicit reconciliation. Re-running at a higher tier is an additive upgrade.
-The harness starters it writes are executable policy, such as a guarded Codex
-profile and a fail-closed Claude sandbox (ADR-0025, ADR-0026).
+into a repository. Each tier adds to the one before it (ADR-0019):
+
+- `--minimal` installs the enforcement floor: git hooks, in-session guards and
+  the CI check. Remote branch protection stays a repository setting.
+- `--standard` adds the method skills, reviewer agents, pipeline and docs spine.
+- `--full` adds `project-management/`.
+
+Init is idempotent, non-destructive and offline. It preserves conflicting
+existing content for explicit reconciliation, and re-running at a higher tier is
+an additive upgrade. The harness starters it writes are executable policy, such
+as a guarded Codex profile and a fail-closed Claude sandbox (ADR-0025,
+ADR-0026).
 
 | Written file | What it holds |
 |---|---|
@@ -131,12 +140,16 @@ epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020]
 adrs: [ADR-0011, ADR-0019]
 ```
 
-`codeflow update` refreshes managed scaffold files by ownership class.
-Unmodified files are replaced. User-modified files get a three-way merge from
-`.codeflow/.baseline/`, and a conflict produces a `.new` file and a report.
-Managed regions are updated in place, and user-owned schema-versioned files
-gain new keys with defaults. Update also installs in-tier manifest entries
-that are missing on disk. It never clobbers and never silently skips.
+`codeflow update` refreshes managed scaffold files by ownership class:
+
+- Unmodified files are replaced.
+- User-modified files get a three-way merge from `.codeflow/.baseline/`. A
+  conflict produces a `.new` file and a report.
+- Managed regions are updated in place.
+- User-owned schema-versioned files gain new keys with defaults.
+
+Update also installs in-tier manifest entries that are missing on disk. It
+never clobbers and never silently skips.
 
 | Policy scalar | On update |
 |---|---|
@@ -159,13 +172,17 @@ adrs: [ADR-0025, ADR-0044]
 ```
 
 `/cf-customize` tailors a project after `codeflow init`, or after an update
-that ships new defaults. It verifies the tools each flow the project uses
-needs, then reconciles the project's real README, manifests, code and CI
-against its project-owned docs, instructions and policy. It checks the
-effective harness sandbox and approval posture instead of trusting comments.
-It reports first and then applies fixes interactively through a PR. It never
-auto-installs a tool or silently changes global harness settings. Detail:
-[adoption](adoption.md).
+that ships new defaults. It does three things:
+
+- It verifies the tools each flow the project uses needs.
+- It reconciles the project's real README, manifests, code and CI against its
+  project-owned docs, instructions and policy.
+- It checks the effective harness sandbox and approval posture instead of
+  trusting comments.
+
+It reports first, then applies fixes interactively through a PR. It never
+auto-installs a tool or silently changes global harness settings.
+Detail: [adoption](adoption.md).
 
 #### optional-agentic-estimation
 
@@ -182,10 +199,10 @@ adrs: [ADR-0057]
 Spec SPC-007 defines the optional `cf-estimate` method. A project confirms
 adoption, or its decline is respected. Estimates carry evidence-anchored
 grades, full-delivery scenarios and resource-feasible allocations. The
-standard and full tiers manage the skill; profiles, forecasts and outcomes
+standard and full tiers manage the skill. Profiles, forecasts and outcomes
 stay project-owned. EPC-006 supplies the read-only allocation checker. This
-registry does not establish calibrated delivery predictions. Detail:
-[commands](cli.md).
+registry does not establish calibrated delivery predictions.
+Detail: [commands](cli.md).
 
 ### Enforce
 
@@ -202,15 +219,18 @@ adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline is enforced across four planes that read one config, the `git`
-section of `.codeflow/policy.json`. Git client hooks and the in-session
-`git-guard` give fast local feedback. CI re-runs the same checks through
-`codeflow ci`, and together with remote branch protection it forms the
-authoritative perimeter (ADR-0017). Rule levels are per-repository policy
-values. The anti-bypass layer has no off switch: the strict policy validator,
-the gate-context token for protected-branch advances, and the guard's refusal
-of override variables set in-session. Secret scanning fails closed.
-Agent sessions are judged by the landed policy on the remote, so a local
-edit, commit or branch cannot relax the session checks.
+section of `.codeflow/policy.json`.
+
+- Git client hooks and the in-session `git-guard` give fast local feedback.
+- CI re-runs the same checks through `codeflow ci`. Together with remote branch
+  protection, it forms the authoritative perimeter (ADR-0017).
+- Rule levels are per-repository policy values.
+- The anti-bypass layer has no off switch. It is the strict policy validator,
+  the gate-context token for protected-branch advances, and the guard's refusal
+  of override variables set in-session.
+- Secret scanning fails closed.
+- Agent sessions are judged by the landed policy on the remote, so a local
+  edit, commit or branch cannot relax the session checks.
 
 Other checks on these planes:
 
@@ -247,12 +267,12 @@ epics: [EPC-001, EPC-002, EPC-003, EPC-020]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 ```
 
-`codeflow remote protect` applies the policy's `protected_branches` to the
-provider. On GitHub it requires a PR and green CI and blocks force-push and
-deletion, then reports anything the plan tier cannot apply. `codeflow doctor`
-runs twenty health checks on git hooks and CI, harness wiring, policy and
-config, delegates and models, the repository and managed files, and
-customization and test config.
+- `codeflow remote protect` applies the policy's `protected_branches` to the
+  provider. On GitHub it requires a PR and green CI, blocks force-push and
+  deletion, and reports anything the plan tier cannot apply.
+- `codeflow doctor` runs twenty health checks. They cover git hooks and CI,
+  harness wiring, policy and config, delegates and models, the repository and
+  managed files, and customization and test config.
 
 | Doctor check | Reports |
 |---|---|
@@ -275,16 +295,20 @@ epics: [EPC-003, EPC-012]
 adrs: [ADR-0016]
 ```
 
-The duo develop flow's mandatory security and red-team stage (ADR-0016). The
-CI `security-review` job runs `osv-scanner` for software composition analysis
-(SCA) over every lockfile ecosystem. It blocks CI only when the
-`security_review` or `dep_audit` policy key is set to `block`; the shipped
-default is warn. Secrets found by gitleaks always block, with exemptions
-read from the trusted commit. The
-`cf-security-reviewer` agent runs a two-vendor adversarial review; its
-findings warn locally and force bounded rework, with the human merger as the
-backstop (ADR-0007). Detail:
-[enforcement planes](architecture/enforcement-planes.md).
+The duo develop flow includes a mandatory security and red-team stage
+(ADR-0016).
+
+- The CI `security-review` job runs `osv-scanner` for software composition
+  analysis (SCA) over every lockfile ecosystem. It blocks CI only when the
+  `security_review` or `dep_audit` policy key is set to `block`. The shipped
+  default is warn.
+- Secrets found by gitleaks always block, with exemptions read from the trusted
+  commit.
+- The `cf-security-reviewer` agent runs a two-vendor adversarial review. Its
+  findings warn locally and force bounded rework, with the human merger as the
+  backstop (ADR-0007).
+
+Detail: [enforcement planes](architecture/enforcement-planes.md).
 
 ### Verify
 
@@ -302,11 +326,14 @@ adrs: [ADR-0021, ADR-0031]
 
 `codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
 runs the generic test engine against the targets in `.codeflow/test-config.json`
-or a detected stack. With no stack detected it is a loud no-op that exits 0, and `--strict`
-turns that into a non-zero exit for unattended callers. With a stack it is a
-real gate, re-run in CI. Coverage thresholds count toward the verdict
-(ADR-0021). `codeflow test setup` fills absent configs and never auto-replaces
-populated ones.
+or a detected stack.
+
+- With no stack detected it is a loud no-op that exits 0. `--strict` turns that
+  into a non-zero exit for unattended callers.
+- With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
+  the verdict (ADR-0021).
+- `codeflow test setup` fills absent configs and never auto-replaces populated
+  ones.
 
 | Pre-push case | Behaviour |
 |---|---|
@@ -373,7 +400,7 @@ hook appends a session record to the ledger that recall searches. Claude wires
 both through `.claude/settings.json`, and an interactive Codex session gets
 the same digest through `.codex/hooks.json` (ADR-0013).
 
-Rules come back where they were lost or where they apply (TSK-128). One
+Rules return after context loss and where a prompt needs them (TSK-128). One
 advisory command, `session-orient`, is wired on `SessionStart` and
 `UserPromptSubmit` and reads the event from the payload. Sizes are guidelines.
 
@@ -426,15 +453,20 @@ epics: [EPC-002, EPC-011, EPC-012, EPC-018]
 adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
 ```
 
-Consult or delegate a unit of work to another vendor's coding CLI at the
-process boundary, each under its own subscription auth. CodeFlow's gates judge
-the output whoever wrote it (ADR-0005). Transport is interactive only. From
-Claude Code it uses the official `codex-plugin-cc` plugin, with a qualified
-native client fallback (ADR-0059). From Codex it uses the interactive `claude`
-CLI through the delegate lifecycle. When `HERDR_ENV=1`, `cf-herdr` hosts that
-terminal in a named Herdr tab. Headless task execution is prohibited. Delegates
-edit only inside a worktree on a feature branch, under the same gates. Detail:
-[delegation](delegation.md).
+A session can consult or delegate a unit of work to another vendor's coding CLI
+at the process boundary, each under its own subscription auth. CodeFlow's gates
+judge the output whoever wrote it (ADR-0005).
+
+- Transport is interactive only. Headless task execution is prohibited.
+- From Claude Code it uses the official `codex-plugin-cc` plugin, with a
+  qualified native client fallback (ADR-0059).
+- From Codex it uses the interactive `claude` CLI through the delegate
+  lifecycle. When `HERDR_ENV=1`, `cf-herdr` hosts that terminal in a named
+  Herdr tab.
+- Delegates edit only inside a worktree on a feature branch, under the same
+  gates.
+
+Detail: [delegation](delegation.md).
 
 #### duo-model-orchestration
 
@@ -448,16 +480,25 @@ epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, 
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060, ADR-0069]
 ```
 
-`/cf-model-orchestrator` is the host-neutral entry for routed repository
-work, decided by touched paths: adopter-facing paths, research that will
-drive such a change, and plan, design, security or irreversible work. It
-selects the smallest complete outcome mode, so research or planning work
+`/cf-model-orchestrator` is the host-neutral entry for routed repository work.
+Touched paths decide what is routed:
+
+- adopter-facing paths
+- research that will drive such a change
+- plan, design, security or irreversible work
+
+It selects the smallest complete outcome mode, so research or planning work
 stops before implementation. Planning, review and batch landing follow
 [how work moves to main](delivery.md) (ADR-0076).
-Both seats independently discover from the same immutable brief before
-either sees the other's findings. Claude then drafts the one plan, Codex
-challenges it, and both approve one version before implementation; material
-product or visual work also records a `DESIGN_INTENT` in that plan
+
+The two seats work in this order:
+
+1. Both discover independently from the same immutable brief, before either
+   sees the other's findings.
+2. Claude drafts the one plan, and Codex challenges it.
+3. Both approve one version before implementation.
+
+Material product or visual work also records a `DESIGN_INTENT` in that plan
 (ADR-0043, ADR-0051).
 
 The work records a plan produces are judged by one core (SPC-013):
@@ -489,11 +530,15 @@ adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR
 
 `/cf-evaluate-model` qualifies a new model or version, native harness release,
 permission profile, or material CodeFlow instruction change as the complete
-system users will run. The standard and full skill carries stable requirement
-IDs, balanced regression and capability cases, a native-interactive run
-protocol, and a standard-library tool for validation, scoring, baseline
-comparison and fail-closed cleanup. Focused diagnostic packs do not qualify a
-model binding.
+system users will run. The standard and full skill carries:
+
+- stable requirement IDs
+- balanced regression and capability cases
+- a native-interactive run protocol
+- a standard-library tool for validation, scoring, baseline comparison and
+  fail-closed cleanup
+
+Focused diagnostic packs do not qualify a model binding.
 
 | Evaluation part | What it does |
 |---|---|
@@ -520,11 +565,14 @@ adrs: [ADR-0036, ADR-0037]
 
 `codeflow delegate init|arm|wait` and the `hook delegate-turn --state-dir` mode
 drive a delegated harness turn through durable, owner-only protocol records
-instead of tmux signalling. The binary never launches a harness or delivers a
-prompt; the host does both, and the current event adapter is Claude hooks.
-`arm` records one turn as the SHA-256 of the exact prompt bytes, and
-acceptance requires a matching `UserPromptSubmit`. `wait` has a stable exit
-contract. Poison is durable, and recovery is a new run in a fresh directory.
+instead of tmux signalling.
+
+- The binary never launches a harness or delivers a prompt. The host does both,
+  and the current event adapter is Claude hooks.
+- `arm` records one turn as the SHA-256 of the exact prompt bytes. Acceptance
+  requires a matching `UserPromptSubmit`.
+- `wait` has a stable exit contract.
+- Poison is durable. Recovery is a new run in a fresh directory.
 
 | Background task notice | Check |
 |---|---|
@@ -551,16 +599,19 @@ epics: [EPC-005, EPC-007, EPC-013, EPC-014, EPC-016, EPC-017]
 adrs: [ADR-0048, ADR-0058]
 ```
 
-`codeflow portal setup --path <repository-relative-directory>` explicitly
-adopts the pinned Starlight and Pagefind repository guide. Ordinary
-initialization never installs it. Setup preserves user-owned configuration,
-and runtime drift or a collision stops all portal writes.
-`codeflow portal transfer --confirm` hands runtime maintenance to the project.
-The adapter generates pages, Markdown twins, `llms.txt` and search output from
-one clean committed snapshot, and it fails closed rather than publish mixed
-content. `codeflow validate --portal` runs no project code, writes nothing,
-and checks the generated evidence. Detail:
-[opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md).
+- `codeflow portal setup --path <repository-relative-directory>` explicitly
+  adopts the pinned Starlight and Pagefind repository guide. Ordinary
+  initialization never installs it.
+- Setup preserves user-owned configuration. Runtime drift or a collision stops
+  all portal writes.
+- `codeflow portal transfer --confirm` hands runtime maintenance to the project.
+- The adapter generates pages, Markdown twins, `llms.txt` and search output from
+  one clean committed snapshot. It fails closed rather than publish mixed
+  content.
+- `codeflow validate --portal` runs no project code, writes nothing and checks
+  the generated evidence.
+
+Detail: [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md).
 
 #### interactive-presentation-review
 
@@ -575,15 +626,19 @@ adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 
 `codeflow present` turns a closed, versioned JSON and Markdown document into
-one bounded local review surface with anchored feedback. The standard and full
-tiers supply the `cf-present` authoring skill and its schemas. Simple answers
-stay in chat, and durable docs belong to the portal. The runtime serves an
-authenticated loopback-only page to an isolated browser profile and keeps
-immutable revisions and append-only feedback in owner-private state. It
-retains ambiguous state rather than deleting it. The `diagram` block was
-removed with Mermaid: new input carrying one is refused with its conversion
-named, and a revision stored with one loads read only with a notice and its
-escaped source. The status stays building
-until task TSK-007 records the full native platform and browser matrix.
+one bounded local review surface with anchored feedback.
+
+- The standard and full tiers supply the `cf-present` authoring skill and its
+  schemas.
+- Simple answers stay in chat, and durable docs belong to the portal.
+- The runtime serves an authenticated loopback-only page to an isolated browser
+  profile. It keeps immutable revisions and append-only feedback in
+  owner-private state, and it retains ambiguous state rather than deleting it.
+- The `diagram` block was removed with Mermaid. New input carrying one is
+  refused with its conversion named. A revision stored with one loads read only,
+  with a notice and its escaped source.
+
+The status stays building until task TSK-007 records the full native platform
+and browser matrix.
 Detail: [present architecture](architecture/present.md) and
 [present guide](present-guide.md).
