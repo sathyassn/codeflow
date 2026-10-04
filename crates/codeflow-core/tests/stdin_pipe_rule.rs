@@ -13,7 +13,7 @@
 //! - reads a field named `stdin` (`child.stdin.take()`), or binds one in a
 //!   struct pattern (`let Child { ref mut stdin, .. } = child`, under any
 //!   alias or nesting);
-//! - names the `ChildStdin` type.
+//! - names the `ChildStdin` type, imported or not.
 //!
 //! Items marked `#[cfg(test)]` or `#[cfg(all(test, ...))]` are skipped one by
 //! one, so production code after a test module is still read. Raw identifiers
@@ -55,11 +55,13 @@ fn is_stdin(ident: &syn::Ident) -> bool {
 /// A path that ends in `stdin` and names more than a local: `Command::stdin`,
 /// `<Command>::stdin`, `io::stdin`. A single segment is a local or parameter.
 fn is_stdin_path(path: &syn::ExprPath) -> bool {
-    path.path
-        .segments
-        .last()
-        .is_some_and(|s| is_stdin(&s.ident))
-        && (path.path.segments.len() > 1 || path.qself.is_some())
+    let segments = &path.path.segments;
+    let own_stdin = path.qself.is_none()
+        && segments.len() >= 2
+        && segments[segments.len() - 2].ident.unraw() == "io";
+    segments.last().is_some_and(|s| is_stdin(&s.ident))
+        && (segments.len() > 1 || path.qself.is_some())
+        && !own_stdin
 }
 
 /// Whether an attribute is `#[cfg(test)]` or `#[cfg(all(test, ...))]`.
@@ -246,6 +248,21 @@ impl<'ast> Visit<'ast> for Uses {
         syn::visit::visit_field_pat(self, field);
     }
 
+    fn visit_use_name(&mut self, name: &'ast syn::UseName) {
+        if name.ident.unraw() == "ChildStdin" {
+            self.note(name.ident.span(), "the `ChildStdin` type, imported");
+        }
+    }
+
+    fn visit_use_rename(&mut self, rename: &'ast syn::UseRename) {
+        if rename.ident.unraw() == "ChildStdin" {
+            self.note(
+                rename.ident.span(),
+                "the `ChildStdin` type, imported and renamed",
+            );
+        }
+    }
+
     fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
         if segment.ident.unraw() == "ChildStdin" {
             self.note(segment.ident.span(), "the `ChildStdin` type");
@@ -258,7 +275,10 @@ impl<'ast> Visit<'ast> for Uses {
 fn stdin_uses(source: &str) -> Vec<(usize, String)> {
     let file = syn::parse_file(source).expect("the source parses");
     let mut uses = Uses::default();
-    uses.visit_file(&file);
+    // A file marked `#![cfg(test)]` is test code throughout.
+    if !skipped(&file.attrs) {
+        uses.visit_file(&file);
+    }
     uses.found.sort();
     uses.found
 }
@@ -326,6 +346,8 @@ fn the_scan_flags_each_way_to_reach_a_childs_stdin() {
         ("fn f() { let set = Command::stdin; }", "the setter as a value"),
         ("fn f() { v.into_iter().for_each(Command::stdin); }", "the setter passed on"),
         ("fn f(w: ChildStdin) {}", "the handle type"),
+        ("use std::process::ChildStdin as Input; fn f(w: Input) {}", "an aliased handle type"),
+        ("use std::process::{Child, ChildStdin};", "an imported handle type"),
         ("fn f() -> Option<std::process::ChildStdin> { None }", "the qualified handle type"),
     ] {
         assert_eq!(stdin_uses(source).len(), 1, "{what}: {source}");
@@ -376,6 +398,14 @@ fn the_scan_passes_what_does_not_pipe() {
             "re-exporting own stdin",
         ),
         ("use std::io::{stdin, Read};", "an import group"),
+        (
+            "fn f() { let read = std::io::stdin; read(); }",
+            "own stdin as a value",
+        ),
+        (
+            "#![cfg(test)]\nfn f() { c.stdin(Stdio::piped()); }",
+            "a test-only file",
+        ),
         (
             "fn f(stdin: &str, other: Option<&str>) {}",
             "a parameter named stdin",
