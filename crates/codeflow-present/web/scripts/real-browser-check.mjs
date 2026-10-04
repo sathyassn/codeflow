@@ -39,7 +39,8 @@ const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
 // succeeded, and one at load 200 took over 25, so the bound has to separate a
 // slow close from a hung one, not a quiet machine from a busy one. Only a
 // hung close earns the exact-owned fallback. closeWaitMs trims the wait when
-// the run is late, so teardown still ends before the parent check's kill.
+// the run is late, so the fallback of a hung close starts before the parent
+// check's kill; it does not bound how long a stuck teardown then takes.
 const BROWSER_CLOSE_TIMEOUT_MS = 60_000;
 // The injected hang never settles; this bound only ends the wait for it.
 const INJECTED_CLOSE_HANG_BOUND_MS = 1_000;
