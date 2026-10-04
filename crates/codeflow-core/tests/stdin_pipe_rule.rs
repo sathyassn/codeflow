@@ -25,6 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use syn::ext::IdentExt;
+use syn::spanned::Spanned;
 use syn::visit::Visit;
 
 /// The only source file allowed to pipe a child's stdin.
@@ -49,6 +50,16 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn is_stdin(ident: &syn::Ident) -> bool {
     ident.unraw() == "stdin"
+}
+
+/// A path that ends in `stdin` and names more than a local: `Command::stdin`,
+/// `<Command>::stdin`, `io::stdin`. A single segment is a local or parameter.
+fn is_stdin_path(path: &syn::ExprPath) -> bool {
+    path.path
+        .segments
+        .last()
+        .is_some_and(|s| is_stdin(&s.ident))
+        && (path.path.segments.len() > 1 || path.qself.is_some())
 }
 
 /// Whether an attribute is `#[cfg(test)]` or `#[cfg(all(test, ...))]`.
@@ -111,28 +122,68 @@ impl Uses {
     }
 }
 
-macro_rules! skip_test_items {
-    ($($visit:ident($node:ty) => $walk:ident),* $(,)?) => {
-        $(fn $visit(&mut self, node: &'ast $node) {
-            if !skipped(&node.attrs) {
-                syn::visit::$walk(self, node);
-            }
-        })*
+fn item_attributes(item: &syn::Item) -> &[syn::Attribute] {
+    use syn::Item::{
+        Const, Enum, ExternCrate, Fn, ForeignMod, Impl, Macro, Mod, Static, Struct, Trait,
+        TraitAlias, Type, Union, Use,
     };
+    match item {
+        Const(i) => &i.attrs,
+        Enum(i) => &i.attrs,
+        ExternCrate(i) => &i.attrs,
+        Fn(i) => &i.attrs,
+        ForeignMod(i) => &i.attrs,
+        Impl(i) => &i.attrs,
+        Macro(i) => &i.attrs,
+        Mod(i) => &i.attrs,
+        Static(i) => &i.attrs,
+        Struct(i) => &i.attrs,
+        Trait(i) => &i.attrs,
+        TraitAlias(i) => &i.attrs,
+        Type(i) => &i.attrs,
+        Union(i) => &i.attrs,
+        Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+fn impl_item_attributes(item: &syn::ImplItem) -> &[syn::Attribute] {
+    match item {
+        syn::ImplItem::Const(i) => &i.attrs,
+        syn::ImplItem::Fn(i) => &i.attrs,
+        syn::ImplItem::Type(i) => &i.attrs,
+        syn::ImplItem::Macro(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+fn trait_item_attributes(item: &syn::TraitItem) -> &[syn::Attribute] {
+    match item {
+        syn::TraitItem::Const(i) => &i.attrs,
+        syn::TraitItem::Fn(i) => &i.attrs,
+        syn::TraitItem::Type(i) => &i.attrs,
+        syn::TraitItem::Macro(i) => &i.attrs,
+        _ => &[],
+    }
 }
 
 impl<'ast> Visit<'ast> for Uses {
-    skip_test_items! {
-        visit_item_mod(syn::ItemMod) => visit_item_mod,
-        visit_item_fn(syn::ItemFn) => visit_item_fn,
-        visit_item_impl(syn::ItemImpl) => visit_item_impl,
-        visit_item_const(syn::ItemConst) => visit_item_const,
-        visit_item_static(syn::ItemStatic) => visit_item_static,
-        visit_item_struct(syn::ItemStruct) => visit_item_struct,
-        visit_item_enum(syn::ItemEnum) => visit_item_enum,
-        visit_item_trait(syn::ItemTrait) => visit_item_trait,
-        visit_impl_item_fn(syn::ImplItemFn) => visit_impl_item_fn,
-        visit_impl_item_const(syn::ImplItemConst) => visit_impl_item_const,
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !skipped(item_attributes(item)) {
+            syn::visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
+        if !skipped(impl_item_attributes(item)) {
+            syn::visit::visit_impl_item(self, item);
+        }
+    }
+
+    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
+        if !skipped(trait_item_attributes(item)) {
+            syn::visit::visit_trait_item(self, item);
+        }
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -149,19 +200,32 @@ impl<'ast> Visit<'ast> for Uses {
     }
 
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(path) = &*call.func {
-            let last = path.path.segments.last();
-            let own_stdin = call.args.is_empty();
-            if let Some(segment) = last.filter(|s| is_stdin(&s.ident)) {
-                if path.path.segments.len() > 1 && !own_stdin {
-                    self.note(
-                        segment.ident.span(),
-                        "a path call of `stdin` with arguments",
-                    );
+        // The callee, through parentheses: `(Command::stdin)(&mut c, x)`.
+        let mut callee = &*call.func;
+        while let syn::Expr::Paren(inner) = callee {
+            callee = &inner.expr;
+        }
+        if let syn::Expr::Path(path) = callee {
+            if is_stdin_path(path) {
+                // Only the process's own `io::stdin()` takes no argument.
+                if !call.args.is_empty() {
+                    self.note(path.span(), "a path call of `stdin` with arguments");
                 }
+                for argument in &call.args {
+                    self.visit_expr(argument);
+                }
+                return;
             }
         }
         syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        // `Command::stdin` used as a value (`map(Command::stdin)`, an alias).
+        if is_stdin_path(path) {
+            self.note(path.span(), "the `stdin` setter used as a value");
+        }
+        syn::visit::visit_expr_path(self, path);
     }
 
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
@@ -257,6 +321,10 @@ fn the_scan_flags_each_way_to_reach_a_childs_stdin() {
         ("fn f() { match c { Child { ref mut stdin, .. } => {} } }", "a match arm"),
         ("fn f() { let Child { stdout: Some(ChildStdout { .. }), stdin, .. } = c else { return; }; }", "nested"),
         ("use std::process::Child as P; fn f() { let P { stdin: pipe, .. } = c; }", "aliased"),
+        ("fn f() { <Command>::stdin(&mut c, Stdio::piped()); }", "a qualified-self call"),
+        ("fn f() { (Command::stdin)(&mut c, Stdio::piped()); }", "a parenthesized callee"),
+        ("fn f() { let set = Command::stdin; }", "the setter as a value"),
+        ("fn f() { v.into_iter().for_each(Command::stdin); }", "the setter passed on"),
         ("fn f(w: ChildStdin) {}", "the handle type"),
         ("fn f() -> Option<std::process::ChildStdin> { None }", "the qualified handle type"),
     ] {

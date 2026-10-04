@@ -128,6 +128,7 @@ pub fn output_with_input(command: &mut Command, input: &[u8]) -> std::io::Result
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(unix)]
     use super::*;
     use std::cell::Cell;
 
