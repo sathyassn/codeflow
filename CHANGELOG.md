@@ -16,10 +16,6 @@ erratum below, never an edit of the section.
   identify different commits. The published archive is the release's source;
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
-- 2026-10-03, 3.0.0: the notes link to `docs/verification/` for the model
-  role quality diagnostic. The link opens in the repository but not in the
-  published `source.tar.gz`, which leaves that folder out. Read the evidence
-  at https://github.com/sathyassn/codeflow/tree/main/docs/verification.
 
 ## [3.1.0]
 
@@ -2657,7 +2653,7 @@ publication date._
   load/stress, or concurrency evidence is required when material risk earns it,
   without imposing ceremonial benchmarks on unaffected paths. A targeted
   native Fable/Sol
-  [diagnostic](docs/verification/model-role-quality-diagnostic-2026-07-26.md)
+  [diagnostic](https://github.com/sathyassn/codeflow/blob/main/docs/verification/model-role-quality-diagnostic-2026-07-26.md)
   exercised this case together with managed-primary resolution and
   test-integrity review; it is retained as diagnostic evidence, not binding
   qualification.

@@ -455,15 +455,14 @@ fn linked_repository_path(file: &str, target: &str) -> Option<String> {
 fn kept_markdown_does_not_link_into_the_evidence_the_archive_leaves_out() {
     // `source.tar.gz` leaves out docs/verification/, so a relative link into
     // it breaks for everyone who reads the archive. Point at the published
-    // copy on `main` instead. CHANGELOG.md is exempt: its published sections
-    // are frozen, and an erratum names where the evidence is read.
+    // copy on `main` instead.
     let tracked = workspace_output(
         "git",
         &["-c", "core.quotePath=false", "ls-files", "-z", "--", "*.md"],
     );
     let mut broken = Vec::new();
     for file in tracked.split('\0').filter(|name| !name.is_empty()) {
-        if file.starts_with("docs/verification/") || file == "CHANGELOG.md" {
+        if file.starts_with("docs/verification/") {
             continue;
         }
         let Ok(text) = fs::read_to_string(workspace_root().join(file)) else {
