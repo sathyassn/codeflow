@@ -39,8 +39,9 @@
 //! substitution, no substitution other than a `$(cat <<EOF …)` message,
 //! no `${…}`, `$[…]` or `$((…))` expansion (which can assign), no unquoted
 //! `*`, `?`, `[` or `{` (a pathname or brace expansion supplies words the
-//! line does not show), no unquoted `#` or `$'…'` string (where this
-//! reader's quoting may differ from the shell's), and no command after one
+//! line does not show), no unquoted `#`, `$'…'` string or carriage
+//! return (where this reader's quoting or word ends may differ from the
+//! shell's), and no command after one
 //! that can write a file
 //! (`>`, `tee`, `uniq`, `base64`, `git`, `gh`), which could replace the
 //! program, hook or configuration it then runs. `printf` is no data
@@ -203,8 +204,8 @@ struct LineShape {
     /// `*`, `?`, `[` or `{` outside a heredoc body, whose pathname or brace
     /// expansion supplies words the line does not show.
     expands: bool,
-    /// An unquoted `#` or a `$'…'` string, where this reader's quoting may
-    /// differ from the shell's.
+    /// An unquoted `#`, a `$'…'` string or a carriage return, where this
+    /// reader's quoting or word ends may differ from the shell's.
     opaque: bool,
 }
 
@@ -280,6 +281,9 @@ fn split_data(command: &str) -> (String, Vec<String>) {
         expands: ["${", "$[", "$(("]
             .iter()
             .any(|form| command.contains(form)),
+        // A carriage return is no shell blank, so a word or delimiter that
+        // holds one ends where this reader would not end it.
+        opaque: command.contains('\r'),
         ..LineShape::default()
     };
     let mut span = String::new();
@@ -489,16 +493,21 @@ fn substitution(chars: &[char], start: usize, span: &mut String, runs: &mut bool
 
 /// The end of a `$(cat <<WORD …)` substitution at `start` whose body
 /// cannot expand (a quoted delimiter, or no `$` or backtick in the body),
-/// or `None` for any other text.
+/// or `None` for any other text. It reads boundaries as the shell does, or
+/// not at all: the delimiter is a plain word of letters, digits and `_`,
+/// only spaces or tabs follow it on its line, and the body ends at a line
+/// that is exactly the delimiter (after leading tabs only, for `<<-`).
 fn cat_heredoc_substitution(chars: &[char], start: usize) -> Option<usize> {
+    const BLANK: [char; 2] = [' ', '\t'];
     let text: String = chars[start..].iter().collect();
-    let rest = text.strip_prefix("$(")?.trim_start();
+    let rest = text.strip_prefix("$(")?.trim_start_matches(BLANK);
     let rest = rest.strip_prefix("cat")?;
-    let rest = rest.trim_start_matches([' ', '\t']).strip_prefix("<<")?;
+    let rest = rest.trim_start_matches(BLANK).strip_prefix("<<")?;
+    let strip_tabs = rest.starts_with('-');
     let rest = rest
         .strip_prefix('-')
         .unwrap_or(rest)
-        .trim_start_matches([' ', '\t']);
+        .trim_start_matches(BLANK);
     let open = rest.chars().next()?;
     let (delimiter, quoted, after) = if matches!(open, '\'' | '"') {
         let inner = &rest[1..];
@@ -506,23 +515,33 @@ fn cat_heredoc_substitution(chars: &[char], start: usize) -> Option<usize> {
         (&inner[..end], true, &inner[end + 1..])
     } else {
         let end = rest
-            .find(|c: char| c.is_whitespace() || c == ')')
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .unwrap_or(rest.len());
         (&rest[..end], false, &rest[end..])
     };
-    if delimiter.is_empty() {
+    if delimiter.is_empty()
+        || !delimiter
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
         return None;
     }
     let (first, body) = after.split_once('\n')?;
-    if !first.trim().is_empty() {
+    if !first.chars().all(|c| BLANK.contains(&c)) {
         return None;
     }
     let mut offset = text.len() - body.len();
     for line in body.split_inclusive('\n') {
         offset += line.len();
-        if line.trim() == delimiter {
+        let bare = line.strip_suffix('\n').unwrap_or(line);
+        let bare = if strip_tabs {
+            bare.trim_start_matches('\t')
+        } else {
+            bare
+        };
+        if bare == delimiter {
             let tail = &text[offset..];
-            let close = tail.find(|c: char| !c.is_whitespace())?;
+            let close = tail.find(|c: char| !matches!(c, ' ' | '\t' | '\n'))?;
             if !tail[close..].starts_with(')') {
                 return None;
             }
@@ -1889,6 +1908,12 @@ mod tests {
             "# '\nshopt -s expand_aliases; BASH_ALIASES[echo]=command; X=true; $X\n# '\necho codex exec x",
             "echo x # '\nprintf -v X y\n# '\ngrep -c review <<< 'Codex review: approve'",
             "echo $'a\\'b'; X=1; grep -c review <<< 'Codex review: approve'",
+            // Final review round 6: a message heredoc whose terminator the
+            // shell does not accept, so the substitution runs on.
+            "git commit -m \"$(cat <<'EOF'\n EOF\n)\nEOF\ncodex exec x\n)\" <<< ''",
+            "git commit -m \"$(cat <<'EOF'\nEOF \n)\nEOF\ncodex exec x\n)\" <<< ''",
+            "git commit -m \"$(cat <<-'EOF'\n EOF\n)\nEOF\ncodex exec x\n)\" <<< ''",
+            "git commit -m \"$(cat <<EOF\r\nEOF\n)\nEOF\r\ncodex exec x\n)\" <<< ''",
         ] {
             assert!(found(command).is_some(), "{command}");
         }
