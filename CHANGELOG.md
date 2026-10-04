@@ -22,6 +22,37 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **CI checks the release digests the project pinned.** The managed CI
+  installers trusted the release's own `sha256.sum`, which anyone who can
+  replace a release asset can replace too (sathyassn/codeflow#47).
+  `codeflow update --pin <version>` now downloads a release's `sha256.sum`
+  and its Linux and macOS archives, refuses any archive that does not match,
+  and writes only `scaffold_version` and a `[scaffold_sha256]` table of
+  digests to `.codeflow/project.toml`, for review in the pull request that
+  raises the pin. Once the target pins that table, every installer (the
+  gates, candidate and enforcing jobs and the shared GitLab, Bitbucket and
+  generic script) requires the archive to match it and still checks
+  `sha256.sum`; a table left from another version, a missing platform or a
+  different digest fails the job closed. A project with no table is checked
+  against `sha256.sum` alone, with a warning, so a fresh `codeflow init` and
+  the upgrade that adds the table still pass. `codeflow doctor --check
+  ci-perimeter` names the mode and warns on a table CI would refuse. The
+  first upgrade step is now `codeflow update --pin <version>`, then
+  `codeflow update`.
+
+<!-- codeflow:release-impact minor -->
+- **A project setup hook runs before the CI test gate.** The managed gates
+  job ran `codeflow test --strict` on the runner's default toolchain, so a
+  project that needs its own either edited the managed file or ran the gate
+  twice (sathyassn/codeflow#46). The gates job and the shared script of the
+  other templates now source a project-owned `.codeflow/ci-setup.sh`, when
+  the change holds one, under `set -eu` after installing codeflow and just
+  before `codeflow test`, so what it exports reaches the gate and a failing
+  command fails the job. `codeflow update` never writes it, and `codeflow
+  doctor --check ci-perimeter` says whether it exists, whether the CI file
+  sources it and its first command.
+
+<!-- codeflow:release-impact minor -->
 - **Pull request Summaries open with a prose lead, then bullets.**
   `codeflow ci` now checks the shape of a pull request body's Summary under
   a new policy key, `git.pr_summary`, which blocks by default: one prose
@@ -157,6 +188,19 @@ erratum below, never an edit of the section.
   do not change.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **A secret scan finding on one branch no longer fails every pull
+  request.** The managed secret scan read the whole history of HEAD, so a
+  finding already in the base, or on any branch merged into it, failed the
+  scan of every pull request until each target's `.gitleaksignore` carried
+  it (sathyassn/codeflow#48). A pull request now scans only the commits it
+  brings, and a push only the pushed range. The workflow also runs weekly
+  and on manual dispatch, and those runs, a push that creates the branch
+  and a push whose previous tip is gone scan the full history, so nothing on
+  the default branch goes unscanned; the gates job stays off the schedule.
+  Each run prints which history it read, and exemptions are still read only
+  from the trusted commit.
 
 <!-- codeflow:release-impact patch -->
 - **The CodeFlow guards run in Grok sessions.** Grok expands `$name` and

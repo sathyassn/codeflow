@@ -11,13 +11,19 @@
 #
 # The binary is the version the TARGET pins in .codeflow/project.toml
 # (`scaffold_version`), downloaded from its release and verified against the
-# release's published sha256.sum; a missing or wrong checksum fails the run and
-# nothing unverified is installed (SPC-013 R-113). The target is the current
+# archive digests pinned beside it ([scaffold_sha256], written by `codeflow
+# update --pin`) and the release's published sha256.sum; a stale or partial
+# digest table, or a missing or wrong checksum, fails the run and nothing
+# unverified is installed (SPC-013 R-113). Without a pinned table the run
+# checks sha256.sum alone and warns. The target is the current
 # commit of the branch the change lands on, not the merge base; this script
 # refuses to run without it and never guesses it, since a pin read from the
 # change itself would let the change choose the binary that judges it. An upgrade takes two
-# changes, in order: first raise only `scaffold_version` (the target's binary
-# judges it and the candidate is tested alongside), then run `codeflow update`.
+# changes, in order: first raise only `scaffold_version` and its digests
+# (`codeflow update --pin <version>`; the target's binary judges it and the
+# candidate is tested alongside), then run `codeflow update`. A project that
+# needs its own toolchain commits .codeflow/ci-setup.sh, sourced just before
+# `codeflow test`.
 #
 # PR/MR body: export CODEFLOW_PR_BODY to also scan it (AI attribution, emoji,
 # and the required-section structure, git.pr_sections).

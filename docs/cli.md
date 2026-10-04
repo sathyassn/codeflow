@@ -78,6 +78,7 @@ behave.
 | `codeflow update` | | Refresh managed scaffold files (3-way merge; never clobbers) |
 | | `--diff <FILE>` | Write the report plus unified diffs of applied changes to a file. |
 | | `--force` | Replace user-modified managed files instead of merging. |
+| | `--pin <VERSION>` | Only pin this codeflow release for CI: download its archives, check them against its sha256.sum and write `scaffold_version` and their digests (`[scaffold_sha256]`) to .codeflow/project.toml. Nothing else changes. Upgrade step one; land it before the update. |
 | `codeflow epic new <TITLE>` | | Allocate the next `EPC-NNN` and scaffold the epic from the template |
 | | `--integration` | Also cut `integration/EPC-NNN-<slug>` from main (or master) and push it to origin when that remote exists. |
 | | `<TITLE>` | Epic title. |

@@ -8,7 +8,8 @@
 # pull request targets, so the job checks out the pull request's base commit
 # explicitly. From that target checkout it installs the codeflow version the
 # target pins in .codeflow/project.toml (`scaffold_version`), verified against
-# the release's published sha256.sum (SPC-013 R-113), and reads the target's
+# the archive digests the target pins beside it ([scaffold_sha256]) and the
+# release's published sha256.sum (SPC-013 R-113), and reads the target's
 # policy. It fetches the pull request head only as git data and never runs
 # its code. The token is read-only and no secret is used. Builds and tests of
 # the head run in codeflow-ci.yml on `pull_request`.

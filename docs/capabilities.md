@@ -126,7 +126,7 @@ id: CAP-002
 name: scaffold-update
 area: scaffold
 status: shipped
-verified_by: ["cargo test scaffold::update", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
+verified_by: ["cargo test scaffold::update", "cargo test scaffold::release_pin", "codeflow-cli tests/release_pin.rs", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
 epics: [EPC-001, EPC-005, EPC-012, EPC-018, EPC-020]
 adrs: [ADR-0011, ADR-0019]
 ```
@@ -137,6 +137,11 @@ Unmodified files are replaced. User-modified files get a three-way merge from
 Managed regions are updated in place, and user-owned schema-versioned files
 gain new keys with defaults. Update also installs in-tier manifest entries
 that are missing on disk. It never clobbers and never silently skips.
+`codeflow update --pin <version>` is the first step of an upgrade: it
+downloads that release's archives, checks each against its `sha256.sum`, and
+writes only `scaffold_version` and the `[scaffold_sha256]` digest table the
+CI installers check (TSK-225). Update never writes the project's CI setup
+hook, `.codeflow/ci-setup.sh`.
 
 | Policy scalar | On update |
 |---|---|
@@ -196,7 +201,7 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::conflict_markers", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "codeflow-cli tests/ci_pin.rs", "codeflow-cli tests/ci_pin_platforms.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "codeflow-cli tests/release_impact_corpus.rs", "scripts/test_release.py", "cargo test ledger::refusal", "cargo test ceremony::", "codeflow-cli tests/report_cli.rs", "codeflow-cli tests/refusal_journey.rs", "cargo test hooks::git_discard", "cargo test hooks::edit_guard", "cargo test security::outward", "cargo test security::interpreter"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
@@ -211,6 +216,16 @@ the gate-context token for protected-branch advances, and the guard's refusal
 of override variables set in-session. Secret scanning fails closed.
 Agent sessions are judged by the landed policy on the remote, so a local
 edit, commit or branch cannot relax the session checks.
+
+The managed CI installs the codeflow release the target pins and, once the
+target pins its archive digests in `[scaffold_sha256]`, refuses an archive
+that does not match them whatever the release's own `sha256.sum` says; a
+digest table left from another version or missing the runner's platform
+fails closed, and a project with no table is checked against `sha256.sum`
+with a warning (TSK-225). The gates job sources a project-owned
+`.codeflow/ci-setup.sh` just before `codeflow test`, and the secret scan
+reads only the commits a pull request or push brings, with a weekly and
+manual full-history scan.
 
 Other checks on these planes:
 

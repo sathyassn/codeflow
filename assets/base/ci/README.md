@@ -16,6 +16,9 @@ Every file in this directory is therefore a **thin wrapper**: install the
 codeflow ci && codeflow test --strict && codeflow validate --docs
 ```
 
+with the project's own setup hook, when it has one, sourced just before
+`codeflow test` (see [Project setup hook](#project-setup-hook)).
+
 Each wrapper only differs in how it discovers the commit range and branch, which
 it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 
@@ -93,9 +96,35 @@ runner — copy the one you need to your repo root (`.gitlab-ci.yml`,
 
 `codeflow-ci.yml` and `codeflow-policy.yml` install
 the `codeflow` release named by `scaffold_version` in the target branch's
-`.codeflow/project.toml`, verified against the release's published
-`sha256.sum`. A missing checksum file, a missing entry or a mismatch fails the
-job; nothing unverified is installed. The enforcing jobs run on
+`.codeflow/project.toml`. The release's own `sha256.sum` only proves the
+download was not corrupted: anyone who can replace a release asset can
+replace that file too. So the project pins the reviewed archive digests
+beside the version, in a `[scaffold_sha256]` table that
+`codeflow update --pin <version>` writes:
+
+```toml
+[scaffold_sha256]
+aarch64-apple-darwin = "<sha256>"
+version = "3.1.0"
+x86_64-apple-darwin = "<sha256>"
+x86_64-unknown-linux-gnu = "<sha256>"
+```
+
+`codeflow update --pin` downloads the release's `sha256.sum` and every
+archive, refuses any archive that does not match its entry, a malformed
+version and a lowered pin, and then writes only `scaffold_version` and the
+table; review the digests in the pull request that lands them. When the
+target pins the table, every installer requires its `version` to equal
+`scaffold_version` and the archive to match the digest for the runner's
+platform, and still checks `sha256.sum`; a table left from another version,
+a missing entry or a different digest fails the job, even when the release's
+`sha256.sum` was replaced to match. A project that has never pinned a table
+is checked against `sha256.sum` alone, and the job says so in a warning
+(`codeflow doctor --check ci-perimeter` names the mode too). Requiring the
+table there would leave a fresh `codeflow init`, and the first upgrade that
+adds it, unable to pass, since the target they are judged by has no table
+yet. A missing checksum file, a missing entry or a mismatch fails the job;
+nothing unverified is installed. The enforcing jobs run on
 `pull_request_target`, which takes the workflow from the default branch; they
 check out the pull request's base commit, so the target's pin and policy
 apply, and read the pull request head only as git data.
@@ -109,16 +138,19 @@ branch fetched from the merge request's project, never the diff base
 `BITBUCKET_PR_DESTINATION_COMMIT`, otherwise the destination branch fetched
 from `origin`, failing when it cannot; or the generic script's first
 argument),
-installs that release with the same checksum verification, and runs
+installs that release with the same digest and checksum verification, and runs
 `codeflow ci` from a checkout of the target, so the target's policy judges
 the head as git data; `codeflow test` and `validate --docs` run on the head
 with the same binary. When the head raises the pin, the head's release is
 installed separately and only tested (`--version`, `validate --docs`). When
 the head lowers it, the target's binary still judges the change and the job
 then fails; a head that kept the pin it branched from lowers nothing. An upgrade takes two pull requests, in order: raise only
-`scaffold_version`, land it, then run `codeflow update`; a head that carries
-new policy keys before the raise lands fails with a message naming that
-order.
+`scaffold_version` and its digests (`codeflow update --pin <version>`, with
+any 3.1.0 or later binary), land it, then run `codeflow update` with the new
+binary; a head that carries new policy keys before the raise lands fails
+with a message naming that order. A hand-raised `scaffold_version` that
+leaves an older table behind fails closed in the candidate job, which
+names the `codeflow update --pin` that fixes it.
 
 A Bitbucket pull request pipeline "merges the destination branch into your
 working branch before it runs"
@@ -131,6 +163,27 @@ On GitLab and Bitbucket the job file runs from the merge or pull request
 itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
+
+## Project setup hook
+
+The gate runs on the runner's default toolchain unless the project sets up
+its own. A project that needs a toolchain of its own (a Node version with
+corepack and a frozen install, a pinned Python, a service) commits
+`.codeflow/ci-setup.sh`. The GitHub gates job and the shared pinned run of
+the GitLab, Bitbucket and generic wrappers source it after installing
+codeflow and just before `codeflow test --strict`, so the managed file stays
+managed and the gate runs once, on the project's toolchain:
+
+- It is sourced (`. ./.codeflow/ci-setup.sh`) under `set -eu` by the shell
+  that runs the gate, so write POSIX sh. Variables it exports and `PATH`
+  changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
+  or `GITHUB_ENV`. A `cd` in it does not move the gate.
+- A failing command fails the job before the gate runs; `exit` ends the run.
+- It is the change's own file, as the test targets are: it runs in the
+  gates job, never in the secret-scan job or the enforcing policy job.
+- The project owns it. `codeflow update` never writes, merges or removes
+  it, and `codeflow doctor --check ci-perimeter` says whether it exists,
+  whether the CI file sources it, and its first command.
 
 ## Two planes, deliberately
 
@@ -171,14 +224,22 @@ as extra steps when your stack warrants:
   job. Update recognises the scan step by its shipped name, `gitleaks`,
   with `TRUSTED_SHA` in its env; if you renamed it, update cannot check the
   order and says on every run that the job's step order needs your review.
-  gitleaks reads the whole history of HEAD, the base's included (on a
-  pull request, the pull request merged into its base; on a push, the
-  pushed commit), with what each merge adds beyond its automatic result,
-  files whose type changes and files git judges binary, which gitleaks'
-  default history scan leaves out. That scope is narrower on purpose: a
-  branch with no pull request, or a tag, is not scanned by this workflow
-  unless its commits become reachable from a scanned HEAD, so a
-  repository-wide audit needs a scan of its own. The refusals below check
+  gitleaks reads only the commits the event brings: on a pull request,
+  those the pull request merged into its base holds and the base does not;
+  on a push, those the pushed commit holds and the previous tip did not. A
+  finding already in the base's history, or on another branch, is not the
+  change's to fix, so it no longer fails every pull request. The workflow
+  also runs weekly and on manual dispatch (the gates job stays off the
+  schedule); those runs, a push that creates the branch and a push whose
+  previous tip is not in the checkout read the whole history of HEAD, so
+  every commit on the default branch is scanned once as it arrives and
+  again each week. The step prints which history it read, and a range that
+  changes no file passes with nothing to scan. Every scan includes what
+  each merge adds beyond its automatic result, files whose type changes and
+  files git judges binary, which gitleaks' default history scan leaves out.
+  No run reads a branch or tag that HEAD does not reach, so an unrelated
+  ref can neither fail this scan nor hide a leak from it; a
+  repository-wide audit of every ref needs a scan of its own. The refusals below check
   only the commits a pull request brings, those HEAD holds and the trusted
   commit does not; on a push that range is empty, since the pushed commit
   is the trusted commit, so a push scan reads its history without them.

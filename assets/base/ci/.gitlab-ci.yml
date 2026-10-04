@@ -10,16 +10,20 @@
 #
 # The binary is the version the merge request's target pins in
 # .codeflow/project.toml (`scaffold_version`), downloaded from its release and
-# verified against the release's published sha256.sum; a missing or wrong
-# checksum fails the job and nothing unverified is installed (SPC-013 R-113).
+# verified against the archive digests pinned beside it ([scaffold_sha256],
+# written by `codeflow update --pin`) and the release's sha256.sum; a stale or
+# partial digest table, or a missing or wrong checksum, fails the job and
+# nothing unverified is installed (SPC-013 R-113). Without a pinned table the
+# job checks sha256.sum alone and warns. A project that needs its own
+# toolchain commits .codeflow/ci-setup.sh, sourced just before `codeflow test`.
 # The target is the target branch's current commit: the one a merged results
 # pipeline names (CI_MERGE_REQUEST_TARGET_BRANCH_SHA), otherwise the branch
 # CI_MERGE_REQUEST_TARGET_BRANCH_NAME fetched from the merge request's project;
 # the job fails when it cannot establish it. A branch pipeline judges its own
 # commit. An upgrade takes
-# two merge requests, in order: first raise only `scaffold_version` (the
-# target's binary judges it and the candidate is tested alongside), then run
-# `codeflow update`. The job file itself runs from the merge request, so
+# two merge requests, in order: first raise only `scaffold_version` and its
+# digests (`codeflow update --pin <version>`; the target's binary judges it
+# and the candidate is tested alongside), then run `codeflow update`. The job file itself runs from the merge request, so
 # protect .gitlab-ci.yml and .codeflow/ with required review.
 #
 # This is a copy-in template (see this directory's README): `codeflow init`

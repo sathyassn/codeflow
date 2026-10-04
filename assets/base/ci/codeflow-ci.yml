@@ -5,10 +5,19 @@
 #
 # The codeflow binary is the version your target branch pins in
 # .codeflow/project.toml (`scaffold_version`), downloaded from the release and
-# verified against its published sha256.sum; a missing or wrong checksum fails
-# the job (SPC-013 R-113). Until that release is published the jobs fail red:
-# an unverified binary is never installed. An upgrade takes two pull requests:
-# first raise only `scaffold_version`, then run `codeflow update`.
+# verified against the archive digests pinned beside it ([scaffold_sha256],
+# written by `codeflow update --pin`) and the release's sha256.sum; a stale
+# or partial digest table, or a missing or wrong checksum, fails the job
+# (SPC-013 R-113). Without a pinned table the job checks sha256.sum alone and
+# warns. Until that release is published the jobs fail red: an unverified
+# binary is never installed. An upgrade takes two pull requests: first raise
+# only `scaffold_version` and its digests (`codeflow update --pin <version>`),
+# then run `codeflow update`.
+#
+# A project that needs its own toolchain for the gate commits
+# .codeflow/ci-setup.sh; the gates job sources it just before `codeflow test`.
+# The secret scan reads only the commits a pull request or push brings; the
+# weekly and manual runs read the full history.
 #
 # The commit, branch and PR-body standards run in codeflow-policy.yml on
 # `pull_request_target`, so a pull request cannot edit the job that judges it.
