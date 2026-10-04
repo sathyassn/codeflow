@@ -1526,6 +1526,49 @@ fn a_bodyless_run_blocks_when_the_target_tracking_state_is_unreadable() {
     assert!(out.contains("work.tracking_state (block)"), "{out}");
 }
 
+/// TSK-223: a bodyless run reads durable tracking at the judged head too,
+/// so a branch that adds its first task record is held to the journey rule
+/// when the run starts from a checkout without tracking, such as `main`.
+#[test]
+fn a_bodyless_run_from_main_sees_tracking_the_head_adds() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "-b", "main"]);
+    git(dir.path(), &["config", "user.email", "t@example.com"]);
+    git(dir.path(), &["config", "user.name", "t"]);
+    std::fs::write(dir.path().join("README.md"), "project\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: start"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-work"]);
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(
+        tasks.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "# contract\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "feat: add the contract"]);
+    let args = [
+        "ci",
+        "--base",
+        "main",
+        "--head",
+        "task/TSK-001-work",
+        "--branch",
+        "task/TSK-001-work",
+    ];
+    let from_task = run_in(dir.path(), &args);
+    let task_out = combined(&from_task);
+    assert_eq!(from_task.status.code(), Some(1), "{task_out}");
+    assert!(task_out.contains("work.journey_criterion"), "{task_out}");
+    git(dir.path(), &["switch", "main"]);
+    let from_main = run_in(dir.path(), &args);
+    let main_out = combined(&from_main);
+    assert_eq!(from_main.status.code(), Some(1), "{main_out}");
+    assert!(main_out.contains("work.journey_criterion"), "{main_out}");
+}
+
 // -- watched contract paths (TSK-147 AC-4) -----------------------------------
 
 /// A code range whose commit touches `thing.rs`, which the policy watches as a

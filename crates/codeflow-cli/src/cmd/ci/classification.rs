@@ -288,7 +288,16 @@ pub(super) fn branch_journey(
     else {
         return;
     };
-    match tracking_on(root, Some(range)) {
+    // Tracking as the judged head carries it too, so a run from a checkout
+    // without tracking (a push from `main`) still sees a head that adds it.
+    let tracking = match (
+        tracking_on(root, Some(range)),
+        durable_work_tracking_enabled_at(root, range.head),
+    ) {
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(here), Ok(at_head)) => Ok(here || at_head),
+    };
+    match tracking {
         Ok(true) => {}
         Ok(false) => return,
         // The finding the pull request check gives for an unreadable state.

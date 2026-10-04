@@ -1384,7 +1384,7 @@ fn exec_guard_points_text_that_names_a_peer_to_a_file() {
             "`git commit -F <file>`",
             "`gh pr create --body-file <file>`",
             "-F body=@<file>",
-            "refused by design",
+            "flagged by design",
         ] {
             assert!(err.contains(part), "{command}: missing {part}: {err}");
         }
