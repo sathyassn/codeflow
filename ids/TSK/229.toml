@@ -1,0 +1,11 @@
+id = "TSK-229"
+uid = "8f28d44f-cc26-4655-877f-3cd41fa2becf"
+kind = "TSK"
+title = "One planning amendment names several epics and carries its instruction text"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T02:08:45Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
