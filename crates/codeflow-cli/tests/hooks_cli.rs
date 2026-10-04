@@ -1878,63 +1878,153 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
     }
 }
 
+/// The exec-guard's answer to `command` sent as a `tool` payload from `dir`.
+fn exec_guard_tool(dir: &Path, tool: &str, command: &str) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": tool,
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    run_with_stdin(
+        codeflow().args(["hook", "exec-guard"]).current_dir(dir),
+        &payload,
+    )
+}
+
 #[test]
-fn exec_guard_semicolon_launcher_check_stops_at_the_launcher_word() {
-    // TSK-233 AC-3 (sathyassn/codeflow#66), through the real hook: prose,
-    // a heredoc body and a grep pattern whose word only starts with a
-    // launcher name pass; every real launch after a semicolon still refuses.
+fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
+    // TSK-233 (sathyassn/codeflow#66), through the real hook. A line the strict
+    // prose tokenizer certifies (echo, printf, grep and cat with quoted words)
+    // is not refused for launcher text inside its data; every other line keeps
+    // the 3.0.0 raw matching, including each form the design reviews found.
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    let guard = |command: &str| {
-        run_with_stdin(
-            codeflow()
-                .args(["hook", "exec-guard"])
-                .current_dir(dir.path()),
-            &guard_payload(command, dir.path()),
-        )
-    };
-    for command in [
+    let allowed = [
         "printf '%s\\n' 'first; such as this' > note.md",
+        "grep -n '; su' file.txt",
         "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
-        "grep -n '; supersedes' file.txt",
-        "echo 'a; doasync b'",
-    ] {
-        let out = guard(command);
-        assert_eq!(out.status.code(), Some(0), "should allow: {command}");
-        assert!(
-            out.stderr.is_empty(),
-            "{command}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
+        "echo \"(...; supersedes A3's ...)\"",
+        "echo 'a; doasync b' && grep -c 'su' f",
+        "cat <<'EOF'\n$(sudo id)\n`su -`\ntrue; sudo id\nEOF\n",
+    ];
+    for tool in ["Bash", "run_terminal_command"] {
+        for command in allowed {
+            let out = exec_guard_tool(dir.path(), tool, command);
+            assert_eq!(
+                out.status.code(),
+                Some(0),
+                "{tool}: should allow: {command}"
+            );
+            assert!(
+                out.stderr.is_empty(),
+                "{tool}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
-    for command in [
-        "true; su -",
-        "true; su",
-        "true; su\t-",
-        "true; sudo -i",
-        "true; doas sh",
-        "true; pkexec id",
-        "true; runuser -u x id",
-        "touch sudo; su?? -n id",
-        "touch sudo; su[d]o -n id",
-        "shopt -s extglob\ntouch sudo; su@(do) -n id",
-        "setopt extendedglob; touch sudo; su^x -n id",
-        "setopt extendedglob; touch su; su# -",
-        "true; sudoedit /etc/hosts",
-        "true; sudo-rs -i",
-        "true; super id",
-        "setopt extendedglob; touch sudo; sudoa# -n id",
-        "echo supersedes; su -",
-        "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF\nls; sudo id",
-    ] {
-        let out = guard(command);
+    // PowerShell reads `1,2` and `@name` differently, so nothing is certified.
+    let out = exec_guard_tool(dir.path(), "PowerShell", allowed[1]);
+    assert_eq!(out.status.code(), Some(2), "PowerShell is never certified");
+}
+
+#[test]
+fn exec_guard_keeps_the_3_0_0_floor_on_every_line_it_cannot_certify() {
+    // Each form the design reviews found, plus the other raw rules, through the
+    // real hook; every one keeps the 3.0.0 verdict.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let blocked = [
+        // The issue's own pattern with a backslash in double quotes, an
+        // unquoted heredoc delimiter, and tools off the list.
+        (
+            "grep -rn -i \"chained su\\|; su\" docs/",
+            "security.privilege_escalation",
+        ),
+        (
+            "cat <<EOF\nsupersedes; summary\nEOF",
+            "security.privilege_escalation",
+        ),
+        ("git commit -m 'a; su b'", "security.privilege_escalation"),
+        ("rg --no-config '; su' src", "security.privilege_escalation"),
+        // Real launches, plain and through every bypass form the reviews found.
+        ("true; su -", "security.privilege_escalation"),
+        ("true; sudo -i", "security.privilege_escalation"),
+        ("true; doas sh", "security.privilege_escalation"),
+        ("true; su\t-", "security.privilege_escalation"),
+        (
+            "printf '%s\\n' \"\\\"\"; sudo id",
+            "security.privilege_escalation",
+        ),
+        (
+            "awk 'BEGIN { system(\"true; sudo id\") }'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '%s\\n' '; su'; s??? -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; supersedes -n id", "security.privilege_escalation"),
+        (
+            "true; runas.exe /user:x cmd",
+            "security.privilege_escalation",
+        ),
+        ("touch sudo; su?? -n id", "security.privilege_escalation"),
+        ("touch sudo; su[d]o -n id", "security.privilege_escalation"),
+        (
+            "shopt -s extglob\ntouch sudo; su@(do) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa# -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa(#c0,1) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "touch supersedes; supersedes(e:'REPLY=sudo':) -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; sudoedit /etc/hosts", "security.privilege_escalation"),
+        ("true; super id", "security.privilege_escalation"),
+        (
+            "printf '%n' 'a[$(true; sudo id)]'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf -v x '%s' 'a; sudo id'",
+            "security.privilege_escalation",
+        ),
+        ("echo 'x; sudo id' > s.sh", "security.privilege_escalation"),
+        ("echo a; sudo id", "security.privilege_escalation"),
+        (
+            "cat <<'EOF' > a.md\nA3\nEOF\nls; sudo id",
+            "security.privilege_escalation",
+        ),
+        ("LD_PRELOAD=example true", "security.privilege_escalation"),
+        ("export PATH=/usr/bin:/tmp", "security.privilege_escalation"),
+        ("env -S 'sudo -n id'", "security.privilege_escalation"),
+        // The other raw rules stay on the floor too.
+        ("true; claude -p x", "security.headless_peer_runs"),
+        ("echo a; mkfs.ext4 /dev/sda1", "security.dangerous_commands"),
+        (
+            "echo x > /dev/sda; echo '; su'",
+            "security.dangerous_commands",
+        ),
+        ("cmd /c \"format C: /Q\"", "security.dangerous_commands"),
+    ];
+    for (command, rule) in blocked {
+        let out = exec_guard_tool(dir.path(), "Bash", command);
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
-        assert!(
-            err.contains("security.privilege_escalation"),
-            "{command}: {err}"
-        );
+        assert!(err.contains(rule), "{command}: {err}");
     }
+    // The privilege refusal says how to write prose that is not refused.
+    let out = exec_guard_tool(dir.path(), "Bash", "git commit -m 'a; su b'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("quoted heredoc delimiter"), "{err}");
 }
 
 /// Run the exec-guard on `command` with `TMPDIR` set, from `repo`.

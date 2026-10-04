@@ -46,9 +46,26 @@ pub fn evaluate_floor(command: &str) -> Vec<Violation> {
 }
 
 /// Evaluate commands and interpreter literals at the shell's actual directory.
+/// The shell is unknown, so no line is certified as prose.
 #[must_use]
 pub fn evaluate_at(
     command: &str,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+) -> Vec<Violation> {
+    evaluate_in(command, false, levels, integrity, cwd, root)
+}
+
+/// [`evaluate_at`] for a call whose shell is known. `posix` is true for the
+/// Bash and `run_terminal_command` tools; only those lines can be certified
+/// as prose (TSK-233), because the grammar is POSIX shell grammar and
+/// Windows `PowerShell` reads `1,2`, `@name` and aliases differently.
+#[must_use]
+pub fn evaluate_in(
+    command: &str,
+    posix: bool,
     levels: &SecuritySection,
     integrity: PolicyLevel,
     cwd: &std::path::Path,
@@ -68,13 +85,23 @@ pub fn evaluate_at(
     // A consuming repository cannot turn the catastrophic floor off or
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
-    let mut violations = evaluate_floor(command);
-    if levels.privilege_escalation.is_active() {
+    //
+    // A line that the strict prose tokenizer certifies (TSK-233) is judged by
+    // none of the three raw-text checks below: it runs only `echo`, `printf`,
+    // `grep`, `rg` and `cat` with their quoted words as data. Every other
+    // check still runs on it, and every other line keeps the raw rules.
+    let prose = posix && crate::security::prose::certify(command).is_some();
+    let mut violations = if prose {
+        Vec::new()
+    } else {
+        evaluate_floor(command)
+    };
+    if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
         }
     }
-    if levels.headless_peer_runs.is_active() {
+    if !prose && levels.headless_peer_runs.is_active() {
         if let Some(run) = headless_peer_run(command) {
             violations.push(headless_violation(levels.headless_peer_runs, &run));
         }

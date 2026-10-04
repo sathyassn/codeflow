@@ -93,6 +93,34 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Prose the exec-guard certifies
+
+The exec-guard's privilege, headless-peer and dangerous-command checks match
+launcher, peer and destructive words in the raw command line, so text that only
+quotes such a word (for example "; supersedes" in a heredoc) is refused like a
+launch. A line is exempt from those three checks only when a separate strict
+tokenizer (`security/prose.rs`) certifies all of it:
+
+- every command is `echo`, `printf`, `grep` or `cat`, written bare and
+  case-exact; a `printf` format holds only `%s` and `%%`;
+- every argument is a plain word, a single-quoted string, or a double-quoted
+  string with no backslash, `$` or backtick;
+- commands are joined by `;`, `&&`, `||`, `|` or a newline;
+- a redirect writes a document file (`.md`, `.markdown`, `.txt`, `.rst`,
+  `.log`), or is `2>&1` or `>&2`;
+- `cat` may take one heredoc whose delimiter is quoted (`cat <<'EOF' > a.md`),
+  and its body is data.
+
+Any other character or construct, such as `$`, a backtick, `#`, a glob, a
+brace, a path program or a PowerShell payload, leaves the line uncertified and
+every 3.0.0 rule applies unchanged. A certified line still passes through the
+other guards (edit, git, outward, deletion, interpreter). Text that cannot take
+this shape, such as a commit or pull request body, goes in a file written with
+the editor tool and is passed by path (`git commit -F`, `gh pr create
+--body-file`). Two limits are stated: a shell alias or function that shadows
+one of the four programs is not seen, and a certified line can write a document
+that is later run as a script.
+
 ## Git hook stages
 
 `codeflow git-hook` dispatches five hook stages and answers a `capabilities`
