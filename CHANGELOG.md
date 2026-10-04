@@ -494,7 +494,7 @@ erratum below, never an edit of the section.
   reads as a run, such as "Grok agent seat too.", is still refused. The
   rest of the line, and interpreter code, are judged as before. A line
   that defines an alias or function, sources, evaluates or `exec`s, or
-  sets `PATH` or a similar variable keeps all its data. Of 1,566 headless
+  sets `PATH` or a similar variable keeps all its data. Of 1,570 headless
   run forms compared with 3.0.0, none that 3.0.0 refused is let through.
   The guard reads the line's text; a run hidden behind a command it
   cannot resolve that redefines a later data command, such as a `$X`

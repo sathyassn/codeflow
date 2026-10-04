@@ -130,6 +130,54 @@ const REORDERING_WORDS: &[&str] = &[
     ".", "eval", "exec", "hash", "enable",
 ];
 
+/// Launchers that run the command after them, walked to find the command
+/// word: `command`, `builtin` and `time` reach a builtin; the others are
+/// walked as well, which only ever keeps data.
+const WORD_LAUNCHERS: &[&str] = &["command", "builtin", "time", "nohup", "env"];
+
+/// Launcher options that take the next word as their value.
+const LAUNCHER_VALUES: &[&str] = &["-u", "-S", "-P", "-C", "-o", "-f"];
+
+/// Whether the command these words run is a [`REORDERING_WORDS`] word,
+/// read past `{`, `!`, assignments and [`WORD_LAUNCHERS`] with their
+/// options, so `command source`, `{ eval …; }` and `time builtin .` count
+/// while `git add .` or `find . -exec` do not.
+fn runs_reordering_word(words: &[String]) -> bool {
+    let mut at = 0;
+    loop {
+        while words
+            .get(at)
+            .is_some_and(|w| w == "{" || w == "!" || is_assignment(w))
+        {
+            at += 1;
+        }
+        let Some(word) = words.get(at) else {
+            return false;
+        };
+        if REORDERING_WORDS.contains(&word.as_str()) {
+            return true;
+        }
+        if !WORD_LAUNCHERS.contains(&basename(word).as_str()) {
+            return false;
+        }
+        at += 1;
+        while let Some(option) = words.get(at) {
+            if option == "--" {
+                at += 1;
+                break;
+            }
+            if !option.starts_with('-') {
+                break;
+            }
+            at += if LAUNCHER_VALUES.contains(&option.as_str()) {
+                2
+            } else {
+                1
+            };
+        }
+    }
+}
+
 /// Variables that change which program a name runs, or what runs beside
 /// it.
 const RUN_ENVIRONMENT: &[&str] = &[
@@ -238,9 +286,9 @@ enum Piece {
 struct LineShape {
     segments: Vec<Segment>,
     pieces: Vec<Piece>,
-    /// A pipe, a background job, a process substitution, a
-    /// [`REORDERING_WORDS`] word in a command that is neither data nor
-    /// inert, or a [`RUN_ENVIRONMENT`] assignment:
+    /// A pipe, a background job, a process substitution, a command that
+    /// runs a [`REORDERING_WORDS`] word ([`runs_reordering_word`]), or a
+    /// [`RUN_ENVIRONMENT`] assignment:
     /// commands may run in another order than they are written, or a name
     /// may run another program.
     reordered: bool,
@@ -251,18 +299,14 @@ impl LineShape {
     fn flush(&mut self, span: &mut String, runs: &mut bool, docs: &mut [PendingDoc], piped: bool) {
         let mut words = command_argv(span);
         let environment = sets_run_environment(&words);
+        // Before the reserved words go (`while`, `until`), and after
+        // (`then source …`, `if command eval …`).
+        let mut reorders = runs_reordering_word(&words);
         strip_reserved_words(&mut words);
+        reorders |= runs_reordering_word(&words);
         let data = data_command(&words).filter(|_| !piped && !*runs);
         let inert = !*runs && !environment && inert(&words);
-        // Any word of a command that is neither data nor inert, so a
-        // launcher, group or `if` body (`command source`, `{ eval …; }`,
-        // `then alias …`) cannot hide it; a data command's words are its
-        // text.
-        if environment
-            || (data.is_none()
-                && !inert
-                && words.iter().any(|w| REORDERING_WORDS.contains(&w.as_str())))
-        {
+        if environment || reorders {
             self.reordered = true;
         }
         let owner = self.segments.len();
@@ -1741,6 +1785,12 @@ mod tests {
             "$EDITOR notes.md; cat > brief.md <<EOF\nCodex adversarial seat: please review $D/page.html\nEOF",
             "\"$EDITOR\" notes.md\ncat > brief.md <<'EOF'\nThe Codex review found two issues.\nEOF\ncat brief.md",
             "$EDITOR x; echo \"`date`\"; echo 'Codex review: done'",
+            // Round four of review: `.` and `exec` as arguments are no
+            // reordering words.
+            "$EDITOR notes.md\ngit add .\ngit commit -m 'docs: record the Codex review'",
+            "$EDITOR notes.md; git add . && git commit -m 'docs: record the Codex review'",
+            "$EDITOR notes.md; cp notes.md .; find . -exec true {} \\;; git commit -m 'the Codex review'",
+            "$EDITOR notes.md; npm exec prettier; git commit -m 'docs: record the Codex review'",
             "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
             "M=$(date); $PAGER notes.md; git commit -m \"docs: record the Codex review\"",
             "$EDITOR x; git commit -m \"$(cat <<'EOF'\nfix: apply the Codex review\n\nClaude -p was not used.\nEOF\n)\"",
@@ -1830,6 +1880,11 @@ mod tests {
             "$EDITOR notes.md; command eval 'echo() { :; }'; echo codex exec do the work",
             "shopt -s expand_aliases\ncommand alias echo=eval\n$X\necho codex exec do the work",
             "nohup command source fn.sh; $X; echo codex exec do the work",
+            "env source fn.sh; $X; echo codex exec do the work",
+            "while source fn.sh; do $X; done; echo codex exec do the work",
+            "! command source fn.sh; $X; echo codex exec do the work",
+            "time -p builtin . fn.sh; $X; echo codex exec do the work",
+            "command exec > >(bash); $X; echo codex exec do the work",
             "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
         ] {
             assert!(found(command).is_some(), "{command}");
