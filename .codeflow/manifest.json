@@ -461,7 +461,7 @@
     ".agents/skills/cf-model-orchestrator/references/model-overrides.md": {
       "src": "agents/skills/cf-model-orchestrator/references/model-overrides.md",
       "ownership": "managed",
-      "sha256": "619492b27c4ea2675ce161875548869ce69b3692b417ff63a5c83c11ea8c797d",
+      "sha256": "1d052185d978808acdb6ed0fdc76464c606977b5b40348cc8b99e308e255e84b",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/parallel-tasks.md": {
@@ -1295,7 +1295,7 @@
     ".claude/skills/cf-model-orchestrator/references/model-overrides.md": {
       "src": "agents/skills/cf-model-orchestrator/references/model-overrides.md",
       "ownership": "managed",
-      "sha256": "619492b27c4ea2675ce161875548869ce69b3692b417ff63a5c83c11ea8c797d",
+      "sha256": "1d052185d978808acdb6ed0fdc76464c606977b5b40348cc8b99e308e255e84b",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/parallel-tasks.md": {

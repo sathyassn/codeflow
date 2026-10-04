@@ -361,3 +361,98 @@ fn another_family_still_needs_the_task_override() {
         "--route and --effort require --override",
     );
 }
+
+fn commit_all(root: &Path, message: &str) {
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", message]);
+}
+
+/// Review round one: a task-branch commit that rewrites only the task's
+/// declared target cannot borrow a block from another line, because the
+/// task must be anchored on the target it declares, as the override is.
+#[test]
+fn a_rewritten_task_target_cannot_borrow_another_lines_authority() {
+    let project = Project::new(None, "");
+    let root = project.root();
+    git(root, &["checkout", "-q", TARGET]);
+    git(root, &["checkout", "-q", "-b", "integration/other"]);
+    write(root, SELECTION, &authority().to_string());
+    commit_all(root, "test: another line carries a block");
+    git(root, &["checkout", "-q", "task/TSK-900-fixture"]);
+    git(root, &["merge", "-q", "--no-edit", "integration/other"]);
+    let record = std::fs::read_to_string(root.join("project-management/tasks/TSK-900.md"))
+        .unwrap()
+        .replace(
+            "integration_target: integration/fixture",
+            "integration_target: integration/other",
+        );
+    write(root, "project-management/tasks/TSK-900.md", &record);
+    commit_all(root, "test: rewrite the declared target");
+    let open = project.resolve(DESIGN, 1);
+    assert_eq!(open["participants"], json!([]), "{open}");
+    let reasons = open["open"][0]["reasons"].to_string();
+    assert!(
+        reasons.contains("project design authority not applied")
+            && reasons.contains("integration/fixture"),
+        "{reasons}"
+    );
+}
+
+/// A standalone task whose record is not on its integration line reads no
+/// authority from that line; on `main` it reads the committed block.
+#[test]
+fn a_standalone_task_reads_authority_only_from_main() {
+    // Not anchored: the record arrives on the task branch only.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, CATALOG, &fixture_data::fixture().to_string());
+    write(root, SELECTION, &authority().to_string());
+    git(root, &["init", "-q", "-b", TARGET]);
+    git(root, &["config", "user.email", "fixture@example.test"]);
+    git(root, &["config", "user.name", "Fixture"]);
+    commit_all(root, "test: the line carries a block");
+    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
+    write(
+        root,
+        "project-management/tasks/TSK-900.md",
+        &task("TSK-900", ""),
+    );
+    commit_all(root, "test: a standalone record");
+    let project = Project { dir };
+    let open = project.resolve(DESIGN, 1);
+    assert!(
+        open["open"][0]["reasons"]
+            .to_string()
+            .contains("reads design authority only from main or master"),
+        "{open}"
+    );
+
+    // On main, the same standalone record reads the committed block.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, CATALOG, &fixture_data::fixture().to_string());
+    write(root, SELECTION, &authority().to_string());
+    git(root, &["init", "-q", "-b", "main"]);
+    git(root, &["config", "user.email", "fixture@example.test"]);
+    git(root, &["config", "user.name", "Fixture"]);
+    commit_all(root, "test: main carries a block");
+    git(root, &["checkout", "-q", "-b", "task/TSK-900-fixture"]);
+    write(
+        root,
+        "project-management/tasks/TSK-900.md",
+        &task("TSK-900", "").replace(
+            "integration_target: integration/fixture",
+            "integration_target: main",
+        ),
+    );
+    commit_all(root, "test: a standalone record on main");
+    let project = Project { dir };
+    let result = project.resolve(DESIGN, 0);
+    assert_eq!(
+        result["participants"][0]["line"], "orchid-support",
+        "{result}"
+    );
+    assert!(limitations(&result["participants"][0])
+        .iter()
+        .any(|l| l.contains("committed on main at ")));
+}

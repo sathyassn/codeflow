@@ -1423,6 +1423,9 @@ pub fn anchored_project_file(
         .map_err(|e| e.to_string())?
         .get_path(Path::new(&record))
         .map_err(|_| format!("task {task_id} not committed"))?;
+    if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
+        return Err("task record must be a regular file".into());
+    }
     let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
     let content = String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string())?;
     let target = parse_record(&content, RecordKind::Task)?
@@ -1431,11 +1434,36 @@ pub fn anchored_project_file(
     if !is_stable_work_target(&target) {
         return Err("task integration target must be a stable non-task branch".into());
     }
-    let target_commit = target_reference(&repo, &target)
-        .ok_or_else(|| format!("integration target {target} does not resolve"))?;
-    let base = repo
-        .merge_base(head.id(), target_commit.id())
-        .map_err(|_| format!("no merge-base with {target}"))?;
+    // The task must be anchored on the target it declares, exactly as the
+    // override's anchor requires, so a rewritten target cannot borrow
+    // another line's file. A standalone task, whose record arrives with its
+    // own pull request, may read only from `main` or `master`, which only a
+    // human merge moves.
+    let (base, mut records) =
+        anchored_records(&repo, &target, head.id()).map_err(|error| match error {
+            WorkStartError::Target(_) => format!("integration target {target} does not resolve"),
+            WorkStartError::MergeBase(_) => format!("no merge-base with {target}"),
+            other => other.to_string(),
+        })?;
+    if records.contains_key(task_id) {
+        validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.to_string())?;
+    } else {
+        if !matches!(logical_target(&target), "main" | "master") {
+            return Err(format!(
+                "task {task_id} is not anchored on {target}; a standalone task reads design \
+                 authority only from main or master"
+            ));
+        }
+        let branch = repo
+            .head()
+            .ok()
+            .filter(git2::Reference::is_branch)
+            .and_then(|reference| reference.shorthand().ok().map(str::to_owned))
+            .ok_or("a standalone task reads design authority only on its own task branch")?;
+        standalone_at_head(&repo, &mut records, task_id, &branch, false, head.id())
+            .map_err(|e| e.to_string())?;
+    }
+    let base = Oid::from_str(&base).map_err(|e| e.to_string())?;
     let tree = repo
         .find_commit(base)
         .and_then(|commit| commit.tree())
