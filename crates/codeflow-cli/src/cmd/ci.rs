@@ -388,6 +388,10 @@ pub fn run(args: &CiArgs) -> i32 {
         into: into.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
+        candidate: match &authority {
+            Some(Authority::Named(sha)) => Some(sha.as_str()),
+            _ => None,
+        },
         release: std::cell::OnceCell::new(),
     };
 
@@ -1657,6 +1661,11 @@ pub(super) struct Names<'a> {
     pub destination: Option<&'a str>,
     /// The destination's advertisement, when the caller already asked it.
     pub advertisement: Option<&'a str>,
+    /// The candidate authority's tip (`--policy-from`, which the pre-push
+    /// hook sets to the destination default branch's tip): beside the base,
+    /// a tip whose first-parent line a clean merge after a review may come
+    /// from (TSK-220).
+    pub candidate: Option<&'a str>,
     /// The release scope, asked once per run and shared by the checks.
     pub release: std::cell::OnceCell<
         Result<
