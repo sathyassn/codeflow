@@ -131,9 +131,19 @@ const REORDERING_WORDS: &[&str] = &[
 ];
 
 /// Launchers that run the command after them, walked to find the command
-/// word: `command`, `builtin` and `time` reach a builtin; the others are
-/// walked as well, which only ever keeps data.
-const WORD_LAUNCHERS: &[&str] = &["command", "builtin", "time", "nohup", "env"];
+/// word: `command`, `builtin` and `time`, and zsh's `noglob`, `nocorrect`
+/// and `-` modifiers, reach a builtin (a harness may run zsh); `nohup` and
+/// `env` are walked as well, which only ever keeps data.
+const WORD_LAUNCHERS: &[&str] = &[
+    "command",
+    "builtin",
+    "time",
+    "noglob",
+    "nocorrect",
+    "-",
+    "nohup",
+    "env",
+];
 
 /// Launcher options that take the next word as their value.
 const LAUNCHER_VALUES: &[&str] = &["-u", "-S", "-P", "-C", "-o", "-f"];
@@ -1885,6 +1895,9 @@ mod tests {
             "! command source fn.sh; $X; echo codex exec do the work",
             "time -p builtin . fn.sh; $X; echo codex exec do the work",
             "command exec > >(bash); $X; echo codex exec do the work",
+            "$EDITOR notes.md; noglob source fn.sh; echo codex exec do the work",
+            "$EDITOR notes.md; nocorrect . fn.sh; echo codex exec do the work",
+            "$EDITOR notes.md; - builtin source fn.sh; echo codex exec do the work",
             "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
         ] {
             assert!(found(command).is_some(), "{command}");
