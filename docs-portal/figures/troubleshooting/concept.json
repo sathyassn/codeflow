@@ -53,7 +53,7 @@
         "derive": "the read-only sentence",
         "check": {
           "kind": "contains",
-          "text": "changes no file in the repository and fixes nothing"
+          "text": "it changes no file in the repository and"
         },
         "value": true
       }

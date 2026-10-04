@@ -25,8 +25,8 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.hard_reset_protected` | Level | `block` | off \| warn \| allow \| block | A hard reset on a protected branch. |  |
 | `git.merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A merge commit landing on a protected branch. | PR merge and `codeflow integrate` are the sanctioned paths; a human may override the git layer with CODEFLOW_HUMAN_OVERRIDE=1. |
 | `git.pr_merge_to_protected` | Level | `block` | off \| warn \| allow \| block | A `gh pr merge` whose base branch is protected (git-guard only). |  |
-| `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. |
-| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. |
+| `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
+| `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one, a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. A path built at run time is past the guard; the OS sandbox's write denies are the backstop. |
 | `git.root_branch` | string | `""` | empty, or a valid branch name | The branch the root checkout holds; empty means the repository's default branch. | Set it only for an umbrella repository whose root is a working checkout; `codeflow init --workspace` writes the convention name. |
 | `git.root_checkout_commits` | Level | `block` | off \| warn \| allow \| block | A commit at the root checkout on any branch other than git.root_branch. | git-guard applies the level to agents; the git hooks apply it when a harness marker is set and only warn otherwise. Suspended in the pre-first-commit bootstrap window. |
 | `git.worktree_locations` | string list | `[".worktrees",".claude/worktrees","$CODEX_HOME/worktrees","$GROK_HOME/worktrees","$GROK_HOME/worktree_pool"]` | folders: relative to the root checkout, absolute, ~/..., $CODEX_HOME/... or $GROK_HOME/... | Where linked worktrees may live; doctor reports one outside them. | The default covers .worktrees and the folders the Claude desktop app, Codex and Grok manage. |
@@ -95,10 +95,11 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ## Git hook stages
 
-The five stages `codeflow git-hook` dispatches. Each shim in
+`codeflow git-hook` dispatches five hook stages and answers a `capabilities`
+query that the shims use to check the binary. Each shim in
 `.codeflow/git-hooks/` runs its stage against the policy above. The stage
-names are checked against the binary's dispatcher; the descriptions are
-written here.
+names are checked against the binary's dispatcher, and the descriptions are
+written by hand.
 
 | Stage | What it checks | Detail |
 |---|---|---|

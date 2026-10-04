@@ -53,7 +53,7 @@
         "derive": "the one-plan sentence",
         "check": {
           "kind": "contains",
-          "text": "there is no second plan and no reconciliation round"
+          "text": "There is no second plan and no reconciliation round."
         },
         "value": true
       },
@@ -63,7 +63,7 @@
         "derive": "the review sentence",
         "check": {
           "kind": "contains",
-          "text": "accepts it, and a lineage\ndifferent from the actual author's reviews it"
+          "text": "A lineage different from the actual author's reviews it independently."
         },
         "value": true
       }

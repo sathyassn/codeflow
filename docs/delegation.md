@@ -13,15 +13,19 @@
 Consult and delegate let your agent bring in a model from another vendor,
 either for an opinion or for a piece of work.
 
-A consult is read-only, so the peer reads, tests and reasons, then ends its
-reply with a verdict line that your agent checks against its own analysis. A
-delegate gets a scoped piece of implementation and does it in its own worktree
-on a feature branch, where CodeFlow's gates judge its commits exactly as they
-judge yours. This is for an operator who wants an independent check or
-parallel work, with each model running in its own interactive session under
-your own login. It never runs a peer headless, so `codex exec` and `claude -p`
-are prohibited, and it never logs in for you or counts a same-vendor model as
-an independent reviewer.
+- A consult is read-only, so the peer reads, tests and reasons, then ends its
+  reply with a verdict line that your agent checks against its own analysis.
+- A delegate gets a scoped piece of implementation and does it in its own
+  worktree on a feature branch. CodeFlow's gates judge its commits exactly as
+  they judge yours.
+
+Use them when you want an independent check or parallel work. Each model runs
+in its own interactive session under your own login.
+
+- Consult and delegate never run a peer headless, so `codex exec` and
+  `claude -p` are prohibited.
+- They never log in for you.
+- They never count a same-vendor model as an independent reviewer.
 
 ## Architecture
 
@@ -57,7 +61,16 @@ The [command reference](cli.md) lists every delegate flag, and the
 
 The delegate lifecycle keeps owner-only records for one run in a state
 directory outside every Git worktree, and each record marks one state of a
-turn.
+turn. A turn that goes well follows this path.
+
+```text
+Initialized --> Ready --> Armed --> Accepted --+--> Completed (Stop hook)
+                                               |
+                                               +--> Failed (StopFailure hook)
+```
+
+The table lists every state, including the poisoned, timed-out and rejected
+cases that leave the path.
 
 | State | Record in the state directory | What moves the turn here | What the host runs |
 |---|---|---|---|
@@ -91,10 +104,13 @@ matching skill for the host you are in.
 7. Read your agent's synthesis. It lists where it agrees and disagrees with
    the peer, each point backed by its own evidence.
 
-A consult worked when the reply ends in `VERDICT: approved` or
-`VERDICT: changes_requested` with a Codex thread id or lifecycle records behind
-it and the worktree diff unchanged, and a delegate worked when its commits sit
-on the feature branch and pass the same gates.
+Check the result:
+
+- A consult worked when the reply ends in `VERDICT: approved` or
+  `VERDICT: changes_requested` with a Codex thread id or lifecycle records
+  behind it and the worktree diff unchanged.
+- A delegate worked when its commits sit on the feature branch and pass the
+  same gates.
 
 ### Host a peer in Herdr
 
@@ -126,6 +142,9 @@ not.
 7. A follow-up on the same work reuses the same tab. When the work is done,
    the agent closes only the tab it created.
 
-It worked when a `cf/` tab appears beside yours with the peer running, your
-own pane keeps focus, and the agent reports the tab label, agent name and the
-peer's native thread or session id.
+Hosting worked when:
+
+- a `cf/` tab appears beside yours with the peer running
+- your own pane keeps focus
+- the agent reports the tab label, agent name and the peer's native thread or
+  session id
