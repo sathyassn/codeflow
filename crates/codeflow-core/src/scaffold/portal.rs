@@ -2979,6 +2979,63 @@ mod tests {
         );
     }
 
+    /// A file named `caf\xe9`, which is not valid UTF-8, in `directory`.
+    /// `false` when the file system refuses the name (APFS does), so the tests
+    /// below run where they can, as on Linux.
+    #[cfg(unix)]
+    fn write_latin1_file(directory: &Path) -> bool {
+        use std::os::unix::ffi::OsStrExt as _;
+        std::fs::write(
+            directory.join(std::ffi::OsStr::from_bytes(b"caf\xe9")),
+            b"x",
+        )
+        .is_ok()
+    }
+
+    /// Kept strict (issue 79): a legacy baseline entry that is not valid UTF-8
+    /// is unknown content, and the migration preserves all content.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_baseline_entry_that_is_not_utf8_stops_migration() {
+        let temp = initialized_root();
+        setup_portal(&source("1.0.0", "old\n"), temp.path(), Path::new("guide")).unwrap();
+        make_legacy(temp.path());
+        if !write_latin1_file(&temp.path().join(BASELINE_ROOT)) {
+            return;
+        }
+        let before = std::fs::read(temp.path().join(STATE_PATH)).unwrap();
+        let error =
+            setup_portal(&source("2.0.0", "new\n"), temp.path(), Path::new("guide")).unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8"), "{error}");
+        assert_eq!(std::fs::read(temp.path().join(STATE_PATH)).unwrap(), before);
+    }
+
+    /// Kept strict (issue 79): a staged output that is not valid UTF-8 is not
+    /// one of the transaction's own outputs, so the cleanup refuses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_staged_output_that_is_not_utf8_stops_the_cleanup() {
+        let temp = initialized_root();
+        let transaction = temp.path().join(TRANSACTION_PATH);
+        std::fs::create_dir_all(transaction.join("after")).unwrap();
+        if !write_latin1_file(&transaction.join("after")) {
+            return;
+        }
+        let journal: PortalTransactionJournal = serde_json::from_str(
+            r#"{"schema_version":2,"transaction_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","portal_root":"guide","state_path":".codeflow/docs-portal.json","baseline_root":".codeflow/.docs-portal-baseline","mutations":[]}"#,
+        )
+        .unwrap();
+        let error = authenticated_cleanup_outputs(
+            &PortalIo::open(temp.path()).unwrap(),
+            TRANSACTION_PATH,
+            &journal,
+            Path::new("guide"),
+            true,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8"), "{error}");
+    }
+
     #[test]
     fn successful_migration_removes_only_authenticated_legacy_blobs() {
         let temp = initialized_root();

@@ -476,4 +476,18 @@ mod tests {
             );
         }
     }
+
+    /// Kept strict (issue 79, pinned by `remedy_clearing`): refs that are not
+    /// valid UTF-8 are not read, and the hook reports why instead of judging
+    /// a branch under a lossy name.
+    #[test]
+    fn hook_stdin_that_is_not_utf8_is_not_read() {
+        let error = read_hook_input(&b"0 1 refs/heads/caf\xe9\n"[..]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(degraded_hook_input_note("pre-push", &error).contains("ref checks degraded"));
+        assert_eq!(
+            read_hook_input(&b"0 1 refs/heads/cafe\n"[..]).unwrap(),
+            "0 1 refs/heads/cafe\n"
+        );
+    }
 }

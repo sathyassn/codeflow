@@ -3774,6 +3774,63 @@ mod tests {
             ErrorKind::Invalid
         );
     }
+
+    /// Makes a `0700` directory named `caf\xe9`, which is not valid UTF-8, in
+    /// `parent`. `None` when the file system refuses the name (APFS does), so
+    /// the tests below run where they can, as on Linux.
+    #[cfg(unix)]
+    fn latin1_private_dir(parent: &Path) -> Option<()> {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::DirBuilderExt as _;
+        let path = parent.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        std::fs::DirBuilder::new().mode(0o700).create(path).ok()
+    }
+
+    /// Kept strict (issue 79): the state directory is written into the hook
+    /// command, so a path that is not valid UTF-8 is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_state_directory_that_is_not_utf8_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
+        let error = validate_absolute(path).unwrap_err();
+        assert!(error.message.contains("valid UTF-8"), "{}", error.message);
+    }
+
+    /// Kept strict (issue 79): a turn directory this tool did not write is
+    /// foreign state, and the check stops on it.
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_directory_that_is_not_utf8_is_unsafe_state() {
+        let (_temp, path) = state();
+        if latin1_private_dir(&path.join("turns")).is_none() {
+            return;
+        }
+        let error = inspect_turns("run-1", &path).unwrap_err();
+        assert!(error.message.contains("not UTF-8"), "{}", error.message);
+    }
+
+    /// Kept strict (issue 79): the same for a continuation of a stopped turn.
+    #[cfg(unix)]
+    #[test]
+    fn a_continuation_that_is_not_utf8_is_unsafe_state() {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let (_temp, path) = state();
+        ready(&path);
+        arm("run-1", &path, "turn-1", b"hello").unwrap();
+        accept(&path, Some(PROMPT_ID));
+        stop(&path, PROMPT_ID, "done").unwrap();
+        let continuations = path.join("turns").join("turn-1").join("continuations");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&continuations)
+            .unwrap();
+        if latin1_private_dir(&continuations).is_none() {
+            return;
+        }
+        let error = inspect_turns("run-1", &path).unwrap_err();
+        assert!(error.message.contains("not UTF-8"), "{}", error.message);
+    }
 }
 
 #[cfg(all(test, windows))]

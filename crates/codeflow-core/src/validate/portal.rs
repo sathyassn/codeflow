@@ -6074,4 +6074,46 @@ mod tests {
             .iter()
             .any(|issue| issue.contains("not a regular directory")));
     }
+
+    /// Kept strict (issue 79): a tree path that is not valid UTF-8 is a
+    /// finding about the published tree, not a name to spell lossily.
+    #[cfg(unix)]
+    #[test]
+    fn a_tree_path_that_is_not_utf8_is_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100_644,
+                uid: 0,
+                gid: 0,
+                file_size: 4,
+                id: repo.blob(b"data").unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: b"docs/caf\xe9.md".to_vec(),
+            })
+            .unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = repo
+            .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
+            .unwrap();
+        let Err(error) = git_tree_records(dir.path(), &commit.to_string()) else {
+            panic!("a tree path that is not UTF-8 is refused");
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{error}");
+        let segment = std::ffi::OsStr::from_bytes(b"caf\xe9");
+        assert!(portable_relative_path(Path::new("docs").join(segment).as_path()).is_none());
+        assert_eq!(
+            portable_relative_path(Path::new("docs/cafe.md")).as_deref(),
+            Some("docs/cafe.md")
+        );
+    }
 }
