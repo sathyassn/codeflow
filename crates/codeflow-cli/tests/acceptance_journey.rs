@@ -493,10 +493,19 @@ fn a_journey_tag_reads_with_sentence_punctuation_on_a_fresh_project() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/third.rs"), "pub fn third() {}\n").unwrap();
     commit(&root, "feat: add the third function");
+    let inside = ci(&root, branch, "TSK-003");
     fails(
-        &ci(&root, branch, "TSK-003"),
+        &inside,
         "a tag inside the criterion text",
         "TSK-003 changes the adopter-facing path set but has no `(journey)` criterion",
+    );
+    // The refusal names the criterion and the rule it missed (TSK-223 AC-2).
+    assert!(
+        text(&inside).contains(
+            "AC-1 carries `(journey)` inside its text, and the tag counts only where it opens or closes the criterion (R-50)"
+        ),
+        "{}",
+        text(&inside)
     );
 }
 
@@ -954,4 +963,164 @@ fn a_completed_task_is_fixed_in_one_pull_request_on_a_fresh_project() {
             reason,
         );
     }
+}
+
+/// The `work.journey_criterion` findings in a check's output, one line
+/// each, without the reporter's prefix, so a push and a pull request run
+/// can be compared.
+fn journey_findings(output: &str) -> Vec<String> {
+    let mut found: Vec<String> = output
+        .lines()
+        .filter(|line| line.contains("changes the adopter-facing path set"))
+        .map(|line| {
+            let at = line.find("TSK-").unwrap_or(0);
+            line[at..].trim().to_string()
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// `codeflow ci` over `branch` as its pull request into `main` runs it,
+/// with the installed template filled for TSK-001.
+fn pull_request_ci(root: &Path, main: &str, branch: &str) -> Output {
+    codeflow(
+        root,
+        &[
+            "ci",
+            "--base",
+            main,
+            "--head",
+            "HEAD",
+            "--branch",
+            branch,
+            "--into",
+            main,
+            "--pr-body",
+            &body(root, "TSK-001"),
+        ],
+    )
+}
+
+/// Journey (TSK-223 AC-1, sathyassn/codeflow#50): on a fresh
+/// `codeflow init --full` project, a standalone task branch that changes
+/// an adopter-facing path while its task has no journey criterion is
+/// refused by the installed pre-push hook with the same journey finding
+/// the pull request check reports for that range. Once the task carries a
+/// journey criterion, both paths pass that check.
+#[test]
+fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let start = git(&root, &["branch", "--show-current"]);
+    let main = start.as_str();
+    let origin = dir.path().join("origin.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", main, "origin.git"],
+    );
+    git(
+        &origin,
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{main}:{main}"),
+        ],
+    );
+
+    // A standalone task on its own branch, with no journey criterion,
+    // that changes a managed instruction file (an adopter-facing path).
+    // The record is written before the remote exists, as a project
+    // without a shared id registry does.
+    let branch = "task/TSK-001-parity";
+    git(&root, &["switch", "-q", "-c", branch]);
+    let args = [
+        "task",
+        "new",
+        "--standalone-reason",
+        "parity fixture",
+        "--into",
+        main,
+        "parity",
+    ];
+    ok(&codeflow(&root, &args), "task new");
+    edit(
+        &root,
+        TASK,
+        "- AC-1\n",
+        "- AC-1 When run, the system shall work.\n",
+    );
+    commit(&root, "docs(tasks): plan the parity task");
+    ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
+    let agents = std::fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    std::fs::write(
+        root.join("AGENTS.md"),
+        format!("{agents}\n- Parity fixture note.\n"),
+    )
+    .unwrap();
+    commit(&root, "docs: add a project note");
+    git(
+        &root,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&root, &["fetch", "-q", "origin"]);
+
+    // The pull request check over the range blocks on the journey.
+    let reason = "TSK-001 changes the adopter-facing path set but has no `(journey)` criterion";
+    let pull = pull_request_ci(&root, main, branch);
+    fails(&pull, "the pull request check without a journey", reason);
+
+    // The push of the same range is refused with the same finding.
+    let (pushed, said) = push(&root, &["origin", branch]);
+    assert!(!pushed, "the push without a journey went through:\n{said}");
+    assert!(said.contains("work.journey_criterion"), "{said}");
+    let from_pull = journey_findings(&text(&pull));
+    assert_eq!(from_pull.len(), 1, "{}", text(&pull));
+    assert_eq!(journey_findings(&said), from_pull, "push:\n{said}");
+
+    // From a checkout without the task record, the task is read at the
+    // pushed head: a bodyless run and a push of the branch find the same.
+    git(&root, &["switch", "-q", main]);
+    let bodyless = codeflow(
+        &root,
+        &["ci", "--base", main, "--head", branch, "--branch", branch],
+    );
+    fails(&bodyless, "a bodyless run from the main checkout", reason);
+    assert_eq!(journey_findings(&text(&bodyless)), from_pull);
+    let (pushed, said) = push(&root, &["origin", branch]);
+    assert!(!pushed, "the push from main went through:\n{said}");
+    assert_eq!(
+        journey_findings(&said),
+        from_pull,
+        "push from main:\n{said}"
+    );
+    git(&root, &["switch", "-q", branch]);
+
+    // With a journey criterion, neither path reports the journey.
+    edit(
+        &root,
+        TASK,
+        "shall work.\n",
+        "shall work.\n- AC-2 On a fresh project, the note shall read (journey).\n",
+    );
+    commit(&root, "docs(tasks): add the parity journey");
+    let pull = pull_request_ci(&root, main, branch);
+    assert!(
+        !text(&pull).contains("work.journey_criterion"),
+        "{}",
+        text(&pull)
+    );
+    let (pushed, said) = push(&root, &["origin", branch]);
+    assert!(pushed, "the push with a journey was refused:\n{said}");
+    assert!(!said.contains("work.journey_criterion"), "{said}");
 }

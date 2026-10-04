@@ -634,6 +634,35 @@ erratum below, never an edit of the section.
   The cf-method project-organization reference states the same route.
 
 <!-- codeflow:release-impact patch -->
+- **The pre-push hook checks the journey criterion its pull request
+  will.** `codeflow ci` classified a range only when a pull request body
+  was given, so the pre-push run never reached `work.journey_criterion`,
+  and a task branch that changes an adopter-facing path without a journey
+  criterion passed the push and was blocked by hosted CI once its pull
+  request opened. A run without a body now holds a branch that carries its
+  task (`task/TSK-NNN-...`) to the journey rule over its range, which needs
+  only the task record and the paths the range changes, so the push is
+  refused with the finding the pull request check gives. The refusal also
+  names a criterion that carries `(journey)` inside its text and says the
+  tag counts only where it opens or closes the criterion.
+
+<!-- codeflow:release-impact patch -->
+- **The exec-guard refusal names the file route for text that mentions a
+  peer.** On a line exec-guard cannot fully parse, such as one with a
+  variable as the program or a here-string, it judges the raw text, so a
+  heredoc or inline string that names a peer with a headless flag is
+  refused, and a review brief or commit message written that way was
+  refused with no way forward. That matching is unchanged and is flagged
+  by design, refused at the default block level: a reader that tried to
+  leave such text out kept
+  missing shell forms that still run a peer. The refusal now says so and
+  names the route that works: write the text to a file with the editor
+  tool and pass it by path, as `git commit -F <file>`,
+  `gh pr create --body-file <file>` or `gh api ... -F body=@<file>`.
+  Verdicts are unchanged: 1,618 headless run forms and 12 text shapes
+  compared with 3.0.0 get the same verdict.
+
+<!-- codeflow:release-impact patch -->
 - **A reviewed task can take its moved target without a new review.** The
   release-impact check needs a pull request to contain the current target,
   so after every merge to `main` a reviewed task merges `main` in. In a

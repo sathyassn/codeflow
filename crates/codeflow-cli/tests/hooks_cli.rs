@@ -2268,6 +2268,66 @@ fn exec_guard_classifies_every_review_probe() {
 }
 
 #[test]
+fn exec_guard_points_text_that_names_a_peer_to_a_file() {
+    // TSK-223 AC-3 (sathyassn/codeflow#52): text that only mentions a peer
+    // passes when it is written to a file and passed by path; the same text
+    // inline on a line exec-guard cannot fully parse is still refused, and
+    // the refusal names the file route.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"security": {"headless_peer_runs": "block"}}"#,
+    );
+    std::fs::write(
+        dir.path().join("msg.txt"),
+        "docs: record the review\n\nNo codex exec run was used.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("body.md"),
+        "The Codex review approved; codex exec was not used.\n",
+    )
+    .unwrap();
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "git commit -F msg.txt",
+        "gh pr create --body-file body.md",
+        "gh api -X PATCH repos/o/r/pulls/1 -F body=@body.md",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "should allow: {command}: {err}");
+        assert!(!err.contains("headless"), "{command}: {err}");
+    }
+    for command in [
+        "grep -c review <<< 'Codex review: approve'",
+        "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
+    ] {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        for part in [
+            "security.headless_peer_runs",
+            "could not be fully parsed",
+            "`git commit -F <file>`",
+            "`gh pr create --body-file <file>`",
+            "-F body=@<file>",
+            "flagged by design",
+        ] {
+            assert!(err.contains(part), "{command}: missing {part}: {err}");
+        }
+    }
+}
+
+#[test]
 fn exec_guard_flags_headless_peer_runs_per_level() {
     // TSK-136 AC-1 as amended by ADR-0075 D4: each headless form is refused
     // by default and at block, warns with the rule and the interactive path
