@@ -397,6 +397,9 @@ catalog! {
     /// A PR body over the presentation guidelines.
     PR_PRESENTATION = Step::Codeflow("codeflow ci"),
         "keep the body concise and link detailed evidence; retain necessary verification; `codeflow ci --pr-body-file <body.md>` checks the new text";
+    /// A PR body over the word limit.
+    PR_BODY_LENGTH = Step::Codeflow("codeflow ci"),
+        "rewrite the body to its final state (replace it, never append review rounds), link records instead of copying them, keep one results block at the head and one review row per reviewer; `codeflow ci --pr-body-file <body.md>` checks the new text";
     /// A Summary that is not one prose lead, then a list or table.
     PR_SUMMARY_SHAPE = Step::Codeflow("codeflow ci"),
         "open the Summary with one short prose paragraph that anchors the reader, put the details after it as `-` bullets or a table, and end with at most one closing paragraph (`.codeflow/rules/writing.md` \"Summaries\"); `codeflow ci --pr-body-file <body.md>` checks the new text";

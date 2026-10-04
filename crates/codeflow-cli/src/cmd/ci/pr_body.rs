@@ -386,6 +386,93 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         })
 }
 
+/// A body over this many words draws the length warning (TSK-228).
+const BODY_WORD_LIMIT: usize = 1000;
+
+/// The text of `source` as a reader sees it rendered, for counting words:
+/// headings, tables and fenced blocks count; HTML comments, tag markup and
+/// image alt text do not. A comment split across events is stripped whole,
+/// because the HTML of one run of events is stripped together.
+fn reader_text(source: &str) -> String {
+    fn flush(html: &mut String, text: &mut String) {
+        if !html.is_empty() {
+            text.push_str(&strip_markup(html));
+            html.clear();
+        }
+    }
+    let mut text = String::new();
+    let mut html = String::new();
+    let mut image = 0usize;
+    for event in Parser::new_ext(source, github_options()) {
+        match event {
+            Event::Html(value) | Event::InlineHtml(value) => html.push_str(&value),
+            Event::SoftBreak | Event::HardBreak if !html.is_empty() => html.push('\n'),
+            event => {
+                flush(&mut html, &mut text);
+                if starts_block(&event) && !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                match event {
+                    Event::Start(Tag::Image { .. }) => image += 1,
+                    Event::End(TagEnd::Image) => image = image.saturating_sub(1),
+                    Event::Text(value) | Event::Code(value) if image == 0 => {
+                        text.push_str(&value);
+                    }
+                    Event::End(
+                        TagEnd::Emphasis
+                        | TagEnd::Strong
+                        | TagEnd::Strikethrough
+                        | TagEnd::Superscript
+                        | TagEnd::Subscript
+                        | TagEnd::Link,
+                    ) => {}
+                    Event::SoftBreak | Event::HardBreak | Event::End(_) => text.push('\n'),
+                    _ => {}
+                }
+            }
+        }
+    }
+    flush(&mut html, &mut text);
+    text
+}
+
+/// The words of `source` as a reader sees them.
+fn word_count(source: &str) -> usize {
+    reader_text(source).split_whitespace().count()
+}
+
+/// The length warning's message for an over-long body: the count, the limit
+/// and the three largest `##` sections with their word counts. `None` at or
+/// under the limit.
+fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
+    let total = word_count(body);
+    if total <= BODY_WORD_LIMIT {
+        return None;
+    }
+    let mut largest: Vec<(&str, usize)> = sections
+        .iter()
+        .filter(|section| section.depth == HeadingLevel::H2)
+        .map(|section| (section.name.trim(), word_count(section.content())))
+        .filter(|(_, words)| *words > 0)
+        .collect();
+    // Stable, so equal sections keep their order in the body.
+    largest.sort_by(|a, b| b.1.cmp(&a.1));
+    let named = largest
+        .iter()
+        .take(3)
+        .map(|(name, words)| format!("## {name} ({words} words)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sections = if named.is_empty() {
+        String::new()
+    } else {
+        format!("; largest sections: {named}")
+    };
+    Some(format!(
+        "PR body is {total} words, over the {BODY_WORD_LIMIT}-word limit (HTML comments not counted){sections}"
+    ))
+}
+
 pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec<Violation> {
     if !git.pr_sections.is_active() {
         return Vec::new();
@@ -400,6 +487,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         ));
     };
     let outline = outline(body);
+    // TSK-228: a body over the word limit warns and never blocks; this check
+    // raises every finding at warn, whatever `git.pr_sections` says.
+    let length = length_message(body, &outline.sections);
     for tag in &outline.unclosed {
         warn(format!(
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
@@ -416,6 +506,14 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
         {
             warn("PR Testing has no Not tested: line".into());
         }
+    }
+    if let Some(message) = length {
+        out.push(Violation::new(
+            "git.pr_sections",
+            PolicyLevel::Warn,
+            message,
+            codeflow_core::remedy::PR_BODY_LENGTH.remedy(),
+        ));
     }
     out
 }
@@ -1623,6 +1721,127 @@ mod tests {
             ..GitPolicy::default()
         };
         assert!(presentation(&git, &body, false).is_empty());
+    }
+
+    fn words(n: usize) -> String {
+        "word ".repeat(n)
+    }
+
+    /// TSK-228: the count is what a reader sees. Comments, tag markup and
+    /// image alt text are left out; code blocks, tables, headings and link
+    /// text are in.
+    #[test]
+    fn word_count_reads_what_a_reader_sees() {
+        assert_eq!(word_count("one two three"), 3);
+        assert_eq!(word_count("one <!-- hidden words here --> two"), 2);
+        assert_eq!(
+            word_count("one\n\n<!--\nhidden\n\nmore hidden\n-->\n\ntwo"),
+            2
+        );
+        assert_eq!(word_count("a <!-- split\nacross lines --> b"), 2);
+        assert_eq!(word_count("## Heading of three\ntext"), 4);
+        assert_eq!(word_count("```text\nfenced output of five words\n```"), 5);
+        assert_eq!(
+            word_count("```\n<!-- shown in a fence -->\n```"),
+            6,
+            "a comment inside a fenced block is shown, so it counts"
+        );
+        assert_eq!(
+            word_count("| a | b |\n|---|---|\n| one two | three |"),
+            5,
+            "cell text counts; pipes and the delimiter row do not"
+        );
+        assert_eq!(
+            word_count("see [the guide](https://example.com/a/b) now"),
+            4,
+            "a link counts by its text, never its address"
+        );
+        assert_eq!(word_count("look ![alt text of image](x.png) here"), 2);
+        assert_eq!(word_count("a <b>bold</b> c"), 3);
+        assert_eq!(word_count("foo**bar**baz"), 1, "inline marks join words");
+        assert_eq!(word_count("- one\n- two\n- three"), 3);
+        assert_eq!(word_count(""), 0);
+        assert_eq!(word_count("<!-- only a comment -->"), 0);
+    }
+
+    #[test]
+    fn length_message_fires_only_over_the_limit() {
+        let at = format!("## Summary\n{}", words(BODY_WORD_LIMIT - 1));
+        assert_eq!(word_count(&at), BODY_WORD_LIMIT);
+        assert!(length_message(&at, &sections(&at)).is_none());
+        let over = format!("{at}word");
+        let message = length_message(&over, &sections(&over)).unwrap();
+        assert!(
+            message.starts_with("PR body is 1001 words, over the 1000-word limit"),
+            "{message}"
+        );
+        let commented = format!("{at}\n<!-- {} -->", words(500));
+        assert!(length_message(&commented, &sections(&commented)).is_none());
+    }
+
+    /// TSK-228: the three largest `##` sections are named with their words;
+    /// a subsection belongs to its parent and text before the first heading
+    /// belongs to none.
+    #[test]
+    fn length_message_names_the_three_largest_sections() {
+        let body = format!(
+            "Task: TSK-001 {}\n## Summary\n{}\n## Changes\n{}\n## Testing\n{}\n### Detail\n{}\n## Reviews\n{}\n",
+            words(5),
+            words(10),
+            words(300),
+            words(100),
+            words(400),
+            words(450),
+        );
+        let message = length_message(&body, &sections(&body)).unwrap();
+        let named = message.split("largest sections: ").nth(1).unwrap();
+        assert_eq!(
+            named, "## Testing (501 words), ## Reviews (450 words), ## Changes (300 words)",
+            "{message}"
+        );
+        assert!(!message.contains("Detail"), "{message}");
+        assert!(!message.contains("Summary"), "{message}");
+    }
+
+    #[test]
+    fn length_message_without_sections_names_none() {
+        let body = words(1200);
+        let message = length_message(&body, &sections(&body)).unwrap();
+        assert!(message.contains("1200 words"), "{message}");
+        assert!(!message.contains("largest sections"), "{message}");
+    }
+
+    /// TSK-228: the warning rides the presentation check, so it is always a
+    /// warning, names its remedy, and follows `git.pr_sections` being active.
+    #[test]
+    fn long_body_warns_at_warn_whatever_the_section_level() {
+        let body = format!(
+            "## Summary\nShort.\n## Testing\nNot tested: x.\n{}",
+            words(1100)
+        );
+        for level in [PolicyLevel::Block, PolicyLevel::Warn] {
+            let git = GitPolicy {
+                pr_sections: level,
+                ..GitPolicy::default()
+            };
+            let findings = presentation(&git, &body, true);
+            let long: Vec<_> = findings
+                .iter()
+                .filter(|v| v.message.contains("-word limit"))
+                .collect();
+            assert_eq!(long.len(), 1, "{level}: {findings:?}");
+            assert_eq!(long[0].level, PolicyLevel::Warn);
+            assert!(long[0].remedy.to_string().contains("link records"));
+        }
+        for level in [PolicyLevel::Allow, PolicyLevel::Off] {
+            let git = GitPolicy {
+                pr_sections: level,
+                ..GitPolicy::default()
+            };
+            assert!(presentation(&git, &body, true).is_empty(), "{level}");
+        }
+        let short = "## Summary\nShort.\n## Testing\nNot tested: x.\n";
+        assert!(presentation(&GitPolicy::default(), short, true).is_empty());
     }
 
     /// ADR-0071 rule 7 (Codex TSK-108 review, R108-1): a Summary is judged
