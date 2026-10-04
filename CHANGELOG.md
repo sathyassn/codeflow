@@ -23,27 +23,31 @@ erratum below, never an edit of the section.
 
 <!-- codeflow:release-impact minor -->
 - **Guidance for working while something is uncertain (issue 70).** The
-  autonomy reference gains "While a question is open", with three
-  decision-table rows. While an operator answer is pending and the
-  recommended answer is reversible, dependent work continues on a working
-  default, labelled where it lands with what reverses it. When the answer is
-  not reversible, or a fact cannot be verified yet, the work holds the
-  conservative state and says what clears it. Neither interim state takes
-  the operator-owned step. An interim state that another task, a reviewer
-  or a later session relies on is recorded where the work is tracked, with
-  its evidence, reversal and status. `workflow-discipline.md` states the
-  rule at every tier in "Navigate blockers". Under "Claims need evidence"
-  it adds that how far a change reaches is a claim: list and check every
-  consumer of the changed thing. It also adds that a rule encoding the
-  operator's guidance adds nothing the operator never gave. Under
-  "Planning" it adds that operator feedback during work is a request like
-  any other: attached to its unit, placed in the plan's order, acted on
-  after a read of the whole aspect, closed with evidence. `writing.md` asks
-  for a qualifier on a word the project uses for several things.
-  `project-organization.md` names the record home for an interim state.
-  `cf-reviewer` checks a reach claim, a working default's label and encoded
-  guidance. The per-task reading chain does not grow: the full rule sits in
-  the reference read only when a step may need the operator.
+  managed instructions now say how dependent work keeps moving while an
+  operator question is open, a fact cannot be verified yet, or operator
+  feedback arrives mid-run. The full rule sits in the autonomy reference,
+  read only when a step may need the operator, so the per-task reading
+  chain does not grow.
+  - `autonomy.md` "While a question is open", with three decision-table
+    rows: while an operator answer is pending and the recommended answer is
+    reversible, dependent work continues on a working default, labelled
+    where it lands with what reverses it; when the answer is not reversible,
+    or a fact cannot be verified yet, the work holds the conservative state
+    and says what clears it; neither interim state takes the operator-owned
+    step; an interim state another task, a reviewer or a later session
+    relies on is recorded where the work is tracked, with its evidence,
+    reversal and status.
+  - `workflow-discipline.md`: the rule at every tier in "Navigate
+    blockers"; under "Claims need evidence", how far a change reaches is a
+    claim (list and check every consumer of the changed thing), and a rule
+    encoding the operator's guidance adds nothing the operator never gave;
+    under "Planning", operator feedback during work is a request like any
+    other: attached to its unit, placed in the plan's order, acted on after
+    a read of the whole aspect, closed with evidence.
+  - `writing.md` asks for a qualifier on a word the project uses for
+    several things; `project-organization.md` names the record home for an
+    interim state; `cf-reviewer` checks a reach claim, a working default's
+    label and encoded guidance.
 
 <!-- codeflow:release-impact minor -->
 - **Pull request Summaries open with a prose lead, then bullets.**
