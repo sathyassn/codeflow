@@ -11,8 +11,9 @@ pane waits for the watcher's ready record for that pane, then refuses; each
 delivery let through is logged with its time and pane.
 Everything else passes through unchanged.
 
-`claude`, `codex`, `grok`: version, help and sign-in status calls pass
-through. The subject's own seat start passes through once, before readiness.
+`claude`, `codex`, `grok`: version, help, sign-in status and `mcp list` calls
+pass through, logged as information calls. The subject's own seat start
+passes through once, before readiness.
 Any other start writes a request and waits for the runner's watcher, which
 checks it and answers with the exact argv and environment to run, or a
 refusal. Without an answer nothing runs. This arranges qualified launches;
@@ -35,6 +36,10 @@ HERE = Path(__file__).parent
 ROLE = Path(__file__).name
 INFO_FLAGS = {"--version", "-V", "--help", "-h"}
 STATUS = {"codex": ["login", "status"], "claude": ["auth", "status"]}
+# Read-only subcommands answered as they are: listing MCP servers reads the
+# configuration and starts no session. `add`, `remove` and every other
+# subcommand still go to the watcher as launches.
+READ_ONLY = (["mcp", "list"], ["mcp", "list", "--json"])
 # Herdr commands that open a pane or a workspace.
 CREATES = {("tab", "create"), ("pane", "split")}
 OTHER_WORKSPACE = {("workspace", "create"), ("worktree", "create"), ("worktree", "open")}
@@ -166,12 +171,16 @@ def herdr(context: dict, args: list[str]) -> None:
 
 
 def informational(harness: str, args: list[str]) -> bool:
-    """Version, help and sign-in status calls start no session."""
+    """Version, help, sign-in status and MCP listing calls start no session
+    and change nothing; they run as the evaluator's real harness, so the
+    answer is what the trial's seats would see."""
     if INFO_FLAGS & set(args) or args == ["help"]:
         return True
     rest = list(args)
     while rest[:1] == ["-c"] and len(rest) >= 2:
         rest = rest[2:]
+    if rest in READ_ONLY:
+        return True
     status = STATUS.get(harness)
     return status is not None and rest[:2] == status and len(rest) <= 3
 

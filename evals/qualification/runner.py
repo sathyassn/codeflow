@@ -446,13 +446,23 @@ def frame_event(harness: str, stage: str, screen: str) -> dict:
             "screen_sha256": "sha256:" + hashlib.sha256(screen.encode()).hexdigest(), "time": time.time()}
 
 
+# Herdr can keep reporting a seat "blocked" for a moment after its trust
+# dialog was accepted, while the screen already shows the ready input box
+# (seen with Codex 0.160.0 on 2026-10-04). Readiness waits this long for the
+# status to catch up; any other screen is never treated as ready.
+STALE_BLOCKED_GRACE = 10.0
+
+
 def wait_ready(pane: str, seconds: float, harness: str | None = None,
                repository: Path | None = None, acceptances: list | None = None,
                display_choices: list | None = None, branch: str | None = None,
-               codex: dict | None = None, frames: list | None = None) -> dict:
+               codex: dict | None = None, frames: list | None = None,
+               waits: list | None = None) -> dict:
     end = time.monotonic() + seconds
     acceptances = acceptances if acceptances is not None else []
     display_choices = display_choices if display_choices is not None else []
+    waits = waits if waits is not None else []
+    blocked_since = None
     while True:
         trust_pending = False
         if harness is not None:
@@ -469,11 +479,25 @@ def wait_ready(pane: str, seconds: float, harness: str | None = None,
             if not screen.strip():
                 trust_pending = True
         current = state(pane)
+        now = time.monotonic()
         if not trust_pending and current.get("agent_status") in {"idle", "done"}:
+            if blocked_since is not None:
+                waits.append({"status": "blocked", "after": "trust_acceptance", "cleared": True,
+                              "seconds": round(now - blocked_since, 2)})
             if harness == "codex" and frames is not None:
                 frames.append(frame_event("codex", "ready", screen))
             return current
-        if (not trust_pending and current.get("agent_status") == "blocked") or time.monotonic() >= end:
+        stale = (not trust_pending and current.get("agent_status") == "blocked" and acceptances
+                 and harness is not None)
+        if stale and blocked_since is None:
+            blocked_since = now
+        if not stale:
+            blocked_since = None
+        if (not trust_pending and current.get("agent_status") == "blocked"
+                and (not stale or now - blocked_since >= STALE_BLOCKED_GRACE)) or now >= end:
+            if blocked_since is not None:
+                waits.append({"status": "blocked", "after": "trust_acceptance", "cleared": False,
+                              "seconds": round(now - blocked_since, 2)})
             if harness == "grok":
                 raise Refused(grok_startup_refusal(screen))
             raise Refused("seat did not become ready; inspect its native UI before any delivery")
@@ -1286,6 +1310,66 @@ def config_drift(before: dict, after: dict, peer_trust_accepted: bool = False) -
     return ["evaluator_config_drift"]
 
 
+# Every trial can start Codex and Grok, as its seat or as a peer, and both
+# write their dedicated home's config during a trial (folder trust). Two
+# trials at once would change each other's config and both drift, so a
+# launch takes an exclusive lock on each of these homes and `finish` frees it.
+LOCKED_HOMES = ("CODEX_HOME", "GROK_HOME")
+
+
+def evaluator_lock_path(home: Path) -> Path:
+    home = Path(os.path.realpath(home))
+    return home.parent / "trial-locks" / f"{home.name}.lock.json"
+
+
+def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[dict]:
+    """Lock the Codex and Grok evaluator homes for this trial, or refuse
+    naming the trial that holds one. Nothing is left locked on refusal."""
+    held: list[dict] = []
+    try:
+        for variable in LOCKED_HOMES:
+            home = Path(os.path.realpath(environment[variable]))
+            path = evaluator_lock_path(home)
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+            if path.parent.is_symlink():
+                raise Refused(f"evaluator lock folder is a link: {path.parent}")
+            record = {"home": str(home), "path": str(path), "output": str(output.resolve()),
+                      "pid": os.getpid(), "time": time.time(), "token": secrets.token_hex(16)}
+            try:
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            except FileExistsError:
+                try:
+                    holder = json.loads(path.read_text(encoding="utf-8")).get("output", "unknown")
+                except (OSError, ValueError, AttributeError):
+                    holder = "unreadable lock record"
+                raise Refused(f"another trial holds the evaluator home {home} ({holder}): run one trial at a "
+                              f"time; when that trial is over, `runner.py finish --output <its output>` frees "
+                              f"it; remove {path} yourself only if no trial is running") from None
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(record, handle)
+            held.append(record)
+    except BaseException:
+        release_evaluator_locks(held)
+        raise
+    return held
+
+
+def release_evaluator_locks(locks: list[dict]) -> list[str]:
+    """Free the locks this trial took; a lock another trial holds is kept."""
+    released = []
+    for lock in locks or []:
+        path = Path(lock["path"])
+        try:
+            if path.is_symlink():
+                continue
+            if json.loads(path.read_text(encoding="utf-8")).get("token") == lock.get("token"):
+                path.unlink()
+                released.append(str(path))
+        except (OSError, ValueError, AttributeError):
+            continue
+    return released
+
+
 def load_fixture(record_path: Path) -> tuple[dict, Path, dict]:
     record = kit.load_json(record_path)
     if not kit.registration_verifies(record):
@@ -1988,10 +2072,13 @@ def launch(args) -> None:
         remote_plugins = require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
         # Every trial can start Claude too, as its seat or as a peer.
         account_content = require_claude_account_content_off(Path(environment["CLAUDE_CONFIG_DIR"]))
+        # One trial at a time per Codex and Grok home; `finish` frees them.
+        locks = acquire_evaluator_locks(environment, args.output)
         if args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
     except Refused as exc:
+        release_evaluator_locks(locals().get("locks") or [])
         args.output.mkdir(parents=True)
         write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
                                            "refused_flag": exc.flag, "error": str(exc),
@@ -2018,6 +2105,7 @@ def launch(args) -> None:
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
            "claude_account_content": account_content,
+           "evaluator_locks": locks,
            "declared_mcp_servers": declared_mcp_servers(repository),
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
@@ -2064,7 +2152,8 @@ def launch(args) -> None:
             run["launch_response"] = recover_registration(
                 run["pane"], f"eval-{trial.name}", args.harness, repository, start_args)
         initial = wait_ready(run["pane"], args.start_timeout, args.harness, repository, run["trust_acceptances"],
-                             run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"])
+                             run["display_choices"], record.get("branch"), codex=codex, frames=run["verified_frames"],
+                             waits=run.setdefault("readiness_waits", []))
         if args.harness == "grok":
             screen = herdr("pane", "read", run["pane"], "--source", "visible", text=True)
             if not grok_authenticated_editor(screen):
@@ -2198,6 +2287,10 @@ def finish(args) -> None:
             result["validity_flags"].append("native_state_unavailable")
             result["native_error"] = str(exc)
     write(args.output / "observation.json", result)
+    # The final config snapshot is taken: the next trial may start.
+    if run.get("evaluator_locks"):
+        run["evaluator_locks_released"] = release_evaluator_locks(run["evaluator_locks"])
+        write(args.output / "launch.json", run)
     print(json.dumps(result, indent=2))
     # The primary retains native transcripts and closes the recorded tab.
 

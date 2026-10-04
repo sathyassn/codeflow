@@ -264,6 +264,10 @@ erratum below, never an edit of the section.
   reads a process's working directory on macOS through libproc instead of
   `lsof`, which took longer than the watcher's poll gap on a loaded host,
   and pins Codex 0.160.0's idle and pending screens in its frame tests.
+  It runs one trial at a time, holding a lock on the Codex and Grok
+  evaluator homes from launch to finish, answers a subject's `mcp list`
+  as an information call, and waits up to 10 seconds when Herdr still
+  reports a seat blocked after its accepted trust dialog.
 
 <!-- codeflow:release-impact patch -->
 - **The full gate runs inside CodeFlow's own Claude sandbox.** The full

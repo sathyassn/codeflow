@@ -6962,6 +6962,14 @@ class ProcessRepairTests(unittest.TestCase):
             # Peers can only be opened after delivery; the watcher is answering by then.
             self.assertEqual(["start", "ready", "snapshot", "watch", "delivery"], order)
             self.assertFalse((args.output / "peers.stop").exists())
+            # The started trial holds the evaluator homes until its finish.
+            locks = json.loads((args.output / "launch.json").read_text())["evaluator_locks"]
+            self.assertEqual(2, len(locks))
+            self.assertTrue(all(Path(lock["path"]).exists() for lock in locks))
+            runner.release_evaluator_locks(locks)
+            # Each launch below stands for a separate trial whose finish would
+            # free the homes; the lock itself has its own tests.
+            runner.LOCKED_HOMES = ()
             args.output = evidence_root / "delivery-refused"
             with patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "herdr", side_effect=herdr), \
@@ -7528,6 +7536,61 @@ class ProcessRepairTests(unittest.TestCase):
             done = subprocess.run([str(bin_dir / "claude"), "-p", "headless"], cwd=repository,
                                   env=subject_env, capture_output=True, text=True, timeout=20)
             self.assertEqual(2, done.returncode)
+
+    def test_peer_launcher_answers_read_only_mcp_listing_and_refuses_changes(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+            runner, run, repository, environment, calls = self.peer_trial(Path(temp).resolve())
+            peers = run["peers"]
+            runner.write_peer_context(peers, subject={"pane": "subject-pane", "ready": True}, decision_seconds=0.3)
+            bin_dir, launches = Path(peers["bin"]), Path(peers["launches"])
+            env = {**environment, "HERDR_PANE_ID": "subject-pane"}
+            # The subject asks, from its own pane after readiness: answered by the
+            # real harness in the trial's evaluator environment, logged as information.
+            for harness, args in [("claude", ["mcp", "list"]), ("codex", ["mcp", "list", "--json"]),
+                                  ("codex", ["-c", 'cli_auth_credentials_store="file"', "mcp", "list"]),
+                                  ("grok", ["mcp", "list"]), ("claude", ["--version"]), ("claude", ["--help"])]:
+                with self.subTest(harness=harness, args=args):
+                    done = subprocess.run([str(bin_dir / harness), *args], cwd=repository, env=env,
+                                          capture_output=True, text=True, timeout=20)
+                    self.assertEqual(0, done.returncode, done.stderr)
+                    native = self.native_calls(calls)[-1]
+                    self.assertEqual(harness, Path(native["argv"][0]).name)
+                    self.assertEqual(args, native["argv"][1:])
+                    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME", "HOME"]:
+                        self.assertEqual(environment[key], native["env"][key])
+            infos = [json.loads(path.read_text()) for path in launches.glob("*-info.json")]
+            self.assertIn(["mcp", "list"], [info["args"] for info in infos])
+            self.assertEqual([], list(launches.glob("*.request.json")))
+            watcher = {"stopped_at": 2.0, "stop_reason": "finish", "last_poll": 1.5, "max_gap": 0.5}
+            flags, _ = runner.peer_findings(run, {"watcher": watcher, "requests": [], "peers": {}, "errors": []})
+            self.assertEqual([], flags)
+            # Anything that changes configuration or could start a session is a
+            # launch: it waits for the watcher, which refuses it from the subject's
+            # pane, and the trial is flagged.
+            count = len(self.native_calls(calls))
+            for harness, args in [("claude", ["mcp", "add", "x", "--", "cmd"]), ("codex", ["mcp", "remove", "x"]),
+                                  ("grok", ["mcp", "list", "extra"]), ("grok", ["mcp", "doctor"]),
+                                  ("claude", ["mcp", "list", "now"]), ("codex", ["exec", "mcp list"])]:
+                with self.subTest(refused=args):
+                    runner.write_peer_context(peers, decision_seconds=10)
+                    earlier = set(launches.glob("*.request.json"))
+                    child = subprocess.Popen([str(bin_dir / harness), *args], cwd=repository, env=env,
+                                             stderr=subprocess.PIPE, text=True)
+                    for _ in range(200):
+                        pending = [path for path in launches.glob("*.request.json") if path not in earlier]
+                        if pending:
+                            break
+                        threading.Event().wait(0.05)
+                    self.assertTrue(pending, f"{args} was not sent to the watcher")
+                    record = {"requests": [], "peers": {}}
+                    with patch.object(runner, "state", return_value={"workspace_id": "trial-workspace"}):
+                        runner.answer_requests(run, record)
+                    _, error = child.communicate(timeout=20)
+                    self.assertEqual(2, child.returncode)
+                    self.assertFalse(record["requests"][0]["decision"]["allow"])
+                    self.assertEqual(count, len(self.native_calls(calls)))
+                    flags, _ = runner.peer_findings(run, {"watcher": watcher, "errors": [], **record})
+                    self.assertEqual(["peer_launch_refused"], flags)
 
     def test_herdr_launcher_carries_the_trial_environment_and_workspace(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
@@ -8732,6 +8795,121 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
                 transport.assert_not_called()
             saved = json.loads((output / "launch.json").read_text())
             self.assertEqual("refused", saved["status"])
+
+    def codex_ready_screen(self, path):
+        return (self.FRAMES / "codex-0.160.0-idle.txt").read_text().replace("{path}", str(path))
+
+    def test_readiness_waits_out_herdr_stale_blocked_after_an_accepted_trust_dialog(self):
+        runner = self.runner()
+        path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
+        expect = {"model": "gpt-6-astra", "effort": "high", "repository": path}
+        ready = self.codex_ready_screen(path)
+        accepted = [{"harness": "codex", "path": str(path)}]
+        # Trial 13 of 2026-10-04: the screen is ready while Herdr still says
+        # blocked for a few polls after the trust dialog was accepted.
+        clock = iter(float(n) for n in range(100))
+        statuses = ["blocked", "blocked", "blocked", "idle"]
+        waits, frames = [], []
+        with patch.object(runner, "herdr", return_value=ready), \
+             patch.object(runner, "state", side_effect=[{"agent_status": status} for status in statuses]), \
+             patch.object(runner.time, "monotonic", side_effect=lambda: next(clock)), patch.object(runner.time, "sleep"):
+            self.assertEqual("idle", runner.wait_ready("owned", 60, "codex", path, accepted, [], codex=expect,
+                                                       frames=frames, waits=waits)["agent_status"])
+        self.assertEqual(["ready"], [frame["stage"] for frame in frames])
+        self.assertEqual([{"status": "blocked", "after": "trust_acceptance", "cleared": True, "seconds": 3.0}], waits)
+        # The grace is bounded: still blocked after it, the launch is refused.
+        clock = iter(float(n) for n in range(100))
+        waits = []
+        with patch.object(runner, "herdr", return_value=ready), \
+             patch.object(runner, "state", return_value={"agent_status": "blocked"}), \
+             patch.object(runner.time, "monotonic", side_effect=lambda: next(clock)), patch.object(runner.time, "sleep"), \
+             self.assertRaisesRegex(runner.Refused, "did not become ready"):
+            runner.wait_ready("owned", 60, "codex", path, accepted, [], codex=expect, frames=[], waits=waits)
+        self.assertFalse(waits[0]["cleared"])
+        self.assertGreaterEqual(waits[0]["seconds"], runner.STALE_BLOCKED_GRACE)
+        # Without an accepted trust dialog a blocked seat is refused at once,
+        # and a screen that is not the ready input box never counts as ready.
+        for acceptances, screen in [([], ready), (accepted, ready.replace("› Ask Codex to do anything", "› Allow? y/n"))]:
+            with self.subTest(acceptances=acceptances, screen=screen[-80:]):
+                clock = iter(float(n) for n in range(100))
+                polls = []
+                def blocked(pane):
+                    polls.append(pane)
+                    return {"agent_status": "blocked"}
+                waits = []
+                with patch.object(runner, "herdr", return_value=screen), patch.object(runner, "state", side_effect=blocked), \
+                     patch.object(runner.time, "monotonic", side_effect=lambda: next(clock)), \
+                     patch.object(runner.time, "sleep"), self.assertRaises(runner.Refused):
+                    runner.wait_ready("owned", 30, "codex", path, list(acceptances), [], codex=expect, frames=[], waits=waits)
+                # No grace without an acceptance; an unready screen waits for the
+                # start timeout as before and is never recorded as stale.
+                self.assertEqual(1 if not acceptances else 30, len(polls))
+                self.assertEqual([], waits)
+
+    def test_one_trial_at_a_time_holds_the_codex_and_grok_homes(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            env = eval_kit.subject_environment(root.parent / "trial", root.parent / "bin/codeflow", [])
+            first = runner.acquire_evaluator_locks(env, root.parent / "first")
+            self.assertEqual({str((root / "codex").resolve()), str((root / "grok").resolve())},
+                             {lock["home"] for lock in first})
+            for lock in first:
+                self.assertEqual(0o600, stat.S_IMODE(Path(lock["path"]).stat().st_mode))
+            with self.assertRaisesRegex(runner.Refused, "another trial holds the evaluator home .*first"):
+                runner.acquire_evaluator_locks(env, root.parent / "second")
+            # A refused second launch takes nothing and frees nothing.
+            self.assertTrue(all(Path(lock["path"]).exists() for lock in first))
+            # Only the holder's own token frees a lock.
+            self.assertEqual([], runner.release_evaluator_locks([{**first[0], "token": "other"}]))
+            self.assertEqual(sorted(lock["path"] for lock in first), sorted(runner.release_evaluator_locks(first)))
+            second = runner.acquire_evaluator_locks(env, root.parent / "second")
+            # A partial take (Grok held elsewhere) leaves the Codex home free.
+            runner.release_evaluator_locks(second[:1])
+            with self.assertRaises(runner.Refused):
+                runner.acquire_evaluator_locks(env, root.parent / "third")
+            self.assertFalse(Path(second[0]["path"]).exists())
+            runner.release_evaluator_locks(second)
+
+    def test_launch_refuses_a_second_trial_and_finish_frees_the_homes(self):
+        import argparse
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            subject = root.parent / "subjects"
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            held = runner.acquire_evaluator_locks(env, root.parent / "running-trial")
+            with patch.object(runner, "herdr") as transport, \
+                 patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
+                                                                    subject / "t/repository", [])), \
+                 patch.object(runner, "watch_directories", return_value=[]):
+                output = root.parent / "evidence"
+                args = type("A", (), {"record": root.parent / "r.json", "output": output, "workspace": "w",
+                                      "harness": "codex", "codex_hook_trust": "review", "watch_dir": [],
+                                      "max_entries": 10, "snapshot_seconds": 1, "start_timeout": 1,
+                                      "native": ["--", "--model", "gpt-6-astra", "--ask-for-approval", "never",
+                                                 "--sandbox", "danger-full-access"]})()
+                with self.assertRaisesRegex(runner.Refused, "another trial holds"):
+                    runner.launch(args)
+                transport.assert_not_called()
+            self.assertEqual("refused", json.loads((output / "launch.json").read_text())["status"])
+            self.assertTrue(all(Path(lock["path"]).exists() for lock in held))
+            runner.release_evaluator_locks(held)
+            # finish frees the locks its launch recorded, after the final snapshot.
+            done = root.parent / "done"; done.mkdir()
+            locks = runner.acquire_evaluator_locks(env, done)
+            runner.write(done / "launch.json", {"declared_directories": [], "observation": {}, "status": "started",
+                                                "environment": {}, "repository": str(subject / "t/repository"),
+                                                "evaluator_locks": locks})
+            (done / "before.json").write_text("{}")
+            with patch.object(runner, "snapshot", return_value={"validity_flags": []}), \
+                 patch.object(runner, "compare", return_value={"validity_flags": []}), \
+                 patch.object(runner, "config_snapshot", return_value={}), patch("builtins.print"):
+                runner.finish(argparse.Namespace(output=done))
+            self.assertFalse(any(Path(lock["path"]).exists() for lock in locks))
+            self.assertEqual(sorted(lock["path"] for lock in locks),
+                             sorted(json.loads((done / "launch.json").read_text())["evaluator_locks_released"]))
+            runner.release_evaluator_locks(runner.acquire_evaluator_locks(env, root.parent / "next"))
 
     @staticmethod
     def transcript_lines(skills, agents=(), servers=(), tools=(), used=()):

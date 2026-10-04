@@ -310,6 +310,18 @@ history and caches are not hashed. Native workspace-trust writes before
 readiness are not trial drift. The digests do not prove absence of transient
 changes restored before finish, or changes outside the listed coverage.
 
+Trials run one at a time. Any trial can start Codex and Grok, as its seat or
+as a peer, and both write their dedicated home's config during a trial (folder
+trust), so two trials at once change each other's config and both drift; this
+happened on 2026-10-04. Before any seat starts, `launch` takes an exclusive
+lock on the Codex and Grok evaluator homes, a record created with `O_EXCL` in
+`~/.codeflow-eval/trial-locks/`, and refuses a second launch while one is
+held, naming the trial that holds it. `launch.json` records the locks as
+`evaluator_locks`; `finish` frees them after its final config snapshot and
+records `evaluator_locks_released`, and a launch refused before any seat frees
+them at once. After a crash, run `finish` on that trial's output; remove a
+lock record by hand only when no trial is running.
+
 Claude auto-memory and Grok cross-session memory are disabled in the launch
 environment. Codex launch overrides disable history and memory generation
 and injection, and move its SQLite state and logs into the disposable HOME.
@@ -358,6 +370,12 @@ again and added to `GROK_VERSIONS` in the runner.
 A new tab has its own cwd and environment; no existing pane is reused. The
 runner waits for shell readiness before starting a seat, then for seat readiness
 before taking the `before.json` baseline, then delivering the prompt.
+Herdr can keep reporting a seat as blocked for a moment after its trust
+dialog was accepted, while the screen already shows the ready input box (seen
+with Codex 0.160.0 on 2026-10-04). Only in that case readiness waits up to 10
+seconds for the status to catch up and records the wait in `launch.json` as
+`readiness_waits`; without an accepted trust dialog a blocked seat is refused
+at once, and a screen other than the ready input box never counts as ready.
 Startup writes before readiness are not counted. If startup refuses before
 readiness, no baseline exists and `finish` flags incomplete observation.
 Claude delivery recognizes only the complete editor frame
@@ -503,8 +521,11 @@ checkout. Watch roots overlapping these folders are refused.
   Each delivery let through is logged with its time and pane, and `finish`
   checks it against the time the watcher recorded that peer ready.
   Other Herdr calls pass through.
-- `claude`, `codex`, `grok`: version, help and sign-in status calls pass
-  through. The runner's own seat start passes through once, in the subject's
+- `claude`, `codex`, `grok`: version, help and sign-in status calls and
+  `mcp list` (optionally `--json`) pass through to the real harness in the
+  trial's environment, so the answer is what the trial's seats would see; each
+  is logged as an information call and flags nothing. Every other `mcp`
+  subcommand, including `add`, `remove` and `doctor`, is a launch. The runner's own seat start passes through once, in the subject's
   pane, before readiness; `launch.json` records in
   `peers.subject_start_via_launcher` whether Herdr's launch route reached the
   trial PATH. Any other start writes a request and waits up to 20 seconds for
