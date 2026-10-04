@@ -172,12 +172,15 @@ def herdr(context: dict, args: list[str]) -> None:
 
 def informational(harness: str, args: list[str]) -> bool:
     """Version, help, sign-in status and MCP listing calls start no session
-    and change nothing; they run as the evaluator's real harness, so the
-    answer is what the trial's seats would see."""
+    and change no configuration; they run as the evaluator's real harness,
+    so the answer is what the trial's seats would see. Claude's listing
+    health-checks the servers already approved for the trial."""
     if INFO_FLAGS & set(args) or args == ["help"]:
         return True
     rest = list(args)
-    while rest[:1] == ["-c"] and len(rest) >= 2:
+    # Only Codex's `-c` is a configuration override; Claude's `-c` continues
+    # a session, so a leading `-c` there is a launch.
+    while harness == "codex" and rest[:1] == ["-c"] and len(rest) >= 2:
         rest = rest[2:]
     if rest in READ_ONLY:
         return True

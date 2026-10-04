@@ -7,6 +7,8 @@ Use --help and README.md. A clean snapshot is bounded evidence, not confinement.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -1322,52 +1324,77 @@ def evaluator_lock_path(home: Path) -> Path:
     return home.parent / "trial-locks" / f"{home.name}.lock.json"
 
 
-def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[dict]:
-    """Lock the Codex and Grok evaluator homes for this trial, or refuse
-    naming the trial that holds one. Nothing is left locked on refusal."""
-    held: list[dict] = []
-    try:
-        for variable in LOCKED_HOMES:
-            home = Path(os.path.realpath(environment[variable]))
-            path = evaluator_lock_path(home)
-            path.parent.mkdir(mode=0o700, exist_ok=True)
-            if path.parent.is_symlink():
-                raise Refused(f"evaluator lock folder is a link: {path.parent}")
-            record = {"home": str(home), "path": str(path), "output": str(output.resolve()),
-                      "pid": os.getpid(), "time": time.time(), "token": secrets.token_hex(16)}
-            try:
-                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            except FileExistsError:
-                try:
-                    holder = json.loads(path.read_text(encoding="utf-8")).get("output", "unknown")
-                except (OSError, ValueError, AttributeError):
-                    holder = "unreadable lock record"
-                raise Refused(f"another trial holds the evaluator home {home} ({holder}): run one trial at a "
-                              f"time; when that trial is over, `runner.py finish --output <its output>` frees "
-                              f"it; remove {path} yourself only if no trial is running") from None
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(record, handle)
-            held.append(record)
-    except BaseException:
-        release_evaluator_locks(held)
-        raise
-    return held
+@contextlib.contextmanager
+def lock_guard(paths: list[Path]):
+    """Hold the guard of every lock folder involved, in a fixed order. Each
+    folder's `.guard` file is never removed, so taking, checking and freeing
+    a lock record happen as one step against every other launch or finish."""
+    with contextlib.ExitStack() as stack:
+        for folder in sorted({path.parent for path in paths}):
+            folder.mkdir(mode=0o700, exist_ok=True)
+            if folder.is_symlink() or not folder.is_dir():
+                raise Refused(f"evaluator lock folder is not a plain folder: {folder}")
+            descriptor = os.open(folder / ".guard", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            stack.callback(os.close, descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
 
 
-def release_evaluator_locks(locks: list[dict]) -> list[str]:
-    """Free the locks this trial took; a lock another trial holds is kept."""
+def read_lock(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _release_held(locks: list[dict]) -> list[str]:
     released = []
     for lock in locks or []:
         path = Path(lock["path"])
         try:
             if path.is_symlink():
                 continue
-            if json.loads(path.read_text(encoding="utf-8")).get("token") == lock.get("token"):
+            if read_lock(path).get("token") == lock.get("token"):
                 path.unlink()
                 released.append(str(path))
         except (OSError, ValueError, AttributeError):
             continue
     return released
+
+
+def acquire_evaluator_locks(environment: dict[str, str], output: Path) -> list[dict]:
+    """Lock the Codex and Grok evaluator homes for this trial, or refuse
+    naming the trial that holds one. Nothing is left locked on refusal."""
+    homes = [Path(os.path.realpath(environment[variable])) for variable in LOCKED_HOMES]
+    paths = [evaluator_lock_path(home) for home in homes]
+    held: list[dict] = []
+    with lock_guard(paths):
+        try:
+            for home, path in zip(homes, paths):
+                record = {"home": str(home), "path": str(path), "output": str(output.resolve()),
+                          "pid": os.getpid(), "time": time.time(), "token": secrets.token_hex(16)}
+                try:
+                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                except FileExistsError:
+                    try:
+                        holder = read_lock(path).get("output", "unknown")
+                    except (OSError, ValueError, AttributeError):
+                        holder = "unreadable lock record"
+                    raise Refused(f"another trial holds the evaluator home {home} ({holder}): run one trial at "
+                                  f"a time; when that trial is over, `runner.py finish --output <its output>` "
+                                  f"frees it; remove {path} yourself only if no trial is running") from None
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(record, handle)
+                held.append(record)
+        except BaseException:
+            _release_held(held)
+            raise
+    return held
+
+
+def release_evaluator_locks(locks: list[dict]) -> list[str]:
+    """Free the locks this trial took; a lock another trial now holds is kept."""
+    if not locks:
+        return []
+    with lock_guard([Path(lock["path"]) for lock in locks]):
+        return _release_held(locks)
 
 
 def load_fixture(record_path: Path) -> tuple[dict, Path, dict]:
@@ -2072,40 +2099,37 @@ def launch(args) -> None:
         remote_plugins = require_codex_remote_plugins_off(Path(environment["CODEX_HOME"]))
         # Every trial can start Claude too, as its seat or as a peer.
         account_content = require_claude_account_content_off(Path(environment["CLAUDE_CONFIG_DIR"]))
-        # One trial at a time per Codex and Grok home; `finish` frees them.
-        locks = acquire_evaluator_locks(environment, args.output)
         if args.codex_hook_trust == "bypass":
             codex_hook_preflight(environment, repository, hook_trust)
             environment["CODEX_HOME"] = hook_trust["evaluator_home"]
+        authentication = check_evaluator_auth(args.harness, environment, repository)
+        # Validate all config roots before a native process could follow a link.
+        config_preflight = config_snapshot(environment)
+        if args.codex_hook_trust == "bypass":
+            config_preflight["codex"]["plugins"] = hook_trust["plugins"]
+        native = [*native, *kit.trial_native_args(args.harness, environment)]
+        if args.harness == "codex" and args.codex_hook_trust == "bypass":
+            if CODEX_HOOK_TRUST_FLAG not in native:
+                native.append(CODEX_HOOK_TRUST_FLAG)
+            permissions[CODEX_HOOK_TRUST_FLAG] = "true"
+            hook_trust["flag_used"] = True
+        elif args.harness == "codex":
+            print(print_hook_review(args.record), end="")
+        # After the native status checks, which must not meet the launchers.
+        peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
     except Refused as exc:
-        release_evaluator_locks(locals().get("locks") or [])
+        # Every refusal before the seat is recorded; no lock is held yet.
         args.output.mkdir(parents=True)
         write(args.output / "launch.json", {"harness": args.harness, "status": "refused",
                                            "refused_flag": exc.flag, "error": str(exc),
                                            "hook_trust": hook_trust})
         raise
-    authentication = check_evaluator_auth(args.harness, environment, repository)
-    # Validate all config roots before a native process could follow a link.
-    config_preflight = config_snapshot(environment)
-    if args.codex_hook_trust == "bypass":
-        config_preflight["codex"]["plugins"] = hook_trust["plugins"]
-    native = [*native, *kit.trial_native_args(args.harness, environment)]
-    if args.harness == "codex" and args.codex_hook_trust == "bypass":
-        if CODEX_HOOK_TRUST_FLAG not in native:
-            native.append(CODEX_HOOK_TRUST_FLAG)
-        permissions[CODEX_HOOK_TRUST_FLAG] = "true"
-        hook_trust["flag_used"] = True
-    elif args.harness == "codex":
-        print(print_hook_review(args.record), end="")
-    # After the native status checks, which must not meet the launchers.
-    peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
     args.output.mkdir(parents=True)
     run = {"schema_version": 1, "fixture_record": str(args.record.resolve()),
            "repository": str(repository), "harness": args.harness, "workspace": args.workspace, "peers": peers,
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
            "claude_account_content": account_content,
-           "evaluator_locks": locks,
            "declared_mcp_servers": declared_mcp_servers(repository),
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
@@ -2116,6 +2140,11 @@ def launch(args) -> None:
            "status": "prepared", "started_at": time.time()}
     write(args.output / "launch.json", run)
     try:
+        # One trial at a time per Codex and Grok home, taken before any seat
+        # and recorded at once; `finish` frees them. The fixture's own
+        # environment names the dedicated homes.
+        run["evaluator_locks"] = acquire_evaluator_locks(record["subject_environment"], args.output)
+        write(args.output / "launch.json", run)
         argv = ["tab", "create", "--workspace", args.workspace, "--label",
                 f"eval-{record['case_id'][:30]}", "--cwd", str(repository), "--no-focus"]
         for key, value in environment.items():
@@ -2211,6 +2240,9 @@ def launch(args) -> None:
         run["status"] = "started"
     except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
         run.update(status="refused", error=str(exc))
+        if "pane" not in run and run.get("evaluator_locks"):
+            # No seat was started, so nothing can still write the homes.
+            run["evaluator_locks_released"] = release_evaluator_locks(run["evaluator_locks"])
         if "pane" in run and "initial_agent" not in run:
             # Keep the screen a startup refusal met, for inspection.
             try:

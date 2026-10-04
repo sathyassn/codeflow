@@ -7302,7 +7302,10 @@ class ProcessRepairTests(unittest.TestCase):
                  patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, runner.AUTH_REFUSAL):
                 runner.launch(args)
             transport.assert_not_called()
-            self.assertFalse(args.output.exists())
+            # The refusal is recorded; nothing started and no lock is held.
+            refused = json.loads((args.output / "launch.json").read_text())
+            self.assertEqual(("refused", runner.AUTH_REFUSAL), (refused["status"], refused["error"]))
+            self.assertEqual(["launch.json"], [path.name for path in args.output.iterdir()])
             args.output = evidence_root / "refused-flags"
             args.native = ["--settings", "/outside/settings.json"]
             with patch.object(runner, "herdr") as transport, self.assertRaisesRegex(runner.Refused, "--settings"):
@@ -7568,9 +7571,12 @@ class ProcessRepairTests(unittest.TestCase):
             # launch: it waits for the watcher, which refuses it from the subject's
             # pane, and the trial is flagged.
             count = len(self.native_calls(calls))
+            # Claude's `-c` continues a session; only Codex's `-c` is a config pair.
             for harness, args in [("claude", ["mcp", "add", "x", "--", "cmd"]), ("codex", ["mcp", "remove", "x"]),
                                   ("grok", ["mcp", "list", "extra"]), ("grok", ["mcp", "doctor"]),
-                                  ("claude", ["mcp", "list", "now"]), ("codex", ["exec", "mcp list"])]:
+                                  ("claude", ["mcp", "list", "now"]), ("codex", ["exec", "mcp list"]),
+                                  ("claude", ["-c", "review-probe", "mcp", "list"]),
+                                  ("claude", ["-c", "probe", "auth", "status"]), ("grok", ["-c", "x", "mcp", "list"])]:
                 with self.subTest(refused=args):
                     runner.write_peer_context(peers, decision_seconds=10)
                     earlier = set(launches.glob("*.request.json"))
@@ -8871,6 +8877,92 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             self.assertFalse(Path(second[0]["path"]).exists())
             runner.release_evaluator_locks(second)
 
+    def test_an_old_release_never_frees_a_newer_trials_locks(self):
+        import threading
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            env = eval_kit.subject_environment(root.parent / "trial", root.parent / "bin/codeflow", [])
+            first = runner.acquire_evaluator_locks(env, root.parent / "a")
+            paused, go = threading.Event(), threading.Event()
+            real_read = runner.read_lock
+            def slow_read(path):
+                record = real_read(path)
+                if not paused.is_set():
+                    paused.set()
+                    go.wait(10)  # trial A's release has read its token and stops here
+                return record
+            results = {}
+            with patch.object(runner, "read_lock", side_effect=slow_read):
+                a1 = threading.Thread(target=lambda: results.setdefault("a1", runner.release_evaluator_locks(first)))
+                a1.start()
+                self.assertTrue(paused.wait(10))
+                a2 = threading.Thread(target=lambda: results.setdefault("a2", runner.release_evaluator_locks(first)))
+                def take_b():
+                    try:
+                        results["b"] = runner.acquire_evaluator_locks(env, root.parent / "b")
+                    except runner.Refused as exc:
+                        results["b"] = exc
+                b = threading.Thread(target=take_b)
+                a2.start(); b.start()
+                time.sleep(0.5)
+                go.set()
+                for thread in (a1, a2, b):
+                    thread.join(10)
+                    self.assertFalse(thread.is_alive())
+            self.assertIsInstance(results["b"], list)
+            for lock in results["b"]:
+                self.assertEqual(lock["token"], json.loads(Path(lock["path"]).read_text())["token"])
+            self.assertEqual(sorted(lock["path"] for lock in first), sorted(results["a1"]))
+            with self.assertRaisesRegex(runner.Refused, "another trial holds"):
+                runner.acquire_evaluator_locks(env, root.parent / "c")
+            self.assertEqual(2, len(runner.release_evaluator_locks(results["b"])))
+
+    def test_launch_refusals_before_any_seat_leave_no_lock(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            subject = root.parent / "subjects"
+            (subject / "t/repository").mkdir(parents=True)
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            def make_args(name):
+                return type("A", (), {"record": root.parent / "r.json", "output": root.parent / name, "workspace": "w",
+                                      "harness": "codex", "codex_hook_trust": "review", "watch_dir": [],
+                                      "max_entries": 10, "snapshot_seconds": 1, "start_timeout": 1,
+                                      "native": ["--", "--model", "gpt-6-astra", "--ask-for-approval", "never",
+                                                 "--sandbox", "danger-full-access"]})()
+            lock_paths = [runner.evaluator_lock_path(Path(env[variable])) for variable in runner.LOCKED_HOMES]
+            fixture = patch.object(runner, "load_fixture", return_value=(
+                {"subject_environment": env, "case_id": "c"}, subject / "t/repository", []))
+            no_watch = patch.object(runner, "watch_directories", return_value=[])
+            signed_in = patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True})
+            failures = {
+                "authentication": [patch.object(runner, "check_evaluator_auth",
+                                                side_effect=runner.Refused("evaluator home not signed in"))],
+                "configuration": [signed_in, patch.object(runner, "config_snapshot",
+                                                          side_effect=runner.Refused("config changed"))],
+                "peer preparation": [signed_in, patch.object(runner, "prepare_peers",
+                                                             side_effect=runner.Refused("peer launchers"))],
+                "tab create": [signed_in, patch.object(runner, "herdr",
+                                                       side_effect=runner.Refused("herdr tab create failed"))],
+            }
+            for label, patches in failures.items():
+                with self.subTest(label):
+                    args = make_args(label.replace(" ", "-"))
+                    with fixture, no_watch, contextlib.ExitStack() as stack:
+                        for item in patches:
+                            stack.enter_context(item)
+                        with self.assertRaises(runner.Refused):
+                            runner.launch(args)
+                    self.assertFalse(any(path.exists() for path in lock_paths), label)
+                    saved = json.loads((args.output / "launch.json").read_text())
+                    self.assertEqual("refused", saved["status"])
+                    if saved.get("evaluator_locks"):
+                        self.assertEqual(sorted(lock["path"] for lock in saved["evaluator_locks"]),
+                                         sorted(saved["evaluator_locks_released"]))
+            # The next trial takes the homes.
+            runner.release_evaluator_locks(runner.acquire_evaluator_locks(env, root.parent / "next"))
+
     def test_launch_refuses_a_second_trial_and_finish_frees_the_homes(self):
         import argparse
         runner = self.runner()
@@ -8879,7 +8971,9 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             subject = root.parent / "subjects"
             env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
             held = runner.acquire_evaluator_locks(env, root.parent / "running-trial")
+            (subject / "t/repository").mkdir(parents=True)
             with patch.object(runner, "herdr") as transport, \
+                 patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
                  patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
                                                                     subject / "t/repository", [])), \
                  patch.object(runner, "watch_directories", return_value=[]):
@@ -8892,7 +8986,10 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
                 with self.assertRaisesRegex(runner.Refused, "another trial holds"):
                     runner.launch(args)
                 transport.assert_not_called()
-            self.assertEqual("refused", json.loads((output / "launch.json").read_text())["status"])
+            saved = json.loads((output / "launch.json").read_text())
+            self.assertEqual("refused", saved["status"])
+            self.assertIn("another trial holds", saved["error"])
+            self.assertNotIn("evaluator_locks", saved)
             self.assertTrue(all(Path(lock["path"]).exists() for lock in held))
             runner.release_evaluator_locks(held)
             # finish frees the locks its launch recorded, after the final snapshot.

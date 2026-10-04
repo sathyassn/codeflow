@@ -313,14 +313,18 @@ changes restored before finish, or changes outside the listed coverage.
 Trials run one at a time. Any trial can start Codex and Grok, as its seat or
 as a peer, and both write their dedicated home's config during a trial (folder
 trust), so two trials at once change each other's config and both drift; this
-happened on 2026-10-04. Before any seat starts, `launch` takes an exclusive
-lock on the Codex and Grok evaluator homes, a record created with `O_EXCL` in
-`~/.codeflow-eval/trial-locks/`, and refuses a second launch while one is
-held, naming the trial that holds it. `launch.json` records the locks as
-`evaluator_locks`; `finish` frees them after its final config snapshot and
-records `evaluator_locks_released`, and a launch refused before any seat frees
-them at once. After a crash, run `finish` on that trial's output; remove a
-lock record by hand only when no trial is running.
+happened on 2026-10-04. Once `launch.json` exists and before any seat starts,
+`launch` takes an exclusive lock on the Codex and Grok evaluator homes, a
+record created with `O_EXCL` in `~/.codeflow-eval/trial-locks/`, and refuses a
+second launch while one is held, naming the trial that holds it. Taking,
+checking and freeing a lock record happen under an `flock` on that folder's
+`.guard` file, so a late or repeated release never frees a newer trial's
+lock. `launch.json` records the locks as `evaluator_locks`; `finish` frees
+them after its final config snapshot and records `evaluator_locks_released`,
+and a launch refused before any seat started frees them at once. Every
+refusal before the seat is recorded in `launch.json`. After a crash, run
+`finish` on that trial's output; remove a lock record by hand only when no
+trial is running.
 
 Claude auto-memory and Grok cross-session memory are disabled in the launch
 environment. Codex launch overrides disable history and memory generation
@@ -524,8 +528,11 @@ checkout. Watch roots overlapping these folders are refused.
 - `claude`, `codex`, `grok`: version, help and sign-in status calls and
   `mcp list` (optionally `--json`) pass through to the real harness in the
   trial's environment, so the answer is what the trial's seats would see; each
-  is logged as an information call and flags nothing. Every other `mcp`
-  subcommand, including `add`, `remove` and `doctor`, is a launch. The runner's own seat start passes through once, in the subject's
+  is logged as an information call and flags nothing. Claude's listing
+  health-checks the servers already approved for the trial. Leading `-c`
+  pairs are read as configuration for Codex only; for Claude `-c` continues a
+  session, so such a call is a launch. Every other `mcp` subcommand,
+  including `add`, `remove` and `doctor`, is a launch. The runner's own seat start passes through once, in the subject's
   pane, before readiness; `launch.json` records in
   `peers.subject_start_via_launcher` whether Herdr's launch route reached the
   trial PATH. Any other start writes a request and waits up to 20 seconds for
