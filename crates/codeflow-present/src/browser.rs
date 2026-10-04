@@ -546,23 +546,23 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
 /// Judges the `ps` rendering of one process: owned when it shows both
 /// identity arguments, reused otherwise.
 ///
-/// OS text rule (issue 79, `docs/architecture.md`): the rendering is decoded
-/// lossily and only compared. An invalid byte becomes U+FFFD, which is neither
-/// whitespace nor part of an identity argument, and the instance argument
-/// holds a random UUID that no other process can carry, so the decode cannot
-/// turn another process into an owned one. Refusing the read for its encoding
-/// would fail `present close` on a machine with an unusual process name.
+/// OS text rule (issue 79, `docs/architecture.md`): the rendering is compared
+/// as bytes and never decoded. Identity is an exact match of two arguments, so
+/// a byte that is not valid UTF-8 elsewhere in the line cannot change the
+/// answer and must not refuse the read, and an invalid byte can never equal a
+/// valid character such as U+FFFD in the profile path, which a lossy decode
+/// would let it do. Refusing the read for its encoding would fail `present
+/// close` on a machine with an unusual process name.
 #[cfg(any(target_os = "macos", test))]
 fn rendered_process_identity(
     stdout: &[u8],
     instance_id: Uuid,
     profile_dir: &Path,
 ) -> ProcessIdentity {
-    let command = String::from_utf8_lossy(stdout);
     let profile = format!("--user-data-dir={}", profile_dir.display());
     let instance = format!("--cf-present-instance={instance_id}");
-    if rendered_command_line_contains_argument(&command, &profile)
-        && rendered_command_line_contains_argument(&command, &instance)
+    if rendered_command_line_contains_argument(stdout, &profile)
+        && rendered_command_line_contains_argument(stdout, &instance)
     {
         ProcessIdentity::Owned
     } else {
@@ -675,27 +675,32 @@ fn macos_inventory_candidates(
     // `ps` lists every user's processes, and one caught in the middle of
     // `exec` can show bytes that are not UTF-8 (seen under a loaded full
     // gate, TSK-142 AC-6). Refusing the whole listing for it would fail
-    // cleanup on any busy machine. Each invalid byte decodes to U+FFFD,
-    // which is neither whitespace nor part of an identity argument, so an
-    // owned line is still found and no other line can come to match.
-    let output = String::from_utf8_lossy(output);
+    // cleanup on any busy machine. The listing is compared as bytes (issue
+    // 79), so an owned line is still found and no other line can come to
+    // match, whatever bytes it holds.
     let profile = format!("--user-data-dir={}", profile_dir.display());
     let instance = format!("--cf-present-instance={instance_id}");
     let mut candidates = Vec::new();
-    for line in output.lines() {
-        let line = line.trim_start();
-        let Some(split) = line.find(char::is_whitespace) else {
+    for line in output.split(|byte| *byte == b'\n') {
+        let line = line.trim_ascii_start();
+        let Some(split) = line.iter().position(u8::is_ascii_whitespace) else {
             continue;
         };
         let (pid, command) = line.split_at(split);
-        if rendered_command_line_contains_argument(command.trim_start(), &profile)
-            && rendered_command_line_contains_argument(command.trim_start(), &instance)
+        let command = command.trim_ascii_start();
+        if rendered_command_line_contains_argument(command, &profile)
+            && rendered_command_line_contains_argument(command, &instance)
         {
-            candidates.push(pid.parse::<u32>().map_err(|_| {
-                PresentError::BrowserUnavailable(
-                    "browser process inventory contained an invalid PID".to_string(),
-                )
-            })?);
+            candidates.push(
+                std::str::from_utf8(pid)
+                    .ok()
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                    .ok_or_else(|| {
+                        PresentError::BrowserUnavailable(
+                            "browser process inventory contained an invalid PID".to_string(),
+                        )
+                    })?,
+            );
             if candidates.len() > 64 {
                 return Err(PresentError::BrowserUnavailable(
                     "browser process candidate count exceeded its bound".to_string(),
@@ -926,6 +931,7 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
         ));
     }
     let command = windows_output_text(&output.stdout);
+    refuse_ambiguous_identity_text(&command, profile_dir)?;
     let arguments = windows_command_line_arguments(&command)?;
     let argument_refs = arguments.iter().map(String::as_str).collect::<Vec<_>>();
     if !arguments_prove_identity(&argument_refs, instance_id, profile_dir) {
@@ -937,15 +943,32 @@ fn process_identity(pid: u32, instance_id: Uuid, profile_dir: &Path) -> Result<P
 /// The text a `PowerShell` identity query wrote.
 ///
 /// OS text rule (issue 79, `docs/architecture.md`): the text is decoded
-/// lossily and only compared. `PowerShell` encodes a .NET string, so a lone
-/// surrogate in a command line arrives as U+FFFD, and a console that is not
-/// UTF-8 can still hand back other bytes. U+FFFD is no part of an identity
-/// argument and the instance argument holds a random UUID, so the decode
-/// cannot make another process look owned. Refusing the read for its encoding
-/// would fail `present close` for any browser the user has open.
+/// lossily. `PowerShell` encodes a .NET string, so a lone surrogate in a
+/// command line arrives as U+FFFD, and a console that is not UTF-8 can still
+/// hand back other bytes. Refusing the read for its encoding would fail
+/// `present close` for any browser the user has open. A replacement character
+/// cannot tell an invalid unit from a valid U+FFFD, so
+/// [`refuse_ambiguous_identity_text`] stops the one case where that could
+/// matter, and the instance argument, a random UUID, is exact either way.
 #[cfg(any(windows, test))]
 fn windows_output_text(stdout: &[u8]) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(stdout)
+}
+
+/// Refuses identity text that a lossy decode cannot judge exactly: text that
+/// holds U+FFFD while the expected profile argument holds it too. The profile
+/// path is then ambiguous with an invalid unit in the process text, which is an
+/// identity decision, so the read stops, as it does for any identity it cannot
+/// prove.
+#[cfg(any(windows, test))]
+fn refuse_ambiguous_identity_text(text: &str, profile_dir: &Path) -> Result<()> {
+    if text.contains('\u{fffd}') && profile_dir.display().to_string().contains('\u{fffd}') {
+        return Err(PresentError::BrowserUnavailable(
+            "browser identity cannot be proven exactly: its text and the profile path both hold U+FFFD"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(any(windows, test))]
@@ -1001,6 +1024,7 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
                 "a qualified Windows browser process has an unreadable command line",
             ))
         })?;
+        refuse_ambiguous_identity_text(&command, profile_dir)?;
         let arguments = windows_command_line_arguments(&command)?;
         let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
         if arguments_prove_identity(&arguments, instance_id, profile_dir) {
@@ -1364,13 +1388,25 @@ fn arguments_prove_identity<A: AsRef<[u8]>>(
             .any(|argument| argument.as_ref() == instance.as_bytes())
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn rendered_command_line_contains_argument(command: &str, expected: &str) -> bool {
-    command.match_indices(expected).any(|(start, value)| {
-        let before = command[..start].chars().next_back();
-        let after = command[start + value.len()..].chars().next();
-        before.is_none_or(char::is_whitespace) && after.is_none_or(char::is_whitespace)
-    })
+/// Whether `expected` is one whole argument of a `ps` rendering, which joins
+/// the arguments with spaces. Bytes, not text (issue 79): see
+/// [`rendered_process_identity`].
+#[cfg(any(target_os = "macos", windows, test))]
+fn rendered_command_line_contains_argument(command: &[u8], expected: &str) -> bool {
+    let expected = expected.as_bytes();
+    if expected.is_empty() || command.len() < expected.len() {
+        return false;
+    }
+    command
+        .windows(expected.len())
+        .enumerate()
+        .any(|(start, window)| {
+            window == expected
+                && command[..start].last().is_none_or(u8::is_ascii_whitespace)
+                && command[start + expected.len()..]
+                    .first()
+                    .is_none_or(u8::is_ascii_whitespace)
+        })
 }
 
 #[cfg(test)]
@@ -1556,11 +1592,11 @@ mod tests {
     #[test]
     fn rendered_command_line_identity_rejects_prefix_and_suffix_confusion() {
         assert!(rendered_command_line_contains_argument(
-            "chrome --user-data-dir=/tmp/profile --flag",
+            b"chrome --user-data-dir=/tmp/profile --flag",
             "--user-data-dir=/tmp/profile"
         ));
         assert!(!rendered_command_line_contains_argument(
-            "chrome --user-data-dir=/tmp/profile-other --flag",
+            b"chrome --user-data-dir=/tmp/profile-other --flag",
             "--user-data-dir=/tmp/profile"
         ));
     }
@@ -1626,6 +1662,22 @@ mod tests {
             rendered_process_identity(b"/bin/other \xc3 --flag\n", instance, profile),
             ProcessIdentity::Reused
         );
+        // Review finding: an invalid byte is not a valid U+FFFD in the
+        // profile path, so it cannot stand for it.
+        let fffd_profile = Path::new("/state/pro\u{fffd}ile/browser-profile");
+        let raw = format!(
+            "chrome --user-data-dir=/state/pro\u{fffd}ile/browser-profile --cf-present-instance={instance}\n"
+        );
+        assert_eq!(
+            rendered_process_identity(raw.as_bytes(), instance, fffd_profile),
+            ProcessIdentity::Owned
+        );
+        let mut invalid = b"chrome --user-data-dir=/state/pro\xffile/browser-profile ".to_vec();
+        invalid.extend_from_slice(format!("--cf-present-instance={instance}\n").as_bytes());
+        assert_eq!(
+            rendered_process_identity(&invalid, instance, fffd_profile),
+            ProcessIdentity::Reused
+        );
         // An invalid byte inside an identity argument breaks it.
         let broken = format!(
             "chrome --user-data-dir=/state/browser-pro\u{fffd}ile --cf-present-instance={instance}\n"
@@ -1651,11 +1703,61 @@ mod tests {
         let text = windows_output_text(&command);
         assert!(text.contains('\u{fffd}'));
         assert!(rendered_command_line_contains_argument(
-            &text,
+            text.as_bytes(),
             &format!("--cf-present-instance={instance}")
         ));
         let arguments = text.split(' ').collect::<Vec<_>>();
         assert!(arguments_prove_identity(&arguments, instance, profile));
+        refuse_ambiguous_identity_text(&text, profile).unwrap();
+    }
+
+    /// Review finding: a lossy decode cannot tell an invalid unit from a valid
+    /// U+FFFD, so the one case where that could name the wrong process, a
+    /// profile path that holds U+FFFD beside process text that does, is
+    /// refused.
+    #[test]
+    fn non_utf8_identity_windows_text_is_refused_when_the_profile_holds_the_replacement() {
+        let ambiguous = Path::new("/state/pro\u{fffd}ile/browser-profile");
+        let plain = Path::new("/state/browser-profile");
+        let text = windows_output_text(b"chrome.exe \xff --x");
+        assert!(refuse_ambiguous_identity_text(&text, ambiguous)
+            .unwrap_err()
+            .to_string()
+            .contains("U+FFFD"));
+        refuse_ambiguous_identity_text(&text, plain).unwrap();
+        refuse_ambiguous_identity_text("chrome.exe --x", ambiguous).unwrap();
+    }
+
+    /// Review finding: an owned record beside unrelated ones is still found
+    /// when its command line holds a byte that is not UTF-8. The arguments are
+    /// split on spaces here, where the Windows build uses `CommandLineToArgvW`.
+    #[test]
+    fn non_utf8_windows_inventory_finds_the_owned_record() {
+        let instance = Uuid::new_v4();
+        let profile = Path::new("/state/browser-profile");
+        let owned = format!(
+            "chrome.exe --user-data-dir=/state/browser-profile --cf-present-instance={instance}"
+        );
+        let json = [
+            br#"[{"ProcessId":4,"Name":"chrome.exe","CommandLine":"chrome.exe "#.as_slice(),
+            b"\xff",
+            br#" --other"},{"ProcessId":9,"Name":"chrome.exe","CommandLine":""#.as_slice(),
+            owned.as_bytes(),
+            b" \xc3",
+            br#""}]"#.as_slice(),
+        ]
+        .concat();
+        let found = windows_inventory_records(&json)
+            .unwrap()
+            .into_iter()
+            .filter(|record| {
+                let command = record.command_line.as_deref().unwrap();
+                let arguments = command.split(' ').collect::<Vec<_>>();
+                arguments_prove_identity(&arguments, instance, profile)
+            })
+            .map(|record| record.process_id)
+            .collect::<Vec<_>>();
+        assert_eq!(found, [9]);
     }
 
     #[test]
