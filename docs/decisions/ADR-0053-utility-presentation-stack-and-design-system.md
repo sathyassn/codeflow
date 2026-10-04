@@ -32,7 +32,7 @@ conventions, present Comment interaction rules, and skill doctrine that
 authoring composes into that system rather than inventing free-form pages.
 Consuming product brand and product UI are out of scope. Normative craft
 intent is recorded in
-[`utility-presentation-system-design-intent-2026-08-07.md`](../verification/utility-presentation-system-design-intent-2026-08-07.md).
+[`utility-presentation-system-design-intent-2026-08-07.md`](https://github.com/sathyassn/codeflow/blob/main/docs/verification/utility-presentation-system-design-intent-2026-08-07.md).
 
 **Present stack.** Keep **Rust-owned document DOM** and **Preact-owned chrome
 only** as in ADR-0049. Implement the settled design system in that chrome

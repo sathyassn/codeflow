@@ -14,64 +14,102 @@ task, one holistic review, one full gate per batch, and one pull request into
 `main` that the operator merges.**
 
 Every piece of work attaches to a task before substantive work starts, an
-existing one or a new one. The smallest unit is a standalone task, whose
-record and code land in the same reviewed pull request. A body of work starts
-from a brief or a spec and is broken down once into an epic and its tasks, in
-one planning pull request reviewed once by the other model lineage. Each task
-then goes the same way: one pull request that carries the whole change, one
-review by the other lineage, and a landing in a small batch with one full
-gate. When the epic is done, one pull request carries it into `main`, and only
-a person merges there.
+existing one or a new one.
 
-It is for the operator who runs agents and wants to know what to approve and
-merge, and for a contributor landing a change. It is not a plan per task, a
-review capped at a number of rounds, or a full gate for each pull request in
-a batch; those were retired by ADR-0076 without lowering any quality floor,
-and a standalone pull request still runs its own gate as its own candidate.
-Where durable
-tracking is inactive (the standard and minimal tiers), the same flow runs with
-the harness's tracked unit in place of the task record.
+- The smallest unit is a standalone task, whose record and code land in the
+  same reviewed pull request.
+- A body of work starts from a brief or a spec and is broken down once into an
+  epic and its tasks, in one planning pull request reviewed once by the other
+  model lineage.
+- Each task then goes the same way: one pull request that carries the whole
+  change, one review by the other lineage, and a landing in a small batch with
+  one full gate.
+- When the epic is done, one pull request carries it into `main`, and only a
+  person merges there.
+
+This page is for the operator who runs agents and wants to know what to
+approve and merge, and for a contributor landing a change. ADR-0076 retired
+three things without lowering any quality floor:
+
+- a plan for every task
+- a review capped at a number of rounds
+- a full gate for each pull request in a batch
+
+A standalone pull request still runs its own gate as its own candidate. Where
+durable tracking is inactive (the standard and minimal tiers), the same flow
+runs with the harness's tracked unit in place of the task record.
 
 ## Architecture
 
 **Four actors take a task through its stages, and the operator holds the
 last boundary.**
 
-- **The builder**, an agent seat, starts the task from the line tip or a
-  predecessor's reviewed head, builds with the tests in the same change,
-  merges the current integration line into the task branch so conflicts
-  surface in the task, and opens one pull request that carries the whole task:
-  code, tests, docs, the task record with its status and criteria, and the
-  acceptance block. It cites its targeted tests and the quick gate in the
-  pull request.
+From request to `main`, the work passes through the actors in this order:
+
+```text
+  operator   settles intent at the breakdown
+      |
+      v
+  planning   one PR creates the epic and its tasks, reviewed once
+      |
+      v
+  builder    one PR per task
+      |
+      v
+  reviewer   one review of the whole change; a material finding is
+      |      fixed in the same PR
+      v
+  primary    batch candidate, one full gate on that exact candidate
+      |      green: the integration line moves
+      |      red: diagnose first, drop a member only on evidence
+      v
+  primary    proves the epic once and raises one PR into main
+      |
+      v
+  operator   reviews and merges it; agents never merge into main
+```
+
+The builder and reviewer steps repeat for each task, and the primary gates
+each batch.
+
+- **The builder**, an agent seat, takes the task from start to pull request.
+  - It starts the task from the line tip or a predecessor's reviewed head.
+  - It builds with the tests in the same change.
+  - It merges the current integration line into the task branch, so conflicts
+    surface in the task.
+  - It opens one pull request that carries the whole task: code, tests, docs,
+    the task record with its status and criteria, and the acceptance block.
+  - It cites its targeted tests and the quick gate in the pull request.
 - **The reviewer**, a seat of the other model lineage, reads the whole change
   once. A material finding is fixed in the same pull request and confirmed by
   its finder; a nit gets one disposition and never blocks. Review ends on
   evidence, never on a round count.
 - **The primary** assembles reviewed heads into a small batch candidate in
-  dependency order, inspects the resolved hunks and seams on product paths,
-  and runs the full gate once on that exact candidate. The other lineage
-  reviews the integration effects only when the primary hand-resolved a
-  product hunk or two tasks touched one hotspot; unit reviews are not
-  repeated. Green moves the integration line. Red is diagnosed first, and a
-  member leaves the batch only when evidence attributes the failure to it.
-  When the last batch has landed, the primary proves the epic once on the
-  integration line, closes it and raises the one pull request into `main`.
+  dependency order and inspects the resolved hunks and seams on product paths.
+  - It runs the full gate once on that exact candidate.
+  - The other lineage
+    reviews the integration effects only when the primary hand-resolved a
+    product hunk or two tasks touched one hotspot. Unit reviews are not
+    repeated.
+  - Green moves the integration line. Red is diagnosed first, and a
+    member leaves the batch only when evidence attributes the failure to it.
+  - When the last batch has landed, the primary proves the epic once on the
+    integration line, closes it and raises the one pull request into `main`.
 - **The operator** settles intent at the breakdown, decides any change of
   intent midway, and reviews and merges that one pull request into `main`.
   Agents never merge there.
 
-A standalone pull request is its own candidate: it lands on the integration
-line it targets, or, when it targets `main`, it is the pull request the
-operator merges. A later task may build on a predecessor's exact reviewed
-head before that predecessor lands, named with `--on TSK-NNN@<sha>`; the
-predecessor still lands first, and a change to it after review means a
-rebase and a recheck. Landing has priority: a new build starts only while no
-landing can proceed.
+- A standalone pull request is its own candidate. It lands on the integration
+  line it targets, or, when it targets `main`, it is the pull request the
+  operator merges.
+- A later task may build on a predecessor's exact reviewed head before that
+  predecessor lands, named with `--on TSK-NNN@<sha>`. The predecessor still
+  lands first, and a change to it after review means a rebase and a recheck.
+- Landing has priority: a new build starts only while no landing can proceed.
 
 Only the operator adds process. A rule that adds a pull request, an approval,
 a review pass or a record to every task needs the operator's explicit
-approval, with what it protects and what it costs; agreement between model
+approval, with what it protects and what it costs. Agreement between model
 seats is never enough.
 
 ## Technical

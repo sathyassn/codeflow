@@ -20,15 +20,25 @@ controls ([Codex security](https://learn.chatgpt.com/docs/security)).
 ## Architecture
 
 Each harness reads its own configuration files, and all three hand the same
-payload to the same two guards. Read a row of the table as the boundary for one
-harness: the left column is what the scaffold turns on, the right column is
-what an operator still has to decide.
+payload to the same two guards. Each table row is the boundary for one harness.
+The middle column is what the scaffold turns on, and the right column is what
+an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
 | Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations; cross-family seats pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; an unsandboxed retry only when the native configuration permits it, auto-classified for a trusted installed tool that needs host state such as `herdr` or the official Codex plugin; the guards judge the retried command under the same policy, a retry never lifts a destructive, privileged, publishing, secret-read or enforcement-file refusal, and a delegated seat that runs sandboxed denies the retry natively; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
 | Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
+
+The unsandboxed retry for Claude Code works as follows.
+
+- It happens only when the native configuration permits it.
+- It is auto-classified, and only for a trusted installed tool that needs host
+  state, such as the official Codex plugin.
+- The guards judge the retried command under the same policy.
+- A retry never lifts a destructive, privileged, publishing, secret-read or
+  enforcement-file refusal.
+- A delegated seat that runs sandboxed denies the retry natively.
 
 The catastrophic classifier is a non-relaxable floor, not a complete endpoint
 security product. Managed organization policy, least-privilege host accounts,
@@ -43,10 +53,11 @@ dated evidence.
 
 ### Platform assurance
 
-CodeFlow releases target macOS, Linux, and x86-64 native Windows; 3.0.0 was
-the one release without native Windows, which returns in 3.1.0. Windows users
-can also run the Linux build inside WSL2; this is the preferred route for a
-Linux-native toolchain or Claude work that needs OS-enforced sandboxing.
+- CodeFlow releases target macOS, Linux, and x86-64 native Windows. 3.0.0 was
+  the one release without native Windows, which returns in 3.1.0.
+- Windows users can also run the Linux build inside WSL2. This is the preferred
+  route for a Linux-native toolchain or Claude work that needs OS-enforced
+  sandboxing.
 
 | Platform | Sandbox | What it means for the work |
 |---|---|---|
@@ -63,13 +74,16 @@ specific shell. `/cf-customize` must canary the selected shell and commands.
 
 ### Codex permission profile
 
-The `cf-guard` permission profile in `.codex/config.toml` (selected via
-`default_permissions`, extending `:workspace`) denies the home-directory secret
-stores and high-confidence workspace key material (`~/.ssh`, `~/.aws`, `.env`,
-`*.key`, `*.p12`, …) at the OS-sandbox layer, so unlike the PreToolUse guards
-it holds even in headless `codex exec` (ADR-0014). The `gh` and `docker`
-tool-token stores are deliberately left readable so those tools can read their
-own tokens.
+The `cf-guard` permission profile in `.codex/config.toml` is selected via
+`default_permissions` and extends `:workspace`.
+
+- It denies the home-directory secret stores and high-confidence workspace key
+  material (`~/.ssh`, `~/.aws`, `.env`, `*.key`, `*.p12`, …) at the OS-sandbox
+  layer.
+- Unlike the PreToolUse guards, it holds even in headless `codex exec`
+  (ADR-0014).
+- The `gh` and `docker` tool-token stores are deliberately left readable so
+  those tools can read their own tokens.
 
 | Key | Value | Why |
 |---|---|---|
@@ -81,34 +95,44 @@ own tokens.
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
 | `approvals_reviewer` | `approvals_reviewer = "auto_review"` | vestigial under `never`: it is not a human gate and does not fire on-request prompts |
 
-`.codex/hooks.json` wires `codeflow hook git-guard` and
-`codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event and
-`codeflow hook edit-guard` onto its `apply_patch` edits, each with
-`--contract 3`, and `config.toml` enables the hooks engine. The `.codex/`
-starter is part of the enforcement floor, shipped from `--minimal` up. Codex
-loads a project's `.codex/hooks.json` only when that project's `.codex/` layer
-is trusted: run `/hooks` inside an interactive `codex` session to trust the
-CodeFlow hooks. Codex records that trust against the absolute path of the
-hooks file, so each new clone or linked worktree asks again, and a changed
-hooks file, such as the move to contract 3, asks again too. Codex's hook payload is byte-compatible with Claude's, so the same
-binaries run unchanged.
+The Codex hook wiring works as follows.
+
+- `.codex/hooks.json` wires `codeflow hook git-guard` and
+  `codeflow hook exec-guard` onto Codex's `PreToolUse` (Bash) event and
+  `codeflow hook edit-guard` onto its `apply_patch` edits, each with
+  `--contract 3`. `config.toml` enables the hooks engine.
+- The `.codex/` starter is part of the enforcement floor, shipped from
+  `--minimal` up.
+- Codex loads a project's `.codex/hooks.json` only when that project's
+  `.codex/` layer is trusted. Run `/hooks` inside an interactive `codex`
+  session to trust the CodeFlow hooks.
+- Codex records that trust against the absolute path of the hooks file, so each
+  new clone or linked worktree asks again. A changed hooks file, such as the
+  move to contract 3, asks again too.
+- Codex's hook payload is byte-compatible with Claude's, so the same binaries
+  run unchanged.
 
 `session-orient` is wired for Codex `SessionStart` too, for all sources
-(ADR-0013), so an interactive Codex session opens with the same orientation
-digest Claude gets, and re-orients to it after a compaction
-(`source=compact`). One handler serves both harnesses with plain-text stdout
-that each injects as session context. The `codex_hooks` test pins the JSON
-wiring, while live firing rests on Codex's documented hooks contract.
+(ADR-0013).
+
+- An interactive Codex session opens with the same orientation digest Claude
+  gets, and re-orients to it after a compaction (`source=compact`).
+- One handler serves both harnesses with plain-text stdout that each injects as
+  session context.
+- The `codex_hooks` test pins the JSON wiring, while live firing rests on
+  Codex's documented hooks contract.
 
 ### Credentials and tools
 
-Authenticated command-line tools must be able to read their own configuration,
-so the OS sandbox does not deny `~/.config/gh` or `~/.docker/config.json` to
-every subprocess; doing so would also disable `gh` and Docker. Prefer OS
-keychains and credential helpers rather than plaintext tokens in those files.
-The harness denies direct file-reading tools, but a host that cannot provide
-brokered or helper-backed credentials must treat arbitrary shell access as
-credential-bearing and tighten that task's tool boundary.
+Authenticated command-line tools must be able to read their own configuration.
+
+- The OS sandbox does not deny `~/.config/gh` or `~/.docker/config.json` to
+  every subprocess, because doing so would also disable `gh` and Docker.
+- Prefer OS keychains and credential helpers rather than plaintext tokens in
+  those files.
+- The harness denies direct file-reading tools. A host that cannot provide
+  brokered or helper-backed credentials must treat arbitrary shell access as
+  credential-bearing and tighten that task's tool boundary.
 
 | Concern | Rule |
 |---|---|
@@ -122,19 +146,22 @@ credential-bearing and tighten that task's tool boundary.
 
 ### Hosting the duo from either seat
 
-A Codex-primary session can host the full duo, not only a consult. The host
-owns orchestration and routes production by the qualified capability binding,
-risk, evidence needs, and available capacity; no vendor receives implementation
-work merely because of its name. From a Claude Code host, the official Codex
-plugin provides the independent Codex lane. Both seats independently research
-and plan before approving the same versioned contract; material design and
-implementation receive cross-lineage review (ADR-0023, ADR-0046).
+A Codex-primary session can host the full duo, not only a consult.
 
-Google's Antigravity `agy` is **not** bound automatically: its hook dialect
-differs and its macOS reliability is unresolved. The `cf-delegate` skill carries
-an experimental, manual opt-in snippet for those who want it. As a *delegate*,
-`agy` is retired: its only documented drive shape is headless one-shot, which
-ADR-0018 prohibits.
+- The host owns orchestration and routes production by the qualified
+  capability binding, risk, evidence needs, and available capacity. No vendor
+  receives implementation work merely because of its name.
+- From a Claude Code host, the official Codex plugin provides the independent
+  Codex lane.
+- Both seats independently research and plan before approving the same
+  versioned contract. Material design and implementation receive cross-lineage
+  review (ADR-0023, ADR-0046).
+
+Google's Antigravity `agy` is **not** bound automatically. Its hook dialect
+differs and its macOS reliability is unresolved. The `cf-delegate` skill
+carries an experimental, manual opt-in snippet for those who want it. As a
+*delegate*, `agy` is retired: its only documented drive shape is headless
+one-shot, which ADR-0018 prohibits.
 
 ### Dated verification stamps
 
@@ -150,19 +177,18 @@ re-verifies them before each CodeFlow tag.
 | Headless `codex exec` did not run project PreToolUse hooks, even with `--dangerously-bypass-hook-trust` and the layer trusted | codex-cli 0.142.5 | historical, retained by ADR-0008 |
 | `agy` does not read `AGENTS.md` | Antigravity `agy` 1.0.15 | historical |
 
-Treat the in-session guards as an interactive-session safeguard and rely on the
-git-hook plane where Git invokes the installed hooks. CodeFlow's own flows no
-longer produce headless runs: ADR-0018 makes cross-model transport
-interactive-only, so the consult, delegate and duo flows never shell out to
-`codex exec` and a headless Codex run is outside those flows.
-
-Do not generalize
-that historical Codex observation to every harness: Claude's
-[programmatic-mode documentation](https://code.claude.com/docs/en/headless)
-states that ordinary noninteractive sessions load project hooks, while bare
-mode skips their automatic discovery.
-
-This does not authorize headless CodeFlow
-work. Earlier hook-specific evidence is retained by ADR-0008, ADR-0013, and
-ADR-0014, and how far each plane reaches is in
-[enforcement planes](architecture/enforcement-planes.md).
+- Treat the in-session guards as an interactive-session safeguard, and rely on
+  the git-hook plane where Git invokes the installed hooks.
+- CodeFlow's own flows no longer produce headless runs. ADR-0018 makes
+  cross-model transport interactive-only, so the consult, delegate and duo
+  flows never shell out to `codex exec`, and a headless Codex run is outside
+  those flows.
+- Do not generalize that historical Codex observation to every harness.
+  Claude's
+  [programmatic-mode documentation](https://code.claude.com/docs/en/headless)
+  states that ordinary noninteractive sessions load project hooks, while bare
+  mode skips their automatic discovery.
+- This does not authorize headless CodeFlow work.
+- Earlier hook-specific evidence is retained by ADR-0008, ADR-0013, and
+  ADR-0014. How far each plane reaches is in
+  [enforcement planes](architecture/enforcement-planes.md).

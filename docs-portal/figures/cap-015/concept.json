@@ -48,7 +48,7 @@
         "derive": "the lead sentence",
         "check": {
           "kind": "contains",
-          "text": "out, and the Markdown stays the only authority."
+          "text": "and the Markdown stays the only authority."
         },
         "value": true
       },

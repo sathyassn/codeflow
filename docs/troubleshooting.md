@@ -10,10 +10,12 @@
 `codeflow doctor` runs twenty health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
-`codeflow update` or after a harness change. Doctor only reads and probes, so it
-changes no file in the repository and fixes nothing; each message names the fix
-for you to apply. Live account and tool access stays with the harness, where an
-interactive canary proves it.
+`codeflow update` or after a harness change.
+
+- Doctor only reads and probes, so it changes no file in the repository and
+  fixes nothing. Each message names the fix for you to apply.
+- Live account and tool access stays with the harness, where an interactive
+  canary proves it.
 
 ## Architecture
 
@@ -42,7 +44,7 @@ The twenty checks fall into six groups by the surface each one reads.
 ## Technical
 
 Doctor inspects the nearest directory at or above the current one that holds
-`.git`. The checks run concurrently, the report keeps the order below, and one
+`.git`. The checks run concurrently, and the report keeps the order below. One
 failed check never hides the others. Each line starts with a status badge.
 
 - `ok` means the check passed, or found nothing to inspect, such as a harness
@@ -54,9 +56,10 @@ Doctor exits 0 when no check failed, with or without warnings, and 1 when any
 check failed. Nine checks can fail: `hooks`, `config`, `permissions`,
 `policy-source`, `model-bindings`, `delegate-roundtrip`, `repo-integrity`,
 `id-registry` and `adopter-fit`. The other eleven warn at most.
-`codeflow doctor --list` prints the twenty names and exits 0.
-`codeflow doctor --check <name>` runs one check; an unknown name prints an
-error to stderr and exits 1.
+
+- `codeflow doctor --list` prints the twenty names and exits 0.
+- `codeflow doctor --check <name>` runs one check. An unknown name prints an
+  error to stderr and exits 1.
 
 Each row below is one check, in the order doctor prints it.
 
@@ -65,7 +68,7 @@ Each row below is one check, in the order doctor prints it.
 | `hooks` | Asks the `codeflow` on PATH for its hook contract (`git-hook capabilities` must print `hooks 3`) and to answer `--help` for eight hook subcommands (`hook git-guard`, `hook session-orient`, `hook session-summary` and the five `git-hook` stages), then compares git's active hooks directory with `.codeflow/git-hooks` | Fail: `codeflow` is not on PATH, is older than hook contract 3, or a listed subcommand did not answer. Warn: `core.hooksPath` is absolute, the shims are not git's active hooks (often a fresh clone), or init recorded `git_hooks = "unwired"` because another hook manager owns the hooks | Install the binary on PATH ([adoption](adoption.md)). Run a listed subcommand with `--help` to see its error. For the wiring warnings run `git config core.hooksPath .codeflow/git-hooks`, or with another manager call the `.codeflow/git-hooks/` shims from its stages |
 | `claude` | Whether the `claude` CLI is on PATH | Warn: not found, so the Claude-layer hooks are inactive. Git hooks and CI still enforce | Put the `claude` CLI on PATH if you use Claude Code. Without it the warning is expected |
 | `codex` | `.codex/hooks.json`, whether `codex` is on PATH, and the hook trust Codex records in its own state | Warn when Codex runs fewer than all the hooks, because one is untrusted, changed or disabled. Note when all are trusted and enabled (configured; a live run is not verified), or when the trust could not be read, such as in a linked worktree. Ok when the file is absent | Once, run `/hooks` inside interactive Codex and approve and enable the CodeFlow hooks; the check then reports a note |
-| `grok` | Any `.grok/hooks/*.json` file, whether `grok` is on PATH, Grok's folder trust store, the CodeFlow hook commands in the hook files Grok reads, and the answer the exec-guard in doctor's own process gives a fixed canary dangerous command under the catastrophic-command floor, with no policy or repository read | Warn when Grok does not trust the folder or cannot read its trust store, when a CodeFlow hook command carries a `$` Grok skips, or when the shipped shell guard does not refuse the canary with exit 2, a reason and Grok's deny answer. Note when the folder is trusted or folder trust is off (configured; a live run is not verified). A customised shell guard handler is reported unverified and never run; where PATH resolves `codeflow` is reported, never run. Ok when no hook file exists | Once, run `/hooks-trust` in Grok, or start it with `--trust`, so the project hooks load; the check then reports a note. For a hook command, follow the printed step: `codeflow update`, resolving any `.new` file it writes, or a hand edit of a file update does not rewrite, for the reason doctor names; with stale files of both kinds, both steps. For a missing shell guard that update would not bind again, add the guard group doctor quotes to `.grok/hooks/codeflow.json` |
+| `grok` | Any `.grok/hooks/*.json` file, whether `grok` is on PATH, Grok's folder trust store, and the CodeFlow hook commands in the hook files Grok reads. It also reads the answer the exec-guard in doctor's own process gives a fixed canary dangerous command under the catastrophic-command floor, with no policy or repository read | Warn when Grok does not trust the folder or cannot read its trust store, when a CodeFlow hook command carries a `$` Grok skips, or when the shipped shell guard does not refuse the canary with exit 2, a reason and Grok's deny answer. Note when the folder is trusted or folder trust is off (configured; a live run is not verified). A customised shell guard handler is reported unverified and never run. Where PATH resolves `codeflow` is reported, never run. Ok when no hook file exists | Once, run `/hooks-trust` in Grok, or start it with `--trust`, so the project hooks load; the check then reports a note. For a hook command, follow the printed step: `codeflow update`, resolving any `.new` file it writes, or a hand edit of a file update does not rewrite, for the reason doctor names. With stale files of both kinds, take both steps. For a missing shell guard that update would not bind again, add the guard group doctor quotes to `.grok/hooks/codeflow.json` |
 | `config` | Every `.json` file under `.codeflow/`, parsed recursively | Warn: `.codeflow/` does not exist. Fail: a listed file does not parse, or the directory could not be scanned | Run `codeflow init` when the directory is missing. Repair the JSON in each listed file |
 | `permissions` | The owner write bit on `.codeflow/`, on Unix only, then whether this process can write the directories a full gate writes outside the worktree: the lock directories (`locks/` under the CodeFlow home and `codeflow/` under the git common directory) and `gate-runs/` under the CodeFlow home. Says so when it runs inside the Claude Code sandbox (`SANDBOX_RUNTIME` set) | Fail: `.codeflow/` is not writable. Warn: a named gate directory is not writable, so `codeflow test --mode full` refuses with `gate lock unavailable` or fails to keep its evidence | Give the owner write permission on `.codeflow/`. For a gate directory, inside the Claude sandbox the operator adds it to `sandbox.filesystem.allowWrite` (the shipped presets allow `~/.codeflow/locks` and `~/.codeflow/gate-runs`, and `codeflow update` adds them), or runs the full gate outside the sandbox |
 | `policy-source` | Where the agent guards read `.codeflow/policy.json` and `.codeflow/project.toml`: the remote's default branch and declared target as last fetched, `HEAD` before any tracking ref exists, or the working copy on an unborn `HEAD`. It never fetches | Fail: the source cannot be read, such as several remotes without an `origin`, a missing authority ref or a dangling remote HEAD. Ok names the source and any local policy drift | Run `git fetch`. For an unset or custom default branch, the operator runs `git remote set-head <remote> --auto` ([enforcement planes](architecture/enforcement-planes.md#in-session-guards)) |

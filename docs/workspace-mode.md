@@ -2,11 +2,12 @@
 
 Workspace mode is for an umbrella repository that holds several projects,
 each its own git repository (CodeFlow projects or plain repositories), in
-folders inside it. The umbrella's
-root checkout is a working checkout: sessions start there, load their
-instructions and settings from it, and read the shared records it holds. So
-its root stays on a designated working branch, `integration/workspace` by
-convention, instead of the default branch.
+folders inside it.
+
+The umbrella's root checkout is a working checkout: sessions start there, load
+their instructions and settings from it, and read the shared records it
+holds. Its root therefore stays on a designated working branch,
+`integration/workspace` by convention, instead of the default branch.
 
 ## The layout
 
@@ -69,23 +70,26 @@ a nested project's files
 - With no remote, the root branch is the landing line and `main` is a
   protected checkpoint: at a milestone the operator moves it forward with
   `codeflow integrate integration/workspace --into main`; agents never do.
-  With a remote the same holds, the root branch is pushed, and a change into
+- With a remote the same holds, the root branch is pushed, and a change into
   `main` is a pull request a human merges.
-- A nested repository: every change goes through that repository's own
-  flow, a worktree under its own `.worktrees/<slug>` and a pull request into
-  its integration branch or its `main`. The umbrella never commits nested
-  files, which it ignores, and agents never merge into any repository's
-  `main`.
+- A nested repository: every change goes through that repository's own flow,
+  a worktree under its own `.worktrees/<slug>` and a pull request into its
+  integration branch or its `main`. The umbrella never commits nested files,
+  which it ignores, and agents never merge into any repository's `main`.
 
 ## Where settings come from
 
 A session runs the harness settings of the folder it starts in. A session
 started at `umbrella/` runs the umbrella's hooks, permissions and sandbox,
-even while it edits files in `project-a/`. Git works per repository: a
-commit in `project-a/` runs `project-a`'s git hooks and policy, and
-git-guard judges each git command by the policy of the repository it
-targets. Keep the umbrella's settings at least as strict as every
-project's.
+even while it edits files in `project-a/`.
+
+Git works per repository:
+
+- A commit in `project-a/` runs `project-a`'s git hooks and policy.
+- git-guard judges each git command by the policy of the repository it
+  targets.
+
+Keep the umbrella's settings at least as strict as every project's.
 
 ## When to use it, and when not
 
@@ -105,11 +109,14 @@ Do not use it for:
 ## Set it up
 
 1. At the umbrella's root, with no uncommitted changes to tracked files,
-   run `codeflow init --workspace`. It creates `integration/workspace` from
-   the default branch (or reuses it), puts the root checkout on it, writes
-   `git.root_branch`, and adds every nested repository to `.gitignore`,
-   saying which are CodeFlow projects and which are plain git
-   repositories. It refuses over uncommitted changes and names them.
+   run `codeflow init --workspace`. It:
+   - creates `integration/workspace` from the default branch (or reuses it)
+     and puts the root checkout on it;
+   - writes `git.root_branch`;
+   - adds every nested repository to `.gitignore`, saying which are CodeFlow
+     projects and which are plain git repositories.
+
+   It refuses over uncommitted changes and names them.
 2. Commit the files init wrote, including `.gitignore` and
    `.codeflow/policy.json`, on `integration/workspace`.
 3. Run `codeflow doctor`. It reports workspace mode, the root branch, and
@@ -120,7 +127,7 @@ Do not use it for:
 
 Running `codeflow init --workspace` again changes nothing. Plain `codeflow
 init` or `codeflow update` in a folder that holds nested repositories
-switches nothing; it says the folder looks like a workspace and names
+switches nothing. It says the folder looks like a workspace and names
 `codeflow init --workspace`.
 
 ## What is enforced
@@ -133,10 +140,10 @@ switches nothing; it says the folder looks like a workspace and names
   linked worktree sits outside `git.worktree_locations`.
 - `codeflow ci` classifies a range headed by the root branch as the
   workspace root branch, as it accepts a verified epic line: it needs no
-  `Task:` line and may change task criteria. It reads `git.root_branch`
-  from the policy on the target, so a pull request cannot name its own
-  branch as the root. With durable tracking, a pull request from any other
-  `integration/*` branch that is not a verified epic line or a release
-  branch is refused whatever its `Task:` line, including a pull request
-  whose host supplies no body. A plain push outside a pull request is not
-  judged this way.
+  `Task:` line and may change task criteria.
+- It reads `git.root_branch` from the policy on the target, so a pull
+  request cannot name its own branch as the root.
+- With durable tracking, a pull request from any other `integration/*`
+  branch that is not a verified epic line or a release branch is refused
+  whatever its `Task:` line, including a pull request whose host supplies no
+  body. A plain push outside a pull request is not judged this way.

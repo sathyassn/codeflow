@@ -14,22 +14,24 @@ repository guide.
 
 It is not the design system of a product that consumes CodeFlow.
 
-The two surfaces differ only in job. The portal is a guide to the project as
-it stands: a composed visual presentation of the sources with supporting text,
-never the Markdown re-rendered, and it points to decisions and work records as
-folders. A present session is a composed review document, never a chat answer
-restyled.
+The two surfaces differ only in job.
+
+- The portal is a guide to the project as it stands: a composed visual
+  presentation of the sources with supporting text, never the Markdown
+  re-rendered. It points to decisions and work records as folders.
+- A present session is a composed review document, never a chat answer
+  restyled.
 
 ## Architecture
 
-The doctrine is two files, copied into both skills by parity rather than by
-reference, and the token values are one contract held equal across both
-stylesheets. Two tests keep the copies honest.
-
-The surface-specific contracts live in each skill's own reference, so a change
-to one surface's gate never edits the shared file. Graphite, Slate and Sage
-are the kit skins; Archivo, Inter and IBM Plex Sans are independent font
-choices. An unset font is Inter on both surfaces.
+- The doctrine is two files, copied into both skills by parity rather than by
+  reference.
+- The token values are one contract held equal across both stylesheets.
+- Two tests keep the copies honest.
+- The surface-specific contracts live in each skill's own reference, so a
+  change to one surface's gate never edits the shared file.
+- Graphite, Slate and Sage are the kit skins. Archivo, Inter and IBM Plex Sans
+  are independent font choices. An unset font is Inter on both surfaces.
 
 ## Technical
 
@@ -44,12 +46,14 @@ The runtime controls first, then the contracts and what verifies each one.
 
 `codeflow present export --theme` accepts Graphite, Slate and Sage as lowercase values.
 
-Older theme names still resolve: `instrument` and `technical` to Graphite,
-`editorial` to Slate and `ink` to Sage, and in the portal `signal` to Graphite
-and `folio` to Sage. Saved skin choices use the same mapping, and saved font
-choices `instrument` and `editorial` become Archivo and Inter. Explicit font
-choices are kept. Export keeps its `editorial` default, which resolves to
-Slate.
+Older theme names still resolve.
+
+- `instrument` and `technical` resolve to Graphite, `editorial` to Slate and
+  `ink` to Sage. In the portal, `signal` resolves to Graphite and `folio` to
+  Sage.
+- Saved skin choices use the same mapping. Saved font choices `instrument` and
+  `editorial` become Archivo and Inter. Explicit font choices are kept.
+- Export keeps its `editorial` default, which resolves to Slate.
 
 | Contract | Where | Verified by |
 |---|---|---|
@@ -66,14 +70,17 @@ Slate.
 
 Three carriers are not promised:
 
-- Mermaid and any other diagram syntax on both surfaces: the portal renders a
-  Mermaid fence as plain code;
-- a present `diagram` block, which present refuses;
-- a hierarchy tree in the portal, where a structure figure carries it.
+- Mermaid and any other diagram syntax on both surfaces. The portal renders a
+  Mermaid fence as plain code.
+- A present `diagram` block, which present refuses.
+- A hierarchy tree in the portal, where a structure figure carries it.
 
-Adding one requires an adapter or runtime change and an ADR. The family figure is the default form (ADR-0068)
-and a rendered carrier on both surfaces. A portal page binds a declaration in `portal.config.json` and the
-adapter draws it as a companion beside the unchanged source; raw HTML in a
-source stays escaped, so a figure enters a page only through its declaration.
-A present document carries the declaration in a `figure` block, which the
-client draws with the same grammar module.
+Adding one requires an adapter or runtime change and an ADR.
+
+- The family figure is the default form (ADR-0068) and a rendered carrier on
+  both surfaces.
+- A portal page binds a declaration in `portal.config.json`, and the adapter
+  draws it as a companion beside the unchanged source. Raw HTML in a source
+  stays escaped, so a figure enters a page only through its declaration.
+- A present document carries the declaration in a `figure` block, which the
+  client draws with the same grammar module.

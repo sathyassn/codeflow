@@ -63,7 +63,7 @@
         "derive": "the headless sentence",
         "check": {
           "kind": "contains",
-          "text": "It never runs a peer headless"
+          "text": "never run a peer headless"
         },
         "value": true
       },

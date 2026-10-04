@@ -34,7 +34,7 @@ tmux 3.6a, and `codex@openai-codex` 1.0.6 were present. This is evidence that
 status output alone is not an authoritative Claude account probe; each lane
 needs a scoped interactive canary. The commands, observations, and portability
 boundary are retained in
-[`../verification/host-neutral-duo-canary-2026-07-15.md`](../verification/host-neutral-duo-canary-2026-07-15.md).
+[`../verification/host-neutral-duo-canary-2026-07-15.md`](https://github.com/sathyassn/codeflow/blob/main/docs/verification/host-neutral-duo-canary-2026-07-15.md).
 
 The implemented adapter was then exercised through a real Sonnet 5 Claude Code
 session in task-scoped tmux. Plan mode correctly paused at an interactive
