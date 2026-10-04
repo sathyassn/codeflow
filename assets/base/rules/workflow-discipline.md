@@ -62,9 +62,10 @@ approved contract, scope, authority, or risk boundary, stop and surface it
 in that form first; the dependent action waits while authorized independent
 work continues. While an operator question or an unverifiable fact is open,
 the work that depends on it moves on an interim state: a working default
-when the recommended answer is reversible, labelled where it lands with what
-reverses it, or the conservative state when it is not, stated with what
-clears it. Neither takes the operator-owned step, and an interim state that
+when an operator answer is pending and your recommended answer is
+reversible, labelled where it lands with what reverses it; the conservative
+state when the answer is not reversible or the fact cannot be verified yet,
+stated with what clears it. Neither takes the operator-owned step, and an interim state that
 others rely on is recorded where the work is tracked (at the standard and
 full tiers, `autonomy.md` "While a question is open" has the rule). A lost
 seat or route gets bounded recovery, then an explicit
@@ -177,8 +178,8 @@ completion, test, coverage, UI result, qualification, availability, cost or
 saving; transport or background completion is not the peer result. How far
 a change reaches is a claim like any other: before stating it, list every
 consumer of the changed thing (each base, branch, environment or reader that
-loads it) and check each; a file that every branch reads from its own base
-reaches every branch when it changes. A rule or record that
+loads it) and check each; a file that each branch reads from its own base
+has one consumer per branch, and each copy is checked. A rule or record that
 encodes the operator's guidance quotes or closely paraphrases it; a
 restriction the operator never gave is an invented fact.
 

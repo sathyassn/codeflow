@@ -1389,7 +1389,7 @@ fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
         &[
             (
                 "interim state at every tier",
-                "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state: a working default when the recommended answer is reversible, labelled where it lands with what reverses it, or the conservative state when it is not, stated with what clears it.",
+                "While an operator question or an unverifiable fact is open, the work that depends on it moves on an interim state: a working default when an operator answer is pending and your recommended answer is reversible, labelled where it lands with what reverses it; the conservative state when the answer is not reversible or the fact cannot be verified yet, stated with what clears it.",
             ),
             (
                 "never the operator-owned step",
@@ -1401,7 +1401,7 @@ fn uncertainty_guidance_keeps_its_rules_in_their_homes() {
             ),
             (
                 "reach is a claim",
-                "How far a change reaches is a claim like any other: before stating it, list every consumer of the changed thing (each base, branch, environment or reader that loads it) and check each",
+                "How far a change reaches is a claim like any other: before stating it, list every consumer of the changed thing (each base, branch, environment or reader that loads it) and check each; a file that each branch reads from its own base has one consumer per branch, and each copy is checked.",
             ),
             (
                 "encoded guidance matches its source",
