@@ -39,9 +39,10 @@
 //! substitution, no substitution other than a `$(cat <<EOF …)` message,
 //! no `${…}`, `$[…]` or `$((…))` expansion (which can assign), no unquoted
 //! `*`, `?`, `[` or `{` (a pathname or brace expansion supplies words the
-//! line does not show), no unquoted `#`, `$'…'` string or carriage
-//! return (where this reader's quoting or word ends may differ from the
-//! shell's), and no command after one
+//! line does not show), no unquoted `#`, `$'…'` string, carriage return
+//! or heredoc delimiter other than a plain word (where this reader's
+//! quoting, word ends or body ends may differ from the shell's), and no
+//! command after one
 //! that can write a file
 //! (`>`, `tee`, `uniq`, `base64`, `git`, `gh`), which could replace the
 //! program, hook or configuration it then runs. `printf` is no data
@@ -204,8 +205,9 @@ struct LineShape {
     /// `*`, `?`, `[` or `{` outside a heredoc body, whose pathname or brace
     /// expansion supplies words the line does not show.
     expands: bool,
-    /// An unquoted `#`, a `$'…'` string or a carriage return, where this
-    /// reader's quoting or word ends may differ from the shell's.
+    /// An unquoted `#`, a `$'…'` string, a carriage return or a heredoc
+    /// delimiter that is no plain word, where this reader's quoting, word
+    /// ends or body ends may differ from the shell's.
     opaque: bool,
 }
 
@@ -353,7 +355,10 @@ fn split_data(command: &str) -> (String, Vec<String>) {
                 && chars.get(i + 2) != Some(&'<')
                 && (i == 0 || chars[i - 1] != '<') =>
             {
-                let (doc, end) = heredoc_operator(&chars, i);
+                let (doc, end, exact) = heredoc_operator(&chars, i);
+                if !exact {
+                    shape.opaque = true;
+                }
                 span.extend(&chars[i..end]);
                 docs.extend(doc);
                 i = end;
@@ -557,8 +562,12 @@ fn cat_heredoc_substitution(chars: &[char], start: usize) -> Option<usize> {
 }
 
 /// Parse the `<<`/`<<-` operator at `start` and its delimiter word: the
-/// heredoc, unless no delimiter follows, and the index after the word.
-fn heredoc_operator(chars: &[char], start: usize) -> (Option<PendingDoc>, usize) {
+/// heredoc, unless no delimiter follows, the index after the word, and
+/// whether the word is one this reader resolves exactly as the shell does:
+/// a plain word of letters, digits and `_`, bare, in single or double
+/// quotes, or after one backslash. Any other word (`$'EOF'`, `"E\\OF"`, a
+/// mix of quotes) may end the body elsewhere in the shell.
+fn heredoc_operator(chars: &[char], start: usize) -> (Option<PendingDoc>, usize, bool) {
     let mut i = start + 2;
     let strip_tabs = chars.get(i) == Some(&'-');
     if strip_tabs {
@@ -567,6 +576,7 @@ fn heredoc_operator(chars: &[char], start: usize) -> (Option<PendingDoc>, usize)
     while chars.get(i).is_some_and(|c| *c == ' ' || *c == '\t') {
         i += 1;
     }
+    let word_start = i;
     let mut delimiter = String::new();
     let mut expands = true;
     while let Some(&c) = chars.get(i) {
@@ -589,13 +599,24 @@ fn heredoc_operator(chars: &[char], start: usize) -> (Option<PendingDoc>, usize)
             }
         }
     }
+    let word: String = chars[word_start..i].iter().collect();
+    let plain = |text: &str| {
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let exact = plain(&word)
+        || word.strip_prefix('\\').is_some_and(plain)
+        || ['\'', '"'].iter().any(|quote| {
+            word.strip_prefix(*quote)
+                .and_then(|rest| rest.strip_suffix(*quote))
+                .is_some_and(plain)
+        });
     let doc = (!delimiter.is_empty()).then_some(PendingDoc {
         delimiter,
         strip_tabs,
         expands,
         owner: usize::MAX,
     });
-    (doc, i)
+    (doc, i, exact)
 }
 
 /// Consume the bodies of `pending`, in order, from `start`, into
@@ -1914,6 +1935,11 @@ mod tests {
             "git commit -m \"$(cat <<'EOF'\nEOF \n)\nEOF\ncodex exec x\n)\" <<< ''",
             "git commit -m \"$(cat <<-'EOF'\n EOF\n)\nEOF\ncodex exec x\n)\" <<< ''",
             "git commit -m \"$(cat <<EOF\r\nEOF\n)\nEOF\r\ncodex exec x\n)\" <<< ''",
+            // Final review round 7: a heredoc delimiter the shell resolves
+            // differently, so commands after its real end look like data.
+            "cat <<$'EOF'\nEOF\nshopt -s expand_aliases; BASH_ALIASES[echo]=command; X=true; $X\n$EOF\necho codex exec x",
+            "cat <<\"E\\\\OF\"\nE\\OF\nshopt -s expand_aliases; BASH_ALIASES[echo]=command; X=true; $X\nE\\\\OF\necho codex exec x <<< ''",
+            "cat <<E'O'F\nx\nEOF\ngrep -c review <<< 'Codex review: approve'",
         ] {
             assert!(found(command).is_some(), "{command}");
         }

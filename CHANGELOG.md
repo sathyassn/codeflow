@@ -550,8 +550,8 @@ erratum below, never an edit of the section.
   it exactly as the shell does, no `${...}`, `$[...]` or `$((...))`
   expansion, no unquoted `*`, `?`, `[` or `{` (a pathname or brace
   expansion supplies words the line does not show), no unquoted `#`,
-  `$'...'` string or carriage return, and no command after one that can
-  write a file (`>`, `tee`, `git`, `gh` and the like), which
+  `$'...'` string, carriage return or heredoc delimiter other than a plain
+  word, and no command after one that can write a file (`>`, `tee`, `git`, `gh` and the like), which
   could replace the program or hook it then runs. `printf` is no data
   command, since its formats can assign a variable. So
   `grep -c review <<< 'Codex review: approve'` and
@@ -562,7 +562,7 @@ erratum below, never an edit of the section.
   still refused. A brief written with `cat` and a heredoc, a `git commit
   -m` message and a `gh pr create --body` text on their own were already
   allowed; a heredoc brief followed by another command on the same line
-  is judged as in 3.0.0. Of 1,615 headless run forms compared with 3.0.0,
+  is judged as in 3.0.0. Of 1,618 headless run forms compared with 3.0.0,
   none that 3.0.0 refused is let through.
 
 <!-- codeflow:release-impact patch -->
