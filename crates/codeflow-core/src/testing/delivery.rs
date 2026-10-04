@@ -64,6 +64,34 @@ pub fn revision(root: &Path) -> Option<String> {
         .map(|id| id.to_string())
 }
 
+/// The snapshot key and the file system path of one index entry.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): a path in the index is
+/// bytes, and the gate only reads it and hashes what it names, so a name that
+/// is not valid UTF-8 must not stop `codeflow test`. The file system path
+/// keeps the exact bytes where the platform allows it. The key is the lossy
+/// text and, for a name that is not valid UTF-8, the hex of its bytes, so two
+/// different names never share a key and hide a change of one of them.
+fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
+    let key = if let Ok(name) = std::str::from_utf8(raw) {
+        name.to_string()
+    } else {
+        let mut hex = String::with_capacity(raw.len() * 2);
+        for byte in raw {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        format!("{} [bytes {hex}]", String::from_utf8_lossy(raw))
+    };
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt;
+        root.join(std::ffi::OsStr::from_bytes(raw))
+    };
+    #[cfg(not(unix))]
+    let path = root.join(String::from_utf8_lossy(raw).as_ref());
+    (key, path)
+}
+
 /// Snapshot the bytes and modes of every tracked path, including dirty edits.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
     let Ok(repo) = git2::Repository::discover(root) else {
@@ -75,8 +103,7 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
         .map_err(|e| invalid(root, e.to_string()))?
         .iter()
     {
-        let name = std::str::from_utf8(&entry.path).map_err(|e| invalid(root, e.to_string()))?;
-        let path = root.join(name);
+        let (name, path) = tracked_entry(root, &entry.path);
         let bytes = if path.is_symlink() {
             std::fs::read_link(&path)?
                 .to_string_lossy()
@@ -95,7 +122,7 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
         #[cfg(not(unix))]
         let mode = entry.mode;
         result.insert(
-            name.to_string(),
+            name,
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
         );
     }
@@ -295,6 +322,13 @@ pub fn check_only(
     }
 }
 
+/// Git's text output, or `None` when it failed or is not valid UTF-8.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): kept strict on purpose.
+/// The output decides which targets a run may skip, and `None` makes every
+/// caller select every target, so a path that is not valid UTF-8 widens the
+/// run and never narrows it. A lossy path could match a `narrow` pattern the
+/// real bytes do not and drop a check the change owes.
 fn git_output(root: &Path, args: &[&str]) -> Option<String> {
     let output = crate::git::command()
         .args(args)
@@ -420,4 +454,88 @@ fn observation(output: &std::process::Output) -> String {
     )
     .trim()
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A repository whose index and first commit hold `caf\xe9.txt`, a name
+    /// that is not valid UTF-8, beside `plain.txt`. The file is never written
+    /// to the work tree, so the repository builds on file systems that refuse
+    /// such a name.
+    fn repository_with_a_non_utf8_path() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for name in [b"plain.txt".as_slice(), b"caf\xe9.txt"] {
+            let id = repo.blob(b"data").unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 4,
+                    id,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: name.to_vec(),
+                })
+                .unwrap();
+        }
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("test", "test@example.com").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "test: seed",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        dir
+    }
+
+    /// Issue 79: the snapshot of tracked files used to fail on the first
+    /// index path that is not valid UTF-8, which stopped `codeflow test` in
+    /// any project with such a file name.
+    #[test]
+    fn tracked_snapshots_a_path_that_is_not_utf8() {
+        let dir = repository_with_a_non_utf8_path();
+        let snapshot = tracked(dir.path()).unwrap();
+        assert_eq!(snapshot.len(), 2, "{snapshot:?}");
+        assert!(snapshot.contains_key("plain.txt"));
+        let key = snapshot
+            .keys()
+            .find(|key| key.starts_with("caf"))
+            .expect("the non-UTF-8 path is in the snapshot");
+        assert!(key.ends_with("[bytes 636166e92e747874]"), "{key}");
+        // A second snapshot of the same tree is equal, so the gate sees no
+        // generation change for a name it cannot spell.
+        assert_eq!(snapshot, tracked(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn two_names_that_differ_only_in_invalid_bytes_keep_distinct_keys() {
+        let root = Path::new("/repo");
+        let (first, _) = tracked_entry(root, b"a\xe9");
+        let (second, _) = tracked_entry(root, b"a\xff");
+        assert_ne!(first, second);
+        assert_eq!(tracked_entry(root, b"plain.txt").0, "plain.txt");
+    }
+
+    /// Kept strict on purpose: git output that is not valid UTF-8 is `None`,
+    /// which every caller reads as "select every target".
+    #[test]
+    fn git_output_that_is_not_utf8_selects_every_target() {
+        let dir = repository_with_a_non_utf8_path();
+        assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_none());
+        assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_some());
+    }
 }
