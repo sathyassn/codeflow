@@ -391,7 +391,7 @@ const BODY_WORD_LIMIT: usize = 1000;
 
 /// The HTML elements GitHub keeps that start a new line of text. It strips
 /// every other tag and keeps its text, so the words either side of one of
-/// those join: `<section>`, `<script>` and a stray `<String>` separate
+/// those join: `<script>`, `<article>` and a stray `<String>` separate
 /// nothing.
 const BLOCK_TAGS: &[&str] = &[
     "blockquote",
@@ -425,71 +425,151 @@ const BLOCK_TAGS: &[&str] = &[
     "ul",
 ];
 
-/// The text a reader sees in raw HTML: comments, declarations, processing
-/// instructions and tags are gone, a block tag separates its neighbours, and
-/// character references are decoded.
-fn html_text(html: &str) -> String {
-    let mut out = String::new();
-    let mut rest = html;
-    while let Some(at) = rest.find('<') {
-        out.push_str(&rest[..at]);
-        rest = &rest[at..];
-        // Comments, CDATA sections, processing instructions and
-        // declarations show nothing; an unterminated one hides the rest.
-        let hidden = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
-            .into_iter()
-            .find_map(|(open, close)| rest.strip_prefix(open).map(|after| (after, close)))
-            .or_else(|| {
-                rest.strip_prefix("<!")
-                    .filter(|after| after.starts_with(|c: char| c.is_ascii_alphabetic()))
-                    .map(|after| (after, ">"))
-            });
-        if let Some((after, close)) = hidden {
-            rest = after
-                .find(close)
-                .map_or("", |end| &after[end + close.len()..]);
-            continue;
-        }
-        let tag_like = rest[1..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '/');
-        if let Some(end) = tag_end(rest).filter(|_| tag_like) {
-            let name = rest[1..end]
-                .trim_start_matches('/')
-                .split(|c: char| c.is_whitespace() || c == '/')
-                .next()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if BLOCK_TAGS.contains(&name.as_str()) {
-                out.push('\n');
-            }
-            rest = &rest[end + 1..];
-        } else if tag_like {
-            // A tag that never ends is dropped with everything after it.
-            rest = "";
-        } else {
-            out.push('<');
-            rest = &rest[1..];
-        }
-    }
-    out.push_str(rest);
-    decode_entities(&out)
+/// Where the reading of the body's raw HTML stands. GitHub escapes the
+/// Markdown text it renders, so only raw HTML can close a comment, a CDATA
+/// section, a processing instruction, a declaration or a tag: after one
+/// opens, everything up to its closer is hidden, whatever Markdown blocks
+/// lie between.
+enum HtmlState {
+    Text,
+    /// Inside a comment, CDATA section, processing instruction or
+    /// declaration, until this closer.
+    Until(&'static str),
+    /// Inside a tag that has not ended; `quote` is the open attribute quote.
+    Tag {
+        block: bool,
+        quote: Option<char>,
+    },
 }
 
-/// The offset of the `>` that ends the tag `html` opens with, skipping any
-/// `>` inside a quoted attribute value; `None` when the tag never ends.
-fn tag_end(html: &str) -> Option<usize> {
-    let mut quote: Option<char> = None;
-    for (at, ch) in html.char_indices() {
-        match (quote, ch) {
-            (None, '>') => return Some(at),
-            (None, '"' | '\'') => quote = Some(ch),
-            (Some(open), _) if ch == open => quote = None,
-            _ => {}
+struct HtmlScan {
+    state: HtmlState,
+}
+
+impl HtmlScan {
+    fn new() -> Self {
+        Self {
+            state: HtmlState::Text,
         }
     }
-    None
+
+    /// Whether Markdown text rendered now would show.
+    fn visible(&self) -> bool {
+        matches!(self.state, HtmlState::Text)
+    }
+
+    /// A Markdown event rendered while a tag is still open. The renderer
+    /// writes its own tags (`<p>`, `<code>`, `<br />`), whose `>` ends an
+    /// open tag that has no open quote, and it escapes `"`, `<`, `>` and `&`
+    /// in text but not `'`, so an apostrophe closes a single-quoted value.
+    fn rendered(&mut self, event: &Event<'_>) {
+        let HtmlState::Tag { quote, .. } = &mut self.state else {
+            return;
+        };
+        let text = match event {
+            Event::Text(text) | Event::Code(text) => Some(text),
+            _ => None,
+        };
+        if let (Some(text), Some('\'')) = (text, *quote) {
+            if text.contains('\'') {
+                *quote = None;
+            }
+        }
+        let writes_a_tag = !matches!(event, Event::Text(_) | Event::SoftBreak);
+        if writes_a_tag && quote.is_none() {
+            self.state = HtmlState::Text;
+        }
+    }
+
+    /// The text a reader sees in this stretch of raw HTML: comments,
+    /// declarations, processing instructions and tags are gone, a block tag
+    /// separates its neighbours, and character references are decoded.
+    fn feed(&mut self, html: &str) -> String {
+        let mut out = String::new();
+        let mut rest = html;
+        while !rest.is_empty() {
+            match std::mem::replace(&mut self.state, HtmlState::Text) {
+                HtmlState::Until(close) => {
+                    let Some(end) = rest.find(close) else {
+                        self.state = HtmlState::Until(close);
+                        break;
+                    };
+                    rest = &rest[end + close.len()..];
+                }
+                HtmlState::Tag { block, mut quote } => {
+                    let mut ended = None;
+                    for (at, ch) in rest.char_indices() {
+                        match (quote, ch) {
+                            (None, '>') => {
+                                ended = Some(at);
+                                break;
+                            }
+                            (None, '"' | '\'') => quote = Some(ch),
+                            (Some(open), _) if ch == open => quote = None,
+                            _ => {}
+                        }
+                    }
+                    let Some(at) = ended else {
+                        self.state = HtmlState::Tag { block, quote };
+                        break;
+                    };
+                    if block {
+                        out.push('\n');
+                    }
+                    rest = &rest[at + 1..];
+                }
+                HtmlState::Text => {
+                    let Some(at) = rest.find('<') else {
+                        out.push_str(rest);
+                        break;
+                    };
+                    out.push_str(&rest[..at]);
+                    rest = &rest[at..];
+                    if let Some(after) = rest.strip_prefix("<!--") {
+                        // `<!-->` and `<!--->` are complete comments.
+                        if let Some(after) = after.strip_prefix('>').or(after.strip_prefix("->")) {
+                            rest = after;
+                        } else {
+                            self.state = HtmlState::Until("-->");
+                            rest = after;
+                        }
+                    } else if let Some(after) = rest.strip_prefix("<![CDATA[") {
+                        self.state = HtmlState::Until("]]>");
+                        rest = after;
+                    } else if let Some(after) = rest.strip_prefix("<?") {
+                        self.state = HtmlState::Until("?>");
+                        rest = after;
+                    } else if let Some(after) = rest
+                        .strip_prefix("<!")
+                        .filter(|after| after.starts_with(|c: char| c.is_ascii_alphabetic()))
+                    {
+                        self.state = HtmlState::Until(">");
+                        rest = after;
+                    } else if rest[1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '/')
+                    {
+                        let name = rest[1..]
+                            .trim_start_matches('/')
+                            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                            .next()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase();
+                        self.state = HtmlState::Tag {
+                            block: BLOCK_TAGS.contains(&name.as_str()),
+                            quote: None,
+                        };
+                        rest = &rest[1..];
+                    } else {
+                        out.push('<');
+                        rest = &rest[1..];
+                    }
+                }
+            }
+        }
+        decode_entities(&out)
+    }
 }
 
 /// What the HTML character reference at the start of `rest` (which begins
@@ -591,53 +671,43 @@ impl ReaderText {
             text: String::new(),
             marks: Vec::new(),
         };
-        let mut html = String::new();
-        let mut html_at = 0;
+        let mut scan = HtmlScan::new();
         let mut image = 0usize;
         let mut hidden_definition = false;
         for (event, span) in Parser::new_ext(source, options).into_offset_iter() {
-            match event {
-                Event::Html(value) | Event::InlineHtml(value) => {
-                    if html.is_empty() {
-                        html_at = span.start;
-                    }
-                    html.push_str(&value);
-                    continue;
-                }
-                Event::SoftBreak | Event::HardBreak if !html.is_empty() => {
-                    html.push('\n');
-                    continue;
-                }
-                _ => {}
-            }
-            if !html.is_empty() {
-                if !hidden_definition {
-                    reader.mark(html_at);
-                    reader.text.push_str(&html_text(&html));
-                }
-                html.clear();
-            }
             match event {
                 Event::Start(Tag::FootnoteDefinition(label)) => {
                     hidden_definition = !referenced.contains(label.as_ref());
                 }
                 Event::End(TagEnd::FootnoteDefinition) => hidden_definition = false,
+                Event::Start(Tag::Image { .. }) => image += 1,
+                Event::End(TagEnd::Image) => image = image.saturating_sub(1),
                 _ if hidden_definition => {}
+                Event::Html(value) | Event::InlineHtml(value) => {
+                    let visible = scan.feed(&value);
+                    if !visible.is_empty() {
+                        reader.mark(span.start);
+                        reader.text.push_str(&visible);
+                    }
+                }
                 event => {
-                    // An End event spans its whole element; its end keeps
-                    // the offsets in order.
-                    reader.mark(if matches!(event, Event::End(_)) {
-                        span.end
-                    } else {
-                        span.start
-                    });
-                    reader.event(event, &mut image);
+                    // Text rendered inside an open tag or comment is hidden;
+                    // the renderer's own tags may end that tag.
+                    if !scan.visible() {
+                        scan.rendered(&event);
+                    }
+                    if scan.visible() {
+                        // An End event spans its whole element; its end
+                        // keeps the offsets in order.
+                        reader.mark(if matches!(event, Event::End(_)) {
+                            span.end
+                        } else {
+                            span.start
+                        });
+                        reader.event(event, image > 0);
+                    }
                 }
             }
-        }
-        if !html.is_empty() && !hidden_definition {
-            reader.mark(html_at);
-            reader.text.push_str(&html_text(&html));
         }
         reader
     }
@@ -646,14 +716,12 @@ impl ReaderText {
         self.marks.push((offset, self.text.len()));
     }
 
-    fn event(&mut self, event: Event<'_>, image: &mut usize) {
+    fn event(&mut self, event: Event<'_>, in_image: bool) {
         if starts_block(&event) && !self.text.is_empty() && !self.text.ends_with('\n') {
             self.text.push('\n');
         }
         match event {
-            Event::Start(Tag::Image { .. }) => *image += 1,
-            Event::End(TagEnd::Image) => *image = image.saturating_sub(1),
-            Event::Text(value) | Event::Code(value) if *image == 0 => {
+            Event::Text(value) | Event::Code(value) if !in_image => {
                 self.text.push_str(&value);
             }
             // Inline ends join the words either side of them; block and
@@ -664,7 +732,8 @@ impl ReaderText {
                 | TagEnd::Strikethrough
                 | TagEnd::Superscript
                 | TagEnd::Subscript
-                | TagEnd::Link,
+                | TagEnd::Link
+                | TagEnd::Image,
             ) => {}
             Event::SoftBreak | Event::HardBreak | Event::End(_) => self.text.push('\n'),
             _ => {}
@@ -2161,6 +2230,62 @@ mod tests {
                 "<table><caption>cap words</caption><tr><th>h1</th><td>a b</td></tr></table>"
             ),
             5
+        );
+    }
+
+    /// Review round 5: GitHub escapes rendered text, so only raw HTML ends
+    /// a comment or a tag, and what an unended one covers stays hidden
+    /// across Markdown blocks, at the boundary and in the section counts.
+    #[test]
+    fn unended_comments_and_tags_hide_what_follows_across_blocks() {
+        let prefix = words(BODY_WORD_LIMIT - 2);
+        let comment = format!(
+            "{prefix}\n\n<details>\n<summary>Evidence</summary>\n<!-- hidden\n\nmore hidden words here\n-->\n</details>\n"
+        );
+        assert_eq!(word_count(&comment), BODY_WORD_LIMIT - 1);
+        for quote in ['"', '\''] {
+            let tag = format!(
+                "{prefix}\n\n<div><img src=x alt={quote}one\n\ntwo three{quote}> after</div>\n"
+            );
+            assert_eq!(word_count(&tag), BODY_WORD_LIMIT - 2, "{quote}");
+        }
+        // An apostrophe is not escaped in rendered text, so it closes a
+        // single-quoted value; a double quote is escaped and never does.
+        let tail = "<div><img src=x alt=QONE\n\ntwo three QTWO> after</div>\n\ntail words";
+        for (open, visible) in [("'", 2), ("\"", 0)] {
+            let body = format!(
+                "{prefix}\n\n{}",
+                tail.replace("QONE", &format!("{open}one"))
+                    .replace("QTWO", open)
+            );
+            assert_eq!(word_count(&body), BODY_WORD_LIMIT - 2 + visible, "{open}");
+        }
+        assert_eq!(
+            word_count("one <!--> two"),
+            2,
+            "an abrupt comment is complete"
+        );
+        assert_eq!(word_count("one <!---> two"), 2);
+        assert_eq!(word_count("<!-- a b\n\nc d\n-->\n\none two"), 2);
+        let body = format!(
+            "## First\n<!-- hidden\n\n{}\n## Second\n{}\n",
+            words(300),
+            words(BODY_WORD_LIMIT)
+        );
+        assert_eq!(
+            word_count(&body),
+            1,
+            "an unended comment hides the rest of the body"
+        );
+        let sections = format!(
+            "## First\n<!-- a\n\nb -->\n{}\n## Second\n{}\n",
+            words(400),
+            words(700)
+        );
+        let message = length_message(&sections, &super::sections(&sections)).unwrap();
+        assert!(
+            message.ends_with("## Second (700 words), ## First (400 words)"),
+            "{message}"
         );
     }
 
