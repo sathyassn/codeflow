@@ -6264,10 +6264,10 @@ mod tests {
     fn a_descendant_that_keeps_stdin_open_and_never_reads_times_out() {
         // The child exits at once; its background `sleep` keeps only the
         // stdin pipe open, so a 4 MiB write would stay blocked forever. The
-        // shell copies stdin to fd 3 first, which every child inherits: a
-        // background job's own stdin is /dev/null in a non-interactive
-        // shell (dash and bash as sh), even with an explicit `<&0`, so `0`
-        // cannot carry the pipe.
+        // shell copies stdin to fd 3 first, which every child inherits. Some
+        // shells (dash, Linux's /bin/sh) give a background job /dev/null as
+        // stdin even with an explicit `<&0`, so fd 0 cannot carry the pipe
+        // on every platform.
         let input = "x".repeat(4 * 1024 * 1024);
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
