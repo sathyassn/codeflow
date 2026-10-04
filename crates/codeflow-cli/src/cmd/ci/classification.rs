@@ -288,8 +288,18 @@ pub(super) fn branch_journey(
     else {
         return;
     };
-    if !matches!(tracking_on(root, Some(range)), Ok(true)) {
-        return;
+    match tracking_on(root, Some(range)) {
+        Ok(true) => {}
+        Ok(false) => return,
+        // The finding the pull request check gives for an unreadable state.
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            ran.push("journey");
+            return;
+        }
     }
     ran.push("journey");
     match range_changes(root, range.base, range.head) {

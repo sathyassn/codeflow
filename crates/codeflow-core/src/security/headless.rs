@@ -238,8 +238,9 @@ enum Piece {
 struct LineShape {
     segments: Vec<Segment>,
     pieces: Vec<Piece>,
-    /// A pipe, a background job, a process substitution, or a
-    /// [`REORDERING_WORDS`] word or [`RUN_ENVIRONMENT`] assignment:
+    /// A pipe, a background job, a process substitution, a
+    /// [`REORDERING_WORDS`] word in a command that is neither data nor
+    /// inert, or a [`RUN_ENVIRONMENT`] assignment:
     /// commands may run in another order than they are written, or a name
     /// may run another program.
     reordered: bool,
@@ -249,18 +250,19 @@ impl LineShape {
     /// Close the simple command in `span`.
     fn flush(&mut self, span: &mut String, runs: &mut bool, docs: &mut [PendingDoc], piped: bool) {
         let mut words = command_argv(span);
-        let reorders = |words: &[String]| {
-            words
-                .iter()
-                .find(|w| !is_assignment(w))
-                .is_some_and(|w| REORDERING_WORDS.contains(&w.as_str()))
-        };
         let environment = sets_run_environment(&words);
-        if reorders(&words) || environment {
-            self.reordered = true;
-        }
         strip_reserved_words(&mut words);
-        if reorders(&words) {
+        let data = data_command(&words).filter(|_| !piped && !*runs);
+        let inert = !*runs && !environment && inert(&words);
+        // Any word of a command that is neither data nor inert, so a
+        // launcher, group or `if` body (`command source`, `{ eval …; }`,
+        // `then alias …`) cannot hide it; a data command's words are its
+        // text.
+        if environment
+            || (data.is_none()
+                && !inert
+                && words.iter().any(|w| REORDERING_WORDS.contains(&w.as_str())))
+        {
             self.reordered = true;
         }
         let owner = self.segments.len();
@@ -269,8 +271,8 @@ impl LineShape {
         }
         self.segments.push(Segment {
             text: std::mem::take(span),
-            data: data_command(&words).filter(|_| !piped && !*runs),
-            inert: !*runs && !environment && inert(&words),
+            data,
+            inert,
         });
         self.pieces.push(Piece::Segment(owner));
         *runs = false;
@@ -1814,6 +1816,20 @@ mod tests {
             "export BASH_ENV=run.sh; $X; echo 'codex exec x' > run.sh",
             "exec > >(bash); $X; echo 'codex exec x'",
             "$X; R=$(bash <<'true'\nx)\necho 'codex exec x'\ntrue\n)",
+            // Round three of review: a reordering word behind a launcher,
+            // a group or a reserved word.
+            "command source fn.sh; echo codex exec do the work",
+            "builtin source fn.sh; echo codex exec do the work",
+            "command . fn.sh; echo codex exec do the work",
+            "{ command source fn.sh; }; echo codex exec do the work",
+            "if true; then command source fn.sh; fi; echo codex exec do the work",
+            "if false; then true; else command source fn.sh; fi; echo codex exec do the work",
+            "if false; then true; elif true; then command source fn.sh; fi; echo codex exec do the work",
+            "$(true); command eval 'echo() { :; }'; echo codex exec do the work",
+            "$(true); time command eval 'echo() { :; }'; echo codex exec do the work",
+            "$EDITOR notes.md; command eval 'echo() { :; }'; echo codex exec do the work",
+            "shopt -s expand_aliases\ncommand alias echo=eval\n$X\necho codex exec do the work",
+            "nohup command source fn.sh; $X; echo codex exec do the work",
             "export GIT_EDITOR='codex exec'; $X; git commit -e -m x",
         ] {
             assert!(found(command).is_some(), "{command}");
