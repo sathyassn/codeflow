@@ -417,8 +417,7 @@ and, for Codex hook trust, [harness posture](harness-posture.md).
 
 ### The daily flow
 
-Each task follows the steps below, from orientation to landing, and each step
-has a check.
+Each task follows these steps, and each step has a check.
 
 ```text
   codeflow orient
@@ -439,8 +438,7 @@ has a check.
   land on the integration line     or a human merges into main
 ```
 
-Each box is one of the steps below; with no remote, `codeflow integrate`
-replaces the pull request.
+With no remote, `codeflow integrate` replaces the pull request.
 
 1. **Orient and route.** Read the SessionStart digest, or run `codeflow orient`,
    for branch and worktree state, work counts, recent ADR titles, gate status

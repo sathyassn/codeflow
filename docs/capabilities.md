@@ -89,8 +89,8 @@ keep their registry entry here:
 
 ## Technical
 
-Each capability below has its definition table, generated from its yaml fence,
-then a short operating summary and a link to the page that owns the detail.
+Each capability has a definition table generated from its yaml fence, then a
+short summary and a link to the page that owns the detail.
 
 ### Scaffold
 
@@ -107,18 +107,17 @@ adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
 `codeflow init [--minimal|--standard|--full] [--yes]` lays the discipline layer
-into a repository. Each tier adds to the one before it (ADR-0019):
+into a repository (ADR-0019).
 
 - `--minimal` installs the enforcement floor: git hooks, in-session guards and
   the CI check. Remote branch protection stays a repository setting.
 - `--standard` adds the method skills, reviewer agents, pipeline and docs spine.
 - `--full` adds `project-management/`.
 
-Init is idempotent, non-destructive and offline. It preserves conflicting
-existing content for explicit reconciliation, and re-running at a higher tier is
-an additive upgrade. The harness starters it writes are executable policy, such
-as a guarded Codex profile and a fail-closed Claude sandbox (ADR-0025,
-ADR-0026).
+Init is idempotent, non-destructive and offline, and it preserves conflicting
+existing content for explicit reconciliation. Re-running at a higher tier is an
+additive upgrade. The harness starters it writes are executable policy, such as
+a guarded Codex profile and a fail-closed Claude sandbox (ADR-0025, ADR-0026).
 
 | Written file | What it holds |
 |---|---|
@@ -224,7 +223,6 @@ section of `.codeflow/policy.json`.
 - Git client hooks and the in-session `git-guard` give fast local feedback.
 - CI re-runs the same checks through `codeflow ci`. Together with remote branch
   protection, it forms the authoritative perimeter (ADR-0017).
-- Rule levels are per-repository policy values.
 - The anti-bypass layer has no off switch. It is the strict policy validator,
   the gate-context token for protected-branch advances, and the guard's refusal
   of override variables set in-session.
@@ -299,9 +297,8 @@ The duo develop flow includes a mandatory security and red-team stage
 (ADR-0016).
 
 - The CI `security-review` job runs `osv-scanner` for software composition
-  analysis (SCA) over every lockfile ecosystem. It blocks CI only when the
-  `security_review` or `dep_audit` policy key is set to `block`. The shipped
-  default is warn.
+  analysis (SCA) over every lockfile ecosystem. It blocks only when
+  `security_review` or `dep_audit` is `block`; the shipped default is warn.
 - Secrets found by gitleaks always block, with exemptions read from the trusted
   commit.
 - The `cf-security-reviewer` agent runs a two-vendor adversarial review. Its
@@ -455,16 +452,16 @@ adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
 
 A session can consult or delegate a unit of work to another vendor's coding CLI
 at the process boundary, each under its own subscription auth. CodeFlow's gates
-judge the output whoever wrote it (ADR-0005).
+judge the output whoever wrote it (ADR-0005). Transport is interactive only,
+and headless task execution is prohibited.
 
-- Transport is interactive only. Headless task execution is prohibited.
-- From Claude Code it uses the official `codex-plugin-cc` plugin, with a
-  qualified native client fallback (ADR-0059).
-- From Codex it uses the interactive `claude` CLI through the delegate
-  lifecycle. When `HERDR_ENV=1`, `cf-herdr` hosts that terminal in a named
-  Herdr tab.
-- Delegates edit only inside a worktree on a feature branch, under the same
-  gates.
+| From | Transport |
+|---|---|
+| Claude Code | The official `codex-plugin-cc` plugin, with a qualified native client fallback (ADR-0059) |
+| Codex | The interactive `claude` CLI through the delegate lifecycle; when `HERDR_ENV=1`, `cf-herdr` hosts that terminal in a named Herdr tab |
+
+Delegates edit only inside a worktree on a feature branch, under the same
+gates.
 
 Detail: [delegation](delegation.md).
 
@@ -491,12 +488,9 @@ It selects the smallest complete outcome mode, so research or planning work
 stops before implementation. Planning, review and batch landing follow
 [how work moves to main](delivery.md) (ADR-0076).
 
-The two seats work in this order:
-
-1. Both discover independently from the same immutable brief, before either
-   sees the other's findings.
-2. Claude drafts the one plan, and Codex challenges it.
-3. Both approve one version before implementation.
+Both seats independently discover from the same immutable brief before either
+sees the other's findings. Claude then drafts the one plan, Codex challenges
+it, and both approve one version before implementation.
 
 Material product or visual work also records a `DESIGN_INTENT` in that plan
 (ADR-0043, ADR-0051).
@@ -630,7 +624,6 @@ one bounded local review surface with anchored feedback.
 
 - The standard and full tiers supply the `cf-present` authoring skill and its
   schemas.
-- Simple answers stay in chat, and durable docs belong to the portal.
 - The runtime serves an authenticated loopback-only page to an isolated browser
   profile. It keeps immutable revisions and append-only feedback in
   owner-private state, and it retains ambiguous state rather than deleting it.

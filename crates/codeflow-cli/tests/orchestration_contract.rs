@@ -968,8 +968,9 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
 fn readme_distinguishes_installed_and_effective_discipline() {
     let readme = normalize_whitespace(&read("README.md"));
 
+    // TSK-224 replaced the README's trait list with a plain opening and a
+    // tier table, so the heading phrase is gone; the qualifiers stay.
     for required in [
-        "Integrated, proportional discipline",
         "Full tier adds durable epics, tasks, and specs plus referential checks",
         "Trivial or conversational work needs no new artifact",
         "Session summaries are captured automatically only when a supported harness's SessionEnd hook is installed and actually executes",

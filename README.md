@@ -20,7 +20,10 @@ An agent works fast, and some of its mistakes cannot be undone:
 - work that nobody can explain a month later
 
 A prompt that asks an agent to behave does not stop any of these. CodeFlow
-turns the rules into checks. Every rule is written once, in
+turns the rules into checks, and the repository holds the record. Session
+summaries are captured automatically only when a supported harness's
+SessionEnd hook is installed and actually executes; otherwise write decisions,
+progress and evidence down as you go. Every rule is written once, in
 `.codeflow/policy.json`, and four planes read it:
 
 ```text
@@ -33,10 +36,15 @@ turns the rules into checks. Every rule is written once, in
 ```
 
 Planes 1 and 2 give fast local feedback and can be edited. Planes 3 and 4 are
-the perimeter, where CI runs and the remote requires it. Installed files do not
-prove a plane works, so check that hooks run, CI results are required and the
-remote rules hold. See [the product page](docs/product.md#the-four-enforcement-planes)
-and [the enforcement planes](docs/architecture/enforcement-planes.md).
+the perimeter, where CI runs and the remote requires it. CI becomes a merge
+gate when the remote requires its result.
+
+Installed files alone do not make those planes effective. Verify hook
+execution, harness trust and event support, required CI results, and actual
+remote rules, permissions, and bypasses. Codex-driven work receives the
+git-hook plane where those hooks are installed and executed. See
+[the product page](docs/product.md#the-four-enforcement-planes) and
+[the enforcement planes](docs/architecture/enforcement-planes.md).
 
 ## Choose a tier
 
@@ -51,9 +59,14 @@ removes files.
 | `--standard` (default) | Minimal plus the develop-loop skills, reviewer agents, the pipeline workflow and the `docs/` spine (product, architecture, capabilities, decisions) | The repository is a code project |
 | `--full` | Standard plus `project-management/` templates for epics, tasks and specs | Work outlives a session and needs durable plans and criteria |
 
-No tier arms remote branch protection. That is a repository setting; see
-[docs/adoption.md](docs/adoption.md) for the tiers, ownership and the daily
-flow.
+Full tier adds durable epics, tasks, and specs plus referential checks for
+work that outlives sessions. Trivial or conversational work needs no new
+artifact.
+
+Minimal init scaffolds local hooks, in-session settings, and CI while
+preserving an existing hook manager; it does not configure remote branch
+protection, and no tier does. See [docs/adoption.md](docs/adoption.md) for the
+tiers, ownership and the daily flow.
 
 ## Install
 
@@ -118,7 +131,7 @@ required tools before the first non-trivial task goes to
 | `update` | Refresh managed scaffold files (3-way merge, never clobbers) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `status` | Show the branch, worktrees, in-flight work and capabilities; `--delivery` adds the capability-delivery rollup |
-| `doctor` | Run health checks on hooks, harness settings, CI, policy, delegates, model bindings and more (`doctor --list` names them) |
+| `doctor` | Health checks (20): hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
 | `test` | Run the test gate; `test setup` detects root stacks, lists templates and appends targets |
 | `validate` | Validate policy and records; `--docs` adds doc-graph checks and `--portal <dir>` verifies portal evidence without running project code |
 | `ci` | Check a commit range and branch name against policy, the same check CI runs; exit 2 on a violation or invalid policy |

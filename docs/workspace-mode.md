@@ -68,15 +68,14 @@ a nested project's files
   a short-lived branch in the umbrella's own `.worktrees/<slug>`, cut from
   the root branch and merged back with `codeflow integrate`.
 - With no remote, the root branch is the landing line and `main` is a
-  protected checkpoint. At a milestone the operator moves it forward with
-  `codeflow integrate integration/workspace --into main`. Agents never do.
-- With a remote the same holds: the root branch is pushed, and a change into
+  protected checkpoint: at a milestone the operator moves it forward with
+  `codeflow integrate integration/workspace --into main`; agents never do.
+- With a remote the same holds, the root branch is pushed, and a change into
   `main` is a pull request a human merges.
-- A nested repository: every change goes through that repository's own
-  flow, a worktree under its own `.worktrees/<slug>` and a pull request into
-  its integration branch or its `main`. The umbrella never commits nested
-  files, which it ignores. Agents never merge into any repository's
-  `main`.
+- A nested repository: every change goes through that repository's own flow,
+  a worktree under its own `.worktrees/<slug>` and a pull request into its
+  integration branch or its `main`. The umbrella never commits nested files,
+  which it ignores, and agents never merge into any repository's `main`.
 
 ## Where settings come from
 
