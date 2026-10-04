@@ -1808,14 +1808,24 @@ fn run_captured(
     // larger than a pipe cannot block the write and with it the timeout
     // below. A child that exits without reading closes the pipe; its exit
     // status, not this write, is the result, and a killed child ends the
-    // write the same way.
+    // write the same way. The write must also finish by the deadline: a
+    // descendant that keeps the pipe open and never reads would leave it
+    // blocked, so the tree is stopped and the run times out.
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
+    let mut writer = None;
     if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let text = text.to_string();
-        std::thread::spawn(move || {
+        match std::thread::Builder::new().spawn(move || {
             let _ = pipe.write_all(text.as_bytes());
-        });
+        }) {
+            Ok(handle) => writer = Some(handle),
+            Err(error) => {
+                terminate_process_tree(&mut child);
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
     }
     let started = Instant::now();
     let status = loop {
@@ -1845,6 +1855,15 @@ fn run_captured(
             error
         }
     })?;
+    if let Some(writer) = writer {
+        while !writer.is_finished() {
+            if started.elapsed() >= timeout {
+                terminate_process_tree(&mut child);
+                return Err(probe_timeout_message(timeout));
+            }
+            std::thread::sleep(VERSION_PROBE_POLL);
+        }
+    }
     Ok(CapturedRun {
         code: status.code(),
         stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
@@ -6245,5 +6264,31 @@ mod tests {
         assert_eq!(captured.code, Some(0));
         assert!(captured.stdout.starts_with('x'));
         assert_eq!(exec.unwrap().len(), 2 * 1024 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_that_keeps_stdin_open_and_never_reads_times_out() {
+        // The child exits at once; its background `sleep` keeps only the
+        // stdin pipe open (`<&0`; a background job otherwise reads
+        // /dev/null), so a 4 MiB write would stay blocked forever.
+        let input = "x".repeat(4 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let run = run_captured(
+                "sh",
+                &["-c", "sleep 30 <&0 >/dev/null 2>&1 & exit 0"],
+                Duration::from_millis(500),
+                Some(&input),
+                None,
+            );
+            let _ = sender.send((run, started.elapsed()));
+        });
+        let (run, elapsed) = receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("run_captured returned instead of waiting on the blocked write");
+        assert!(run.unwrap_err().contains("timed out"));
+        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
     }
 }

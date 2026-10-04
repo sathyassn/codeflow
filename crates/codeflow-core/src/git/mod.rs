@@ -95,7 +95,16 @@ pub fn output_with_input(
         .ok_or_else(|| std::io::Error::other("child stdin was not piped"))?;
     let input = input.to_vec();
     // `stdin` drops with the thread, which closes the pipe and ends the input.
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    // A thread that cannot be created is an error, not a panic: the child is
+    // stopped and reaped first, so none is left running.
+    let writer = match std::thread::Builder::new().spawn(move || stdin.write_all(&input)) {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
     let output = child.wait_with_output();
     let written = writer
         .join()
