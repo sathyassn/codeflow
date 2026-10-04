@@ -6263,15 +6263,18 @@ mod tests {
     #[test]
     fn a_descendant_that_keeps_stdin_open_and_never_reads_times_out() {
         // The child exits at once; its background `sleep` keeps only the
-        // stdin pipe open (`<&0`; a background job otherwise reads
-        // /dev/null), so a 4 MiB write would stay blocked forever.
+        // stdin pipe open, so a 4 MiB write would stay blocked forever. The
+        // shell copies stdin to fd 3 first, which every child inherits: a
+        // background job's own stdin is /dev/null in a non-interactive
+        // shell (dash and bash as sh), even with an explicit `<&0`, so `0`
+        // cannot carry the pipe.
         let input = "x".repeat(4 * 1024 * 1024);
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let started = Instant::now();
             let run = run_captured(
                 "sh",
-                &["-c", "sleep 30 <&0 >/dev/null 2>&1 & exit 0"],
+                &["-c", "exec 3<&0; sleep 30 >/dev/null 2>&1 & exit 0"],
                 Duration::from_millis(500),
                 Some(&input),
                 None,
@@ -6283,6 +6286,29 @@ mod tests {
             .expect("run_captured returned instead of waiting on the blocked write");
         assert!(run.unwrap_err().contains("timed out"));
         assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_exits_without_reading_ends_the_write_and_returns_its_status() {
+        // Nothing else holds the pipe, so the write ends with a broken pipe
+        // and the exit status is the result, not a timeout.
+        let input = "x".repeat(4 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let run = run_captured(
+                "sh",
+                &["-c", "exit 3"],
+                Duration::from_secs(30),
+                Some(&input),
+                None,
+            );
+            let _ = sender.send(run);
+        });
+        let run = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("run_captured returned instead of waiting on the write");
+        assert_eq!(run.unwrap().code, Some(3));
     }
 
     #[cfg(unix)]
