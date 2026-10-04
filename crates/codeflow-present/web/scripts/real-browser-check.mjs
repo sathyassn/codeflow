@@ -30,9 +30,19 @@ if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(runPrefix)) {
 }
 const injectCleanupFailure = process.argv.includes("--inject-cleanup-failure");
 const injectCloseTimeout = process.argv.includes("--inject-close-timeout");
+const injectSlowClose = process.argv.includes("--inject-slow-close");
 const NAVIGATION_TIMEOUT_MS = 45_000;
 const BOOTSTRAP_COMMIT_TIMEOUT_MS = 120_000;
-const BROWSER_CLOSE_TIMEOUT_MS = 15_000;
+// A healthy close returns in well under a second. A busy macOS host (load in
+// the tens) was measured at 10 to 20 seconds for a close that then succeeded,
+// so the bound has to separate a slow close from a hung one, not a quiet
+// machine from a busy one. Only a hung close earns the exact-owned fallback.
+const BROWSER_CLOSE_TIMEOUT_MS = 45_000;
+// The injected hang never settles; this bound only ends the wait for it.
+const INJECTED_CLOSE_HANG_BOUND_MS = 1_000;
+// A close slower than the former 15 s bound that still finishes inside the
+// current one, which must not use the fallback.
+const INJECTED_SLOW_CLOSE_MS = 20_000;
 const BROWSER_TERMINATION_GRACE_MS = 2_500;
 const PROCESS_INVENTORY_TIMEOUT_MS = 10_000;
 // A busy machine lists more than execFileSync's 1 MiB default; the inventory
@@ -115,6 +125,7 @@ let browserVersion;
 let playwrightCoreVersion;
 let browserCloseFallbacks = 0;
 let closeTimeoutInjectionPending = injectCloseTimeout;
+let slowCloseInjectionPending = injectSlowClose;
 const requests = [];
 const responses = [];
 const consoleErrors = [];
@@ -776,10 +787,22 @@ async function closeBrowserContext(openContext, profiles, knownProcesses, phase)
   );
   const injectTimeout = closeTimeoutInjectionPending && phase.startsWith("close browser using ");
   if (injectTimeout) closeTimeoutInjectionPending = false;
-  const closePromise = injectTimeout ? new Promise(() => {}) : openContext.close();
+  const injectSlow = !injectTimeout
+    && slowCloseInjectionPending
+    && phase.startsWith("close browser using ");
+  if (injectSlow) slowCloseInjectionPending = false;
+  const closePromise = injectTimeout
+    ? new Promise(() => {})
+    : injectSlow
+      ? delay(INJECTED_SLOW_CLOSE_MS).then(() => openContext.close())
+      : openContext.close();
   let usedFallback = false;
   try {
-    await bounded(closePromise, BROWSER_CLOSE_TIMEOUT_MS, phase);
+    await bounded(
+      closePromise,
+      injectTimeout ? INJECTED_CLOSE_HANG_BOUND_MS : BROWSER_CLOSE_TIMEOUT_MS,
+      phase,
+    );
   } catch (error) {
     ownedProcesses = mergeProcesses(
       ownedProcesses,
