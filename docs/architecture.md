@@ -175,9 +175,14 @@ bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
   strict". Refuse and do not skip: a name the check cannot read is work or
   authority it cannot prove (a policy source ref, a remote name, a worktree
   name, a state directory written into a hook command).
-- **A name that can only match a valid pattern is skipped.** A directory entry
-  tested against a UUID or a `.tmp` suffix cannot match when it is not valid
-  UTF-8, so the scan moves on.
+- **A name that only matches a name this tool generates is skipped.** A
+  directory entry tested against a UUID or a nonce-suffixed temporary name is
+  not one of ours when it is not valid UTF-8, because every generated name is
+  ASCII, so the scan moves on.
+- **A name matched against valid patterns may be read lossily.** A branch
+  name tested against protected globs or task prefixes matches as its bytes do.
+  Where two OS values are compared with each other, or one picks the object
+  acted on, the bytes decide.
 - **File content is not covered.** JSON, TOML, Markdown and blobs are a format
   contract, and a decode failure there names the file.
 

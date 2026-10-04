@@ -383,7 +383,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             let own_range_base = repo
                 .head()
                 .ok()
-                .and_then(|head| head.shorthand().ok().map(str::to_string))
+                .map(|head| crate::git::reference_shorthand(&head))
                 .filter(|branch| {
                     super::task_id_from_branch(repo_root, branch).as_deref()
                         == Some(task.id.as_str())

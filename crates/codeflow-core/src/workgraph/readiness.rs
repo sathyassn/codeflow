@@ -241,17 +241,37 @@ fn visible_work_branches(
     };
     let mut seen = BTreeSet::new();
     for (branch, kind) in branches.flatten() {
-        let Some(name) = branch.name().ok().flatten() else {
+        // OS text rule (issue 79, `docs/architecture.md`): a branch name is
+        // matched against valid work prefixes and task ids and shown, so it is
+        // read lossily. Dropping a branch that is not valid UTF-8 would hide a
+        // claim on its task id.
+        let Ok(raw) = branch.name_bytes() else {
             continue;
         };
+        let name = String::from_utf8_lossy(raw);
+        let name = name.as_ref();
         let (name, short) = match kind {
             BranchType::Local => (name.to_string(), name.to_string()),
             BranchType::Remote => {
-                let Some(remote) = repo
-                    .branch_remote_name(&format!("refs/remotes/{name}"))
-                    .ok()
-                    .and_then(|buf| std::str::from_utf8(&buf).ok().map(str::to_owned))
-                else {
+                // A name that is valid text asks git which remote owns it. One
+                // that is not cannot be asked, so the owner is the longest
+                // configured remote its bytes start with.
+                let remote = if std::str::from_utf8(raw).is_ok() {
+                    repo.branch_remote_name(&format!("refs/remotes/{name}"))
+                        .ok()
+                        .map(|buf| String::from_utf8_lossy(&buf).into_owned())
+                } else {
+                    repo.remotes().ok().and_then(|names| {
+                        names
+                            .iter_bytes()
+                            .filter(|remote| {
+                                raw.starts_with(remote) && raw.get(remote.len()) == Some(&b'/')
+                            })
+                            .max_by_key(|remote| remote.len())
+                            .map(|remote| String::from_utf8_lossy(remote).into_owned())
+                    })
+                };
+                let Some(remote) = remote else {
                     continue;
                 };
                 let Some(short) = name
@@ -1471,6 +1491,27 @@ mod tests {
         assert!(error.to_string().contains("not on 'main'"), "{error}");
         assert!(consumer(&done).is_ok());
         assert!(verdict(root, "TSK-003").is_ok());
+    }
+
+    /// Review finding on issue 79: a branch whose name is not valid UTF-8 and
+    /// carries a task id used to drop out of the visible claims, so the id read
+    /// as free. It is read lossily and still claims the id.
+    #[test]
+    fn a_task_branch_that_is_not_utf8_still_claims_its_id() {
+        let dir = repo();
+        let root = dir.path();
+        run(root, &["commit", "-q", "--allow-empty", "-m", "test: seed"]);
+        let tip = run(root, &["rev-parse", "HEAD"]);
+        let mut packed = b"# pack-refs with: peeled fully-peeled sorted \n".to_vec();
+        packed.extend_from_slice(format!("{tip} refs/heads/task/TSK-238-").as_bytes());
+        packed.extend_from_slice(b"caf\xe9\n");
+        fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
+        let repository = Repository::open(root).unwrap();
+        let ids = BTreeSet::from(["TSK-238".to_string()]);
+        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids);
+        let claims = &carried["TSK-238"];
+        assert_eq!(claims.len(), 1, "{carried:?}");
+        assert_eq!(claims[0].0, "task/TSK-238-caf\u{fffd}");
     }
 
     #[test]

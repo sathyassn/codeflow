@@ -140,7 +140,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
             let branch = repo
                 .head()
                 .ok()
-                .and_then(|h| h.shorthand().ok().map(ToString::to_string));
+                .map(|h| crate::git::reference_shorthand(&h));
             let worktrees = list_worktrees(&repo);
             let target = cleanup_target(&repo);
             let cleanup = collect_cleanup(repo_root, &repo, target.as_ref());
@@ -231,17 +231,13 @@ fn collect_cleanup(
     let mut out = Vec::new();
     let mut checked_out = std::collections::BTreeSet::new();
     if let Ok(head) = repo.head() {
-        if let Ok(name) = head.shorthand() {
-            checked_out.insert(name.to_string());
-        }
+        checked_out.insert(crate::git::reference_shorthand(&head));
     }
 
-    if let Ok(names) = repo.worktrees() {
-        for name in names.iter().filter_map(|name| name.ok().flatten()) {
-            let Ok(worktree) = repo.find_worktree(name) else {
-                continue;
-            };
-            let path = worktree.path();
+    {
+        for linked in crate::git::linked_worktrees(repo) {
+            let name = linked.name.as_str();
+            let path = linked.path.as_path();
             let Ok(worktree_repo) = git2::Repository::open(path) else {
                 out.push(CleanupInfo {
                     kind: "worktree".to_string(),
@@ -253,10 +249,7 @@ fn collect_cleanup(
                 continue;
             };
             let head = worktree_repo.head().ok();
-            let branch = head
-                .as_ref()
-                .and_then(|item| item.shorthand().ok())
-                .map(ToString::to_string);
+            let branch = head.as_ref().map(crate::git::reference_shorthand);
             if let Some(branch) = &branch {
                 checked_out.insert(branch.clone());
             }
@@ -397,15 +390,11 @@ fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
 
 fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
     let mut out = Vec::new();
-    if let Ok(names) = repo.worktrees() {
-        for name in names.iter().filter_map(|name| name.ok().flatten()) {
-            if let Ok(wt) = repo.find_worktree(name) {
-                out.push(WorktreeInfo {
-                    name: name.to_string(),
-                    path: wt.path().display().to_string(),
-                });
-            }
-        }
+    for linked in crate::git::linked_worktrees(repo) {
+        out.push(WorktreeInfo {
+            name: linked.name,
+            path: linked.path.display().to_string(),
+        });
     }
     out
 }

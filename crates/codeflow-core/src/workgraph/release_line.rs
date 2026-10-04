@@ -338,7 +338,7 @@ pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, Str
     let branch = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| crate::git::reference_shorthand(&head))
         .unwrap_or_default();
     let url = repo
         .find_remote("origin")

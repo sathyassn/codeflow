@@ -522,7 +522,7 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         for name in names.iter_bytes() {
             paths.push((
                 Path::new("worktrees")
-                    .join(os_component(name))
+                    .join(crate::git::os_component(name))
                     .join("config.worktree"),
                 false,
             ));
@@ -565,56 +565,12 @@ fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
             roots.push(workdir.to_path_buf());
         }
     }
-    if let Ok(names) = repo.worktrees() {
-        for name in names.iter_bytes() {
-            if let Some(root) = std::str::from_utf8(name)
-                .ok()
-                .and_then(|name| repo.find_worktree(name).ok())
-                .map(|tree| tree.path().to_path_buf())
-                .or_else(|| unreadable_name_worktree_root(repo, name))
-            {
-                roots.push(root);
-            }
-        }
-    }
+    roots.extend(
+        crate::git::linked_worktrees(repo)
+            .into_iter()
+            .map(|worktree| worktree.path),
+    );
     roots
-}
-
-/// A worktree folder name as one path component, byte for byte where the
-/// platform allows it.
-fn os_component(name: &[u8]) -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-        PathBuf::from(std::ffi::OsStr::from_bytes(name))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from(String::from_utf8_lossy(name).into_owned())
-    }
-}
-
-/// The checkout of a linked worktree whose administrative folder name is not
-/// valid UTF-8, which `find_worktree` cannot be asked for. Its `gitdir` file
-/// holds the path of the checkout's `.git`, as git writes it. A worktree this
-/// cannot read is one fewer protected checkout, so only a name that is not
-/// valid UTF-8 comes here.
-fn unreadable_name_worktree_root(repo: &git2::Repository, name: &[u8]) -> Option<PathBuf> {
-    let file = repo
-        .commondir()
-        .join("worktrees")
-        .join(os_component(name))
-        .join("gitdir");
-    let text = std::fs::read(file).ok()?;
-    let text = text.trim_ascii_end();
-    #[cfg(unix)]
-    let gitdir = {
-        use std::os::unix::ffi::OsStrExt as _;
-        PathBuf::from(std::ffi::OsStr::from_bytes(text))
-    };
-    #[cfg(not(unix))]
-    let gitdir = PathBuf::from(String::from_utf8_lossy(text).into_owned());
-    gitdir.parent().map(Path::to_path_buf)
 }
 
 /// The enforcement paths of every checkout sharing this repository, each

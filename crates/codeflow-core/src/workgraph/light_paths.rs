@@ -61,7 +61,7 @@ fn field(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
 fn current_branch(repo_root: &Path) -> Option<String> {
     let repo = git2::Repository::discover(repo_root).ok()?;
     let head = repo.head().ok()?;
-    head.shorthand().ok().map(str::to_owned)
+    Some(crate::git::reference_shorthand(&head))
 }
 
 /// File a follow-up of `source_id` (R-73): the new task records

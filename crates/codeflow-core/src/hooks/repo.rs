@@ -59,17 +59,20 @@ impl RepoInfo {
 #[must_use]
 pub fn current_branch(repo: &Repository) -> String {
     if let Ok(head) = repo.head() {
-        if let Ok(name) = head.shorthand() {
-            if name != "HEAD" {
-                return name.to_string();
-            }
+        // OS text rule (issue 79, `docs/architecture.md`): the name is lossy,
+        // never empty. It is matched against protected-branch patterns, which
+        // a lossy spelling matches as the bytes do, and an empty name would
+        // read a protected branch as detached and drop the refusal.
+        let name = crate::git::reference_shorthand(&head);
+        if name != "HEAD" && !name.is_empty() {
+            return name;
         }
         return String::new(); // detached
     }
     // Unborn branch: HEAD exists as a symbolic ref with no target commit.
     if let Ok(head_ref) = repo.find_reference("HEAD") {
-        if let Ok(Some(target)) = head_ref.symbolic_target() {
-            if let Some(branch) = target.strip_prefix("refs/heads/") {
+        if let Some(target) = head_ref.symbolic_target_bytes() {
+            if let Some(branch) = String::from_utf8_lossy(target).strip_prefix("refs/heads/") {
                 return branch.to_string();
             }
         }
@@ -151,6 +154,40 @@ mod tests {
         git(dir.path(), &["init", "-b", "main"]);
         let info = RepoInfo::discover(dir.path()).unwrap();
         assert_eq!(info.branch, "main");
+    }
+
+    /// Review finding on issue 79: a branch whose name is not valid UTF-8 read
+    /// as detached, so a protected pattern never saw it and the refusal was
+    /// dropped. The name is now lossy and still matches the glob.
+    #[test]
+    fn a_branch_that_is_not_utf8_is_not_detached_and_stays_protected() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_repo = Repository::init(dir.path()).unwrap();
+        let tree = git_repo
+            .find_tree(git_repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let commit = git_repo
+            .commit(Some("HEAD"), &sig, &sig, "test: seed", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let git_dir = dir.path().join(".git");
+        let mut packed = b"# pack-refs with: peeled fully-peeled sorted \n".to_vec();
+        packed.extend_from_slice(format!("{commit} refs/heads/release/").as_bytes());
+        packed.extend_from_slice(b"caf\xe9\n");
+        std::fs::write(git_dir.join("packed-refs"), packed).unwrap();
+        std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let name = current_branch(&repo);
+        assert_eq!(name, "release/caf\u{fffd}");
+        let policy = crate::hooks::policy::GitPolicy {
+            protected_branches: vec!["release/*".to_string()],
+            ..crate::hooks::policy::GitPolicy::default()
+        };
+        assert!(policy.branch_is_protected(&name));
+        // The unborn case reads the symbolic target the same way.
+        std::fs::write(git_dir.join("packed-refs"), b"").unwrap();
+        assert_eq!(current_branch(&Repository::open(dir.path()).unwrap()), name);
     }
 
     #[test]

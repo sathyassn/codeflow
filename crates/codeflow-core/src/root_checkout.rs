@@ -1030,15 +1030,9 @@ pub fn worktree_findings(
         .filter_map(|e| expand_location(e, &root, env))
         .map(|p| canonical(&p))
         .collect();
-    let Ok(names) = repo.worktrees() else {
-        return Vec::new();
-    };
     let mut out = Vec::new();
-    for name in names.iter().filter_map(|n| n.ok().flatten()) {
-        let Ok(worktree) = repo.find_worktree(name) else {
-            continue;
-        };
-        let path = canonical(worktree.path());
+    for worktree in crate::git::linked_worktrees(repo) {
+        let path = canonical(&worktree.path);
         if !path.exists() {
             continue;
         }
