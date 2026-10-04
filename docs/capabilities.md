@@ -89,8 +89,8 @@ keep their registry entry here:
 
 ## Technical
 
-Each capability has a definition table generated from its yaml fence, then a
-short summary and a link to the page that owns the detail.
+Each capability has a definition table from its yaml fence, a short summary and
+a link to the page that owns the detail.
 
 ### Scaffold
 
@@ -114,10 +114,9 @@ into a repository (ADR-0019).
 - `--standard` adds the method skills, reviewer agents, pipeline and docs spine.
 - `--full` adds `project-management/`.
 
-Init is idempotent, non-destructive and offline, and it preserves conflicting
-existing content for explicit reconciliation. Re-running at a higher tier is an
-additive upgrade. The harness starters it writes are executable policy, such as
-a guarded Codex profile and a fail-closed Claude sandbox (ADR-0025, ADR-0026).
+Init is idempotent, non-destructive and offline, and it keeps conflicting
+content for reconciliation. A re-run at a higher tier is an additive upgrade.
+Its harness starters are executable policy (ADR-0025, ADR-0026).
 
 | Written file | What it holds |
 |---|---|
@@ -147,8 +146,8 @@ adrs: [ADR-0011, ADR-0019]
 - Managed regions are updated in place.
 - User-owned schema-versioned files gain new keys with defaults.
 
-Update also installs in-tier manifest entries that are missing on disk. It
-never clobbers and never silently skips.
+Update also installs missing in-tier manifest entries. It never clobbers and
+never silently skips.
 
 | Policy scalar | On update |
 |---|---|
@@ -179,8 +178,8 @@ that ships new defaults. It does three things:
 - It checks the effective harness sandbox and approval posture instead of
   trusting comments.
 
-It reports first, then applies fixes interactively through a PR. It never
-auto-installs a tool or silently changes global harness settings.
+It reports first, then applies fixes through a PR. It never auto-installs a
+tool or silently changes global harness settings.
 Detail: [adoption](adoption.md).
 
 #### optional-agentic-estimation
