@@ -234,9 +234,12 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   and an unfetched line is unknown, never met. Before that, a task may be
   claimed and started on the predecessor's exact reviewed head, named with
   `--on TSK-NNN@<sha>`: the tool checks the pin structurally (an ancestor of
-  HEAD, on the predecessor's branch, still its tip), which is not
-  authentication of the review. CI still requires the predecessor complete at
-  the merge base when the task lands, so the stack lands in order.
+  HEAD, on the predecessor's branch, still its tip, and named by a review row,
+  or following the commit the review names only by the predecessor's status
+  and Closeout), which is not authentication of the review. Each push of the
+  new branch judges the commits up to the pin as the predecessor's own
+  reviewed pull request. CI still requires the predecessor complete at the
+  merge base when the task lands, so the stack lands in order.
 - A **research or decision dependency** is met when the predecessor is
   `complete` at the pinned commit on its target. The planner writes the pin
   when it is known; an entry without a pin is unmet.
@@ -299,8 +302,9 @@ After the review, a task pull request may merge its moved target and keep
 the binding when the merge's recorded result equals the conflict-free
 automatic merge of its parents, so refreshing a stale base needs no new
 review; any other merge or a later code change needs one. A reopened task
-keeps its criteria once its record is on the target; before that, a reopen
-inside its own pull request may change them.
+keeps its criteria once a completion of it has landed on the target; before
+that, a reopen inside its own pull request may change them, also when the
+target already records the task.
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
