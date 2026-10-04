@@ -414,7 +414,7 @@ fn html_text(html: &str) -> String {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '/');
-        if let Some(end) = rest.find('>').filter(|_| tag_like) {
+        if let Some(end) = tag_end(rest).filter(|_| tag_like) {
             let name = rest[1..end]
                 .trim_start_matches('/')
                 .split(|c: char| c.is_whitespace() || c == '/')
@@ -434,6 +434,21 @@ fn html_text(html: &str) -> String {
     decode_entities(&out)
 }
 
+/// The offset of the `>` that ends the tag `html` opens with, skipping any
+/// `>` inside a quoted attribute value; `None` when the tag never ends.
+fn tag_end(html: &str) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    for (at, ch) in html.char_indices() {
+        match (quote, ch) {
+            (None, '>') => return Some(at),
+            (None, '"' | '\'') => quote = Some(ch),
+            (Some(open), _) if ch == open => quote = None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Decode the character references an HTML block can carry. A reference
 /// this does not know stays as written.
 fn decode_entities(text: &str) -> String {
@@ -451,6 +466,14 @@ fn decode_entities(text: &str) -> String {
                 "quot" => Some('"'),
                 "apos" => Some('\''),
                 "nbsp" => Some('\u{a0}'),
+                "ensp" => Some('\u{2002}'),
+                "emsp" => Some('\u{2003}'),
+                "numsp" => Some('\u{2007}'),
+                "puncsp" => Some('\u{2008}'),
+                "thinsp" => Some('\u{2009}'),
+                "hairsp" => Some('\u{200a}'),
+                "Tab" => Some('\t'),
+                "NewLine" => Some('\n'),
                 _ => name
                     .strip_prefix('#')
                     .and_then(|digits| match digits.strip_prefix(['x', 'X']) {
@@ -1955,6 +1978,35 @@ mod tests {
             length_message(&long, &sections(&long)).is_some(),
             "adjacent HTML elements are separate words and pass the limit"
         );
+    }
+
+    /// Review round 2: a `>` inside a quoted attribute does not end the
+    /// tag, and the named whitespace references separate words.
+    #[test]
+    fn word_count_reads_quoted_attributes_and_named_spaces() {
+        assert_eq!(
+            word_count("<div><img src=\"x.png\" alt=\"a > hidden words\"></div>"),
+            0
+        );
+        assert_eq!(
+            word_count("<div><img src='x.png' alt='a > hidden words'>shown</div>"),
+            1
+        );
+        assert_eq!(word_count("<p title=\"x\">a < b</p>"), 3);
+        assert_eq!(
+            word_count("<div>one&ensp;two&emsp;three&Tab;four&NewLine;five&thinsp;six</div>"),
+            6
+        );
+        let at = format!(
+            "{}<div><img src=\"x.png\" alt=\"a > hidden image alternative words here\"></div>",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(length_message(&at, &sections(&at)).is_none());
+        let over = format!(
+            "{}<div>one&ensp;two&emsp;three&Tab;four&NewLine;five</div>",
+            words(BODY_WORD_LIMIT - 2)
+        );
+        assert!(length_message(&over, &sections(&over)).is_some());
     }
 
     #[test]
