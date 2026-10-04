@@ -219,6 +219,7 @@ Other checks on these planes:
 | Unresolved conflict markers (TSK-170) | `git.conflict_markers`, block | The lines a change adds to a text file: in pre-commit over the staged diff, and in `codeflow ci` over the range, which also catches a marker left while resolving `git rebase --continue`. A separator line counts only between an opening and a closing marker, so a Markdown heading underline passes. A file that must hold markers sets `conflict-marker-size` for its path in `.gitattributes` |
 | En and em dashes (ADR-0067) | `policy_characters`, warn; CodeFlow's own policy sets block | Added lines. The scan skips a file only when its bytes equal the whole-file managed asset the running binary ships for that path, so unmodified scaffold content never trips it and a project record proves nothing |
 | Pull request sections by change class (TSK-135) | `pr_sections` | Read from one checked merge-base tree diff that includes merge resolutions, deletions, both rename sides and file modes. A range of only regular Markdown under `docs/` or `project-management/`, outside every shared path set (product and watched contract paths from the checkout and the target, shipped templates, the record schema, dependency manifests, hooks, instructions and CI), needs Summary and Changes, under a mapped heading where the project accepted a mapping. An absent Release impact there reads as no impact unless a commit is marked breaking. The Release impact section is required only on a pull request into a protected branch or one that carries a breaking commit; elsewhere it is optional and checked when present (ADR-0076). A range that cannot be listed is code |
+| Pull request body length (TSK-228) | `git.pr_sections`, always warn | The words of the whole body as a reader sees it, with HTML comments left out and fenced blocks and tables counted. Over 1,000 words it warns, naming the count, the limit and the three largest `##` sections, and says to rewrite the body to its final state and link records. It has no key of its own, follows `pr_sections` being active, and never blocks |
 | Pull request Summary shape (TSK-218) | `git.pr_summary`, block | The one Summary section, under its mapped heading: one prose paragraph, then a list or a table, then at most one closing paragraph, read from the visible blocks only, so an HTML comment never supplies the lead or the list. It judges shape, never a word or sentence count (ADR-0071, note of 2026-10-03). It runs at warn while a kept PR template is diagnosed, and a trusted automation profile skips it |
 | Managed CI release digests (TSK-225) | `[scaffold_sha256]` in `.codeflow/project.toml`, written by `codeflow update --pin`; none by default | The archive each managed CI installer downloads must match the digest the target pins for its platform, whatever the release's own `sha256.sum` says, and must match `sha256.sum` too. A table from another version, a missing platform, a table declared or keyed twice or written in another TOML form, a table line other than a plain entry, and any escaped table name or key or multi-line string in the state fail closed. With no table the install checks `sha256.sum` alone and warns |
 | Managed CI project setup (TSK-225) | `.codeflow/ci-setup.sh`, project-owned; none by default | The gates job and the shared script of the other templates source it under `set -eu` just before `codeflow test`, after any lowered-pin refusal. It is the project's own code with the gate's authority; doctor names its first command but does not audit it |
@@ -426,16 +427,16 @@ area: scaffold
 status: shipped
 verified_by: ["cargo test doctor::tests::test_check_delegates", "cargo test --test orchestration_contract", "codeflow-core tests/herdr_host_contract.rs", "evals/skill-triggers/test_triggers.py", "docs/verification/host-neutral-duo-canary-2026-07-15.md", "docs/verification/herdr-primary-consult-canary-2026-08-30.md"]
 epics: [EPC-002, EPC-011, EPC-012, EPC-018]
-adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059]
+adrs: [ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059, ADR-0077]
 ```
 
 Consult or delegate a unit of work to another vendor's coding CLI at the
 process boundary, each under its own subscription auth. CodeFlow's gates judge
-the output whoever wrote it (ADR-0005). Transport is interactive only. From
-Claude Code it uses the official `codex-plugin-cc` plugin, with a qualified
-native client fallback (ADR-0059). From Codex it uses the interactive `claude`
-CLI through the delegate lifecycle. When `HERDR_ENV=1`, `cf-herdr` hosts that
-terminal in a named Herdr tab. Headless task execution is prohibited. Delegates
+the output whoever wrote it (ADR-0005). Transport is interactive only and
+stated once, in `cf-model-orchestrator/resources/routing/transport.md`
+(ADR-0077): another family runs its own interactive CLI in a Herdr tab that
+`cf-herdr` hosts, Codex on its app-server; the Codex plugin is an optional
+fallback and tmux the last. Headless task execution is prohibited. Delegates
 edit only inside a worktree on a feature branch, under the same gates. Detail:
 [delegation](delegation.md).
 

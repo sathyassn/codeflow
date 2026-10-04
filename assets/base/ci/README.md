@@ -57,8 +57,14 @@ levels stay unchanged on update. The PR template
 ships at minimal, standard and full tiers through the usual managed-file merge.
 
 Presentation warnings cover an HTML block that never closes, a Testing
-section with no `Not tested:` line, and template remnants. They are advisory
-and follow `pr_sections`; off/allow disables them.
+section with no `Not tested:` line, template remnants, and a body over 1,000
+words. The word count is what a reader sees: HTML comments are left out and
+fenced blocks and tables count. The length warning names the count, the
+limit and the three largest `##` sections, and asks for the body to be
+rewritten to its final state with records linked instead of copied. They are
+advisory and follow `pr_sections`; off/allow disables them. The length
+warning has no policy key of its own and never blocks, at any `pr_sections`
+level.
 
 `git.pr_summary` defaults to block independently. It checks the shape of the
 one Summary section: one prose paragraph, then a list or a table, then at

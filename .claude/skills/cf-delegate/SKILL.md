@@ -7,9 +7,10 @@ description: Delegate to the other vendor's native coding harness under its own 
 
 Compose native harnesses at the process boundary, each under its own subscription
 auth. CodeFlow's gates judge the output, not the author. You own and verify
-every returned result. The delegate is a vendor you are **not**: from Claude
-Code that is codex; from codex that is claude. Consulting or delegating to
-your own vendor is self-review with extra steps; never label it independent.
+every returned result. The delegate is a family you are **not**: from
+Claude Code that is Codex or Grok; from Codex, Claude or Grok; from Grok,
+Claude or Codex. Consulting or delegating to your own family is self-review
+with extra steps; never label it independent.
 
 ## Consult, delegate, or neither
 
@@ -27,28 +28,16 @@ choose the authority this assignment needs:
 When uncertain about edit authority, consult first; never turn a read-only
 assignment into an implicit write grant.
 
-## Transport: preferred lanes, qualified native fallback
+## Transport
 
-```text
-Claude Code ──official plugin (preferred) or qualified native client──▶ codex
-codex ──durable delegate lifecycle over interactive claude CLI──▶ claude
-```
-
-- **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
-  wraps the codex app-server, so a delegated task gets codex's full MCP
-  toolset, a resumable thread, and in-band approvals. When unavailable or
-  incompatible, use a qualified official Codex App/interactive CLI route under
-  the fallback contract below; a missing plugin is not proof that Codex itself
-  is unavailable.
-- **codex → claude: the interactive `claude` CLI driven through CodeFlow's
-  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). A Codex host
-  follows its host and canary rules in
-  [the lifecycle lane](resources/lane-lifecycle.md).
+Which seat runs the other family, its fallbacks and its launch flags are
+[cross-family transport](../cf-model-orchestrator/resources/routing/transport.md),
+the one statement of the rule; this skill does not restate it. The seat
+always runs interactive, under the task's tools and guards.
 
 **Prohibited at all times**, no exceptions, including batch/pipeline stages:
-headless task execution in either direction (`codex exec`, `claude -p` /
+headless task execution in any direction (`codex exec`, `claude -p` /
 `--print`), and driving the codex app-server through hand-rolled JSON-RPC.
-CodeFlow requires verified native sessions with the task's tools and guards.
 Status commands are not work sessions: `codex login status`,
 `codex --version`, `codex mcp list`, and the plugin install/setup steps stay
 fine.
@@ -60,13 +49,11 @@ safety boundary; it is not permission to route around a security denial.
 
 ## Preflight: is the delegate even available
 
-Check the preferred lane, then any qualified native fallback.
-
-- **From Claude Code:** the plugin surface and Codex authentication, as
-  [the plugin lane](resources/lane-plugin.md) lists them.
-- **From codex:** the `claude` CLI, its TTY host and an authenticated
-  interactive canary, as [the lifecycle lane](resources/lane-lifecycle.md)
-  lists them.
+Check the preferred seat, then each fallback in the transport order: the
+callee's CLI and an authenticated interactive canary, a reachable Herdr
+server (`herdr status server`), and for Codex the app-server daemon
+(`codex app-server daemon version`). A missing plugin or a missing
+`HERDR_ENV` is not proof that a seat is unavailable.
 
 If no qualified native route remains, record the unavailable seat and reduced
 assurance; never silently substitute your own vendor or claim duo completion.
@@ -77,17 +64,20 @@ vendor account per side, the user's own.
 
 ## Lanes: load the one in use
 
-Read this core, then only the lane for the host you are on:
+Read this core, then only the lane for the seat you are calling:
 
-- **From Claude Code (Claude host):** [the plugin lane](resources/lane-plugin.md)
-  holds the `/codex:*` commands, the bounded role prompt, selector and effort,
-  native thread provenance, and the consult verdict line.
-- **From codex (Codex host):** [the lifecycle lane](resources/lane-lifecycle.md)
-  holds the host preflight, the Herdr variant, pane access, effective
+- **A Codex or Grok seat (any host):** `cf-herdr` creates the tab, launches
+  the seat, delivers the prompt and harvests the reply; its review and
+  harvest reference states this lane's evidence.
+- **A Claude seat, from a Codex or Grok host:** [the lifecycle lane](resources/lane-lifecycle.md)
+  holds the seat preflight, the Herdr host, pane access, effective
   autonomy, consult and edit sessions, and cleanup; before launch it sends
   you to the turn adapter for `codeflow delegate init`, the sibling
   Stop-hook preflight, exact-byte delivery and turn detection. A Claude
   host does not load it.
+- **Only when the Codex plugin fallback is in use, on a Claude Code host:**
+  [the plugin fallback](resources/lane-plugin.md) holds the `/codex:*`
+  commands and their native thread provenance.
 
 ## Dispatch and return
 
@@ -98,27 +88,29 @@ a setting that turns off its rate-limit prompt to switch models, keep it
 off, so a switch never happens silently mid-task. A return names the model
 that produced it.
 
-## Evidence contract, both lanes
+## Evidence contract, every lane
 
 Output counts as the other lineage only under
 [admissible cross-lineage evidence](../cf-model-orchestrator/resources/routing/evidence.md):
 native runtime provenance, a relay is transport and never author. Every
-qualified native route (preferred plugin, official client fallback, or
-schema-v2 delegate lifecycle) meets one five-obligation evidence contract:
+qualified native route (a Codex or Grok seat in Herdr, the schema-v2
+delegate lifecycle for a Claude seat, or a recorded fallback) meets one
+five-obligation evidence contract:
 
 1. **Launch**: verify the delegated task started through a native session
-   artifact: a Codex thread forward or a lifecycle ready record reverse;
+   artifact: a confirmed started turn in a Codex or Grok seat, or a
+   lifecycle ready record for a Claude seat;
 2. **Provenance**: native runtime provenance only: a native Codex thread ID
-   with source-labeled model/effort forward; the lifecycle's
-   session/digest/prompt binding reverse;
+   (or Grok session id) with source-labeled model/effort; the lifecycle's
+   session/digest/prompt binding for a Claude seat;
 3. **Return**: verify the returned unit, scoped worktree diff, and cited
    evidence; a relay's idle or completion signal is evidence of neither;
 4. **Failure**: a legible bounded failure (stable exit state, durable
    poison, or explicit harness error), never silent substitution or
    completion inferred from silence;
 5. **Recheck**: evidence recheckable through the native surface after the
-   fact: the resumable Codex thread forward, the durable state records until
-   cleanup reverse.
+   fact: the resumable Codex thread or Grok session, the durable state
+   records until cleanup for a Claude seat.
 
 Record model/effort as observed only when the transport exposes actual
 values; otherwise label them requested, and never silently upgrade
@@ -150,6 +142,7 @@ the experimental guard binding.
   `.codeflow/rules/writing.md`).
 - **Synthesize, never paste.** A finding is input, not conclusion: re-derive and
   cite it, state agreement/disagreement; unverified remains unverifiable.
-- **Stay within ToS.** This process-boundary composition is sanctioned (OpenAI
-  ships the plugin itself); the single-account, manual-auth, degrade-on-401
-  posture is what keeps it there.
+- **Stay within ToS.** Each seat is the vendor's own interactive client
+  under the user's own login (OpenAI ships a plugin that composes the same
+  way); the single-account, manual-auth, degrade-on-401 posture is what
+  keeps it there.

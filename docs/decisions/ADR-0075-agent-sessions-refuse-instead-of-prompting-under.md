@@ -460,3 +460,44 @@ from TSK-164 AC-1, AC-4 and AC-7. TSK-189 owns the policy-source,
 fail-closed, integration and hook-trust text in AC-2, AC-3 and AC-6. TSK-190
 owns the Codex launch-profile changes. No dropped mechanism is a
 prerequisite to those tasks.
+
+## Amendment, 2026-10-03: hook trust stays the operator's
+
+The operator decided on 2026-10-03 (TSK-213) to let the calling agent answer
+a seat's hook trust prompt when every hook the seat would load is unchanged
+from the pull request's target tip. Two independent review rounds of PR 37
+showed that this cannot be done safely today:
+
+1. **Execution identity is not established.** Identical hook definitions do
+   not mean identical executed code. An unchanged hook can run a changed
+   repository script, and even CodeFlow's shipped `codeflow hook ...` form
+   depends on how the seat's shell and `PATH` resolve `codeflow` and the
+   tools its missing-binary probe calls: a wrapper, symlink, alias, login
+   shell initialization or an earlier repository directory on `PATH` can
+   run repository code. A check of file text in the caller's shell does not
+   establish what the seat executes.
+2. **The prompt does not show what it grants.** Codex 0.159.1's startup
+   hook prompt shows a hook count, a warning and three choices, and no
+   source paths; "trust all and continue" trusts every pending hook in the
+   inventory, including inline, user, global and plugin hooks. Grok's
+   project trust also grants MCP and LSP servers. The agent cannot observe
+   the scope of what it would trust.
+
+Hook trust therefore stays the operator's, as decision 8 and the
+consequence "Hook trust is the operator's: agents never review or trust hook
+definitions" state. The agent never answers a hook trust prompt and never
+picks "continue without trusting" to get past it. When it reports a seat
+waiting at that prompt, it may tell the operator whether each project hook
+file matches the fetched target tip and CodeFlow's managed copy under
+`.codeflow/.baseline/`. That check is information for the operator, never a
+grant. The exception can return only after a qualified procedure that
+establishes the trusted inventory and the seat's execution identity, proven
+by a live canary on the harness version in use.
+
+This also settles D3's agent-launched `--trust`: a Grok seat never launches
+with `--trust` from an agent, since Grok's project trust is the operator's.
+D3's builder route (`--always-approve --sandbox cf-guard-worktree`) stays
+unqualified until the items listed under "Still to establish" are proven,
+so no Grok seat builds until then. The rule is stated in the transport
+rule's "First-run prompts" (`cf-model-orchestrator/resources/routing/transport.md`,
+ADR-0077).

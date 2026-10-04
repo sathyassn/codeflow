@@ -126,7 +126,7 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
     assert_contains(
         ORCHESTRATOR,
         &[
-            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "Use `cf-delegate` for the seats and fallbacks of cross-family transport",
             "exact-byte delivery",
             "bounded cleanup",
         ],
@@ -203,7 +203,7 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
     assert_contains(
         ORCHESTRATOR,
         &[
-            "Use `cf-delegate` for the preferred/fallback native lanes",
+            "Use `cf-delegate` for the seats and fallbacks of cross-family transport",
             "foreground-return contract",
         ],
     );
@@ -239,7 +239,7 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
         DELEGATE_SKILL,
         &[
             "native Codex thread ID",
-            "the resumable Codex thread forward",
+            "the resumable Codex thread or Grok session",
             "otherwise label them requested",
             "never silently upgrade requested to observed",
             "Grade inferred completion explicitly as inferred.",
@@ -541,7 +541,7 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     assert_contains(
         DELEGATE_SKILL,
         &[
-            "Evidence contract, both lanes",
+            "Evidence contract, every lane",
             "one five-obligation evidence contract",
             "routing/evidence.md",
         ],
@@ -598,7 +598,7 @@ fn consult_exhausts_qualified_fallback_without_weakening_auth_or_lineage() {
     assert_contains(
         CONSULT,
         &[
-            "missing or incompatible preferred plugin/CLI is a lane failure",
+            "missing or incompatible preferred CLI, Herdr server or plugin is a lane failure",
             "Exhaust the qualified native alternatives",
             "authentication failure still stops for operator action",
             "After every qualified other-vendor route is unavailable",
@@ -866,4 +866,353 @@ fn process_round_guidance_names_the_evidence_before_action() {
             "do not execute the action to obtain it",
         ],
     );
+}
+
+// TSK-213 (ADR-0077): how one model family calls another is stated once.
+const TRANSPORT: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/routing/transport.md";
+
+/// Every passage of the issue 31 inventory that routes a seat; each cites
+/// the transport rule.
+const TRANSPORT_CITERS: &[&str] = &[
+    ORCHESTRATOR,
+    "assets/base/agents/skills/cf-model-orchestrator/resources/grok-host.md",
+    "assets/base/agents/skills/cf-model-orchestrator/resources/routing/design.md",
+    DELEGATE_SKILL,
+    DELEGATE_PLUGIN_LANE,
+    DELEGATE_LIFECYCLE_LANE,
+    "assets/base/claude/skills/cf-delegate/resources/native-fallback.md",
+    "assets/base/claude/skills/cf-delegate/resources/edit-access.md",
+    ADAPTER,
+    CONSULT,
+    HERDR,
+    "assets/base/agents/skills/cf-herdr/references/review-and-harvest.md",
+    CUSTOMIZE,
+    "assets/base/CLAUDE.md.tmpl",
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.full.md.tmpl",
+];
+
+/// Retired preferences, compared lower-case on normalized text.
+const STALE_ROUTES: &[&str] = &[
+    "codex-plugin-cc` preferred",
+    "prefer the official",
+    "official plugin (preferred)",
+    "preferred plugin",
+    "when `herdr_env=1`",
+    "use when herdr_env=1",
+    "do not use from outside herdr",
+    "tmux degraded",
+    "degraded tmux",
+    "still uses the official plugin",
+    "through the official codex plugin, or a herdr tab",
+];
+
+/// A seat's launch flags: stated in the transport table, and written out
+/// only inside the adapter's executable launch block.
+const POSTURE_FLAGS: &[&str] = &[
+    "danger-full-access",
+    "--always-approve",
+    "bypassPermissions",
+    "--ask-for-approval never",
+    "--permission-mode",
+];
+
+/// Words that rank one host above another in a sentence.
+const RANKING: &[&str] = &[
+    "first",
+    "prefer",
+    "default",
+    "only if",
+    "only when",
+    "instead of",
+    "rather than",
+    "before",
+    "unless",
+];
+
+/// Removes fenced code blocks: the adapter's executable launch example is
+/// the only place a flag may be written out.
+fn without_fences(text: &str) -> String {
+    let mut kept = String::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if !fenced {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
+/// The faults of one citing passage. What this guarantees, and no more: the
+/// passage cites the transport rule; it states none of the listed retired
+/// routes; outside the adapter's executable block it writes out no launch
+/// flag; no sentence that names tmux ranks it with a ranking word unless
+/// that sentence keeps tmux as the fallback for when no Herdr server is
+/// reachable; and no sentence ties auto mode to an edit, build or handoff.
+fn transport_faults(path: &str, text: &str) -> Vec<String> {
+    let normal = normalized(text);
+    let lower = normal.to_lowercase();
+    let mut faults = Vec::new();
+    if !normal.contains("transport.md") {
+        faults.push(format!("{path} does not cite the transport rule"));
+    }
+    for stale in STALE_ROUTES {
+        if lower.contains(stale) {
+            faults.push(format!("{path} restates a retired route: {stale}"));
+        }
+    }
+    let prose = if path == ADAPTER {
+        normalized(&without_fences(text))
+    } else {
+        normal.clone()
+    };
+    for flag in POSTURE_FLAGS {
+        if prose.contains(flag) {
+            faults.push(format!("{path} restates a launch flag: {flag}"));
+        }
+    }
+    let prose = prose.to_lowercase();
+    for sentence in prose.split(['.', ';', '!', '?']) {
+        let ranked = RANKING.iter().any(|word| sentence.contains(word));
+        if sentence.contains("tmux") && ranked && !sentence.contains("no herdr server is reachable")
+        {
+            faults.push(format!(
+                "{path} ranks tmux without the no-Herdr-server condition: {}",
+                sentence.trim()
+            ));
+        }
+        let auto = sentence.contains("auto mode") || sentence.contains("auto-mode");
+        if auto
+            && ["edit", "build", "handoff"]
+                .iter()
+                .any(|w| sentence.contains(w))
+        {
+            faults.push(format!(
+                "{path} ties auto mode to an edit or build: {}",
+                sentence.trim()
+            ));
+        }
+    }
+    faults
+}
+
+#[test]
+fn cross_family_transport_is_stated_once_and_cited_everywhere() {
+    assert_contains(
+        TRANSPORT,
+        &[
+            "never runs as a separate CLI session or a Herdr tab",
+            "The interactive Codex CLI on the local Codex app-server",
+            "The interactive Claude Code CLI, its turns tracked by the `codeflow delegate` lifecycle",
+            "The interactive Grok Build CLI",
+            "Any host may drive any reachable Herdr server",
+            "the official Codex plugin, an optional fallback",
+            "tmux, the last fallback, only when no Herdr server is reachable",
+            "Never `codex exec`, `claude -p` / `--print`, `grok -p` / `--single`",
+            "| Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |",
+            "| Codex | `--ask-for-approval never --sandbox danger-full-access` | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |",
+            "| Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |",
+            "The Codex builder posture is ADR-0075 D1",
+            "The Grok builder posture is ADR-0075 D3: `--always-approve --sandbox cf-guard-worktree`",
+            "until a canary proves both, building goes to a Claude or Codex seat",
+            "A Grok seat never launches with `--trust` from an agent",
+            "The caller never answers a consequential approval for the seat: it reports the seat as blocked",
+            "The caller answers folder trust only for the task's own folder",
+            "and skips a self-update offer",
+            "its Herdr tab or, under the fallback, its tmux pane",
+        ],
+    );
+    let transport = normalized(&read(TRANSPORT));
+    assert!(
+        !transport.contains("never stalls"),
+        "the transport rule overstates the permission modes"
+    );
+    let mut faults = Vec::new();
+    for path in TRANSPORT_CITERS {
+        faults.extend(transport_faults(path, &read(path)));
+    }
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+}
+
+#[test]
+fn a_restated_route_or_flag_fails_naming_it() {
+    let faults = transport_faults(
+        HERDR,
+        "Official `codex-plugin-cc` preferred. Use when HERDR_ENV=1. \
+         Codex: --ask-for-approval never --sandbox danger-full-access.",
+    );
+    for expected in [
+        "does not cite the transport rule",
+        "retired route: codex-plugin-cc` preferred",
+        "retired route: use when herdr_env=1",
+        "launch flag: danger-full-access",
+        "launch flag: --ask-for-approval never",
+    ] {
+        assert!(
+            faults.iter().any(|fault| fault.contains(expected)),
+            "{expected}: {faults:?}"
+        );
+    }
+}
+
+// PR 37 review round 1: a citation alone must not let a passage rank tmux
+// ahead of Herdr or send an edit handoff to auto mode.
+#[test]
+fn a_tmux_first_route_or_an_auto_mode_edit_handoff_fails_despite_a_citation() {
+    for (text, expected) in [
+        (
+            "See transport.md. Use tmux first; use Herdr only if tmux fails.",
+            "ranks tmux",
+        ),
+        (
+            "See transport.md. Claude edit handoffs use --permission-mode auto.",
+            "launch flag: --permission-mode",
+        ),
+        (
+            "See transport.md. Claude edit handoffs run in auto mode.",
+            "auto mode",
+        ),
+    ] {
+        let faults = transport_faults(HERDR, text);
+        assert!(
+            faults.iter().any(|fault| fault.contains(expected)),
+            "{text} -> {expected}: {faults:?}"
+        );
+    }
+    // The adapter's exemption covers its executable block only; the same
+    // flag in its prose fails.
+    let prose = transport_faults(
+        ADAPTER,
+        "See transport.md. Production launches `--permission-mode bypassPermissions`.\n\
+         ```sh\nclaude --permission-mode bypassPermissions\n```\n",
+    );
+    assert!(
+        prose
+            .iter()
+            .any(|fault| fault.contains("bypassPermissions")),
+        "{prose:?}"
+    );
+    let block_only = transport_faults(
+        ADAPTER,
+        "See transport.md.\n```sh\nclaude --permission-mode bypassPermissions\n```\n",
+    );
+    assert!(block_only.is_empty(), "{block_only:?}");
+}
+
+// ADR-0075 amendment of 2026-10-03: two review rounds of PR 37 showed the
+// agent exception cannot be qualified today, so hook trust stays the
+// operator's. The hook-file match is information for the operator only.
+
+/// Every shipped passage that speaks about a seat's trust prompts.
+const HOOK_TRUST_PASSAGES: &[&str] = &[
+    TRANSPORT,
+    HERDR,
+    "assets/base/agents/skills/cf-herdr/references/review-and-harvest.md",
+    "assets/base/claude/skills/cf-method/references/autonomy.md",
+    "docs/delegation.md",
+    "docs/decisions/ADR-0077-another-model-family-is-reached-through-an-inter.md",
+];
+
+/// Words that would let an agent grant hook trust.
+const HOOK_GRANTS: &[&str] = &[
+    "answers \"trust\"",
+    "answer \"trust\"",
+    "answers hook trust",
+    "answer it only",
+    "may trust",
+    "caller trusts",
+    "agent trusts",
+    "trust all and continue",
+    "narrow codex case",
+];
+
+/// A sentence about hooks that grants trust to the agent, unless it denies
+/// that grant or hands the prompt to the operator.
+fn hook_trust_faults(path: &str, text: &str) -> Vec<String> {
+    let lower = normalized(text).to_lowercase();
+    let mut faults = Vec::new();
+    for sentence in lower.split(['.', ';', '!', '?']) {
+        if !sentence.contains("hook") {
+            continue;
+        }
+        let grants = HOOK_GRANTS.iter().any(|grant| sentence.contains(grant));
+        let denied = [
+            "never",
+            "operator's",
+            "goes to the operator",
+            "operator answers",
+        ]
+        .iter()
+        .any(|word| sentence.contains(word));
+        if grants && !denied {
+            faults.push(format!(
+                "{path} lets an agent answer a hook trust prompt: {}",
+                sentence.trim()
+            ));
+        }
+    }
+    faults
+}
+
+#[test]
+fn no_passage_lets_an_agent_answer_a_hook_trust_prompt() {
+    assert_contains(
+        TRANSPORT,
+        &[
+            "Hook trust is the operator's (ADR-0075, amendment of 2026-10-03): the caller never answers a hook trust prompt, a Grok project trust prompt included.",
+            "as information that grants nothing",
+            "It never picks \"continue without trusting\".",
+        ],
+    );
+    assert_contains(
+        "docs/decisions/ADR-0075-agent-sessions-refuse-instead-of-prompting-under.md",
+        &[
+            "## Amendment, 2026-10-03: hook trust stays the operator's",
+            "**Execution identity is not established.**",
+            "**The prompt does not show what it grants.**",
+            "That check is information for the operator, never a grant.",
+            "proven by a live canary on the harness version in use",
+        ],
+    );
+    let mut faults = Vec::new();
+    for path in HOOK_TRUST_PASSAGES {
+        faults.extend(hook_trust_faults(path, &read(path)));
+    }
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+    assert!(
+        !root()
+            .join("assets/base/agents/skills/cf-model-orchestrator/resources/routing/hook-trust.md")
+            .exists(),
+        "the retired agent hook-trust procedure is still shipped"
+    );
+}
+
+#[test]
+fn a_passage_granting_hook_trust_to_the_agent_fails() {
+    for text in [
+        "At a hook trust prompt, the caller answers \"trust\" when the hooks match.",
+        "The agent may trust unchanged hooks in Codex.",
+        "Answer it only in the narrow Codex case: hooks unchanged from the tip.",
+        "Pick trust all and continue when the hook count matches.",
+    ] {
+        assert!(
+            !hook_trust_faults(TRANSPORT, text).is_empty(),
+            "accepted a hook trust grant: {text}"
+        );
+    }
+    for text in [
+        "The caller never answers a hook trust prompt.",
+        "A hook trust prompt goes to the operator.",
+    ] {
+        assert!(
+            hook_trust_faults(TRANSPORT, text).is_empty(),
+            "rejected the operator-only rule: {text}"
+        );
+    }
 }
