@@ -8,9 +8,9 @@
      docs/ or project-management/, outside product, watched contract and
      template paths, needs Summary and Changes; Testing and Reviews are
      optional there. Conditional sections are listed at the end.
-     `codeflow ci` warns on unclosed HTML and on a Testing section with no
-     `Not tested:` line. Link records instead of copying them; never drop
-     evidence to shorten the body. A figure here is a fenced ASCII block,
+     `codeflow ci` warns on unclosed HTML, on a Testing section with no
+     `Not tested:` line and on a body over 1,000 words. Link records
+     instead of copying them; never drop evidence to shorten the body. A figure here is a fenced ASCII block,
      never Mermaid. -->
 
 <!-- Every PR names its work. Where durable tracking is active: TSK-NNN, or

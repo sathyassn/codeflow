@@ -146,6 +146,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_SECTION_MISSING", Runs),
     ("PR_TEMPLATE_REMNANT", Runs),
     ("PR_PRESENTATION", Runs),
+    ("PR_BODY_LENGTH", Runs),
     ("PR_SUMMARY_SHAPE", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
@@ -935,6 +936,25 @@ fn clears_pr_presentation() {
         &BODY.replace("- Not tested: Windows.\n", ""),
         BODY,
         "has no Not tested: line",
+    );
+}
+
+#[test]
+fn clears_pr_body_length() {
+    // TSK-228: an over-long body warns; rewriting it to its final state
+    // clears the warning on the next run.
+    prove_body(
+        "PR_BODY_LENGTH",
+        DEFAULTS,
+        &BODY.replace(
+            "- one change\n",
+            &format!(
+                "- one change\n\n{}",
+                "pasted review round text\n\n".repeat(300)
+            ),
+        ),
+        BODY,
+        "-word limit",
     );
 }
 
