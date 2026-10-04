@@ -1,0 +1,11 @@
+id = "TSK-228"
+uid = "42cc5b2f-f856-4bb4-817c-e993940b0af6"
+kind = "TSK"
+title = "codeflow ci warns when a PR body is too long"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T01:55:06Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
