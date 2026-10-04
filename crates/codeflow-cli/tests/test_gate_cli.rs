@@ -278,6 +278,19 @@ fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
             parsed
         })
         .expect("the target wrote its group");
+    // The gate records the group in its lock file just after the target
+    // starts, and the target can write its file first: wait for the record
+    // before killing the gate, or the kill can land between the two.
+    let lock_file = home.path().join("locks/full-gate.lock");
+    let recorded = (0..200).any(|_| {
+        let text = std::fs::read_to_string(&lock_file).unwrap_or_default();
+        let found = text.lines().any(|l| l == format!("group={group}"));
+        if !found {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        found
+    });
+    assert!(recorded, "the gate recorded the target's group");
 
     gate.kill().unwrap();
     gate.wait().unwrap();

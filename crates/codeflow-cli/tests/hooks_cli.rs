@@ -859,6 +859,16 @@ const REVIEWER_REFUSALS_UNIX: &[&str] = &[
     "rm alias/$x",
     "rm ~+/alias/policy.json",
     "rm alias/^x",
+    // Round eighteen: parentheses after a keyword run a subshell in Bash,
+    // and in argument position zsh reads them as a pattern; a zsh `e`
+    // qualifier runs its code.
+    "if(rm alias/policy.json); then :; fi",
+    "while(rm alias/policy.json); do break; done",
+    "until(rm alias/policy.json); do break; done",
+    "if(find alias/policy.json -delete); then :; fi",
+    "rm (alias|x)/policy.json",
+    "printf x > (alias|x)/policy.json",
+    "ls build/*(e:'rm alias/policy.json':)",
 ];
 
 /// Round three, finding 5, from the linked worktree under
@@ -934,6 +944,12 @@ const REVIEWER_ALLOWED: &[&str] = &[
     r#"cp README.md "$OUT"/notes.md"#,
     "awk '{print $1}' README.md > build/out.txt",
     "git log --format='%H,%s' > build/log.txt",
+    // Round eighteen: conditions in parentheses, and zsh qualifiers on
+    // ordinary reads.
+    "if(true); then :; fi",
+    "while(false); do :; done",
+    "ls *(.)",
+    "x=(a b c)",
     "env -C d1 -C d2 -C d3 -C d4 -C d5 -C d6 -C d7 -C d8 -C d9 -C d10 -C d11 -C d12 -C d13 -C d14 -C d15 -C d16 -C d17 -C d18 -C d19 -C d20 -C d21 -C d22 -C d23 -C d24 -C d25 -C d26 -C d27 -C d28 -C d29 -C d30 true",
 ];
 
@@ -971,6 +987,7 @@ fn git_guard_refuses_the_reviewers_commands() {
         &[
             "git switch feat/review && git branch -f @{-1} HEAD",
             "git worktree add -B main ../other HEAD",
+            "if(git branch -f main HEAD); then :; fi",
         ],
         &[],
         "git.local_ref_protection",
@@ -1062,6 +1079,10 @@ const BASELINE_CLASSICS: &[&str] = &[
     "nohup rm .codeflow/policy.json",
     "command rm .codeflow/policy.json",
     "rm -rf .",
+    "if(rm .codeflow/policy.json); then :; fi",
+    "while(rm .codeflow/policy.json); do break; done",
+    "until(rm .codeflow/policy.json); do break; done",
+    "if(find .codeflow/policy.json -delete); then :; fi",
 ];
 
 /// The same from the linked worktree under `.claude/worktrees`.

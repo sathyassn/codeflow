@@ -1264,7 +1264,7 @@ fn token_integrity_path(token: &str, cwd: &Path, payload_cwd: &Path) -> Option<&
         return None;
     }
     // Each word brace expansion can make is judged (TSK-216 round 16).
-    let Some(words) = brace_words(token) else {
+    let Some(words) = word_readings(token) else {
         return Some(BRACE_UNREAD);
     };
     words
@@ -1391,16 +1391,16 @@ fn has_glob(word: &str) -> bool {
 /// 17): `(` or `)` (extglob groups, zsh groups, alternation and glob
 /// qualifiers, which can admit names that start with `.` and apply to
 /// every component, as `*/policy.json(D)` does), `^` and `#` (zsh extended
-/// globs), a `~` after the first character (a zsh exclusion), a zsh
-/// numeric range `<n-m>` (zsh reads any other `<` or `>` as a redirection,
-/// which ends the word), and `**` (any depth). Such a word matches every
-/// path below its longest literal directory prefix, at every depth,
-/// names that start with `.` included ([`expand_glob`]).
+/// globs), a zsh numeric range `<n-m>` (zsh reads any other `<` or `>` as a
+/// redirection, which ends the word), and `**` (any depth). Such a word
+/// matches every path below its longest literal directory prefix, at
+/// every depth, names that start with `.` included ([`WordGlob`]). zsh's
+/// exclusion `pat~other` matches only names `pat` matches, so a `~` after
+/// the first character is read by the part before it instead
+/// ([`word_readings`]); a Windows short name such as `RUNNER~1` stays a
+/// plain name (TSK-216 round 18).
 fn conservative_glob(word: &str) -> bool {
-    word.char_indices()
-        .any(|(at, c)| matches!(c, '(' | ')' | '^' | '#') || (c == '~' && at > 0))
-        || word.contains("**")
-        || numeric_range(word)
+    word.contains(['(', ')', '^', '#']) || word.contains("**") || numeric_range(word)
 }
 
 /// Whether a word holds a zsh numeric range glob: `<`, optional digits,
@@ -1429,6 +1429,27 @@ fn numeric_range_len(chars: &[char]) -> Option<usize> {
     }
     let close = dash + 1 + digits(dash + 1);
     (chars.get(close) == Some(&'>')).then_some(close + 1)
+}
+
+/// Every word the shell can make of `word` before pathname expansion: each
+/// word of its brace expansion ([`brace_words`]), and for one with a `~`
+/// after its first character, also the part before that `~`, since zsh's
+/// exclusion `pat~other` matches only names `pat` matches (TSK-216 round
+/// 18). `None` when the braces are too many to read.
+fn word_readings(word: &str) -> Option<Vec<String>> {
+    let mut words = brace_words(word)?;
+    let excluded: Vec<String> = words
+        .iter()
+        .filter_map(|w| {
+            w.char_indices()
+                .skip(1)
+                .find(|&(_, c)| c == '~')
+                .map(|(at, _)| w[..at].to_string())
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.extend(excluded);
+    Some(words)
 }
 
 /// The most words one brace expansion yields before the guard stops
@@ -1792,34 +1813,87 @@ fn bracket_end(chars: &[char], start: usize, escapes: bool) -> Option<usize> {
     None
 }
 
-/// Expand a shell glob over the file system, as the shell would before the
-/// command runs. A component with pattern syntax ([`has_glob`]) is read by
-/// [`shell_pattern`], and a name starting with `.` matches only a component
-/// that starts with `.`; matching ignores case. A word the guard reads
-/// conservatively ([`conservative_glob`]) matches every path below its
-/// longest literal directory prefix ([`glob_prefix`]), at every depth,
-/// names that start with `.` and the entries of linked directories
-/// included, and each wild component then matches every name, so a `..`
-/// after one is followed too (TSK-216 round 17). A name that is not UTF-8
-/// cannot be matched as text, so it counts as a match of any wildcard
-/// component: the result over-approximates and never panics (TSK-216 round
-/// 4). Paths are joined as written, so a symbolic link in them is resolved
-/// by the caller's file-system-aware check.
-fn expand_glob(pattern: &Path) -> Result<Vec<PathBuf>, GlobStop> {
-    let mut read = 0;
-    if !conservative_glob(&pattern.to_string_lossy()) {
-        return expand_components(pattern, false, &mut read);
+/// A shell word read as a path pattern from a directory (TSK-216 round
+/// 18): the path it names, how many leading components come from that
+/// directory or the home directory and so are never read as pattern syntax
+/// (a Windows short name such as `RUNNER~1`, or a `(` in a folder name,
+/// stays literal there), and whether the word's own text holds syntax read
+/// conservatively ([`conservative_glob`]).
+struct WordGlob {
+    pattern: PathBuf,
+    literal: usize,
+    conservative: bool,
+}
+
+impl WordGlob {
+    fn new(word: &str, cwd: &Path) -> Self {
+        let pattern = integrity_shell_path(word, cwd);
+        let own = if word == "~" || word == "~+" {
+            ""
+        } else if let Some(rest) = word.strip_prefix("~+/").or_else(|| word.strip_prefix("~/")) {
+            rest
+        } else if word.starts_with('$') {
+            word.split_once('/').map_or("", |(_, rest)| rest)
+        } else {
+            word
+        };
+        let own_parts = Path::new(own)
+            .components()
+            .filter(|c| !matches!(c, std::path::Component::CurDir))
+            .count();
+        Self {
+            literal: pattern.components().count().saturating_sub(own_parts),
+            pattern,
+            conservative: conservative_glob(own),
+        }
     }
-    let prefix = glob_prefix(pattern);
-    let mut found = every_path_below(&prefix, &mut read)?;
-    let after_wild = pattern.components().skip(prefix.components().count());
-    if after_wild
-        .into_iter()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        found.extend(expand_components(pattern, true, &mut read)?);
+
+    /// The literal directory the pattern starts from: its components before
+    /// the first one of the word's own with pattern syntax.
+    fn prefix(&self) -> PathBuf {
+        self.pattern
+            .components()
+            .enumerate()
+            .take_while(|(at, c)| *at < self.literal || !has_glob(&c.as_os_str().to_string_lossy()))
+            .map(|(_, c)| c)
+            .collect()
     }
-    Ok(found)
+
+    /// Expand the pattern over the file system, as the shell would before
+    /// the command runs. A component of the word with pattern syntax
+    /// ([`has_glob`]) is read by [`shell_pattern`], and a name starting with
+    /// `.` matches only a component that starts with `.`; matching ignores
+    /// case. A word read conservatively matches every path below
+    /// [`Self::prefix`], at every depth, names that start with `.` and the
+    /// entries of linked directories included, and each wild component then
+    /// matches every name, so a `..` after one is followed too (TSK-216
+    /// round 17). A name that is not UTF-8 cannot be matched as text, so it
+    /// counts as a match of any wildcard component: the result
+    /// over-approximates and never panics (TSK-216 round 4). Paths are
+    /// joined as written, so a symbolic link in them is resolved by the
+    /// caller's file-system-aware check.
+    fn expand(&self) -> Result<Vec<PathBuf>, GlobStop> {
+        let mut read = 0;
+        if !self.conservative {
+            return expand_components(&self.pattern, self.literal, false, &mut read);
+        }
+        let prefix = self.prefix();
+        let mut found = every_path_below(&prefix, &mut read)?;
+        if self
+            .pattern
+            .components()
+            .skip(prefix.components().count())
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            found.extend(expand_components(
+                &self.pattern,
+                self.literal,
+                true,
+                &mut read,
+            )?);
+        }
+        Ok(found)
+    }
 }
 
 /// Every path at or below `dir`, at every depth: names that start with `.`
@@ -1853,11 +1927,13 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
     Ok(found)
 }
 
-/// [`expand_glob`] one component at a time. `**` is zero or more
-/// directories. With `every_name`, each wild component matches every
-/// name, names that start with `.` included.
+/// [`WordGlob::expand`] one component at a time; the first `literal`
+/// components are never wild. `**` is zero or more directories. With
+/// `every_name`, each wild component matches every name, names that start
+/// with `.` included.
 fn expand_components(
     pattern: &Path,
+    literal: usize,
     every_name: bool,
     read: &mut usize,
 ) -> Result<Vec<PathBuf>, GlobStop> {
@@ -1867,9 +1943,11 @@ fn expand_components(
         require_literal_leading_dot: false,
     };
     let mut current: Vec<PathBuf> = vec![PathBuf::new()];
-    for component in pattern.components() {
+    for (at, component) in pattern.components().enumerate() {
         let text = component.as_os_str().to_string_lossy();
-        let wild = matches!(component, std::path::Component::Normal(_)) && has_glob(&text);
+        let wild = at >= literal
+            && matches!(component, std::path::Component::Normal(_))
+            && has_glob(&text);
         if !wild {
             for path in &mut current {
                 path.push(component);
@@ -1936,22 +2014,13 @@ fn expand_components(
     Ok(current)
 }
 
-/// The literal directory a glob path starts from: its components before
-/// the first wildcard.
-fn glob_prefix(pattern: &Path) -> PathBuf {
-    pattern
-        .components()
-        .take_while(|c| !has_glob(&c.as_os_str().to_string_lossy()))
-        .collect()
-}
-
 /// What a glob word reaches from `cwd`, judged by the file-system-aware
 /// checks: the enforcement path or registered worktree one of its
 /// expansions resolves to, symbolic links followed. When the expansion
 /// stops, the directory it starts from decides: one that holds or lies in
 /// enforcement files or a registered worktree counts as reached.
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
-    let pattern = integrity_shell_path(word, cwd);
+    let glob = WordGlob::new(word, cwd);
     let reached = |path: &Path| {
         let shown = crate::portable_path::slashed(path);
         token_integrity_path_literal(&shown, cwd, payload_cwd)
@@ -1961,13 +2030,13 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
                     .map(|c| format!("the registered worktree {}", c.display()))
             })
     };
-    match expand_glob(&pattern) {
+    match glob.expand() {
         Ok(paths) => paths
             .iter()
             .find_map(|path| reached(path))
             .map(|p| format!("{p} (through `{word}`)")),
         Err(GlobStop::TooManyEntries) => {
-            let prefix = glob_prefix(&pattern);
+            let prefix = glob.prefix();
             let holds = super::edit_guard::holds_enforcement_files(&prefix, cwd)
                 || super::edit_guard::holds_enforcement_files(&prefix, payload_cwd);
             (holds || reached(&prefix).is_some()).then(|| {
@@ -1994,7 +2063,7 @@ fn word_could_name(word: &str) -> Option<&'static str> {
         word
     };
     // Each word brace expansion can make is read (TSK-216 round 16).
-    let Some(words) = brace_words(value) else {
+    let Some(words) = word_readings(value) else {
         return Some(BRACE_UNREAD);
     };
     words.iter().find_map(|w| word_could_name_spelled(w))
@@ -2210,7 +2279,7 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
             integrity_shell_path(target, dir)
         };
         if target.contains(['*', '?', '[']) {
-            match expand_glob(&path) {
+            match WordGlob::new(target, dir).expand() {
                 Ok(found) => reached.extend(found),
                 Err(GlobStop::TooManyEntries) => {
                     run.unknown.get_or_insert_with(|| {
@@ -2581,8 +2650,9 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
     }
     let mut word = String::new();
     let (mut single, mut double) = (false, false);
-    // Parentheses attached to the word are part of it (`out(D)`, TSK-216
-    // round 17).
+    // Parentheses in the word are part of it (`out(D)`, `(a|b)/x`), as
+    // zsh reads them; a `>(` written together never reaches here (TSK-216
+    // rounds 17 and 18).
     let mut parens = 0usize;
     while let Some(&c) = chars.get(i) {
         match c {
@@ -2594,7 +2664,7 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
                     word.push(escaped);
                 }
             }
-            '(' if !single && !double && !word.is_empty() => {
+            '(' if !single && !double => {
                 parens += 1;
                 word.push(c);
             }
@@ -2905,7 +2975,7 @@ fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             std::iter::once(word).chain(value)
         })
         .find_map(|word| {
-            let Some(words) = brace_words(word) else {
+            let Some(words) = word_readings(word) else {
                 return Some(BRACE_UNREAD.to_string());
             };
             words.iter().find_map(|w| {
@@ -3028,7 +3098,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
         return None;
     }
     if text.contains(['*', '?', '[']) {
-        return expand_glob(&integrity_shell_path(&text, cwd)).ok();
+        return WordGlob::new(&text, cwd).expand().ok();
     }
     Some(vec![integrity_shell_path(&text, cwd)])
 }
@@ -3538,13 +3608,13 @@ fn find_action_violation(
     // The shell expands a glob starting point before `find` runs.
     let start_paths: Vec<PathBuf> = starts
         .iter()
-        .flat_map(|start| brace_words(start).unwrap_or_else(|| vec![(*start).to_string()]))
+        .flat_map(|start| word_readings(start).unwrap_or_else(|| vec![(*start).to_string()]))
         .flat_map(|start| {
-            let path = integrity_shell_path(&start, cwd);
+            let glob = WordGlob::new(&start, cwd);
             if has_glob(&start) {
-                expand_glob(&path).unwrap_or_else(|_| vec![glob_prefix(&path)])
+                glob.expand().unwrap_or_else(|_| vec![glob.prefix()])
             } else {
-                vec![path]
+                vec![glob.pattern]
             }
         })
         .collect();
@@ -4096,8 +4166,9 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
 /// Split a command into simple-command segments, recursing into `$(…)` and
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
-/// boundaries. Parentheses attached to a word with no blank before them
-/// ([`attached_paren`]: `word(D)`, `@(a)`) are part of that word.
+/// boundaries. Parentheses zsh reads as part of a word ([`paren_in_word`]:
+/// `word(D)`, `@(a)`, `rm (a|b)/x`) stay in that word, and the text inside
+/// them is judged as commands as well.
 ///
 /// Text the shell does not execute is not a segment: a comment (an unquoted
 /// `#` that starts a word) and a heredoc body read as data. A body is data
@@ -4246,7 +4317,17 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 cur.push(c);
                 i += 1;
             }
-            '(' if attached_paren(&cur) => {
+            '(' if paren_in_word(&cur) => {
+                // zsh reads it as part of the word (a qualifier, group or
+                // pattern), and Bash after a keyword as a subshell
+                // (`if(rm x)`), so the text inside is also judged as
+                // commands, and so is the code of a zsh `e` or `+`
+                // qualifier (TSK-216 round 18).
+                let (inner, _) = capture_word_group(&chars, i + 1);
+                split_into_segments(&inner, out, depth + 1, code_context);
+                for code in qualifier_code(&inner) {
+                    split_into_segments(&code, out, depth + 1, code_context);
+                }
                 word_parens += 1;
                 cur.push(c);
                 i += 1;
@@ -4493,26 +4574,115 @@ fn substitution_output_runs(prefix: &str) -> bool {
     }
 }
 
+/// Words that leave the shell in command position, so a `(` after them
+/// opens a subshell or a `case` pattern.
+const COMMAND_POSITION_WORDS: &[&str] = &[
+    "!", "{", "case", "coproc", "do", "elif", "else", "foreach", "function", "if", "in", "repeat",
+    "select", "then", "time", "until", "while", "[[",
+];
+
+/// Whether a `(` that follows `cur` is read as part of a word: attached to
+/// the word `cur` ends with (`word(D)`, `@(a)`), or in argument position
+/// after a command word (`rm (a|b)/x`, a zsh pattern). zsh reads both as
+/// pattern syntax. A `(` that opens the command, follows only keywords
+/// (`if (`, `then (`) or starts a `case` line keeps the subshell reading,
+/// and so does `<(` or `>(` written together, a process substitution; the
+/// caller also judges the text inside a word's parentheses as commands
+/// (TSK-216 rounds 17 and 18).
+fn paren_in_word(cur: &str) -> bool {
+    let attached = cur.chars().last().is_some_and(|c| !c.is_whitespace());
+    let trimmed = cur.trim_end();
+    let Some(last) = trimmed.chars().last() else {
+        return false;
+    };
+    if matches!(last, '<' | '>' | '|' | '&') {
+        return !attached;
+    }
+    let mut words = trimmed.split_whitespace();
+    let first = words.next().unwrap_or_default();
+    first != "case"
+        && !std::iter::once(first)
+            .chain(words)
+            .all(|w| COMMAND_POSITION_WORDS.contains(&w))
+}
+
+/// The text inside the parentheses opened before `start`, up to the
+/// matching `)`, with quotes and escapes kept; and the index just past it.
+fn capture_word_group(chars: &[char], start: usize) -> (String, usize) {
+    let mut depth = 1;
+    let mut text = String::new();
+    let (mut single, mut double) = (false, false);
+    let mut i = start;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            '\\' if !single => {
+                text.push(c);
+                if let Some(&next) = chars.get(i + 1) {
+                    text.push(next);
+                }
+                i += 2;
+                continue;
+            }
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '(' if !single && !double => depth += 1,
+            ')' if !single && !double => {
+                depth -= 1;
+                if depth == 0 {
+                    return (text, i + 1);
+                }
+            }
+            _ => {}
+        }
+        text.push(c);
+        i += 1;
+    }
+    (text, i)
+}
+
+/// The shell code a zsh glob qualifier list runs: the string of an `e`
+/// qualifier between its delimiters (`e:code:`, `e[code]`), and the
+/// function or code an `+` qualifier names, read after quote removal.
+/// Any `e` followed by a delimiter counts, so this can only read more
+/// than zsh runs (TSK-216 round 18).
+fn qualifier_code(group: &str) -> Vec<String> {
+    let text: String = shell_tokens(group).join(" ");
+    let chars: Vec<char> = text.chars().collect();
+    let mut code = Vec::new();
+    for (at, &c) in chars.iter().enumerate() {
+        if c == 'e' {
+            let Some(&open) = chars.get(at + 1) else {
+                continue;
+            };
+            if open.is_alphanumeric() || open.is_whitespace() {
+                continue;
+            }
+            let close = match open {
+                '(' => ')',
+                '[' => ']',
+                '{' => '}',
+                '<' => '>',
+                other => other,
+            };
+            if let Some(end) = chars[at + 2..].iter().position(|&d| d == close) {
+                code.push(chars[at + 2..at + 2 + end].iter().collect());
+            }
+        } else if c == '+' {
+            let rest: String = chars[at + 1..]
+                .iter()
+                .take_while(|&&d| !matches!(d, ',' | ')' | ':'))
+                .collect();
+            if !rest.trim().is_empty() {
+                code.push(rest);
+            }
+        }
+    }
+    code
+}
+
 /// `true` when the character at `i` begins a shell word, where an unquoted
 /// `#` opens a comment. After a closing `)` or a backtick it continues the
 /// word instead (`$(x)#y`), so neither counts.
-/// Whether a `(` that follows `cur` is attached to the word `cur` ends
-/// with, as in `word(D)` or `@(a)`: zsh reads it as a glob qualifier or
-/// group, and Bash as an extglob group or a syntax error, so no shell runs
-/// it as a subshell. A `(` after a blank, an operator, a redirection
-/// (`<(` and `>(` substitute a process) or a word that is only `=` (zsh's
-/// `=(cmd)`) is not attached (TSK-216 round 17).
-fn attached_paren(cur: &str) -> bool {
-    let Some(last) = cur.chars().last() else {
-        return false;
-    };
-    if last.is_whitespace() || matches!(last, '<' | '>' | '|' | '&' | ';') {
-        return false;
-    }
-    let word = cur.rsplit(char::is_whitespace).next().unwrap_or(cur);
-    word != "="
-}
-
 pub(super) fn starts_word(chars: &[char], i: usize) -> bool {
     i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(')
 }
@@ -9819,6 +9989,46 @@ mod tests {
         }
     }
 
+    /// Folder names above the word are never pattern syntax (TSK-216 round
+    /// 18): a repository under a Windows short name such as `RUNNER~1`, or
+    /// under `Program Files (x86)`, judges `build/*.o` by the build folder
+    /// alone, while a word's own `(` and a
+    /// zsh exclusion after the policy path still reach the policy file.
+    #[test]
+    fn test_folder_names_above_a_word_stay_literal() {
+        for folder in ["RUNNER~1", "Program Files (x86)", "a#b^c"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path().join(folder).join("repo");
+            std::fs::create_dir_all(root.join("build")).unwrap();
+            std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+            git2::Repository::init(&root).unwrap();
+            std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+            std::fs::write(root.join("build/a.o"), "").unwrap();
+            let glob = WordGlob::new("build/*.o", &root);
+            assert_eq!(glob.expand().unwrap(), vec![root.join("build/a.o")]);
+            assert_eq!(glob.prefix(), root.join("build"));
+            assert_eq!(
+                token_integrity_path("build/*.o", &root, &root),
+                None,
+                "{folder}"
+            );
+            // Typed out in full, the folder name is the word's own text: a
+            // short name stays plain, while `(`, `#` or `^` there is read
+            // as pattern syntax, since quotes are gone by then.
+            let absolute = crate::portable_path::slashed(&root.join("build/a.o"));
+            assert_eq!(
+                token_integrity_path(&absolute, &root, &root).is_none(),
+                folder == "RUNNER~1",
+                "{folder}"
+            );
+            assert!(
+                token_integrity_path(".codeflow/policy.json~x", &root, &root).is_some(),
+                "{folder}"
+            );
+            assert!(token_integrity_path("(.codeflow|x)/policy.json", &root, &root).is_some());
+        }
+    }
+
     /// Glob expansion reads the file system as the shell does: a leading
     /// dot only matches a dotted pattern, and a glob that finds nothing
     /// expands to nothing (TSK-216 round 4).
@@ -9827,18 +10037,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a1.o"), "").unwrap();
         std::fs::write(dir.path().join(".hidden.o"), "").unwrap();
-        let found = expand_glob(&dir.path().join("*.o")).unwrap();
+        let found = WordGlob::new("*.o", dir.path()).expand().unwrap();
         assert_eq!(found, vec![dir.path().join("a1.o")]);
-        assert_eq!(expand_glob(&dir.path().join(".*.o")).unwrap().len(), 1);
-        assert!(expand_glob(&dir.path().join("none*")).unwrap().is_empty());
+        assert_eq!(WordGlob::new(".*.o", dir.path()).expand().unwrap().len(), 1);
+        assert!(WordGlob::new("none*", dir.path())
+            .expand()
+            .unwrap()
+            .is_empty());
         // An unclosed bracket is a literal character, never a pattern that
         // matches every entry (TSK-216 round 13).
-        assert!(expand_glob(&dir.path().join("e[32mhello"))
+        assert!(WordGlob::new("e[32mhello", dir.path())
+            .expand()
             .unwrap()
             .is_empty());
         std::fs::write(dir.path().join("x["), "").unwrap();
         assert_eq!(
-            expand_glob(&dir.path().join("x[")).unwrap(),
+            WordGlob::new("x[", dir.path()).expand().unwrap(),
             vec![dir.path().join("x[")]
         );
     }
@@ -9948,9 +10162,25 @@ mod tests {
         }
     }
 
+    /// Whether `program` runs as a POSIX shell here: `-c 'echo ready'`
+    /// prints `ready`. On Windows `bash` may be a launcher with no Linux
+    /// behind it, which answers with an error instead (TSK-216 round 18).
+    fn shell_ready(program: &str) -> bool {
+        std::process::Command::new(program)
+            .args(["-c", "echo ready"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|out| out.status.success() && out.stdout == b"ready\n")
+    }
+
     /// Bash's verdict on each `(pattern, name)` pair, from
-    /// `[[ name == pattern ]]`; `None` when the platform has no Bash.
+    /// `[[ name == pattern ]]`; `None` when the platform has no working
+    /// Bash ([`shell_ready`]).
     fn bash_pattern_verdicts(pairs: &[(&str, &str)]) -> Option<Vec<bool>> {
+        if !shell_ready("bash") {
+            return None;
+        }
         let input = pairs
             .iter()
             .map(|(p, n)| [*p, "\t", *n, "\n"].concat())
@@ -9965,10 +10195,10 @@ mod tests {
         let mut stdin = child.stdin.take().unwrap();
         let writer = std::thread::spawn(move || {
             use std::io::Write as _;
-            stdin.write_all(input.as_bytes()).unwrap();
+            stdin.write_all(input.as_bytes())
         });
         let out = child.wait_with_output().unwrap();
-        writer.join().unwrap();
+        writer.join().unwrap().expect("bash read every pair");
         let verdicts: Vec<bool> = String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(|l| l == "1")
@@ -10212,6 +10442,9 @@ mod tests {
         mut command: std::process::Command,
         words: &[String],
     ) -> Option<Vec<Vec<String>>> {
+        if !shell_ready(&command.get_program().to_string_lossy()) {
+            return None;
+        }
         let mut child = command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -10222,10 +10455,10 @@ mod tests {
         let input: String = words.iter().map(|w| [w.as_str(), "\n"].concat()).collect();
         let writer = std::thread::spawn(move || {
             use std::io::Write as _;
-            stdin.write_all(input.as_bytes()).unwrap();
+            stdin.write_all(input.as_bytes())
         });
         let out = child.wait_with_output().unwrap();
-        writer.join().unwrap();
+        writer.join().unwrap().expect("the shell read every word");
         let text = String::from_utf8_lossy(&out.stdout);
         let records: Vec<Vec<String>> = text
             .split("\u{1e}\n")
@@ -10388,12 +10621,14 @@ mod tests {
             "out/",
             "~+/alias/",
         ];
-        // The reviewer's round 17 words lead the random ones.
+        // The reviewers' round 17 and 18 words lead the random ones.
         let mut words: Vec<String> = [
             "build/*/policy.json(D)",
             "build/*(D)/policy.json",
             "out/<1-9>/policy.json",
             "out/(*/)#policy.json",
+            "(alias|x)/policy.json",
+            "alias/policy.json~x",
         ]
         .map(str::to_string)
         .to_vec();
@@ -10431,7 +10666,10 @@ mod tests {
         for n in 0..=GLOB_ENTRY_LIMIT {
             std::fs::write(many.join(format!("f{n}")), "").unwrap();
         }
-        assert_eq!(expand_glob(&many.join("*")), Err(GlobStop::TooManyEntries));
+        assert_eq!(
+            WordGlob::new("*", &many).expand(),
+            Err(GlobStop::TooManyEntries)
+        );
         assert!(glob_reach("many/*", dir.path(), dir.path()).is_none());
     }
 
@@ -10444,7 +10682,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let name = std::ffi::OsStr::from_bytes(b"bad\xff.o");
         std::fs::write(dir.path().join(name), "").unwrap();
-        let found = expand_glob(&dir.path().join("*.o")).unwrap();
+        let found = WordGlob::new("*.o", dir.path()).expand().unwrap();
         assert_eq!(found, vec![dir.path().join(name)]);
         let line = format!("printf x {}/* | xargs rm", dir.path().display());
         assert!(line_names(&line, dir.path(), dir.path()).is_none());

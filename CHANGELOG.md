@@ -209,11 +209,14 @@ erratum below, never an edit of the section.
   Bash. Brace expansion is read before patterns, under every reading a
   quote or escape allows, up to 64 words, and a larger one is refused;
   a word with syntax the guard reads conservatively (`(` or `)`, zsh glob
-  qualifiers such as `(D)` included, `^`, `#`, a `~` after the first
-  character, a zsh range `<n-m>` or `**`) matches every path below its
-  longest literal directory, at every depth, names that start with `.`
-  included, and parentheses attached to a word are part of it, never a
-  subshell; a word with a
+  qualifiers such as `(D)` included, `^`, `#`, a zsh range `<n-m>` or
+  `**`) matches every path below its longest literal directory, at every
+  depth, names that start with `.` included, while folder names above the
+  word, such as a Windows short name `RUNNER~1`, stay literal; a `~` after
+  the first character is read as zsh's exclusion, by the part before it;
+  parentheses attached to a word or after a command word are part of the
+  word, and the text inside them is also judged as commands, as Bash runs
+  `if(rm ...)`, and so is the code of a zsh `e` or `+` qualifier; a word with a
   part filled in at run time is read by the names after that part, and a
   value assigned on the same line counts; `~+` is the current directory
   and other tilde prefixes are read by name; a line that turns on
