@@ -1922,6 +1922,8 @@ fn exec_guard_semicolon_launcher_check_stops_at_the_launcher_word() {
         "setopt extendedglob; touch su; su# -",
         "true; sudoedit /etc/hosts",
         "true; sudo-rs -i",
+        "true; super id",
+        "setopt extendedglob; touch sudo; sudoa# -n id",
         "echo supersedes; su -",
         "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF\nls; sudo id",
     ] {

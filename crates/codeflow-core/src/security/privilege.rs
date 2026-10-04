@@ -154,18 +154,31 @@ fn check_priv_chaining(cmd: &str) -> Option<Verdict> {
 
 /// Launchers that start with a listed name and still escalate: `sudoedit`
 /// edits as root, `sudo-rs` is the Rust `sudo`, `su-exec` runs as another
-/// user. A semicolon before one of these is a launch, not a longer word.
-const LAUNCHER_VARIANTS: &[&str] = &["sudoedit", "sudoreplay", "sudo-rs", "su-exec"];
+/// user, `super` runs configured commands as root, `sux` and `su-to-root`
+/// wrap `su`, `doasedit` is the `doas` editor wrapper. A semicolon before one
+/// of these is a launch, not a longer word.
+const LAUNCHER_VARIANTS: &[&str] = &[
+    "sudoedit",
+    "sudoreplay",
+    "sudo-rs",
+    "su-exec",
+    "su-to-root",
+    "sux",
+    "super",
+    "doasedit",
+];
 
 /// True when `; {priv_cmd}` appears and the launcher name is not just the
 /// start of a longer word, so `; su -` refuses but `; supersedes` and
 /// `; doasync` do not. Only a letter, digit, underscore or hyphen after the
-/// name continues the word, and a word that is a launcher variant still
-/// matches. Whitespace, the end of the line and every other character match:
-/// punctuation, quotes, and the glob and expansion characters a shell can use
-/// to reach the launcher (`su*`, `su[d]o`, `su@(do)`, `su$IFS`). The test stays
-/// on the raw line: it reads no quoting, heredoc or other text structure, so a
-/// launch inside a string is still refused as before.
+/// name continues the word. A launcher variant still matches, and so does a
+/// longer word that a `#` follows, because zsh's extended glob makes the
+/// character before `#` optional (`sudoa#` expands to `sudo`). Whitespace, the
+/// end of the line and every other character match: punctuation, quotes, and
+/// the glob and expansion characters a shell can use to reach the launcher
+/// (`su*`, `su[d]o`, `su@(do)`, `su$IFS`). The test stays on the raw line: it
+/// reads no quoting, heredoc or other text structure, so a launch inside a
+/// string is still refused as before.
 fn semicolon_chains_launcher(cmd: &str, priv_cmd: &str) -> bool {
     let needle = format!("; {priv_cmd}");
     cmd.match_indices(&needle).any(|(at, _)| {
@@ -173,7 +186,9 @@ fn semicolon_chains_launcher(cmd: &str, priv_cmd: &str) -> bool {
         let run = rest
             .find(|c: char| !continues_launcher_word(c))
             .unwrap_or(rest.len());
-        run == 0 || LAUNCHER_VARIANTS.contains(&format!("{priv_cmd}{}", &rest[..run]).as_str())
+        run == 0
+            || rest[run..].starts_with('#')
+            || LAUNCHER_VARIANTS.contains(&format!("{priv_cmd}{}", &rest[..run]).as_str())
     })
 }
 
@@ -361,6 +376,16 @@ mod tests {
             "true; su-exec nobody id",
             "echo a; supersedes; sudoedit f",
             "echo 'x; su-exec'",
+            "true; super id",
+            "true; sux - root",
+            "true; su-to-root -X -c id",
+            "true; doasedit /etc/hosts",
+            // zsh extendedglob: a character before # is optional.
+            "setopt extendedglob; touch sudo; sudoa# -n id",
+            "setopt extendedglob; touch su; su1# -",
+            "setopt extendedglob; touch doas; doas_# id",
+            "setopt extendedglob; touch pkexec; pkexec-# id",
+            "setopt extendedglob; touch runuser; runusera#b# id",
         ] {
             let v = PrivilegeModule
                 .check(&ctx(cmd))
@@ -417,6 +442,9 @@ mod tests {
             "echo 'a; sudo-x'",
             "echo 'a; sue'",
             "echo 'a; sudoeditor'",
+            "echo 'a; superb'",
+            "echo 'a; suspend'",
+            "echo 'a; suffix. more text; supersedes (see below)'",
             "true; supersedes",
         ] {
             assert!(PrivilegeModule.check(&ctx(cmd)).is_none(), "{cmd:?}");
