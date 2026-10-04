@@ -1363,6 +1363,7 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
         "$EDITOR notes.md; git commit -m 'docs: record the Codex review'",
         "shopt -s expand_aliases; printf -v 'BASH_ALIASES[echo]' command; X=true; $X; echo codex exec x",
         "PATH=/tmp/review-bin:$PATH; $X; cat <<'EOF'\nimport os\nos.system('codex exec x')\nEOF",
+        "printf '%ln' COUNT; grep -c review <<< 'Codex review: approve'",
         "printf '%s' \"${BASH_CMDS[cat]:=/usr/bin/python3}\"\ncat <<< 'import os; os.system(\"/opt/peer/bin/codex exec x\")'",
         "printf '#!/usr/bin/python3\\nimport os\\nos.system(\"codex exec x\")\\n' > /tmp/review-bin/grep\ngrep <<< ''",
         "cat > run.sh <<'EOF'\nCMD=codex\n$CMD exec x\nEOF\nbash run.sh",
