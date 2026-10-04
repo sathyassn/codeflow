@@ -1261,7 +1261,7 @@ fn target_record(
     let mut unreadable = None;
     let mut found = None;
     let mut landed = false;
-    for point in judged {
+    for point in judged.iter().copied() {
         landed |= reaches(point);
         match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
             Presence::Unreadable(reason) => {
@@ -1274,7 +1274,25 @@ fn target_record(
             _ => {}
         }
     }
-    let unjudged = landing_at_tips(repo, task, at, &own_history, tips, &mut unreadable);
+    if !landed {
+        // A record on a target can be edited after it lands, so a landing
+        // is read from every version the judged history holds, never only
+        // from the current one: an ordinary pull request that removes a
+        // landed Closeout does not make the task look unlanded (TSK-234).
+        if let Some(version) = landed_version(&mut index, &judged, &mut unreadable) {
+            landed = true;
+            found.get_or_insert(version);
+        }
+    }
+    let unjudged = landing_at_tips(
+        repo,
+        task,
+        at,
+        &own_history,
+        (&tips, &judged),
+        &mut index,
+        &mut unreadable,
+    );
     if let Some(record) = found {
         // A recorded task keeps the judged target's criteria whenever any
         // point shows a landing or cannot be read.
@@ -1311,7 +1329,8 @@ fn landing_at_tips(
     task: &RecordView,
     at: Oid,
     own_history: &[(String, Oid)],
-    tips: Vec<(String, Oid)>,
+    (tips, judged): (&[(String, Oid)], &[Oid]),
+    index: &mut RecordIndex<'_>,
     unreadable: &mut Option<String>,
 ) -> Option<Presence> {
     let uid = record_uid(&task.content);
@@ -1324,7 +1343,7 @@ fn landing_at_tips(
         }
     }
     let mut unjudged = None;
-    for (reference, point) in tips {
+    for (reference, point) in tips.iter().cloned() {
         match presence_at(repo, point, &task.id, uid.as_deref(), &own_file) {
             Presence::Unreadable(reason) => {
                 unreadable.get_or_insert(reason);
@@ -1340,7 +1359,82 @@ fn landing_at_tips(
             _ => {}
         }
     }
-    unjudged
+    if unjudged.is_some() {
+        return unjudged;
+    }
+    // A tip's earlier versions count as the judged history's do.
+    let points: Vec<Oid> = tips.iter().map(|(_, tip)| *tip).collect();
+    match completion_in_history(repo, index, &points, judged) {
+        Ok(Some((commit, _))) => Some(Presence::Unjudged {
+            reference: tips
+                .iter()
+                .find(|(_, tip)| is_ancestor_or_same(repo, commit, *tip))
+                .map_or_else(|| commit.to_string(), |(name, _)| name.clone()),
+            commit,
+        }),
+        Ok(None) => None,
+        Err(reason) => {
+            unreadable.get_or_insert(reason);
+            None
+        }
+    }
+}
+
+/// The newest version of the task's record in the history of the judged
+/// points that shows a completion, when one does: the task landed there. A
+/// history that cannot be read sets `unreadable`.
+fn landed_version(
+    index: &mut RecordIndex<'_>,
+    judged: &[Oid],
+    unreadable: &mut Option<String>,
+) -> Option<Box<RecordView>> {
+    match completion_in_history(index.repo, index, judged, &[]) {
+        Ok(Some((_, version))) => index.record(version).cloned().map(Box::new),
+        Ok(None) => None,
+        Err(reason) => {
+            unreadable.get_or_insert(reason);
+            None
+        }
+    }
+}
+
+/// The newest commit that `push` reaches and `hide` does not whose version
+/// of the task's record shows a completion ([`shows_completion`]), with that
+/// version's blob. Every version counts, so a later edit on a target never
+/// hides a completion that landed there (TSK-234). An unreadable history is
+/// the reason returned, so the caller fails closed.
+fn completion_in_history(
+    repo: &Repository,
+    index: &mut RecordIndex<'_>,
+    push: &[Oid],
+    hide: &[Oid],
+) -> Result<Option<(Oid, Oid)>, String> {
+    if push.is_empty() {
+        return Ok(None);
+    }
+    let unreadable = |error: git2::Error| format!("cannot read the target's history: {error}");
+    let mut walk = repo.revwalk().map_err(unreadable)?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL)
+        .map_err(unreadable)?;
+    for point in push {
+        walk.push(*point).map_err(unreadable)?;
+    }
+    for point in hide {
+        walk.hide(*point).map_err(unreadable)?;
+    }
+    for commit in walk {
+        let commit = commit.map_err(unreadable)?;
+        let versions = index
+            .versions(commit)
+            .ok_or_else(|| format!("cannot read the tree of {commit}"))?;
+        if let Some(version) = versions
+            .into_iter()
+            .find(|version| index.record(*version).is_some_and(shows_completion))
+        {
+            return Ok(Some((commit, version)));
+        }
+    }
+    Ok(None)
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -1954,8 +2048,8 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
 }
 
 /// Records of the range whose criteria differ from the target's (R-52).
-/// A predecessor's record whose criteria equal its record at the reviewed
-/// head this branch stacks on (`stacked`, SPC-013 R-42, issue #69) changed
+/// A predecessor's record that is its record at the reviewed head this
+/// branch stacks on, byte for byte, (`stacked`, SPC-013 R-42, issue #69) changed
 /// in that predecessor's own reviewed pull request, which judges it: it is
 /// printed as a note, never frozen here.
 #[must_use]
@@ -2009,10 +2103,10 @@ pub fn frozen_criteria(
                     note: true,
                 });
             }
-        } else if let Some(stack) = stacked.iter().find(|stack| {
-            stack.task_id == record.id
-                && stack.record.criteria.signature() == record.criteria.signature()
-        }) {
+        } else if let Some(stack) = stacked
+            .iter()
+            .find(|stack| stack.task_id == record.id && stack.record.content == record.content)
+        {
             found.push(Finding {
                 epic_record: None,
                 rule: FROZEN_RULE,
@@ -2456,6 +2550,7 @@ pub fn pull_request_findings_judged(
             &at_head, &at_target, &paths, exempt, &stacked,
         ));
     }
+    found.extend(stacked_records_kept(&at_head, &stacked));
     let candidate = authority.map(oid).transpose()?;
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
     found.extend(completions_in_range(
@@ -2507,6 +2602,31 @@ fn bind_stacked(
         criteria,
     ));
     Ok(findings)
+}
+
+/// A branch stacked on a predecessor's reviewed head carries that
+/// predecessor's record as the head has it (issue #69): the commits up to
+/// the pin are the predecessor's pull request, and the successor's own
+/// commits never change, revert or remove what that pull request recorded.
+/// Each record that differs from its pinned version is refused.
+fn stacked_records_kept(head: &Graph, stacked: &[StackedHead]) -> Vec<Finding> {
+    stacked
+        .iter()
+        .filter(|stack| {
+            head.records
+                .get(&stack.task_id)
+                .is_none_or(|record| record.content != stack.record.content)
+        })
+        .map(|stack| {
+            finding(
+                FROZEN_RULE,
+                format!(
+                    "{0} differs on this branch from its reviewed head {1:.9}, which this branch stacks on; a successor never changes its predecessor's record: restore {0}'s record as {1:.9} has it, or merge the predecessor's newer reviewed head",
+                    stack.task_id, stack.pin
+                ),
+            )
+        })
+        .collect()
 }
 
 /// A reviewed predecessor head a range stacks on, with that predecessor's

@@ -783,6 +783,7 @@ fn review_tool_naming(bin: &Path, branch: &str, head: &str, named: &str) {
 /// branch corrects TSK-001's criteria and builds, the review names that
 /// commit, and the acceptance is recorded after it in a Closeout commit.
 /// Returns the reviewed commit and the branch tip.
+#[cfg(unix)]
 fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
     git(
         root,
@@ -832,6 +833,7 @@ fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
 
 /// `codeflow ci` as the pre-push hook runs it for a push of `branch`: no
 /// pull request body, from `main` to `head`.
+#[cfg(unix)]
 fn push_check(root: &Path, branch: &str, head: &str, bin: &Path) -> Output {
     cli(
         root,
@@ -840,6 +842,7 @@ fn push_check(root: &Path, branch: &str, head: &str, bin: &Path) -> Output {
     )
 }
 
+#[cfg(unix)]
 fn text(out: &Output) -> String {
     format!(
         "{}{}",
@@ -1047,8 +1050,11 @@ fn a_pin_may_add_only_the_predecessors_status_and_closeout_to_its_review() {
 
 /// Issue #69: a branch stacked on a reviewed predecessor head answers the
 /// journey rule only for the paths it changes after that head; the
-/// predecessor's own pull request answers for its product code. A product
-/// change the successor makes itself still needs its journey criterion.
+/// predecessor's own pull request answers for its product code, and a merge
+/// of the target brings in nothing the successor answers for. A product
+/// change the successor makes itself still needs its journey criterion,
+/// and so does a deletion of the predecessor's file, which leaves no
+/// difference from the target (TSK-234 review).
 #[test]
 #[cfg(unix)]
 fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
@@ -1091,14 +1097,81 @@ fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
     git(root, &["commit", "-qm", "docs: write the notes"]);
     let notes = push_check(root, child, "HEAD", bin.path());
     assert!(notes.status.success(), "{}", text(&notes));
-    write(root, "src/c.rs", "pub fn c() {}\n");
+    git(root, &["switch", "-q", "main"]);
+    write(root, "src/m.rs", "pub fn m() {}\n");
     git(root, &["add", "."]);
-    git(root, &["commit", "-qm", "feat: change product code too"]);
-    let product = push_check(root, child, "HEAD", bin.path());
-    assert!(!product.status.success(), "{}", text(&product));
+    git(
+        root,
+        &["commit", "-qm", "feat: other work lands on the target"],
+    );
+    git(root, &["switch", "-q", child]);
+    git(root, &["merge", "-q", "--no-edit", "main"]);
+    let merged = push_check(root, child, "HEAD", bin.path());
+    assert!(merged.status.success(), "{}", text(&merged));
+    let before = git(root, &["rev-parse", "HEAD"]);
+    for (change, path) in [("delete", "src/a.rs"), ("add", "src/c.rs")] {
+        git(root, &["reset", "-q", "--hard", &before]);
+        if change == "delete" {
+            git(root, &["rm", "-q", "src/a.rs"]);
+        } else {
+            write(root, "src/c.rs", "pub fn c() {}\n");
+            git(root, &["add", "."]);
+        }
+        git(root, &["commit", "-qm", "feat: change product code too"]);
+        let product = push_check(root, child, "HEAD", bin.path());
+        assert!(!product.status.success(), "{change}: {}", text(&product));
+        assert!(
+            text(&product).contains("work.journey_criterion") && text(&product).contains(path),
+            "{change}: {}",
+            text(&product)
+        );
+    }
+}
+
+/// Issue #69 keeps the predecessor's record as its review left it: a
+/// branch stacked on a reviewed head that reverts the predecessor's status
+/// and drops its Closeout, keeping its criteria, is refused (TSK-234
+/// review).
+#[test]
+#[cfg(unix)]
+fn a_stacked_branch_keeps_its_predecessors_record() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", "-q", child]);
+    let path = "project-management/tasks/TSK-001.md";
+    let content = std::fs::read_to_string(root.join(path)).unwrap();
+    let reverted = content
+        .split("## Closeout")
+        .next()
+        .unwrap()
+        .replace("status: complete", "status: todo");
+    write(root, path, &reverted);
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: drop the predecessor's completion"],
+    );
+    let out = push_check(root, child, "HEAD", bin.path());
+    assert!(!out.status.success(), "{}", text(&out));
     assert!(
-        text(&product).contains("work.journey_criterion") && text(&product).contains("src/c.rs"),
+        text(&out).contains("TSK-001 differs on this branch from its reviewed head"),
         "{}",
-        text(&product)
+        text(&out)
     );
 }

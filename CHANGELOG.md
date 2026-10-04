@@ -734,7 +734,8 @@ erratum below, never an edit of the section.
   ([#67](https://github.com/sathyassn/codeflow/issues/67)). The freeze now
   follows a landed completion: a reopened task keeps its criteria when a
   completion of it is complete on the target, kept there as an archived
-  block or reopen line, reachable from the target's tip, or recorded by a
+  block or reopen line, reachable from the target's tip, shown by any
+  earlier version of its record in the target's history, or recorded by a
   branch or remote-tracking ref outside the range; otherwise
   `codeflow task status` and `codeflow ci` accept the change and CI prints
   it for the reviewer. A landed task's criteria still change only through
@@ -754,8 +755,9 @@ erratum below, never an edit of the section.
   it are judged as the predecessor's reviewed pull request, so its criteria
   change is printed, its completion binds at the pin, its status is read
   there, and the journey rule holds the successor only to the paths it
-  changes itself. A head no review names is not honoured, a change the
-  successor makes to the predecessor's record is still refused, and the
+  changes itself, a deletion of the predecessor's file included. A head
+  no review names is not honoured, a successor that changes, reverts or
+  removes the predecessor's record as the pin has it is refused, and the
   pull request into the target still waits for the predecessor to land.
   A pin may now also be the predecessor's tip when the review names the
   commit before it and the tip adds only the predecessor's status and

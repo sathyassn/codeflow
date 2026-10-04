@@ -2955,10 +2955,11 @@ fn a_task_new_in_its_range_may_change_criteria_on_reopen() {
 /// A task whose completion landed on the target keeps its criteria across
 /// a reopen in its own range, by the verb as by CI, whether the fix branch
 /// reopens it or a separate reopen landed first (issue #67 keeps the freeze
-/// for every landed task).
+/// for every landed task). A later target change that clears the landed
+/// Closeout hides nothing: the target's history still shows the landing.
 #[test]
 fn a_landed_task_keeps_its_criteria_on_reopen() {
-    for separate_reopen in [false, true] {
+    for (separate_reopen, cleared) in [(false, false), (true, false), (true, true)] {
         let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
         let root = dir.path();
         let reviewed = code_change(root, BRANCH, "pub fn initial() {}\n");
@@ -2981,14 +2982,69 @@ fn a_landed_task_keeps_its_criteria_on_reopen() {
             );
             commit(root, "docs: reopen the landed task");
         }
+        if cleared {
+            write(
+                root,
+                &record_path("TSK-001"),
+                &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+            );
+            commit(root, "docs: clear the reopened closeout");
+        }
         git(root, &["switch", "-c", "task/TSK-001-fix"]);
         for result in reopen_with_criteria(root, "TSK-001", &old, REOPEN_ADDS) {
             assert_blocks(
                 &result,
-                &format!("a landed task (separate reopen: {separate_reopen})"),
+                &format!("a landed task (separate reopen: {separate_reopen}, cleared: {cleared})"),
                 &["reopened task keeps its criteria"],
             );
         }
+    }
+}
+
+/// A landed completion stays landed when a later target change clears it
+/// from the current record (TSK-234 review): the task landed, a separate
+/// reopen landed, and an ordinary pull request then cleared the archived
+/// Closeout. A fix branch that completes, reopens and changes the criteria
+/// is still refused by the verb and by CI, because the target's history
+/// shows the landing.
+#[test]
+fn a_cleared_closeout_does_not_hide_a_landed_completion() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let first = code_change(root, BRANCH, "pub fn landed() {}\n");
+    let old = fix_block(&first);
+    complete(root, "TSK-001", OWN_JOURNEY, &old);
+    git(root, &["switch", "main"]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "chore: land the task", BRANCH],
+    );
+    let archived = old.replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: fix the task\n",
+    );
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, &archived),
+    );
+    commit(root, "docs: reopen the landed task");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs: clear the reopened closeout");
+    let target = head(root);
+    git(root, &["switch", "-c", "task/TSK-001-fix"]);
+    for result in
+        complete_reopen_complete(root, &record_path("TSK-001"), &|text| text, &target, false)
+    {
+        assert_blocks(
+            &result,
+            "a landed task whose target record was cleared",
+            &["reopened task keeps its criteria"],
+        );
     }
 }
 
