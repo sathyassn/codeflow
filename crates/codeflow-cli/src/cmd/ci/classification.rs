@@ -18,7 +18,7 @@ use codeflow_core::workgraph::classify::{
 use codeflow_core::workgraph::{
     check_epic_line, declared_work_target, declared_work_target_at_revision,
     durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch,
+    task_id_from_branch, task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -281,7 +281,11 @@ pub(super) fn branch_journey(
     let Some(range) = range else {
         return;
     };
-    let Some(task_id) = task_id_from_branch(root, branch) else {
+    // The task as the judged head carries it, so a run from another checkout
+    // (a push of a branch other than the one checked out) still finds it.
+    let Some(task_id) = task_id_from_branch_at(root, branch, range.head)
+        .or_else(|| task_id_from_branch(root, branch))
+    else {
         return;
     };
     if !matches!(tracking_on(root, Some(range)), Ok(true)) {

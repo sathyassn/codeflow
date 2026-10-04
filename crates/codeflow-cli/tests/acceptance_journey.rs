@@ -1088,6 +1088,24 @@ fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
     assert_eq!(from_pull.len(), 1, "{}", text(&pull));
     assert_eq!(journey_findings(&said), from_pull, "push:\n{said}");
 
+    // From a checkout without the task record, the task is read at the
+    // pushed head: a bodyless run and a push of the branch find the same.
+    git(&root, &["switch", "-q", main]);
+    let bodyless = codeflow(
+        &root,
+        &["ci", "--base", main, "--head", branch, "--branch", branch],
+    );
+    fails(&bodyless, "a bodyless run from the main checkout", reason);
+    assert_eq!(journey_findings(&text(&bodyless)), from_pull);
+    let (pushed, said) = push(&root, &["origin", branch]);
+    assert!(!pushed, "the push from main went through:\n{said}");
+    assert_eq!(
+        journey_findings(&said),
+        from_pull,
+        "push from main:\n{said}"
+    );
+    git(&root, &["switch", "-q", branch]);
+
     // With a journey criterion, neither path reports the journey.
     edit(
         &root,

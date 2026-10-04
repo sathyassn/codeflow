@@ -1556,8 +1556,9 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
             String::new()
         } else {
             format!(
-                "; {} carries `(journey)` inside its text, and the tag counts only where it opens or closes the criterion (R-50)",
-                inner.join(", ")
+                "; {} {} `(journey)` inside its text, and the tag counts only where it opens or closes the criterion (R-50)",
+                inner.join(", "),
+                if inner.len() == 1 { "carries" } else { "carry" }
             )
         };
         format!(
