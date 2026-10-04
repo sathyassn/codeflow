@@ -8831,24 +8831,80 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
     def test_mcp_tool_attribution_fails_closed_on_ambiguous_names(self):
         runner = self.runner()
         declared = runner.mcp_tool_declared
-        # A declared server whose name holds `__` owns its tools.
-        self.assertTrue(declared("mcp__foo__bar__read", {"foo__bar"}))
-        # Declaring `foo` never admits a tool that could belong to `foo__bar`.
-        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}))
+        # Unattributed, a name counts only when every split names a declared server.
         self.assertTrue(declared("mcp__foo__read", {"foo"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo__bar"}))
+        self.assertTrue(declared("mcp__foo__bar__read", {"foo", "foo__bar"}))
         self.assertFalse(declared("mcp__foo__", {"foo"}))
         self.assertFalse(declared("mcp__food__read", {"foo"}))
+        # The transcript's own attribution decides, both ways.
+        self.assertTrue(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo__bar"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}, {"foo__bar"}))
         self.assertTrue(declared("Bash", set()))
         self.assertEqual("claude_ai_Claude_Docs", runner.mcp_server_key("claude.ai Claude Docs"))
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
-            self.write_transcript(env, self.transcript_lines([], servers=["foo__bar"], used=["mcp__foo__bar__read"]))
+            snapshot = lambda server: {"type": "attachment", "attachment": {"type": "prompt_snapshot", "tools": [
+                {"name": "mcp__foo__bar__read", "description": "test", "server": server}]}}
+            lines = self.transcript_lines([], used=["mcp__foo__bar__read"])
+            self.write_transcript(env, [*lines, snapshot("foo__bar")])
             self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
                              runner.claude_loaded_extensions(env, ["foo__bar"])["loaded"])
-            found = runner.claude_loaded_extensions(env, ["foo"])["loaded"]
+            self.write_transcript(env, [*lines, snapshot("foo")])
+            found = runner.claude_loaded_extensions(env, ["foo__bar"])["loaded"]
             self.assertEqual(["mcp__foo__bar__read"], found["tools"])
-            self.assertEqual(["foo__bar"], found["mcp_servers"])
+            self.assertEqual(["foo"], found["mcp_servers"])
+            self.write_transcript(env, lines)
+            self.assertEqual(["mcp__foo__bar__read"],
+                             runner.claude_loaded_extensions(env, ["foo__bar"])["loaded"]["tools"])
+
+    def test_transcript_scan_rejects_special_files_and_swaps_without_blocking(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            folder = self.write_transcript(env, self.transcript_lines(["cf-plan"]))
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(folder / "pipe.jsonl")
+                started = time.monotonic()
+                found = runner.claude_loaded_extensions(env, [])
+                self.assertLess(time.monotonic() - started, 5)
+                self.assertTrue(any("not a regular file" in error for error in found["errors"]), found["errors"])
+                self.assertEqual(["session.jsonl"], found["transcripts"])
+                (folder / "pipe.jsonl").unlink()
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "x.jsonl").write_text(json.dumps(self.transcript_lines(["pdf-viewer:view"])[0]) + "\n")
+            (folder / "subagents").mkdir()
+            (folder / "subagents/x.jsonl").write_text(json.dumps(self.transcript_lines(["cf-ship"])[0]) + "\n")
+            real_open = os.open
+            for target in ("subagents", "x.jsonl"):
+                with self.subTest(swap=target):
+                    def swapping_open(name, flags, *args, **kwargs):
+                        # Replace the entry with a link between the look and the open.
+                        if name == target and not swapped:
+                            swapped.append(True)
+                            here = folder / "subagents" if target == "x.jsonl" else folder
+                            os.rename(here / target, root / f"moved-{target}")
+                            (here / target).symlink_to(outside / ("x.jsonl" if target == "x.jsonl" else ""),
+                                                       target_is_directory=target == "subagents")
+                        return real_open(name, flags, *args, **kwargs)
+                    swapped = []
+                    with patch.object(runner.os, "open", side_effect=swapping_open):
+                        found = runner.claude_loaded_extensions(env, [])
+                    self.assertEqual([True], swapped)
+                    self.assertEqual([], found["loaded"]["skills"])
+                    self.assertNotIn("pdf-viewer:view", found["skills"])
+                    self.assertTrue(found["errors"])
+                    here = folder / "subagents" if target == "x.jsonl" else folder
+                    (here / target).unlink()
+                    os.rename(root / f"moved-{target}", here / target)
+            found = runner.claude_loaded_extensions(env, [])
+            self.assertEqual([], found["errors"])
+            self.assertEqual(["session.jsonl", "subagents/x.jsonl"], found["transcripts"])
 
     def test_transcript_scan_never_reads_through_a_link(self):
         runner = self.runner()

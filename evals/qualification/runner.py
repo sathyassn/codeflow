@@ -974,21 +974,25 @@ def mcp_server_key(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", name)
 
 
-def mcp_tool_declared(name: str, keys: set[str]) -> bool:
+def mcp_tool_declared(name: str, keys: set[str], servers: set[str] | frozenset[str] = frozenset()) -> bool:
     """Whether an `mcp__<server>__<tool>` name belongs to a declared server.
-    Server names may hold `__`, so the wire name alone can be ambiguous: it
-    counts as declared only when some declared server key leaves a tool part
-    with no `__` in it. Any other reading flags, failing closed."""
+    `servers` holds the servers the transcript itself attributes the tool to;
+    when there are any, each must be declared and own the name. Without
+    attribution the wire name is ambiguous, since server names may hold
+    `__`: it counts as declared only when every way of splitting it names a
+    declared server. Any other reading flags, failing closed."""
     if not name.startswith("mcp__"):
         return True
     rest = name[len("mcp__"):]
-    for key in keys:
-        prefix = key + "__"
-        if rest.startswith(prefix):
-            tool = rest[len(prefix):]
-            if tool and "__" not in tool:
-                return True
-    return False
+    if servers:
+        for server in servers:
+            key = mcp_server_key(server)
+            if key not in keys or not rest.startswith(key + "__") or len(rest) == len(key) + 2:
+                return False
+        return True
+    splits = [(rest[:at], rest[at + 2:]) for at in range(len(rest)) if rest.startswith("__", at)]
+    splits = [server for server, tool in splits if server and tool]
+    return bool(splits) and all(server in keys for server in splits)
 
 
 def declared_mcp_servers(repository: Path) -> dict:
@@ -1025,35 +1029,88 @@ def _names(value) -> list[str]:
     return names
 
 
-def claude_transcripts(folder: Path, errors: list[str]) -> list[Path]:
-    """Every regular `.jsonl` file under the trial's project folder, walked
-    without following a link. Any link inside it, dangling or not, file or
-    folder, and any folder that cannot be listed is an error."""
-    found = []
+def _open_folder(name, dir_fd: int | None, errors: list[str], shown: Path) -> int | None:
+    """A folder opened without following a link, checked to be the entry
+    that was looked at. Missing is None with no error; anything else that
+    is not a plain folder is an error."""
+    try:
+        before = os.lstat(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        errors.append(f"cannot read {shown}: {exc.strerror}")
+        return None
+    if stat.S_ISLNK(before.st_mode):
+        errors.append(f"transcript path holds a link: {shown}")
+        return None
+    if not stat.S_ISDIR(before.st_mode):
+        errors.append(f"transcript path is not a folder: {shown}")
+        return None
+    try:
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_DIRECTORY", 0),
+                         dir_fd=dir_fd)
+    except OSError as exc:
+        errors.append(f"cannot open {shown}: {exc.strerror}")
+        return None
+    if not os.path.samestat(before, os.fstat(handle)):
+        os.close(handle)
+        errors.append(f"transcript folder changed while it was read: {shown}")
+        return None
+    return handle
 
-    def failed(exc: OSError) -> None:
-        errors.append(f"cannot list {exc.filename}: {exc.strerror}")
 
-    for top, folders, files in os.walk(folder, onerror=failed, followlinks=False):
-        here = Path(top)
-        for name in list(folders):
-            if (here / name).is_symlink():
-                errors.append(f"transcript folder holds a link: {here / name}")
-                folders.remove(name)
-        for name in files:
-            path = here / name
-            if path.is_symlink():
-                errors.append(f"transcript folder holds a link: {path}")
+def claude_transcripts(folder_fd: int, folder: Path, errors: list[str]) -> list[tuple[str, bytes]]:
+    """Every regular `.jsonl` file under the trial's project folder, read
+    through folder descriptors so no component is ever a followed link, even
+    one swapped in during the walk. A link, dangling or not, a special file
+    named `.jsonl` (a pipe would block the read), a folder that cannot be
+    listed and anything that changed between look and open are errors."""
+    found: list[tuple[str, bytes]] = []
+
+    def walk(handle: int, relative: str) -> None:
+        try:
+            names = sorted(entry.name for entry in os.scandir(handle))
+        except OSError as exc:
+            errors.append(f"cannot list {folder / relative}: {exc.strerror}")
+            return
+        for name in names:
+            shown = folder / relative / name
+            inner = f"{relative}/{name}" if relative else name
+            try:
+                before = os.lstat(name, dir_fd=handle)
+            except OSError as exc:
+                errors.append(f"cannot read {shown}: {exc.strerror}")
+                continue
+            if stat.S_ISLNK(before.st_mode):
+                errors.append(f"transcript folder holds a link: {shown}")
+            elif stat.S_ISDIR(before.st_mode):
+                child = _open_folder(name, handle, errors, shown)
+                if child is not None:
+                    try:
+                        walk(child, inner)
+                    finally:
+                        os.close(child)
             elif name.endswith(".jsonl"):
-                found.append(path)
-    return sorted(found)
+                if not stat.S_ISREG(before.st_mode):
+                    errors.append(f"transcript is not a regular file: {shown}")
+                    continue
+                try:
+                    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=handle)
+                except OSError as exc:
+                    errors.append(f"cannot open {shown}: {exc.strerror}")
+                    continue
+                with os.fdopen(descriptor, "rb") as stream:
+                    now = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(now.st_mode) or not os.path.samestat(before, now):
+                        errors.append(f"transcript changed while it was read: {shown}")
+                        continue
+                    try:
+                        found.append((inner, stream.read()))
+                    except OSError as exc:
+                        errors.append(f"cannot read {shown}: {exc.strerror}")
 
-
-def read_no_follow(path: Path) -> str:
-    """A file's text, refusing a link swapped in after the walk."""
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    with os.fdopen(descriptor, "rb") as handle:
-        return handle.read().decode("utf-8")
+    walk(folder_fd, "")
+    return found
 
 
 def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | set[str] = ()) -> dict:
@@ -1063,28 +1120,35 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
     declared at launch. `loaded` lists each kind that flags the trial; an
     unreadable transcript or a link on the way is an error, never a clean read."""
     config = Path(environment["CLAUDE_CONFIG_DIR"])
-    projects = config / "projects"
-    folder = projects / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
+    folder = config / "projects" / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
     allowed = {mcp_server_key(name) for name in declared}
     found = {"folder": str(folder), "transcripts": [], "skills": [], "agents": [], "mcp_servers": [],
              "tools": [], "declared_mcp_servers": sorted(declared),
              "loaded": {"skills": [], "agents": [], "tools": [], "mcp_servers": []}, "errors": []}
-    for part in (config, projects, folder):
-        if part.is_symlink():
-            found["errors"].append(f"transcript path holds a link: {part}")
+    errors = found["errors"]
+    opened: list[int] = []
+    try:
+        handle = _open_folder(str(config), None, errors, config)
+        for name in ("projects", environment["CLAUDE_CODE_PROJECT_DIR_NAME"]):
+            if handle is None:
+                break
+            opened.append(handle)
+            handle = _open_folder(name, handle, errors, config / "projects" if name == "projects" else folder)
+        if handle is None:
             return found
-        if not part.exists():
-            return found
-        if not part.is_dir():
-            found["errors"].append(f"transcript path is not a folder: {part}")
-            return found
-    skills, agents, tools, servers = set(), set(), set(), set()
-    for path in claude_transcripts(folder, found["errors"]):
-        found["transcripts"].append(str(path.relative_to(folder)))
+        opened.append(handle)
+        transcripts = claude_transcripts(handle, folder, errors)
+    finally:
+        for descriptor in opened:
+            os.close(descriptor)
+    skills, agents, servers = set(), set(), set()
+    tools: dict[str, set[str]] = {}
+    for relative, data in transcripts:
+        found["transcripts"].append(relative)
         try:
-            lines = read_no_follow(path).splitlines()
-        except (OSError, UnicodeDecodeError) as exc:
-            found["errors"].append(f"cannot read {path}: {exc}")
+            lines = data.decode("utf-8").splitlines()
+        except UnicodeDecodeError as exc:
+            errors.append(f"cannot read {folder / relative}: {exc}")
             continue
         for line in lines:
             try:
@@ -1110,9 +1174,20 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
                 elif kind == "agent_listing_delta":
                     agents.update(_names(attachment.get("addedTypes")))
                 for field in CLAUDE_TOOL_NAME_FIELDS.get(kind, ()):
-                    tools.update(name for name in _names(attachment.get(field)) if name.startswith("mcp__"))
+                    for name in _names(attachment.get(field)):
+                        if name.startswith("mcp__"):
+                            tools.setdefault(name, set())
                 for field in CLAUDE_TOOL_ENTRY_FIELDS.get(kind, ()):
-                    tools.update(name for name in _names(attachment.get(field)) if name.startswith("mcp__"))
+                    entries = attachment.get(field)
+                    for entry in entries if isinstance(entries, list) else []:
+                        name = entry if isinstance(entry, str) else entry.get("name") if isinstance(entry, dict) else None
+                        if not isinstance(name, str) or not name.startswith("mcp__"):
+                            continue
+                        attributed = tools.setdefault(name, set())
+                        server = entry.get("server") if isinstance(entry, dict) else None
+                        if isinstance(server, str) and server:
+                            attributed.add(server)
+                            servers.add(server)
                 for field in CLAUDE_SERVER_FIELDS.get(kind, ()):
                     servers.update(_names(attachment.get(field)))
             message = record.get("message")
@@ -1121,13 +1196,13 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
                     if isinstance(block, dict) and block.get("type") == "tool_use":
                         name = block.get("name")
                         if isinstance(name, str) and name.startswith("mcp__"):
-                            tools.add(name)
+                            tools.setdefault(name, set())
     found["skills"], found["agents"] = sorted(skills), sorted(agents)
     found["mcp_servers"], found["tools"] = sorted(servers), sorted(tools)
     found["loaded"] = {
         "skills": sorted(name for name in skills if ":" in name),
         "agents": sorted(name for name in agents if ":" in name),
-        "tools": sorted(name for name in tools if not mcp_tool_declared(name, allowed)),
+        "tools": sorted(name for name, by in tools.items() if not mcp_tool_declared(name, allowed, by)),
         "mcp_servers": sorted(name for name in servers if mcp_server_key(name) not in allowed),
     }
     return found

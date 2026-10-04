@@ -113,16 +113,19 @@ content takes), or any MCP server or tool the fixture did not declare, adds
 `extra_extension_loaded` to the trial's validity flags, so the trial is
 invalid, never a model result. The declaration is the fixture's `.mcp.json`
 as launch read it, recorded in `launch.json` as `declared_mcp_servers`, so an
-edit during the trial cannot authorize a server. A tool named
-`mcp__<server>__<tool>` counts as declared only when a declared server leaves
-a tool part without `__`; server names may hold `__`, so any other reading
-flags. `observation.json` lists what was found under `claude_extensions`,
+edit during the trial cannot authorize a server. A tool the transcript
+attributes to a server counts as declared only when that server is declared.
+Without attribution a name `mcp__<server>__<tool>` is ambiguous, since server
+names may hold `__`, so it counts as declared only when every way of splitting
+it names a declared server. `observation.json` lists what was found under `claude_extensions`,
 including the unnamespaced skills and agents the session listed (the
 fixture's own and the harness's bundled ones), which are recorded but not
-flagged. The walk follows no link: a link anywhere from the Claude home's
-`projects` folder down, dangling or not, a folder that cannot be listed, a
-transcript that cannot be read or an unreadable declaration adds
-`evaluator_config_unreadable`. Claude Code 2.1.286 documents the three
+flagged. The walk opens each folder and file relative to its parent's
+descriptor and follows no link, even one swapped in during the walk: a link
+anywhere from the Claude home down, dangling or not, a special file such as
+a pipe named `.jsonl`, an entry that changed between look and open, a folder
+that cannot be listed, a transcript that cannot be read or an unreadable
+declaration adds `evaluator_config_unreadable`. Claude Code 2.1.286 documents the three
 settings; a live Claude trial is the proof that they take effect.
 For an operator's own interactive Codex hook review, materialize a fresh
 fixture with the current binary, then print the operator command:
