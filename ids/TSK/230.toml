@@ -1,0 +1,11 @@
+id = "TSK-230"
+uid = "cc845522-764a-45c7-b754-a1993327eedc"
+kind = "TSK"
+title = "Present show skips processes with unreadable command lines"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T02:44:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
