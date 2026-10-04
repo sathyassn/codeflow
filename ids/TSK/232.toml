@@ -1,0 +1,11 @@
+id = "TSK-232"
+uid = "1a227a33-b337-48da-8a7c-405aa311642a"
+kind = "TSK"
+title = "The docs portal state pin matches the shipped starter"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T11:08:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
