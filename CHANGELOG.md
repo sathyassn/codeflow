@@ -458,6 +458,41 @@ erratum below, never an edit of the section.
   its Closeout by hand in that pull request; an epic is never reopened.
   The cf-method project-organization reference states the same route.
 
+<!-- codeflow:release-impact patch -->
+- **The pre-push hook checks the journey criterion its pull request
+  will.** `codeflow ci` classified a range only when a pull request body
+  was given, so the pre-push run never reached `work.journey_criterion`,
+  and a task branch that changes an adopter-facing path without a journey
+  criterion passed the push and was blocked by hosted CI once its pull
+  request opened. A run without a body now holds a branch that carries its
+  task (`task/TSK-NNN-...`) to the journey rule over its range, which needs
+  only the task record and the paths the range changes, so the push is
+  refused with the finding the pull request check gives. The refusal also
+  names a criterion that carries `(journey)` inside its text and says the
+  tag counts only where it opens or closes the criterion.
+
+<!-- codeflow:release-impact patch -->
+- **exec-guard no longer refuses text that only names a peer.** When a line
+  held a command exec-guard could not resolve, such as a variable as the
+  program, it judged the raw text of the whole line, heredoc bodies and
+  commit messages included, and refused it as a headless run whenever a
+  peer name was followed anywhere later by a marker word: a review brief
+  written with `cat` that named Codex and, further on, the word review was
+  refused. A variable or substitution program is now judged by what it
+  can expand to with its own arguments: a launcher of a peer
+  (`$SUDO codex exec`), a value the line assigns, a substitution's text,
+  or a peer the line names (`CMD=codex; $CMD exec`). An alias the line
+  defines is expanded where it is used, and a here-string or pipe is
+  judged only when it feeds something that can run it, so
+  `grep <<< 'Codex review'` is data. Where the raw text is still read (a
+  shell or `source` running a script the line may have written,
+  interpreter code), a peer name counts only when its headless flag
+  follows it or its headless subcommand is the first word after its
+  options, as the CLI parses it, so prose such as "Codex adversarial
+  seat: please review" is no run. Text that reads as a run to the CLI,
+  such as "the Codex review", is still refused on such a line. Every
+  headless run the guard refused before is still refused.
+
 ## [3.0.0]
 
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
