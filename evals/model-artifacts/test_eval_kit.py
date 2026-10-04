@@ -6980,6 +6980,7 @@ class ProcessRepairTests(unittest.TestCase):
             self.assertEqual({"syncClaudeAiPlugins": False, "syncClaudeAiSkills": False, "disableClaudeAiConnectors": True},
                              json.loads(saved["native_args"][-1]))
             self.assertNotIn("--dangerously-bypass-hook-trust", saved["native_args"])
+            self.assertEqual({"servers": [], "error": None}, saved["declared_mcp_servers"])
             self.assertEqual(["/private/tmp"], saved["observation"]["shallow"])
             self.assertEqual([str(root / "watched")], saved["declared_directories"])
             self.assertNotIn(environment["TMPDIR"], saved["declared_directories"])
@@ -8756,30 +8757,98 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
-            repository = root / "repository"; repository.mkdir()
             self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
-                             runner.claude_loaded_extensions(env, repository)["loaded"])
+                             runner.claude_loaded_extensions(env, [])["loaded"])
             clean = self.transcript_lines(["cf-plan", "cf-ship", "code-review", "dataviz"],
                                           agents=["cf-reviewer", "Explore", "general-purpose"])
             self.write_transcript(env, clean)
-            found = runner.claude_loaded_extensions(env, repository)
+            found = runner.claude_loaded_extensions(env, [])
             self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []}, found["loaded"])
             self.assertEqual(["cf-plan", "cf-ship", "code-review", "dataviz"], found["skills"])
-            (repository / ".mcp.json").write_text(json.dumps({"mcpServers": {"playwright": {"command": "x"}}}))
             loaded = self.transcript_lines(
                 ["cf-plan", "pdf-viewer:view", "anthropic-skills:pdf"], agents=["cf-reviewer", "design:critic"],
                 servers=["claude.ai Atlassian MCP", "playwright", "personal"],
                 tools=["mcp__claude_ai_Slack__send", "mcp__plugin_design_figma__get", "mcp__playwright__click"],
                 used=["mcp__personal__read", "Bash", "mcp__playwright__click"])
             self.write_transcript(env, loaded, "peer.jsonl")
-            found = runner.claude_loaded_extensions(env, repository)
+            found = runner.claude_loaded_extensions(env, ["playwright"])
             self.assertEqual(["playwright"], found["declared_mcp_servers"])
             self.assertEqual({"skills": ["anthropic-skills:pdf", "pdf-viewer:view"], "agents": ["design:critic"],
                               "tools": ["mcp__claude_ai_Slack__send", "mcp__personal__read", "mcp__plugin_design_figma__get"],
                               "mcp_servers": ["claude.ai Atlassian MCP", "personal"]}, found["loaded"])
             self.assertEqual(["peer.jsonl", "session.jsonl"], found["transcripts"])
-            # Without a repository nothing is declared, so every MCP server flags.
-            self.assertIn("mcp__playwright__click", runner.claude_loaded_extensions(env)["loaded"]["tools"])
+            # With nothing declared, every MCP server flags.
+            self.assertIn("mcp__playwright__click", runner.claude_loaded_extensions(env, [])["loaded"]["tools"])
+
+    def test_transcript_scan_reads_structured_inventories_and_invocations(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            lines = [
+                # Claude Code 2.1.286 lists skill names in `names`; a manually
+                # invoked skill can be missing from the listing altogether.
+                {"type": "attachment", "attachment": {"type": "skill_listing", "names": ["cf-plan"],
+                                                      "content": "- cf-plan: plans"}},
+                {"type": "attachment", "attachment": {"type": "invoked_skills",
+                                                      "skills": [{"name": "plugin:secret", "path": "x"}]}},
+                {"type": "attachment", "attachment": {
+                    "type": "deferred_tools_delta", "addedNames": ["CronCreate"],
+                    "surfacedNames": ["mcp__claude_ai_Claude_Docs__guide"], "readdedNames": [],
+                    "pendingMcpServers": ["claude.ai Slack"],
+                    "failedMcpServers": [{"name": "plugin:data:definite", "error": "not found"}]}},
+                {"type": "attachment", "attachment": {"type": "deferred_tools_record", "entries": [
+                    {"name": "mcp__claude_ai_Claude_Docs__batch", "description": "x"}]}},
+            ]
+            self.write_transcript(env, lines)
+            found = runner.claude_loaded_extensions(env, [])
+            self.assertEqual(["plugin:secret"], found["loaded"]["skills"])
+            self.assertEqual(["mcp__claude_ai_Claude_Docs__batch", "mcp__claude_ai_Claude_Docs__guide"],
+                             found["loaded"]["tools"])
+            self.assertEqual(["claude.ai Slack", "plugin:data:definite"], found["loaded"]["mcp_servers"])
+
+    def test_transcript_scan_ignores_names_mentioned_in_text(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            mention = "document the `mcp__example__read` naming convention, as plugin:demo does"
+            lines = [
+                {"type": "attachment", "attachment": {"type": "skill_listing", "names": ["cf-plan"],
+                                                      "content": f"- cf-plan: {mention}"}},
+                {"type": "attachment", "attachment": {"type": "hook_success", "content": mention, "stdout": mention}},
+                {"type": "attachment", "attachment": {"type": "mcp_instructions_delta", "addedNames": [],
+                                                      "addedBlocks": [mention]}},
+                {"type": "attachment", "attachment": {"type": "deferred_tools_record", "entries": [
+                    {"name": "WebFetch", "description": mention}]}},
+                {"type": "user", "message": {"content": mention}},
+                {"type": "assistant", "message": {"content": [{"type": "text", "text": mention}]}},
+            ]
+            self.write_transcript(env, lines)
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
+                             runner.claude_loaded_extensions(env, [])["loaded"])
+
+    def test_mcp_tool_attribution_fails_closed_on_ambiguous_names(self):
+        runner = self.runner()
+        declared = runner.mcp_tool_declared
+        # A declared server whose name holds `__` owns its tools.
+        self.assertTrue(declared("mcp__foo__bar__read", {"foo__bar"}))
+        # Declaring `foo` never admits a tool that could belong to `foo__bar`.
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}))
+        self.assertTrue(declared("mcp__foo__read", {"foo"}))
+        self.assertFalse(declared("mcp__foo__", {"foo"}))
+        self.assertFalse(declared("mcp__food__read", {"foo"}))
+        self.assertTrue(declared("Bash", set()))
+        self.assertEqual("claude_ai_Claude_Docs", runner.mcp_server_key("claude.ai Claude Docs"))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            self.write_transcript(env, self.transcript_lines([], servers=["foo__bar"], used=["mcp__foo__bar__read"]))
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
+                             runner.claude_loaded_extensions(env, ["foo__bar"])["loaded"])
+            found = runner.claude_loaded_extensions(env, ["foo"])["loaded"]
+            self.assertEqual(["mcp__foo__bar__read"], found["tools"])
+            self.assertEqual(["foo__bar"], found["mcp_servers"])
 
     def test_transcript_scan_never_reads_through_a_link(self):
         runner = self.runner()
@@ -8787,16 +8856,41 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             root = Path(temp)
             env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
             folder = self.write_transcript(env, self.transcript_lines(["cf-plan"]))
-            outside = root / "outside.jsonl"
-            outside.write_text(json.dumps(self.transcript_lines(["pdf-viewer:view"])[0]) + "\n")
-            (folder / "linked.jsonl").symlink_to(outside)
-            found = runner.claude_loaded_extensions(env)
-            self.assertEqual([], found["loaded"]["skills"])
-            self.assertTrue(any("symlink" in error for error in found["errors"]))
-            shutil.rmtree(folder)
-            (root / "claude/projects").mkdir(parents=True, exist_ok=True)
-            (root / "claude/projects/eval-abc").symlink_to(root, target_is_directory=True)
-            self.assertTrue(runner.claude_loaded_extensions(env)["errors"])
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "x.jsonl").write_text(json.dumps(self.transcript_lines(["pdf-viewer:view"])[0]) + "\n")
+            cases = {
+                "file link": lambda: (folder / "linked.jsonl").symlink_to(outside / "x.jsonl"),
+                "dangling file link": lambda: (folder / "gone.jsonl").symlink_to(root / "missing.jsonl"),
+                "non-transcript link": lambda: (folder / "note.txt").symlink_to(outside / "x.jsonl"),
+                "nested folder link": lambda: (folder / "subagents").symlink_to(outside, target_is_directory=True),
+                "dangling folder link": lambda: (folder / "lost").symlink_to(root / "missing",
+                                                                              target_is_directory=True),
+            }
+            for label, plant in cases.items():
+                with self.subTest(label):
+                    plant()
+                    found = runner.claude_loaded_extensions(env, [])
+                    self.assertEqual([], found["loaded"]["skills"])
+                    self.assertTrue(any("link" in error for error in found["errors"]), found["errors"])
+                    self.assertEqual(["session.jsonl"], found["transcripts"])
+                    for entry in folder.iterdir():
+                        if entry.is_symlink():
+                            entry.unlink()
+            self.assertEqual([], runner.claude_loaded_extensions(env, [])["errors"])
+            # A link at the project folder or any folder above it, up to the
+            # Claude home, is refused before anything is read.
+            shutil.move(str(root / "claude/projects"), str(root / "real-projects"))
+            (root / "claude/projects").symlink_to(root / "real-projects", target_is_directory=True)
+            found = runner.claude_loaded_extensions(env, [])
+            self.assertEqual([], found["transcripts"])
+            self.assertTrue(found["errors"])
+            (root / "claude/projects").unlink()
+            (root / "claude/projects").mkdir()
+            (root / "claude/projects/eval-abc").symlink_to(root / "real-projects/eval-abc", target_is_directory=True)
+            found = runner.claude_loaded_extensions(env, [])
+            self.assertEqual([], found["transcripts"])
+            self.assertTrue(found["errors"])
 
     def test_finish_fails_a_trial_whose_claude_session_loaded_an_extension(self):
         import argparse
@@ -8822,6 +8916,42 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             self.assertIn("extra_extension_loaded", flagged["validity_flags"])
             self.assertEqual(["finance:close"], flagged["claude_extensions"]["loaded"]["skills"])
             self.assertIn("extra_extension_loaded", eval_kit.KNOWN_VALIDITY_FLAGS)
+
+    def test_finish_reads_the_mcp_declaration_launch_recorded(self):
+        import argparse
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            repository = root / "repository"; repository.mkdir()
+            (repository / ".mcp.json").write_text(json.dumps({"mcpServers": {"playwright": {"command": "x"}}}))
+            declaration = runner.declared_mcp_servers(repository)
+            self.assertEqual({"servers": ["playwright"], "error": None}, declaration)
+            output = root / "evidence"; output.mkdir()
+            runner.write(output / "launch.json", {"declared_directories": [], "observation": {}, "status": "started",
+                                                  "environment": env, "repository": str(repository),
+                                                  "declared_mcp_servers": declaration})
+            self.write_transcript(env, self.transcript_lines([], used=["mcp__playwright__click", "mcp__personal__read"]))
+            # The subject adds the server it used to the fixture during the trial.
+            (repository / ".mcp.json").write_text(json.dumps({"mcpServers": {"playwright": {}, "personal": {}}}))
+            with patch.object(runner, "snapshot", return_value={"validity_flags": []}), \
+                 patch.object(runner, "compare", return_value={"validity_flags": []}), \
+                 patch.object(runner, "config_snapshot", return_value={}), patch("builtins.print"):
+                (output / "before.json").write_text("{}")
+                runner.finish(argparse.Namespace(output=output))
+            observed = json.loads((output / "observation.json").read_text())
+            self.assertIn("extra_extension_loaded", observed["validity_flags"])
+            self.assertEqual(["mcp__personal__read"], observed["claude_extensions"]["loaded"]["tools"])
+            # A linked or unreadable declaration declares nothing and is an error.
+            (repository / ".mcp.json").unlink()
+            (repository / ".mcp.json").symlink_to(root / "elsewhere.json")
+            self.assertEqual([], runner.declared_mcp_servers(repository)["servers"])
+            self.assertTrue(runner.declared_mcp_servers(repository)["error"])
+            (repository / ".mcp.json").unlink()
+            (repository / ".mcp.json").write_text("{not json")
+            self.assertTrue(runner.declared_mcp_servers(repository)["error"])
+            (repository / ".mcp.json").unlink()
+            self.assertEqual({"servers": [], "error": None}, runner.declared_mcp_servers(repository))
 
     def test_every_runner_flag_is_in_the_kit_vocabulary(self):
         runner = self.runner()

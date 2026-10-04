@@ -102,17 +102,28 @@ state as `claude_account_content` and `config_finish` as part of the drift
 check. The home's `.claude.json` holds account state and is never parsed.
 
 At `finish` the runner reads every native Claude transcript of the trial, the
-subject's and its peers', from the trial's project folder in that home. A
+subject's and its peers', from the trial's project folder in that home. It
+reads only the structured inventory and invocation fields Claude Code 2.1.286
+writes: the skill listing's names, invoked skills, the agent listing, the MCP
+servers named by instructions and by pending or failed connections, the MCP
+tools a session listed, surfaced or recorded, and every tool call. A name
+mentioned in a description, an instruction or a reply never counts. A
 namespaced skill or agent (`<plugin>:<name>`, the form plugin and synced
-content takes), a claude.ai or plugin connector, or any MCP tool or server
-that the fixture repository does not declare in its own `.mcp.json` adds
+content takes), or any MCP server or tool the fixture did not declare, adds
 `extra_extension_loaded` to the trial's validity flags, so the trial is
-invalid, never a model result. `observation.json` lists what was found under
-`claude_extensions`, including the unnamespaced skills and agents the session
-listed (the fixture's own and the harness's bundled ones), which are recorded
-but not flagged. A transcript reached through a link, or one that cannot be
-read, adds `evaluator_config_unreadable`. Claude Code 2.1.286 documents the
-three settings; a live Claude trial is the proof that they take effect.
+invalid, never a model result. The declaration is the fixture's `.mcp.json`
+as launch read it, recorded in `launch.json` as `declared_mcp_servers`, so an
+edit during the trial cannot authorize a server. A tool named
+`mcp__<server>__<tool>` counts as declared only when a declared server leaves
+a tool part without `__`; server names may hold `__`, so any other reading
+flags. `observation.json` lists what was found under `claude_extensions`,
+including the unnamespaced skills and agents the session listed (the
+fixture's own and the harness's bundled ones), which are recorded but not
+flagged. The walk follows no link: a link anywhere from the Claude home's
+`projects` folder down, dangling or not, a folder that cannot be listed, a
+transcript that cannot be read or an unreadable declaration adds
+`evaluator_config_unreadable`. Claude Code 2.1.286 documents the three
+settings; a live Claude trial is the proof that they take effect.
 For an operator's own interactive Codex hook review, materialize a fresh
 fixture with the current binary, then print the operator command:
 

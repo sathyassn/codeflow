@@ -952,15 +952,21 @@ def require_claude_account_content_off(home: Path) -> dict:
 
 
 # What a plugin, a synced claude.ai skill or an MCP server adds to a Claude
-# session, as Claude Code names it in its native transcript: plugin and synced
-# skills and agents carry a `<source>:<name>` namespace, and every MCP tool is
-# `mcp__<server>__<tool>`. The fixture's project skills and agents and the
-# harness's bundled skills carry no namespace; they are recorded, not flagged.
-# The only MCP servers a trial may load are those the fixture repository
-# declares in its own `.mcp.json`; claude.ai connectors, plugin servers and
-# user-scope servers all flag.
+# session, as Claude Code records it in the structured fields of its native
+# transcript: plugin and synced skills and agents carry a `<source>:<name>`
+# namespace, and every MCP tool is `mcp__<server>__<tool>`. The fixture's
+# project skills and agents and the harness's bundled skills carry no
+# namespace; they are recorded, not flagged. The only MCP servers a trial may
+# load are those its fixture repository declared in `.mcp.json` when the trial
+# launched; claude.ai connectors, plugin servers and user-scope servers all
+# flag. Only inventory and invocation fields count: a description, an
+# instruction or an example that mentions a name never makes it loaded.
 CLAUDE_SKILL_LINE = re.compile(r"^- (\S+?)(?:: |:$|$)")
-CLAUDE_MCP_TOOL = re.compile(r"\bmcp__([A-Za-z0-9_.-]+?)__[A-Za-z0-9_.-]+")
+# Attachment fields that list MCP tool names, and those that name MCP servers.
+CLAUDE_TOOL_NAME_FIELDS = {"deferred_tools_delta": ("addedNames", "surfacedNames", "readdedNames")}
+CLAUDE_TOOL_ENTRY_FIELDS = {"deferred_tools_record": ("entries",), "prompt_snapshot": ("tools", "inlineTools")}
+CLAUDE_SERVER_FIELDS = {"mcp_instructions_delta": ("addedNames",),
+                        "deferred_tools_delta": ("pendingMcpServers", "failedMcpServers")}
 
 
 def mcp_server_key(name: str) -> str:
@@ -968,42 +974,115 @@ def mcp_server_key(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", name)
 
 
-def declared_mcp_servers(repository: Path) -> set[str]:
-    """Server names the fixture repository declares in `.mcp.json`."""
+def mcp_tool_declared(name: str, keys: set[str]) -> bool:
+    """Whether an `mcp__<server>__<tool>` name belongs to a declared server.
+    Server names may hold `__`, so the wire name alone can be ambiguous: it
+    counts as declared only when some declared server key leaves a tool part
+    with no `__` in it. Any other reading flags, failing closed."""
+    if not name.startswith("mcp__"):
+        return True
+    rest = name[len("mcp__"):]
+    for key in keys:
+        prefix = key + "__"
+        if rest.startswith(prefix):
+            tool = rest[len(prefix):]
+            if tool and "__" not in tool:
+                return True
+    return False
+
+
+def declared_mcp_servers(repository: Path) -> dict:
+    """The MCP servers the fixture repository declares in `.mcp.json`, read
+    once at launch before any session starts. A link or an unreadable file
+    declares nothing and is recorded as an error."""
     path = repository / ".mcp.json"
-    if not path.is_file() or path.is_symlink():
-        return set()
+    result = {"servers": [], "error": None}
+    if path.is_symlink():
+        result["error"] = f"{path} is a link"
+        return result
+    if not path.exists():
+        return result
     try:
         servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
-    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
-        return set()
-    return set(servers) if isinstance(servers, dict) else set()
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError) as exc:
+        result["error"] = f"cannot read {path}: {exc}"
+        return result
+    if not isinstance(servers, dict):
+        result["error"] = f"{path} mcpServers is not an object"
+        return result
+    result["servers"] = sorted(str(name) for name in servers)
+    return result
 
 
-def claude_loaded_extensions(environment: dict[str, str], repository: Path | None = None) -> dict:
+def _names(value) -> list[str]:
+    """Names from a list of strings or of objects with a `name`."""
+    names = []
+    for item in value if isinstance(value, list) else []:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.append(item["name"])
+    return names
+
+
+def claude_transcripts(folder: Path, errors: list[str]) -> list[Path]:
+    """Every regular `.jsonl` file under the trial's project folder, walked
+    without following a link. Any link inside it, dangling or not, file or
+    folder, and any folder that cannot be listed is an error."""
+    found = []
+
+    def failed(exc: OSError) -> None:
+        errors.append(f"cannot list {exc.filename}: {exc.strerror}")
+
+    for top, folders, files in os.walk(folder, onerror=failed, followlinks=False):
+        here = Path(top)
+        for name in list(folders):
+            if (here / name).is_symlink():
+                errors.append(f"transcript folder holds a link: {here / name}")
+                folders.remove(name)
+        for name in files:
+            path = here / name
+            if path.is_symlink():
+                errors.append(f"transcript folder holds a link: {path}")
+            elif name.endswith(".jsonl"):
+                found.append(path)
+    return sorted(found)
+
+
+def read_no_follow(path: Path) -> str:
+    """A file's text, refusing a link swapped in after the walk."""
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as handle:
+        return handle.read().decode("utf-8")
+
+
+def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | set[str] = ()) -> dict:
     """Plugins, synced skills and MCP servers that reached any Claude session
     of this trial, subject or peer, read from the native transcripts in the
-    trial's project folder. `loaded` lists each kind that flags the trial; an
-    unreadable transcript is an error, never a clean read."""
-    folder = Path(environment["CLAUDE_CONFIG_DIR"]) / "projects" / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
-    declared = declared_mcp_servers(repository) if repository is not None else set()
+    trial's project folder. `declared` holds the MCP servers the fixture
+    declared at launch. `loaded` lists each kind that flags the trial; an
+    unreadable transcript or a link on the way is an error, never a clean read."""
+    config = Path(environment["CLAUDE_CONFIG_DIR"])
+    projects = config / "projects"
+    folder = projects / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
     allowed = {mcp_server_key(name) for name in declared}
     found = {"folder": str(folder), "transcripts": [], "skills": [], "agents": [], "mcp_servers": [],
-             "declared_mcp_servers": sorted(declared),
+             "tools": [], "declared_mcp_servers": sorted(declared),
              "loaded": {"skills": [], "agents": [], "tools": [], "mcp_servers": []}, "errors": []}
-    if not folder.exists():
-        return found
-    if folder.is_symlink() or not folder.is_dir():
-        found["errors"].append(f"transcript folder is not a real folder: {folder}")
-        return found
+    for part in (config, projects, folder):
+        if part.is_symlink():
+            found["errors"].append(f"transcript path holds a link: {part}")
+            return found
+        if not part.exists():
+            return found
+        if not part.is_dir():
+            found["errors"].append(f"transcript path is not a folder: {part}")
+            return found
     skills, agents, tools, servers = set(), set(), set(), set()
-    for path in sorted(folder.rglob("*.jsonl")):
-        if path.is_symlink():
-            found["errors"].append(f"transcript is a symlink: {path}")
-            continue
+    for path in claude_transcripts(folder, found["errors"]):
         found["transcripts"].append(str(path.relative_to(folder)))
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = read_no_follow(path).splitlines()
         except (OSError, UnicodeDecodeError) as exc:
             found["errors"].append(f"cannot read {path}: {exc}")
             continue
@@ -1018,25 +1097,37 @@ def claude_loaded_extensions(environment: dict[str, str], repository: Path | Non
             if isinstance(attachment, dict):
                 kind = attachment.get("type")
                 if kind == "skill_listing":
-                    for row in str(attachment.get("content", "")).splitlines():
-                        match = CLAUDE_SKILL_LINE.match(row)
-                        if match:
-                            skills.add(match.group(1))
+                    listed = attachment.get("names")
+                    if isinstance(listed, list):
+                        skills.update(_names(listed))
+                    else:
+                        for row in str(attachment.get("content", "")).splitlines():
+                            match = CLAUDE_SKILL_LINE.match(row)
+                            if match:
+                                skills.add(match.group(1))
+                elif kind == "invoked_skills":
+                    skills.update(_names(attachment.get("skills")))
                 elif kind == "agent_listing_delta":
-                    agents.update(str(name) for name in attachment.get("addedTypes") or [])
-                elif kind == "mcp_instructions_delta":
-                    servers.update(str(name) for name in attachment.get("addedNames") or [])
-                tools.update(match.group(0) for match in CLAUDE_MCP_TOOL.finditer(json.dumps(attachment)))
+                    agents.update(_names(attachment.get("addedTypes")))
+                for field in CLAUDE_TOOL_NAME_FIELDS.get(kind, ()):
+                    tools.update(name for name in _names(attachment.get(field)) if name.startswith("mcp__"))
+                for field in CLAUDE_TOOL_ENTRY_FIELDS.get(kind, ()):
+                    tools.update(name for name in _names(attachment.get(field)) if name.startswith("mcp__"))
+                for field in CLAUDE_SERVER_FIELDS.get(kind, ()):
+                    servers.update(_names(attachment.get(field)))
             message = record.get("message")
             if record.get("type") == "assistant" and isinstance(message, dict):
                 for block in message.get("content") or []:
                     if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tools.update(match.group(0) for match in CLAUDE_MCP_TOOL.finditer(str(block.get("name", ""))))
-    found["skills"], found["agents"], found["mcp_servers"] = sorted(skills), sorted(agents), sorted(servers)
+                        name = block.get("name")
+                        if isinstance(name, str) and name.startswith("mcp__"):
+                            tools.add(name)
+    found["skills"], found["agents"] = sorted(skills), sorted(agents)
+    found["mcp_servers"], found["tools"] = sorted(servers), sorted(tools)
     found["loaded"] = {
         "skills": sorted(name for name in skills if ":" in name),
         "agents": sorted(name for name in agents if ":" in name),
-        "tools": sorted(name for name in tools if CLAUDE_MCP_TOOL.match(name).group(1) not in allowed),
+        "tools": sorted(name for name in tools if not mcp_tool_declared(name, allowed)),
         "mcp_servers": sorted(name for name in servers if mcp_server_key(name) not in allowed),
     }
     return found
@@ -1848,6 +1939,7 @@ def launch(args) -> None:
            "native_args": native, "permission_flags": permissions,
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
            "claude_account_content": account_content,
+           "declared_mcp_servers": declared_mcp_servers(repository),
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
@@ -2007,7 +2099,13 @@ def finish(args) -> None:
     # refused before its environment was recorded started no session.
     environment = run.get("environment") or {}
     if {"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PROJECT_DIR_NAME"} <= environment.keys():
-        extensions = claude_loaded_extensions(environment, Path(run["repository"]) if run.get("repository") else None)
+        # The fixture's declaration as launch read it: an edit during the
+        # trial never authorizes a server after the fact.
+        declaration = run.get("declared_mcp_servers")
+        declared = declaration.get("servers", []) if isinstance(declaration, dict) else []
+        extensions = claude_loaded_extensions(environment, declared)
+        if isinstance(declaration, dict) and declaration.get("error"):
+            extensions["errors"].append(declaration["error"])
         result["claude_extensions"] = extensions
         if any(extensions["loaded"].values()):
             result["validity_flags"].append("extra_extension_loaded")

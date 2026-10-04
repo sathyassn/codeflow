@@ -258,8 +258,9 @@ erratum below, never an edit of the section.
   qualification runner refuses a launch whose Claude home lacks the
   settings or holds such content, checks again after readiness and for
   each Claude peer, and at `finish` flags a trial invalid
-  (`extra_extension_loaded`) when its transcripts show a plugin or account
-  skill, agent or MCP tool the fixture does not declare. The runner also
+  (`extra_extension_loaded`) when the structured fields of its transcripts
+  show a plugin or account skill or agent, or an MCP server or tool that
+  the fixture's `.mcp.json` did not declare at launch. The runner also
   reads a process's working directory on macOS through libproc instead of
   `lsof`, which took longer than the watcher's poll gap on a loaded host,
   and pins Codex 0.160.0's idle and pending screens in its frame tests.
