@@ -2653,7 +2653,7 @@ publication date._
   load/stress, or concurrency evidence is required when material risk earns it,
   without imposing ceremonial benchmarks on unaffected paths. A targeted
   native Fable/Sol
-  [diagnostic](https://github.com/sathyassn/codeflow/blob/main/docs/verification/model-role-quality-diagnostic-2026-07-26.md)
+  [diagnostic](docs/verification/model-role-quality-diagnostic-2026-07-26.md)
   exercised this case together with managed-primary resolution and
   test-integrity review; it is retained as diagnostic evidence, not binding
   qualification.
