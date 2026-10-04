@@ -462,7 +462,66 @@ fn unread_tables(digest: &str) -> Vec<(String, String)> {
             format!("{table}x86_64-unknown-linux-gnu = \"{digest}\"\n"),
             "lists x86_64-unknown-linux-gnu twice".to_string(),
         ),
+        (
+            format!("{base}\n[\"\\u0073caffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden behind an escaped key".to_string(),
+        ),
+        (
+            format!("{base}\n\"\\u0073caffold_sha256\" = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{digest}\" }}\n"),
+            "may be hidden behind an escaped key".to_string(),
+        ),
     ]
+}
+
+/// Values and trailing comments that name the table are not declarations:
+/// with no table the install warns and checks `sha256.sum`, and a pinned
+/// table with such a comment is still enforced.
+#[test]
+fn comments_and_values_naming_the_table_are_not_declarations() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let release = publish(&releases, "1.2.3");
+    let reviewed = sha256(&release.join(format!("{ASSET}.tar.xz")));
+
+    set_state(
+        &work,
+        &format!(
+            "{}\n[notes] # scaffold_sha256 lands later\ntext = \"scaffold_sha256\" # scaffold_sha256\n",
+            project_toml("1.2.3")
+        ),
+        "chore: notes naming the table",
+    );
+    let unpinned = run_install(&script, &work, "HEAD", &releases);
+    assert!(unpinned.out.status.success(), "{}", unpinned.stderr());
+    assert!(
+        unpinned
+            .stderr()
+            .contains("::warning::no release digest is pinned"),
+        "{}",
+        unpinned.stderr()
+    );
+
+    set_state(
+        &work,
+        &format!(
+            "{}\n[scaffold_sha256] # reviewed\nversion = \"1.2.3\" # scaffold_sha256 for 1.2.3\nx86_64-unknown-linux-gnu = \"{reviewed}\"\n",
+            project_toml("1.2.3")
+        ),
+        "chore: a commented table",
+    );
+    let pinned = run_install(&script, &work, "HEAD", &releases);
+    assert!(pinned.out.status.success(), "{}", pinned.stderr());
+    assert!(
+        pinned.stderr().contains(
+            "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+        ),
+        "{}",
+        pinned.stderr()
+    );
 }
 
 /// sathyassn/codeflow#47: with no digest pinned the release's `sha256.sum`

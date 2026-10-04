@@ -753,6 +753,10 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
             (format!("{base}\nscaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.{t} = \"{reviewed}\"\n"), form.to_string()),
             (format!("{table}[other]\n[scaffold_sha256]\n"), "is declared twice".to_string()),
             (format!("{table}{t} = \"{reviewed}\"\n"), format!("lists {t} twice")),
+            (
+                format!("{base}\n\n[\"\\u0073caffold_sha256\"]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
+                "may be hidden behind an escaped key".to_string(),
+            ),
         ] {
             std::fs::write(&path, &state).unwrap();
             let unread = fx.commit("chore: another table form");

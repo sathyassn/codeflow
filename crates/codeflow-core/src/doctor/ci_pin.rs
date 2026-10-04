@@ -158,21 +158,17 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
-    let Some(target_pin) = show(STATE).as_deref().and_then(pinned) else {
-        return PinReport {
-            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
-            message: format!(
-                "{target} pins no scaffold_version, so CI on it fails closed until a pin lands there"
-            ),
-        };
+    let target_state = show(STATE).unwrap_or_default();
+    let (target_pin, target_verified) = match target_check(&target, &target_state) {
+        Ok(checked) => checked,
+        Err(report) => return report,
     };
     if target_pin == head_pin {
         return same_pin(
             &target,
             &target_pin,
-            &show(STATE).unwrap_or_default(),
-            head_state.as_deref().unwrap_or_default(),
-            &verified,
+            (&target_state, &target_verified),
+            (head_state.as_deref().unwrap_or_default(), &verified),
         );
     }
     if is_older(&head_pin, &target_pin) {
@@ -195,7 +191,7 @@ pub(super) fn report(root: &Path) -> PinReport {
         return PinReport {
             status: Status::Pass,
             message: format!(
-                "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and nothing else, upgrade step one: codeflow {target_pin} judges it and CI tests {head_pin} alongside; after it lands, run `codeflow update` on a new branch"
+                "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and nothing else, upgrade step one: codeflow {target_pin}, verified against {target_verified}, judges it and CI tests {head_pin} alongside; after it lands, run `codeflow update` on a new branch"
             ),
         };
     }
@@ -238,25 +234,44 @@ fn digest_mode(state: &str, version: &str) -> Result<String, String> {
     }
 }
 
+/// The target's pin and what CI checks its release against, or the warning
+/// that stops the report. CI installs the target's pin first, checked against
+/// the target's table, whatever the checkout raises or lowers it to.
+fn target_check(target: &str, state: &str) -> Result<(String, String), PinReport> {
+    let digest_warning = |version: &str, problem: String| PinReport {
+        status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", version)])),
+        message: format!("on {target}, {problem}"),
+    };
+    // A table the installers refuse may not parse as TOML at all (one
+    // declared twice), so name it before reading the pin.
+    if matches!(pinned_digests(state), PinnedDigests::Unreadable(_)) {
+        let version = pinned(state).unwrap_or_else(|| "<version>".to_string());
+        let problem = digest_mode(state, &version).err().unwrap_or_default();
+        return Err(digest_warning(&version, problem));
+    }
+    let Some(pin) = pinned(state) else {
+        return Err(PinReport {
+            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", target)])),
+            message: format!(
+                "{target} pins no scaffold_version, so CI on it fails closed until a pin lands there"
+            ),
+        });
+    };
+    match digest_mode(state, &pin) {
+        Ok(verified) => Ok((pin, verified)),
+        Err(problem) => Err(digest_warning(&pin, problem)),
+    }
+}
+
 /// The report when the checkout keeps the target's pin. CI reads the digests
 /// from the target, so the target's table is what protects the install; the
 /// checkout's (`head_verified`) applies once it lands.
 fn same_pin(
     target: &str,
     pin: &str,
-    target_state: &str,
-    head_state: &str,
-    head_verified: &str,
+    (target_state, target_verified): (&str, &str),
+    (head_state, head_verified): (&str, &str),
 ) -> PinReport {
-    let target_verified = match digest_mode(target_state, pin) {
-        Ok(verified) => verified,
-        Err(problem) => {
-            return PinReport {
-                status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", pin)])),
-                message: format!("on {target}, {problem}"),
-            }
-        }
-    };
     let changed = if table_lines(target_state) == table_lines(head_state) {
         String::new()
     } else {
@@ -789,6 +804,53 @@ mod tests {
             found.message.starts_with(&format!(
                 "on main, the [scaffold_sha256] table in {STATE} pins the digests of codeflow 1.2.2, not 1.2.3"
             )),
+            "{}",
+            found.message
+        );
+    }
+
+    #[test]
+    fn a_raise_is_judged_against_the_targets_digest_table() {
+        // CI installs the target's pin first, so a stale, partial or
+        // unreadable table on the target warns even when the checkout
+        // raises the pin with a good one.
+        for broken in [
+            table("1.2.2"),
+            "\n[scaffold_sha256]\nversion = \"1.2.3\"\n".to_string(),
+            format!("{}{}", table("1.2.3"), table("1.2.3")),
+        ] {
+            let dir = project("1.2.3");
+            commit_on_main(dir.path(), &format!("{}{broken}", state("1.2.3")));
+            write(
+                dir.path(),
+                STATE,
+                &format!("{}{}", state("1.2.4"), table("1.2.4")),
+            );
+            let found = report(dir.path());
+            assert!(matches!(found.status, Status::Warn(_)), "{}", found.message);
+            assert!(
+                found
+                    .message
+                    .starts_with("on main, the [scaffold_sha256] table in")
+                    && found.message.ends_with("fails closed"),
+                "{}",
+                found.message
+            );
+        }
+        // A good target table is named in the raise.
+        let dir = project("1.2.3");
+        commit_on_main(dir.path(), &format!("{}{}", state("1.2.3"), table("1.2.3")));
+        write(
+            dir.path(),
+            STATE,
+            &format!("{}{}", state("1.2.4"), table("1.2.4")),
+        );
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Pass, "{}", found.message);
+        assert!(
+            found.message.contains(
+                "upgrade step one: codeflow 1.2.3, verified against the release digests pinned"
+            ),
             "{}",
             found.message
         );

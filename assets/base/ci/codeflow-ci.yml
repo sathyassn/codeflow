@@ -80,11 +80,17 @@ jobs:
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
               if (inside && table) fail("is declared twice")
-              if (!inside && /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              name = $0; sub(/\].*/, "", name)
+              if (!inside && name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (!inside && name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
               if (inside) table = 1
               next
             }
-            /scaffold_sha256/ { fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)") }
+            /=/ {
+              name = $0; sub(/=.*/, "", name)
+              if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+            }
             inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
               if (key in seen) fail("lists " key " twice")
@@ -218,11 +224,17 @@ jobs:
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
               if (inside && table) fail("is declared twice")
-              if (!inside && /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              name = $0; sub(/\].*/, "", name)
+              if (!inside && name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (!inside && name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
               if (inside) table = 1
               next
             }
-            /scaffold_sha256/ { fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)") }
+            /=/ {
+              name = $0; sub(/=.*/, "", name)
+              if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+            }
             inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
               key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
               if (key in seen) fail("lists " key " twice")

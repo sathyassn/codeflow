@@ -111,6 +111,12 @@ pub enum PinnedDigests {
 /// Why the installers refuse a table: it is declared twice.
 pub const TWICE: &str = "is declared twice";
 
+/// Why the installers refuse a state with an escaped key or table name: an
+/// escape such as `s` could spell the table's name without its
+/// letters, so they cannot tell it is absent.
+pub const ESCAPED: &str =
+    "may be hidden behind an escaped key, which the CI installers do not read";
+
 /// Why the installers refuse a table written another way.
 pub const OTHER_FORM: &str = "is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)";
 
@@ -119,10 +125,13 @@ pub const OTHER_FORM: &str = "is written in a form the CI installers do not read
 /// what CI will check: a `[scaffold_sha256]` section header, then
 /// `key = "value"` lines with a bare or double-quoted key and a
 /// double-quoted value, up to the next header. Comment lines are skipped.
-/// Any other line naming the table (a quoted header, an inline or dotted
-/// table, a sub-table), a second header or a key listed twice makes the
-/// table unreadable, and the installers fail closed on it rather than
-/// reading it as absent; single-quoted values read as missing.
+/// Any other table name or key naming the table (a quoted header, an inline
+/// or dotted table, a sub-table), an escaped table name or key (which could
+/// spell it), a second header or a key listed twice makes the table
+/// unreadable, and the installers fail closed on it rather than reading it
+/// as absent. Only names count: a table name runs to its first `]` and a
+/// key to its first `=`, so values and trailing comments never do.
+/// Single-quoted values read as missing.
 /// `codeflow update --pin` writes the form they read.
 #[must_use]
 pub fn pinned_digests(state: &str) -> PinnedDigests {
@@ -146,18 +155,32 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
         }
         if trimmed.starts_with('[') {
             inside = header.is_match(line);
+            // The table's name runs to the first `]`; a comment after it
+            // never counts.
+            let name = line.split(']').next().unwrap_or(line);
             if inside {
                 if table {
                     flag(TWICE.to_string());
                 }
                 table = true;
-            } else if line.contains(TABLE) {
-                flag(OTHER_FORM.to_string());
+            } else {
+                if name.contains(TABLE) {
+                    flag(OTHER_FORM.to_string());
+                }
+                if name.contains('\\') {
+                    flag(ESCAPED.to_string());
+                }
             }
             continue;
         }
-        if line.contains(TABLE) {
-            flag(OTHER_FORM.to_string());
+        // A key runs to the first `=`; its value and comment never count.
+        if let Some((name, _)) = line.split_once('=') {
+            if name.contains(TABLE) {
+                flag(OTHER_FORM.to_string());
+            }
+            if name.contains('\\') {
+                flag(ESCAPED.to_string());
+            }
         }
         let Some(key) = inside.then(|| entry.captures(line)).flatten() else {
             continue;
@@ -479,6 +502,10 @@ mod tests {
                 "{unread}"
             );
         }
+    }
+
+    #[test]
+    fn refuses_doubled_or_escaped_tables_and_ignores_comments() {
         // A second header or a key listed twice is refused too, and a
         // comment naming the table is not a declaration.
         let twice = format!(
@@ -509,6 +536,35 @@ mod tests {
             pinned_digests("# [scaffold_sha256] is written by codeflow update --pin\nscaffold_version = \"1\"\n"),
             PinnedDigests::Absent
         );
+        // Values and trailing comments that name the table are not
+        // declarations, inside the table or out of it.
+        assert_eq!(
+            pinned_digests("scaffold_version = \"1\" # scaffold_sha256 later\n[orient] # scaffold_sha256 too\nnote = \"scaffold_sha256\"\n"),
+            PinnedDigests::Absent
+        );
+        assert_eq!(
+            pinned_digests(&format!(
+                "[scaffold_sha256]\nversion = \"1.2.3\" # scaffold_sha256 for 1.2.3\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+            )),
+            PinnedDigests::Table {
+                version: Some("1.2.3".into()),
+                listed: vec!["x86_64-unknown-linux-gnu"],
+                missing: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+            }
+        );
+        // An escaped name could spell the table without its letters, so it
+        // is refused rather than read as absent.
+        for escaped in [
+            format!("[\"\\u0073caffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"),
+            "\"\\u0073caffold_sha256\" = { version = \"1.2.3\" }\n".to_string(),
+            "\"\\u0073caffold_sha256\".version = \"1.2.3\"\n".to_string(),
+        ] {
+            assert_eq!(
+                pinned_digests(&escaped),
+                PinnedDigests::Unreadable(ESCAPED.into()),
+                "{escaped}"
+            );
+        }
         let single = format!(
             "[ scaffold_sha256 ] # pinned\nversion = '1.2.3'\n\"x86_64-unknown-linux-gnu\" = '{DIGEST}'\n"
         );
