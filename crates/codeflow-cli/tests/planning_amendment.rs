@@ -674,3 +674,89 @@ fn a_planning_amendment_refuses_aliases_and_reads_the_targets_policy() {
         }
     }
 }
+
+/// A changed document, the links (path, target) that reach it, and the
+/// link a refusal names.
+#[cfg(unix)]
+type LinkCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+
+/// Review round 3 (AC-2, AC-3): a link is followed through every link on
+/// its way, before the `..` after it, so a chain through a folder link, an
+/// absolute folder link or a backslash target still keeps the document it
+/// reaches out of a planning amendment, with a body and on push; a link to
+/// the root `AGENTS.md` carries only what `AGENTS.md` may.
+#[cfg(unix)]
+#[test]
+fn a_link_chain_is_followed_before_its_dots() {
+    use std::os::unix::fs::symlink;
+    let dir = repo();
+    let root = dir.path();
+    // Control: CLAUDE.md -> AGENTS.md, and the project section changes.
+    symlink("AGENTS.md", root.join("CLAUDE.md")).unwrap();
+    commit(root, "docs: link the harness instructions to AGENTS.md");
+    two_epic_amendment(root);
+    write(root, "AGENTS.md", &agents("mine, with the amended plan"));
+    commit(root, "docs: carry the instruction text");
+    assert_passes(&ci(root, PLAN, BOTH), "a link to AGENTS.md", &[]);
+    assert_passes(&ci_push(root, PLAN), "a link to AGENTS.md on push", &[]);
+
+    let absolute = root.join("docs").to_string_lossy().into_owned();
+    let cases: [LinkCase; 3] = [
+        // docs/alias -> docs/another/subdir, so `..` lands in docs/another.
+        (
+            "docs/another/rules.md",
+            &[
+                ("docs/alias", "another/subdir"),
+                ("CLAUDE.local.md", "docs/alias/../rules.md"),
+            ],
+            "CLAUDE.local.md",
+        ),
+        // An absolute folder link on the way.
+        (
+            "docs/abs.md",
+            &[
+                ("docs/outside", absolute.as_str()),
+                ("CLAUDE.extra.md", "docs/outside/abs.md"),
+            ],
+            "CLAUDE.extra.md",
+        ),
+        // A backslash is a letter here and a separator on Windows.
+        (
+            "docs/instructions\\safe.md",
+            &[("CLAUDE.back.md", "docs/instructions\\safe.md")],
+            "CLAUDE.back.md",
+        ),
+    ];
+    for (doc, links, link) in cases {
+        git(root, &["switch", "main"]);
+        write(root, doc, &agents("linked"));
+        write(root, "docs/another/subdir/keep.md", "Kept.\n");
+        for (at, target) in links {
+            symlink(target, root.join(at)).unwrap();
+        }
+        commit(root, "docs: link an instruction file");
+        let branch = format!("plan/chain-{link}");
+        git(root, &["switch", "-C", &branch, "main"]);
+        let text = std::fs::read_to_string(root.join(doc)).unwrap();
+        write(root, doc, &text.replace("managed rules", "other rules"));
+        commit(root, "docs: change the linked instructions");
+        assert_blocks(
+            &ci(root, &branch, "Task: EPC-001"),
+            doc,
+            &[&format!("which the symbolic link {link} reaches")],
+        );
+        loosen(root, "TSK-001", Some("EPC-001"), "main");
+        commit(root, "docs(records): loosen AC-1 behind the link");
+        assert_blocks(
+            &ci_push(root, &branch),
+            doc,
+            &["work.criteria_frozen", "TSK-001 changes its criteria"],
+        );
+        // Drop the links so the next case is judged on its own.
+        git(root, &["switch", "main"]);
+        for (at, _) in links {
+            std::fs::remove_file(root.join(at)).unwrap();
+        }
+        commit(root, "docs: drop the links");
+    }
+}

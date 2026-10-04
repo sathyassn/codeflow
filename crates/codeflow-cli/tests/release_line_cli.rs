@@ -596,6 +596,42 @@ fn an_amendment_carrying_a_doc_is_brought_into_a_release() {
     }
 }
 
+/// TSK-229 review round 3: a planning landing that changes a document an
+/// instruction link reaches through a folder link stays frozen in a
+/// release, as its planning pull request was refused.
+#[cfg(unix)]
+#[test]
+fn an_amendment_behind_a_link_chain_stays_frozen_in_a_release() {
+    use std::os::unix::fs::symlink;
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "chore/link", LINE_A]);
+    fx.write("docs/another/rules.md", "Rules.\n");
+    fx.write("docs/another/subdir/keep.md", "Kept.\n");
+    symlink("another/subdir", fx.root.join("docs/alias")).unwrap();
+    symlink("docs/alias/../rules.md", fx.root.join("CLAUDE.md")).unwrap();
+    fx.commit("docs: link the harness instructions");
+    fx.land(LINE_A, "chore/link");
+    fx.git(&["switch", "-q", "-C", "plan/amend-behind-a-link", LINE_A]);
+    let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+    fx.write("docs/another/rules.md", "Other rules.\n");
+    fx.commit("docs(records): amend the criterion behind a link");
+    let landing = fx.land(LINE_A, "plan/amend-behind-a-link");
+    fx.cut_release();
+    fx.import(LINE_A);
+    blocks(
+        &agree(&fx, "a document behind a link chain"),
+        "a document behind a link chain",
+        &[
+            "work.criteria_frozen",
+            &format!(
+                "TSK-003 changes its criteria on its line at {}",
+                &landing[..9]
+            ),
+        ],
+    );
+}
+
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
 /// The adoption marker line (SPC-013 R-120).

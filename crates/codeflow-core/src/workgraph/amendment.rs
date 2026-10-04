@@ -341,7 +341,7 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
         }
     }
     for at in [base, head] {
-        for (link, reach) in links(repo, at) {
+        for (link, reach) in links(repo, at, &project) {
             if let Some(path) = paths.iter().find(|path| reach.covers(path)) {
                 return Some(format!(
                     "a planning-only pull request changes {path}, which the symbolic link {link} reaches; a planning amendment does not change what a link carries"
@@ -368,47 +368,60 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)
     Some((entry.filemode(), blob.content().to_vec()))
 }
 
-/// What a symbolic link may reach, judged without the case of its letters,
-/// since a checkout on a case-insensitive file system resolves `DOCS/` and
-/// `docs/` alike.
+/// What a symbolic link may reach once every link on its way is followed,
+/// judged without the case of its letters, since a checkout on a
+/// case-insensitive file system resolves `DOCS/` and `docs/` alike.
 #[derive(Debug, PartialEq)]
 enum Reach {
-    /// The repository path the link names; empty for the repository root,
-    /// which covers every path.
+    /// The repository path the link resolves to, in lower case; empty for
+    /// the repository root, which covers every path.
     Inside(String),
-    /// A target that is absolute or leaves the repository, as its
-    /// normalized components. Where the checkout lives is not known here,
-    /// so the link may reach any repository path that one of their
-    /// non-empty tails names; with no components it names `/` or a folder
-    /// above the repository, which covers every path.
-    Outside(Vec<String>),
+    /// A link on the way is absolute, holds a backslash (a separator on
+    /// Windows, a letter elsewhere), leaves the repository or loops, so
+    /// what it reaches is not known here and it covers every path.
+    Unknown,
 }
 
 impl Reach {
     /// Whether the link may reach `path` or a folder holding it.
     fn covers(&self, path: &str) -> bool {
         let path = path.to_lowercase();
-        let under = |target: &str| path == target || path.starts_with(&format!("{target}/"));
         match self {
-            Self::Inside(target) => target.is_empty() || under(target),
-            Self::Outside(parts) => {
-                parts.is_empty() || (0..parts.len()).any(|at| under(&parts[at..].join("/")))
+            Self::Inside(target) => {
+                target.is_empty() || path == *target || path.starts_with(&format!("{target}/"))
             }
+            Self::Unknown => true,
         }
     }
 }
 
-/// Every symbolic link in the tree of `commit` with what it may reach.
-fn links(repo: &Repository, commit: Oid) -> Vec<(String, Reach)> {
+/// How many links one resolution follows before it counts as a loop, as a
+/// POSIX system does.
+const MAX_HOPS: usize = 40;
+
+/// Every symbolic link in the tree of `commit` that sits where a planning
+/// amendment may not write, or at `AGENTS.md`, with what it may reach. A
+/// link that resolves to the root `AGENTS.md` is left out: the managed
+/// block of that file is compared on its own, so `CLAUDE.md -> AGENTS.md`
+/// carries only what `AGENTS.md` may.
+fn links(repo: &Repository, commit: Oid, project: &ProjectPaths) -> Vec<(String, Reach)> {
     let Ok(tree) = repo.find_commit(commit).and_then(|commit| commit.tree()) else {
         return Vec::new();
     };
     let mut found = Vec::new();
     let _ = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
         if entry.filemode() == LINK_MODE {
-            if let (Ok(name), Ok(blob)) = (entry.name(), repo.find_blob(entry.id())) {
-                let target = String::from_utf8_lossy(blob.content());
-                found.push((format!("{dir}{name}"), resolve(dir, &target)));
+            if let Ok(name) = entry.name() {
+                let path = format!("{dir}{name}");
+                if matches!(
+                    amendment_path(&path, project),
+                    None | Some(AmendmentPath::Instructions)
+                ) {
+                    let reach = resolve(repo, &tree, &path);
+                    if reach != Reach::Inside("agents.md".to_string()) {
+                        found.push((path, reach));
+                    }
+                }
             }
         }
         git2::TreeWalkResult::Ok
@@ -416,36 +429,78 @@ fn links(repo: &Repository, commit: Oid) -> Vec<(String, Reach)> {
     found
 }
 
-/// What `target`, read from the folder `dir` (with its trailing `/`), may
-/// reach, in lower case.
-fn resolve(dir: &str, target: &str) -> Reach {
-    let target = target.replace('\\', "/").to_lowercase();
-    let absolute = target.starts_with('/') || target.as_bytes().get(1) == Some(&b':');
-    let mut parts: Vec<String> = if absolute {
-        Vec::new()
-    } else {
-        dir.split('/')
-            .filter(|part| !part.is_empty())
-            .map(str::to_lowercase)
-            .collect()
-    };
-    let mut escaped = absolute;
-    for part in target.split('/') {
-        match part {
+/// What the link at `link` in `tree` resolves to: each component is looked
+/// up in the tree without regard to case, and a link met on the way is
+/// followed before any `..` after it, as the file system does.
+fn resolve(repo: &Repository, tree: &git2::Tree<'_>, link: &str) -> Reach {
+    let mut resolved: Vec<String> = link.split('/').map(str::to_string).collect();
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    // Start from the link itself, so its own target is the first hop.
+    if let Some(last) = resolved.pop() {
+        pending.push_back(last);
+    }
+    let mut hops = 0;
+    while let Some(part) = pending.pop_front() {
+        match part.as_str() {
             "" | "." => {}
             ".." => {
-                if parts.pop().is_none() {
-                    escaped = true;
+                if resolved.pop().is_none() {
+                    return Reach::Unknown;
                 }
             }
-            part => parts.push(part.to_string()),
+            name => match child(repo, tree, &resolved, name) {
+                Some((_, LINK_MODE, target)) => {
+                    hops += 1;
+                    if hops > MAX_HOPS
+                        || target.contains('\\')
+                        || target.starts_with('/')
+                        || target.as_bytes().get(1) == Some(&b':')
+                    {
+                        return Reach::Unknown;
+                    }
+                    for (at, piece) in target.split('/').enumerate() {
+                        pending.insert(at, piece.to_string());
+                    }
+                }
+                Some((actual, _, _)) => resolved.push(actual),
+                None => resolved.push(name.to_string()),
+            },
         }
     }
-    if escaped {
-        Reach::Outside(parts)
+    Reach::Inside(resolved.join("/").to_lowercase())
+}
+
+/// The entry named `name`, in any case, in the folder `dir` of `tree`: its
+/// actual name, its mode and, for a link, its target.
+fn child(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    dir: &[String],
+    name: &str,
+) -> Option<(String, i32, String)> {
+    let folder = if dir.is_empty() {
+        tree.clone()
     } else {
-        Reach::Inside(parts.join("/"))
-    }
+        tree.get_path(std::path::Path::new(&dir.join("/")))
+            .ok()?
+            .to_object(repo)
+            .ok()?
+            .into_tree()
+            .ok()?
+    };
+    let wanted = name.to_lowercase();
+    let entry = folder.iter().find(|entry| {
+        entry
+            .name()
+            .is_ok_and(|actual| actual.to_lowercase() == wanted)
+    })?;
+    let target = if entry.filemode() == LINK_MODE {
+        let blob = repo.find_blob(entry.id()).ok()?;
+        String::from_utf8_lossy(blob.content()).into_owned()
+    } else {
+        String::new()
+    };
+    Some((entry.name().ok()?.to_string(), entry.filemode(), target))
 }
 
 /// The project's product and watched paths from the policy at `commit`: its
@@ -530,37 +585,4 @@ pub(super) fn landing_problem(
         .find(|path| single(path).is_some())
         .or_else(|| paths.first())
         .cloned())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{resolve, Reach};
-
-    #[test]
-    fn a_link_reaches_its_target_in_any_case_and_from_outside() {
-        // Relative, with the case of a case-insensitive checkout.
-        let upper = resolve("", "DOCS/instructions.md");
-        assert_eq!(upper, Reach::Inside("docs/instructions.md".to_string()));
-        assert!(upper.covers("docs/instructions.md"));
-        assert!(upper.covers("Docs/Instructions.md"));
-        assert!(!upper.covers("docs/other.md"));
-        // A folder covers what it holds; `..` stays inside while it can.
-        let folder = resolve("docs/plan/", "../reading");
-        assert!(folder.covers("docs/reading/a.md"));
-        assert!(!folder.covers("docs/readings.md"));
-        // The repository root covers every path.
-        assert!(resolve("docs/", "..").covers("src/lib.rs"));
-        assert!(resolve("", ".").covers("AGENTS.md"));
-        // Absolute, or leaving the repository: any tail may be the checkout.
-        let absolute = resolve("", "/home/me/repo/docs/instructions.md");
-        assert!(absolute.covers("docs/instructions.md"));
-        assert!(absolute.covers("instructions.md"));
-        assert!(!absolute.covers("docs/other.md"));
-        let escaped = resolve("", "../repo/DOCS");
-        assert!(escaped.covers("docs/instructions.md"));
-        assert!(resolve("", "C:\\work\\repo\\docs\\a.md").covers("docs/a.md"));
-        // `/` or a folder above the repository covers every path.
-        assert!(resolve("", "/").covers("docs/a.md"));
-        assert!(resolve("", "..").covers("docs/a.md"));
-    }
 }
