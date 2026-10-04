@@ -343,9 +343,9 @@ The version-skew warning is gone and no `.new` file remains.
 
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
-and verify it against that release's `sha256.sum` and the archive digests
-the target pins (below). A mismatch fails the job, and nothing unverified
-is installed.
+and verify it against that release's `sha256.sum` and the target's
+pinned digests (below). A mismatch fails the job and installs nothing
+unverified.
 
 - The commit and PR-body standards run in `codeflow-policy.yml` on
   `pull_request_target`.
@@ -382,9 +382,9 @@ a checkout of that commit, so the target's policy judges the change.
 
 | Managed CI, 3.1.0 | What it does |
 |---|---|
-| Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, because whoever can replace a release asset can replace `sha256.sum` too |
+| Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, since whoever replaces a release asset can replace `sha256.sum` too |
 | A table CI cannot use | One from another version, missing the runner's platform, declared or keyed twice, written as a quoted header, an inline or dotted table or a sub-table, a table holding any line but plain `key = "value"` entries, or a state with a backslash in a header or before a line's first `=`, three quote marks in a row on any line but a full-line comment (they could open a multi-line string), a line starting with a character that is not printable ASCII (a byte-order mark or a Unicode space could hide the header), a control character other than a tab, a header or key name outside printable ASCII, or a carriage return inside a line fails the job closed, even where a value, an array element or a comment happens to match. CodeFlow writes the values it serializes so they never match; a name you wrote yourself is kept, so `--pin` refuses and doctor names the line to rewrite. Keep the plain table `--pin` writes |
-| No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request that adds the table still pass |
+| No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request adding the table pass |
 | Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
 | Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit |
 | `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
