@@ -1,0 +1,11 @@
+id = "TSK-240"
+uid = "f07fd0c3-30e6-4c39-a7fb-ebb3ae666529"
+kind = "TSK"
+title = "Issues are handled by cause and class, with a written critical path"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-04T22:18:21Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
