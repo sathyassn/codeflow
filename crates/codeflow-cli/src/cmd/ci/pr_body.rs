@@ -428,8 +428,8 @@ const BLOCK_TAGS: &[&str] = &[
 /// Where the reading of the body's raw HTML stands. GitHub escapes the
 /// Markdown text it renders, so only raw HTML can close a comment, a CDATA
 /// section, a processing instruction, a declaration or a tag: after one
-/// opens, everything up to its closer is hidden, whatever Markdown blocks
-/// lie between.
+/// opens, everything up to its closer is hidden, whatever the renderer
+/// writes between.
 enum HtmlState {
     Text,
     /// Inside a comment, CDATA section, processing instruction or
@@ -450,34 +450,6 @@ impl HtmlScan {
     fn new() -> Self {
         Self {
             state: HtmlState::Text,
-        }
-    }
-
-    /// Whether Markdown text rendered now would show.
-    fn visible(&self) -> bool {
-        matches!(self.state, HtmlState::Text)
-    }
-
-    /// A Markdown event rendered while a tag is still open. The renderer
-    /// writes its own tags (`<p>`, `<code>`, `<br />`), whose `>` ends an
-    /// open tag that has no open quote, and it escapes `"`, `<`, `>` and `&`
-    /// in text but not `'`, so an apostrophe closes a single-quoted value.
-    fn rendered(&mut self, event: &Event<'_>) {
-        let HtmlState::Tag { quote, .. } = &mut self.state else {
-            return;
-        };
-        let text = match event {
-            Event::Text(text) | Event::Code(text) => Some(text),
-            _ => None,
-        };
-        if let (Some(text), Some('\'')) = (text, *quote) {
-            if text.contains('\'') {
-                *quote = None;
-            }
-        }
-        let writes_a_tag = !matches!(event, Event::Text(_) | Event::SoftBreak);
-        if writes_a_tag && quote.is_none() {
-            self.state = HtmlState::Text;
         }
     }
 
@@ -646,20 +618,40 @@ fn decode_entities(text: &str) -> String {
     out
 }
 
-/// The text of a body as a reader sees it rendered, with the source offset
-/// each stretch of it came from, so a section's words are read from the
-/// one parse of the whole body: a reference link or footnote defined in
-/// another section still resolves.
+/// Text as the reference Markdown renderer writes it into HTML: `&`, `<`,
+/// `>` and `"` escaped, an apostrophe left alone.
+fn escape_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The text of a body as a reader sees it, read from the HTML the Markdown
+/// renderer writes for the whole body, so the renderer's own tags and
+/// quotes, the body's raw HTML and the escaping of text all meet in one
+/// reading, as they do in a browser. The events are cut into chunks at the
+/// given source offsets and rendered one chunk at a time, so each chunk's
+/// words are known while one parse of the body resolves references and one
+/// HTML reading carries across the chunks.
 struct ReaderText {
     text: String,
-    /// `(source offset, text length so far)`, in order.
+    /// `(source offset where a chunk starts, text length before it)`.
     marks: Vec<(usize, usize)>,
 }
 
 impl ReaderText {
     /// Headings, tables and fenced blocks count; HTML comments, tag markup,
     /// image alt text and footnote definitions nothing refers to do not.
-    fn of(source: &str) -> Self {
+    /// `cuts` must lie between top-level blocks.
+    fn of(source: &str, cuts: &[usize]) -> Self {
         let options = github_options();
         let referenced: std::collections::HashSet<String> = Parser::new_ext(source, options)
             .filter_map(|event| match event {
@@ -667,77 +659,49 @@ impl ReaderText {
                 _ => None,
             })
             .collect();
+        let mut cuts = cuts.to_vec();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut chunks: Vec<Vec<Event<'_>>> = vec![Vec::new(); cuts.len() + 1];
+        let mut current = 0;
+        let mut hidden_definition = false;
+        for (event, span) in Parser::new_ext(source, options).into_offset_iter() {
+            let skip = match &event {
+                Event::Start(Tag::FootnoteDefinition(label)) => {
+                    hidden_definition = !referenced.contains(label.as_ref());
+                    hidden_definition
+                }
+                Event::End(TagEnd::FootnoteDefinition) => std::mem::take(&mut hidden_definition),
+                _ => hidden_definition,
+            };
+            if !skip {
+                current = current.max(cuts.partition_point(|cut| *cut <= span.start));
+                // The reference renderer escapes a double quote in text and
+                // this one does not, and an unescaped quote would close an
+                // open attribute value, so the text is escaped here.
+                chunks[current].push(match event {
+                    Event::Text(text) => Event::Html(escape_text(&text).into()),
+                    Event::Code(text) => {
+                        Event::Html(format!("<code>{}</code>", escape_text(&text)).into())
+                    }
+                    other => other,
+                });
+            }
+        }
         let mut reader = Self {
             text: String::new(),
             marks: Vec::new(),
         };
         let mut scan = HtmlScan::new();
-        let mut image = 0usize;
-        let mut hidden_definition = false;
-        for (event, span) in Parser::new_ext(source, options).into_offset_iter() {
-            match event {
-                Event::Start(Tag::FootnoteDefinition(label)) => {
-                    hidden_definition = !referenced.contains(label.as_ref());
-                }
-                Event::End(TagEnd::FootnoteDefinition) => hidden_definition = false,
-                Event::Start(Tag::Image { .. }) => image += 1,
-                Event::End(TagEnd::Image) => image = image.saturating_sub(1),
-                _ if hidden_definition => {}
-                Event::Html(value) | Event::InlineHtml(value) => {
-                    let visible = scan.feed(&value);
-                    if !visible.is_empty() {
-                        reader.mark(span.start);
-                        reader.text.push_str(&visible);
-                    }
-                }
-                event => {
-                    // Text rendered inside an open tag or comment is hidden;
-                    // the renderer's own tags may end that tag.
-                    if !scan.visible() {
-                        scan.rendered(&event);
-                    }
-                    if scan.visible() {
-                        // An End event spans its whole element; its end
-                        // keeps the offsets in order.
-                        reader.mark(if matches!(event, Event::End(_)) {
-                            span.end
-                        } else {
-                            span.start
-                        });
-                        reader.event(event, image > 0);
-                    }
-                }
-            }
+        for (index, events) in chunks.into_iter().enumerate() {
+            let mut html = String::new();
+            pulldown_cmark::html::push_html(&mut html, events.into_iter());
+            let start = index.checked_sub(1).map_or(0, |cut| cuts[cut]);
+            reader.marks.push((start, reader.text.len()));
+            reader.text.push_str(&scan.feed(&html));
+            reader.text.push('\n');
         }
         reader
-    }
-
-    fn mark(&mut self, offset: usize) {
-        self.marks.push((offset, self.text.len()));
-    }
-
-    fn event(&mut self, event: Event<'_>, in_image: bool) {
-        if starts_block(&event) && !self.text.is_empty() && !self.text.ends_with('\n') {
-            self.text.push('\n');
-        }
-        match event {
-            Event::Text(value) | Event::Code(value) if !in_image => {
-                self.text.push_str(&value);
-            }
-            // Inline ends join the words either side of them; block and
-            // table ends and breaks separate them.
-            Event::End(
-                TagEnd::Emphasis
-                | TagEnd::Strong
-                | TagEnd::Strikethrough
-                | TagEnd::Superscript
-                | TagEnd::Subscript
-                | TagEnd::Link
-                | TagEnd::Image,
-            ) => {}
-            Event::SoftBreak | Event::HardBreak | Event::End(_) => self.text.push('\n'),
-            _ => {}
-        }
     }
 
     /// The words of the whole body.
@@ -745,7 +709,7 @@ impl ReaderText {
         self.text.split_whitespace().count()
     }
 
-    /// The words that came from source offsets `start..end`.
+    /// The words of the chunks that start at source offsets `start..end`.
     fn words_in(&self, start: usize, end: usize) -> usize {
         let at = |offset: usize| {
             let index = self.marks.partition_point(|mark| mark.0 < offset);
@@ -758,14 +722,19 @@ impl ReaderText {
 /// The words of `source` as a reader sees them.
 #[cfg(test)]
 fn word_count(source: &str) -> usize {
-    ReaderText::of(source).words()
+    ReaderText::of(source, &[]).words()
 }
 
 /// The length warning's message for an over-long body: the count, the limit
 /// and the three largest `##` sections with their word counts. `None` at or
 /// under the limit.
 fn length_message(body: &str, sections: &[Section<'_>]) -> Option<String> {
-    let reader = ReaderText::of(body);
+    // Each section's heading and its content are chunks of their own.
+    let cuts: Vec<usize> = sections
+        .iter()
+        .flat_map(|section| [section.heading_start, section.start])
+        .collect();
+    let reader = ReaderText::of(body, &cuts);
     let total = reader.words();
     if total <= BODY_WORD_LIMIT {
         return None;
@@ -2291,7 +2260,7 @@ mod tests {
 
     #[test]
     fn word_count_hides_footnote_definitions_nothing_refers_to() {
-        assert_eq!(word_count("text[^1]\n\n[^1]: used note words"), 4);
+        assert_eq!(word_count("text[^1]\n\n[^1]: used note words"), 5);
         assert_eq!(word_count("text\n\n[^1]: unused note words here"), 1);
         let at = format!(
             "{}\n\n[^9]: unused four word note",
