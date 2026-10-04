@@ -1358,6 +1358,7 @@ fn exec_guard_lets_text_that_only_names_a_peer_through() {
     }
     for command in [
         "CMD=codex; $CMD exec x",
+        "printf -v CMD 'codex exec'; $CMD x",
         "D=$PWD; cat > brief.md <<EOF\nCodex: review\nEOF\necho 'codex exec x' | $SHELL",
     ] {
         let out = guard(command);

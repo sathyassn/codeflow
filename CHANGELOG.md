@@ -478,20 +478,21 @@ erratum below, never an edit of the section.
   commit messages included, and refused it as a headless run whenever a
   peer name was followed anywhere later by a marker word: a review brief
   written with `cat` that named Codex and, further on, the word review was
-  refused. A variable or substitution program is now judged by what it
-  can expand to with its own arguments: a launcher of a peer
-  (`$SUDO codex exec`), a value the line assigns, a substitution's text,
-  or a peer the line names (`CMD=codex; $CMD exec`). An alias the line
-  defines is expanded where it is used, and a here-string or pipe is
-  judged only when it feeds something that can run it, so
-  `grep <<< 'Codex review'` is data. Where the raw text is still read (a
-  shell or `source` running a script the line may have written,
-  interpreter code), a peer name counts only when its headless flag
-  follows it or its headless subcommand is the first word after its
-  options, as the CLI parses it, so prose such as "Codex adversarial
-  seat: please review" is no run. Text that reads as a run to the CLI,
-  such as "the Codex review", is still refused on such a line. Every
-  headless run the guard refused before is still refused.
+  refused. The raw text now leaves out what the line only writes as data:
+  a heredoc body read by a data command such as `cat`, `tee` or
+  `git commit -F -`, and a data command that feeds no pipe and runs no
+  substitution, such as `echo '...'`, `git commit -m '...'` (a
+  `$(cat <<'EOF' ...)` message included) or `gh pr create --body '...'`.
+  That data is still judged as a script the line may run later, read with
+  shell quoting: a peer counts only in command position, followed by its
+  headless flag or by its headless subcommand as the first word after its
+  options. A brief that says "Codex adversarial seat: please review" is
+  data, while a written script line `codex exec ...` is still refused.
+  The rest of the line, and interpreter code, are judged as before. A
+  data line that reads as a run, such as "Grok agent seat too." in a
+  brief written beside an unresolved command, is still refused. Of 1,093
+  headless run forms compared with 3.0.0, none that 3.0.0 refused is
+  let through.
 
 ## [3.0.0]
 
