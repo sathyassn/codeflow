@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::scaffold::release_pin::{pinned_digests, PinnedDigests, TABLE};
 use crate::scaffold::version::is_older;
 
 use super::Status;
@@ -37,18 +38,19 @@ const POLICY: &str = ".codeflow/policy.json";
 
 /// Each shipped install doctor recognizes: the template, and the first and
 /// last lines of the span that chooses the target commit and installs the
-/// release it pins, verified against the release's `sha256.sum`. The
-/// GitLab, Bitbucket and generic spans end with the shared pinned run.
+/// release it pins, verified against the digest pinned beside it and the
+/// release's `sha256.sum`. The GitLab, Bitbucket and generic spans end with
+/// the shared pinned run.
 const INSTALLS: [(&str, &str, &str); 5] = [
     (
         include_str!("../../../../assets/base/ci/codeflow-ci.yml"),
         "- name: Install codeflow (target-pinned, checksum-verified)",
-        "installed and verified against sha256.sum",
+        "installed and verified against ${verified}",
     ),
     (
         include_str!("../../../../assets/base/ci/codeflow-policy.yml"),
         "- uses: actions/checkout@v6",
-        "installed and verified against sha256.sum",
+        "installed and verified against ${verified}",
     ),
     (
         include_str!("../../../../assets/base/ci/.gitlab-ci.yml"),
@@ -125,11 +127,22 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
+    let verified = match digest_mode(head_state.as_deref().unwrap_or_default(), &head_pin) {
+        Ok(verified) => verified,
+        Err(problem) => {
+            return PinReport {
+                status: Status::Warn(
+                    remedy::DOCTOR_CI_DIGEST.with(&[("version", head_pin.as_str())]),
+                ),
+                message: problem,
+            }
+        }
+    };
     let Some((target, show)) = target_files(root) else {
         return PinReport {
             status: Status::Pass,
             message: format!(
-                "CI installs the codeflow version the target branch pins ({head_pin} here), verified against its sha256.sum; no local target branch to compare with"
+                "CI installs the codeflow version the target branch pins ({head_pin} here), verified against {verified}; no local target branch to compare with"
             ),
         };
     };
@@ -145,7 +158,7 @@ pub(super) fn report(root: &Path) -> PinReport {
         return PinReport {
             status: Status::Pass,
             message: format!(
-                "CI installs codeflow {target_pin}, the version {target} pins, verified against its sha256.sum"
+                "CI installs codeflow {target_pin}, the version {target} pins, verified against {verified}"
             ),
         };
     }
@@ -179,6 +192,68 @@ pub(super) fn report(root: &Path) -> PinReport {
             "this checkout raises scaffold_version from {target_pin} ({target}) to {head_pin} and also carries {}, which codeflow {target_pin}, the binary CI installs until the raise lands, may not read, so CI fails",
             carried.join(", ")
         ),
+    }
+}
+
+/// What the installers check a download of `version` against, read from the
+/// project state's `[scaffold_sha256]` table (sathyassn/codeflow#47); `Err`
+/// names a table the installers refuse, so CI fails closed.
+fn digest_mode(state: &str, version: &str) -> Result<String, String> {
+    match pinned_digests(state) {
+        PinnedDigests::Absent => Ok(format!(
+            "its sha256.sum only: no release digest is pinned beside it (`codeflow update --pin {version}` pins one)"
+        )),
+        PinnedDigests::Table { version: table, .. } if table.as_deref() != Some(version) => {
+            Err(format!(
+                "the [{TABLE}] table in {STATE} pins the digests of codeflow {}, not {version}, so the CI install fails closed",
+                table.as_deref().unwrap_or("no version")
+            ))
+        }
+        PinnedDigests::Table { missing, .. } if !missing.is_empty() => Err(format!(
+            "the [{TABLE}] table in {STATE} lists no digest for {}, so the CI install on that platform fails closed",
+            missing.join(", ")
+        )),
+        PinnedDigests::Table { .. } => Ok(format!(
+            "the release digests pinned in {STATE} and its sha256.sum"
+        )),
+    }
+}
+
+/// The project-owned setup hook the managed CI sources before the test gate
+/// (sathyassn/codeflow#46).
+pub(super) const SETUP_HOOK: &str = ".codeflow/ci-setup.sh";
+
+/// The line of a shipped CI file that sources [`SETUP_HOOK`].
+const SETUP_LINE: &str = ". ./.codeflow/ci-setup.sh";
+
+/// Whether the project has a setup hook, whether the CI file `dest` (with
+/// `content`) sources it, and its first command.
+pub(super) fn setup_note(root: &Path, dest: &str, content: &str) -> String {
+    let Ok(script) = std::fs::read_to_string(root.join(SETUP_HOOK)) else {
+        return format!("no project setup hook ({SETUP_HOOK})");
+    };
+    let first = script
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'));
+    let what = first.map_or_else(
+        || "it holds no command".to_string(),
+        |command| {
+            let shown: String = command.chars().take(60).collect();
+            let more = if shown.len() < command.len() {
+                "..."
+            } else {
+                ""
+            };
+            format!("first command `{shown}{more}`")
+        },
+    );
+    if content.lines().any(|line| line.trim() == SETUP_LINE) {
+        format!("project setup hook {SETUP_HOOK} runs before `codeflow test` ({what})")
+    } else {
+        format!(
+            "project setup hook {SETUP_HOOK} is present ({what}), but {dest} does not source it before `codeflow test`"
+        )
     }
 }
 
@@ -421,6 +496,129 @@ mod tests {
             "{}",
             report.message
         );
+    }
+
+    const DIGEST: &str = "117f6fa832677ab63b87f3b8c01f996e5e6c427848cde2003a6885656ce73384";
+
+    /// `state(version)` with a `[scaffold_sha256]` table for `table` and a
+    /// digest for each of `triples`.
+    fn with_digests(version: &str, table: &str, triples: &[&str]) -> String {
+        let mut text = format!(
+            "{}\n[scaffold_sha256]\nversion = \"{table}\"\n",
+            state(version)
+        );
+        for triple in triples {
+            text.push_str(&format!("{triple} = \"{DIGEST}\"\n"));
+        }
+        text
+    }
+
+    /// sathyassn/codeflow#47: doctor names the verification mode the CI
+    /// install uses, and warns when the pinned table would fail it closed.
+    #[test]
+    fn the_report_names_the_digest_mode() {
+        let dir = project("1.2.3");
+        let unpinned = report(dir.path());
+        assert_eq!(unpinned.status, Status::Pass, "{}", unpinned.message);
+        assert!(
+            unpinned
+                .message
+                .contains("verified against its sha256.sum only: no release digest is pinned"),
+            "{}",
+            unpinned.message
+        );
+        assert!(unpinned.message.contains("codeflow update --pin 1.2.3"));
+
+        write(
+            dir.path(),
+            STATE,
+            &with_digests("1.2.3", "1.2.3", &crate::scaffold::release_pin::TRIPLES),
+        );
+        let pinned = report(dir.path());
+        assert_eq!(pinned.status, Status::Pass, "{}", pinned.message);
+        assert!(
+            pinned.message.contains(
+                "verified against the release digests pinned in .codeflow/project.toml and its sha256.sum"
+            ),
+            "{}",
+            pinned.message
+        );
+
+        write(
+            dir.path(),
+            STATE,
+            &with_digests("1.2.3", "1.2.2", &crate::scaffold::release_pin::TRIPLES),
+        );
+        let stale = report(dir.path());
+        assert!(stale.status.is_warn(), "{}", stale.message);
+        assert!(
+            stale.message.contains(
+                "pins the digests of codeflow 1.2.2, not 1.2.3, so the CI install fails closed"
+            ),
+            "{}",
+            stale.message
+        );
+        let Status::Warn(remedy) = &stale.status else {
+            panic!("{}", stale.message)
+        };
+        assert!(remedy.contains("codeflow update --pin 1.2.3"), "{remedy}");
+
+        write(
+            dir.path(),
+            STATE,
+            &with_digests("1.2.3", "1.2.3", &["x86_64-unknown-linux-gnu"]),
+        );
+        let partial = report(dir.path());
+        assert!(partial.status.is_warn(), "{}", partial.message);
+        assert!(
+            partial
+                .message
+                .contains("lists no digest for aarch64-apple-darwin, x86_64-apple-darwin"),
+            "{}",
+            partial.message
+        );
+    }
+
+    /// sathyassn/codeflow#46: doctor says whether the setup hook exists,
+    /// whether the CI file sources it, and what it runs first.
+    #[test]
+    fn the_setup_note_names_the_hook_and_whether_ci_runs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ci = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        assert_eq!(
+            setup_note(dir.path(), "ci.yml", ci),
+            "no project setup hook (.codeflow/ci-setup.sh)"
+        );
+        write(
+            dir.path(),
+            SETUP_HOOK,
+            "#!/bin/sh\n# Node for the gate\n\ncorepack enable\npnpm install --frozen-lockfile\n",
+        );
+        for shipped in [
+            ci,
+            include_str!("../../../../assets/base/ci/ci-generic.sh"),
+            include_str!("../../../../assets/base/ci/.gitlab-ci.yml"),
+            include_str!("../../../../assets/base/ci/bitbucket-pipelines.yml"),
+        ] {
+            assert_eq!(
+                setup_note(dir.path(), "ci.yml", shipped),
+                "project setup hook .codeflow/ci-setup.sh runs before `codeflow test` (first command `corepack enable`)"
+            );
+        }
+        assert_eq!(
+            setup_note(dir.path(), "ci.yml", "jobs: {}\n"),
+            "project setup hook .codeflow/ci-setup.sh is present (first command `corepack enable`), but ci.yml does not source it before `codeflow test`"
+        );
+        write(
+            dir.path(),
+            SETUP_HOOK,
+            &format!("echo {}\n", "x".repeat(80)),
+        );
+        assert!(
+            setup_note(dir.path(), "ci.yml", ci).contains(&format!("`echo {}...`", "x".repeat(55)))
+        );
+        write(dir.path(), SETUP_HOOK, "# nothing yet\n");
+        assert!(setup_note(dir.path(), "ci.yml", ci).contains("(it holds no command)"));
     }
 
     #[test]

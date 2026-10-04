@@ -613,6 +613,167 @@ fn the_pinned_install_verifies_the_release_and_fails_closed() {
     }
 }
 
+/// Append a `[scaffold_sha256]` table naming `table_version` and, when
+/// given, this machine's archive digest to the fixture's state.
+fn pin_digest(repo: &Path, table_version: &str, digest: Option<&str>) {
+    let path = repo.join(".codeflow/project.toml");
+    let state = std::fs::read_to_string(&path).unwrap();
+    let state = state
+        .split("\n[scaffold_sha256]\n")
+        .next()
+        .unwrap()
+        .trim_end()
+        .to_string();
+    let entry = digest.map_or_else(String::new, |d| format!("{} = \"{d}\"\n", triple()));
+    std::fs::write(
+        &path,
+        format!("{state}\n\n[scaffold_sha256]\nversion = \"{table_version}\"\n{entry}"),
+    )
+    .unwrap();
+}
+
+/// sathyassn/codeflow#47: the shared pinned run takes the archive digest the
+/// target pins beside the version, refuses a release whose archive and
+/// `sha256.sum` were both replaced, fails closed on a stale or partial
+/// table, and warns when no digest is pinned.
+#[test]
+fn the_shared_run_requires_the_pinned_release_digest() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        let unpinned = fx.project("1.2.3");
+        let release = fx.publish("1.2.3", &Binary::Real);
+        let asset = release.join(format!("codeflow-cli-{}.tar.xz", triple()));
+        let reviewed = sha256(&asset);
+
+        let warned = fx.run(platform, Some(&unpinned), &unpinned);
+        assert!(warned.status.success(), "{platform:?}: {}", text(&warned));
+        assert!(
+            text(&warned).contains("codeflow: warning: no release digest is pinned"),
+            "{platform:?}: {}",
+            text(&warned)
+        );
+        assert!(text(&warned).contains("installed and verified against sha256.sum"));
+
+        pin_digest(&fx.repo(), "1.2.3", Some(&reviewed));
+        let target = fx.commit("chore: pin the release digest");
+        let ok = fx.run(platform, Some(&target), &target);
+        assert!(ok.status.success(), "{platform:?}: {}", text(&ok));
+        assert!(
+            text(&ok).contains(
+                "codeflow 1.2.3 installed and verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+            ),
+            "{platform:?}: {}",
+            text(&ok)
+        );
+        assert!(
+            !text(&ok).contains("no release digest is pinned"),
+            "{platform:?}: {}",
+            text(&ok)
+        );
+
+        // Both release files replaced: the pinned digest refuses it.
+        let original = std::fs::read(&asset).unwrap();
+        let listed = std::fs::read_to_string(release.join("sha256.sum")).unwrap();
+        let mut replaced = original.clone();
+        replaced.extend_from_slice(b"replaced");
+        std::fs::write(&asset, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  codeflow-cli-{}.tar.xz\n", sha256(&asset), triple()),
+        )
+        .unwrap();
+        let swapped = fx.run(platform, Some(&target), &target);
+        assert!(!swapped.status.success(), "{platform:?}");
+        assert!(
+            text(&swapped).contains("does not match the digest pinned in .codeflow/project.toml"),
+            "{platform:?}: {}",
+            text(&swapped)
+        );
+        assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+        std::fs::write(&asset, &original).unwrap();
+        std::fs::write(release.join("sha256.sum"), listed).unwrap();
+
+        // A table from another version, or without this triple, fails closed.
+        pin_digest(&fx.repo(), "1.2.2", Some(&reviewed));
+        let stale_target = fx.commit("chore: stale digest");
+        let stale = fx.run(platform, Some(&stale_target), &stale_target);
+        assert!(!stale.status.success(), "{platform:?}");
+        assert!(
+            text(&stale).contains("pins the digests of codeflow 1.2.2, not 1.2.3"),
+            "{platform:?}: {}",
+            text(&stale)
+        );
+        pin_digest(&fx.repo(), "1.2.3", None);
+        let partial_target = fx.commit("chore: no digest for this triple");
+        let partial = fx.run(platform, Some(&partial_target), &partial_target);
+        assert!(!partial.status.success(), "{platform:?}");
+        assert!(
+            text(&partial).contains(&format!("lists no digest for {}", triple())),
+            "{platform:?}: {}",
+            text(&partial)
+        );
+        assert!(fx.calls().is_empty(), "{platform:?}: {:?}", fx.calls());
+    }
+}
+
+/// sathyassn/codeflow#46: the shared pinned run sources a project-owned
+/// `.codeflow/ci-setup.sh` after the install and before `codeflow test`, so
+/// its exports reach the test gate; a failing hook stops the run before the
+/// gate.
+#[test]
+fn the_shared_run_sources_the_project_setup_hook_before_the_test_gate() {
+    for platform in PLATFORMS {
+        let fx = Fixture::new();
+        fx.project("1.2.3");
+        fx.publish("1.2.3", &Binary::Real);
+        // The test target passes only when the hook's export reaches it.
+        std::fs::write(
+            fx.repo().join(".codeflow/test-config.json"),
+            r#"{"schema_version":"1.0","targets":[{"name":"probe","enabled":true,"runner":"custom","modes":{"quick":{"command":"test \"$HOOK_VALUE\" = set"},"full":{"command":"test \"$HOOK_VALUE\" = set"}}}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            fx.repo().join(".codeflow/ci-setup.sh"),
+            format!(
+                "echo hook >> '{}'\nexport HOOK_VALUE=set\ncd /\n",
+                fx.log().display()
+            ),
+        )
+        .unwrap();
+        let head = fx.commit("ci: add the project setup hook");
+        let ok = fx.run(platform, Some(&head), &head);
+        assert!(ok.status.success(), "{platform:?}: {}", text(&ok));
+        let calls = fx.calls();
+        let hook = calls
+            .iter()
+            .position(|c| c == "hook")
+            .expect("the hook ran");
+        let test = calls
+            .iter()
+            .position(|c| c.starts_with("1.2.3 test --strict"))
+            .expect("the gate ran");
+        let ci = calls
+            .iter()
+            .position(|c| c.starts_with("1.2.3 ci "))
+            .expect("the range was judged");
+        assert!(ci < hook && hook < test, "{platform:?}: {calls:?}");
+
+        std::fs::write(
+            fx.repo().join(".codeflow/ci-setup.sh"),
+            format!("echo hook >> '{}'\nfalse\n", fx.log().display()),
+        )
+        .unwrap();
+        let failing = fx.commit("ci: break the project setup hook");
+        let failed = fx.run(platform, Some(&failing), &failing);
+        assert!(!failed.status.success(), "{platform:?}: {}", text(&failed));
+        assert!(
+            !fx.calls().iter().any(|c| c.starts_with("1.2.3 test")),
+            "{platform:?}: {:?}",
+            fx.calls()
+        );
+    }
+}
+
 #[test]
 fn a_run_without_the_target_commit_is_refused() {
     for platform in PLATFORMS {

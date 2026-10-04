@@ -58,9 +58,14 @@ jobs:
           PIN_REF: HEAD
         run: |
           # SPC-013 R-113: install the codeflow version the target pins in
-          # .codeflow/project.toml (scaffold_version), verified against the
-          # release's published sha256.sum. A missing checksum file, a missing
-          # entry or a mismatch fails closed; nothing unverified is installed.
+          # .codeflow/project.toml (scaffold_version). When the same file pins
+          # the release's archive digests ([scaffold_sha256], written by
+          # `codeflow update --pin`), the archive must match the digest reviewed
+          # there for that version; a table for another version, a missing entry
+          # or a mismatch fails closed. The release's published sha256.sum is
+          # checked too, and is the only check while no digest is pinned: a
+          # missing checksum file, a missing entry or a mismatch fails closed.
+          # Nothing unverified is installed.
           set -euo pipefail
           state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
             echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
@@ -68,8 +73,37 @@ jobs:
           if [ -z "$version" ]; then
             echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
           fi
+          triple=x86_64-unknown-linux-gnu
+          asset="codeflow-cli-${triple}.tar.xz"
+          # The [scaffold_sha256] table as "<version> <digest>" for this triple,
+          # with "-" for a missing value, or nothing when no table is pinned.
+          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" '
+            /^[[:space:]]*\[/ {
+              inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+              if (inside) table = 1
+              next
+            }
+            inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
+              key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
+              if (value == $0) value = ""; else sub(/".*/, "", value)
+              if (key == "version") version = value
+              if (key == want) digest = value
+            }
+            END { if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
+          digest=
+          if [ -n "$pinned" ]; then
+            if [ "${pinned%% *}" != "$version" ]; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} pins the digests of codeflow ${pinned%% *}, not ${version}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+            digest=${pinned#* }
+            if ! printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} lists no digest for ${triple}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+          else
+            echo "::warning::no release digest is pinned in .codeflow/project.toml at ${PIN_REF}, so codeflow ${version} is checked only against its release's own sha256.sum; run \`codeflow update --pin ${version}\` and land it to pin the reviewed digest"
+          fi
           base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
-          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
           work=$(mktemp -d)
           if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
             echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
@@ -86,15 +120,20 @@ jobs:
           else
             actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
           fi
+          if [ -n "$digest" ] && [ "$actual" != "$digest" ]; then
+            echo "::error::${asset} for codeflow ${version} does not match the digest pinned in .codeflow/project.toml at ${PIN_REF} (pinned ${digest}, got ${actual}); refusing it"; exit 1
+          fi
           if [ "$actual" != "$expected" ]; then
             echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
           fi
           tar -xJf "${work}/${asset}" -C "$work"
           mkdir -p "$HOME/.codeflow/bin"
-          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          cp "${work}/codeflow-cli-${triple}/codeflow" "$HOME/.codeflow/bin/codeflow"
           chmod +x "$HOME/.codeflow/bin/codeflow"
           echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
-          echo "codeflow ${version} installed and verified against sha256.sum"
+          verified=sha256.sum
+          if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
+          echo "codeflow ${version} installed and verified against ${verified}"
 
       - name: Fetch the pull request head as data
         if: github.event_name == 'pull_request_target'

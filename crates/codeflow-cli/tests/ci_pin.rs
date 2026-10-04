@@ -271,6 +271,261 @@ fn pinned_install_verifies_the_release_and_fails_closed() {
     );
 }
 
+/// `project_toml(version)` with a `[scaffold_sha256]` table naming
+/// `table_version` and, when given, the Linux archive's digest.
+fn pinned_state(version: &str, table_version: &str, digest: Option<&str>) -> String {
+    let entry = digest.map_or_else(String::new, |d| {
+        format!("x86_64-unknown-linux-gnu = \"{d}\"\n")
+    });
+    format!(
+        "{}\n[scaffold_sha256]\nversion = \"{table_version}\"\n{entry}",
+        project_toml(version)
+    )
+}
+
+fn set_state(work: &Path, state: &str, message: &str) {
+    std::fs::write(work.join(".codeflow/project.toml"), state).unwrap();
+    git(work, &["commit", "-qam", message]);
+}
+
+/// sathyassn/codeflow#47: a digest pinned beside the version in the target's
+/// state is the one the archive must have, whatever the release's own
+/// `sha256.sum` says; a table for another version or without this triple
+/// fails closed.
+#[test]
+fn a_pinned_release_digest_is_required_whatever_sha256_sum_says() {
+    for (workflow, prefix) in [
+        (POLICY, "Install codeflow"),
+        (CI, "Install codeflow"),
+        (CI, "Install candidate codeflow"),
+    ] {
+        let script = run_blocks(workflow, prefix).remove(0);
+        let dir = tempfile::tempdir().unwrap();
+        let releases = dir.path().join("releases");
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        repo(&work, "1.2.3");
+        let release = publish(&releases, "1.2.3");
+        let archive = release.join(format!("{ASSET}.tar.xz"));
+        let reviewed = sha256(&archive);
+
+        // The reviewed digest: installed, and the output names both checks.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.3", Some(&reviewed)),
+            "chore: pin the digest",
+        );
+        let ok = run_install(&script, &work, "HEAD", &releases);
+        assert!(ok.out.status.success(), "{prefix}: {}", ok.stderr());
+        assert_eq!(ok.installed_version().as_deref(), Some("codeflow 1.2.3"));
+        assert!(
+            ok.stderr().contains(
+                "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+            ),
+            "{}",
+            ok.stderr()
+        );
+        assert!(!ok.stderr().contains("::warning::"), "{}", ok.stderr());
+
+        // A replaced archive with a matching replaced sha256.sum: refused.
+        let original = std::fs::read(&archive).unwrap();
+        let listed = std::fs::read_to_string(release.join("sha256.sum")).unwrap();
+        let mut replaced = original.clone();
+        replaced.extend_from_slice(b"replaced");
+        std::fs::write(&archive, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  {ASSET}.tar.xz\n", sha256(&archive)),
+        )
+        .unwrap();
+        let swapped = run_install(&script, &work, "HEAD", &releases);
+        assert!(!swapped.out.status.success(), "{prefix}");
+        assert!(
+            swapped
+                .stderr()
+                .contains("does not match the digest pinned in .codeflow/project.toml"),
+            "{}",
+            swapped.stderr()
+        );
+        assert!(swapped.installed_version().is_none());
+        std::fs::write(&archive, &original).unwrap();
+        std::fs::write(release.join("sha256.sum"), &listed).unwrap();
+
+        // A table left from another version fails closed and names the fix.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.2", Some(&reviewed)),
+            "chore: stale digest",
+        );
+        let stale = run_install(&script, &work, "HEAD", &releases);
+        assert!(!stale.out.status.success(), "{prefix}");
+        assert!(
+            stale
+                .stderr()
+                .contains("pins the digests of codeflow 1.2.2, not 1.2.3"),
+            "{}",
+            stale.stderr()
+        );
+        assert!(
+            stale.stderr().contains("codeflow update --pin 1.2.3"),
+            "{}",
+            stale.stderr()
+        );
+        assert!(stale.installed_version().is_none());
+
+        // A table without this triple fails closed.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.3", None),
+            "chore: no linux digest",
+        );
+        let missing = run_install(&script, &work, "HEAD", &releases);
+        assert!(!missing.out.status.success(), "{prefix}");
+        assert!(
+            missing
+                .stderr()
+                .contains("lists no digest for x86_64-unknown-linux-gnu"),
+            "{}",
+            missing.stderr()
+        );
+        assert!(missing.installed_version().is_none());
+    }
+}
+
+/// sathyassn/codeflow#47: with no digest pinned the release's `sha256.sum`
+/// stays the check, and the job says so as a warning.
+#[test]
+fn without_a_pinned_digest_the_install_warns_and_checks_sha256_sum() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    publish(&releases, "1.2.3");
+    let ok = run_install(&script, &work, "HEAD", &releases);
+    assert!(ok.out.status.success(), "{}", ok.stderr());
+    assert!(
+        ok.stderr()
+            .contains("::warning::no release digest is pinned in .codeflow/project.toml"),
+        "{}",
+        ok.stderr()
+    );
+    assert!(
+        ok.stderr().contains("codeflow update --pin 1.2.3"),
+        "{}",
+        ok.stderr()
+    );
+    assert!(
+        ok.stderr()
+            .contains("codeflow 1.2.3 installed and verified against sha256.sum"),
+        "{}",
+        ok.stderr()
+    );
+}
+
+/// Run the gates job's `codeflow test` step in `repo` with a logging
+/// `codeflow` first on PATH. Returns the output and the log.
+fn run_test_step(repo: &Path) -> (Output, String) {
+    let script = run_blocks(CI, "codeflow test").remove(0);
+    let bin = repo.parent().unwrap().join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = repo.parent().unwrap().join("calls.log");
+    let _ = std::fs::remove_file(&log);
+    std::fs::write(
+        bin.join("codeflow"),
+        format!(
+            "#!/bin/sh\necho \"codeflow $* HOOK_VALUE=${{HOOK_VALUE:-unset}} PWD=$(pwd)\" >> '{}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(bin.join("codeflow"))
+        .status()
+        .unwrap();
+    let out = Command::new("bash")
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+        .current_dir(repo)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("LOG", &log)
+        .output()
+        .unwrap();
+    (out, std::fs::read_to_string(&log).unwrap_or_default())
+}
+
+/// sathyassn/codeflow#46: the gates job sources a project-owned setup hook
+/// between the install and `codeflow test`, so what it exports reaches the
+/// test gate; a failing hook fails the step, and without one the test gate
+/// runs as before.
+#[test]
+fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    let root = work.canonicalize().unwrap();
+
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.trim(),
+        format!(
+            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    );
+
+    // The hook runs first, its export reaches the gate, and a `cd` in it
+    // does not move the gate.
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        "echo hook >> \"$LOG\"\nexport HOOK_VALUE=set\ncd /\n",
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.lines().collect::<Vec<_>>(),
+        vec![
+            "hook".to_string(),
+            format!(
+                "codeflow test --strict HOOK_VALUE=set PWD={}",
+                root.display()
+            )
+        ]
+    );
+
+    // A failing hook fails the step before the gate runs.
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        "echo hook >> \"$LOG\"\nfalse\n",
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "hook");
+}
+
+/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
+/// and on demand, and the gates job stays off the schedule.
+#[test]
+fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
+    let on = CI
+        .split("\non:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .unwrap();
+    for event in ["pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
+        assert!(on.contains(event), "{event}: {on}");
+    }
+    assert!(job(CI, "gates").contains("    if: github.event_name != 'schedule'\n"));
+    assert!(!job(CI, "secret-scan").contains("    if:"));
+}
+
 /// The job-level text of `id` in a workflow, up to the next job.
 fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
     let start = workflow

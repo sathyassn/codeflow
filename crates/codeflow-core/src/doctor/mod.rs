@@ -2532,9 +2532,13 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
 /// `codeflow update` before its raised pin has landed (WARN, with the
 /// two-step order). An older scaffold's placeholder install step WARNS as an
 /// unarmed perimeter, and a CI file without a shipped pinned install left
-/// unchanged passes with no claim about the pin (TSK-182). No CI file at all
-/// passes cleanly: the repo opted out or predates the workflow. WARN only,
-/// never a block.
+/// unchanged passes with no claim about the pin (TSK-182). It names the
+/// verification mode, the release digests pinned beside the version or the
+/// release's `sha256.sum` alone, and warns when a pinned digest table would
+/// make the install fail closed (sathyassn/codeflow#47); it says whether a
+/// project setup hook is present and sourced (sathyassn/codeflow#46). No CI
+/// file at all passes cleanly: the repo opted out or predates the workflow.
+/// WARN only, never a block.
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -2574,12 +2578,13 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
     // The pin describes what CI runs only for a shipped pinned install left
     // unchanged; for any other install (a source build, its own installer,
     // an edited template) doctor makes no claim (TSK-182).
+    let setup = ci_pin::setup_note(&root, &dest, &content);
     if !ci_pin::recognized(&content) {
         return CheckResult {
             name: "ci-perimeter".into(),
             status: Status::Pass,
             message: format!(
-                "{dest} does not carry the shipped target-pinned install unchanged, so doctor cannot verify how it installs codeflow, which version that is, or whether its checksum is checked"
+                "{dest} does not carry the shipped target-pinned install unchanged, so doctor cannot verify how it installs codeflow, which version that is, or whether its checksum is checked; {setup}"
             ),
             duration: start.elapsed(),
         };
@@ -2589,7 +2594,7 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
     CheckResult {
         name: "ci-perimeter".into(),
         status: pin.status,
-        message: format!("{dest}: {}", pin.message),
+        message: format!("{dest}: {}; {setup}", pin.message),
         duration: start.elapsed(),
     }
 }
@@ -5492,6 +5497,13 @@ mod tests {
             r.message
         );
         assert!(r.message.contains("sha256.sum"), "got: {}", r.message);
+        // sathyassn/codeflow#46: the setup hook's state rides along.
+        assert!(
+            r.message
+                .ends_with("; no project setup hook (.codeflow/ci-setup.sh)"),
+            "got: {}",
+            r.message
+        );
     }
 
     /// TSK-182 AC-4: every shipped template, as copied, keeps the TSK-095
@@ -5606,10 +5618,20 @@ mod tests {
         assert_unverified(&perimeter("bitbucket-pipelines.yml", &edited));
         let edited = edit_line(
             SHIPPED_GITHUB_CI,
-            "asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz",
-            "asset=codeflow-cli-x86_64-unknown-linux-musl.tar.xz",
+            "triple=x86_64-unknown-linux-gnu",
+            "triple=x86_64-unknown-linux-musl",
         );
         assert_unverified(&perimeter(CI_DEFAULT_DEST, &edited));
+        // sathyassn/codeflow#47: an install that no longer compares the
+        // pinned digest is not the shipped one either.
+        let check = "          if [ -n \"$digest\" ] && [ \"$actual\" != \"$digest\" ]; then\n";
+        assert!(SHIPPED_GITHUB_CI.contains(check));
+        let unpinned = SHIPPED_GITHUB_CI.replace(check, "          if false; then\n");
+        assert_unverified(&perimeter(CI_DEFAULT_DEST, &unpinned));
+        let shared = "  [ -z \"$digest\" ] || [ \"$actual\" = \"$digest\" ] ||\n";
+        assert!(SHIPPED_GENERIC.contains(shared));
+        let unpinned = SHIPPED_GENERIC.replace(shared, "  true ||\n");
+        assert_unverified(&perimeter(".gitlab-ci.yml", &unpinned));
     }
 
     #[test]

@@ -132,8 +132,12 @@ if '"$report"' not in script:
                      "3.0.0 pipeline line fails every adopter's secret scan")
 open(out, "w", encoding="utf-8").write(script)
 trusted = "          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}"
-if env != ["        env:", trusted]:
-    print(f"step: the trusted commit is not passed as env {trusted.strip()!r}: {env}")
+# The scan's start (sathyassn/codeflow#48): the pull request's base, else
+# the push's previous tip, else nothing for a scheduled or manual run.
+start = "          SCAN_FROM: ${{ github.event.pull_request.base.sha || github.event.before || '' }}"
+if env != ["        env:", trusted, start]:
+    print(f"step: the trusted commit and the scan start are not passed as env "
+          f"{trusted.strip()!r} and {start.strip()!r}: {env}")
 if "${{" in script:
     print("step: the script interpolates an expression instead of reading env")
 if step(own) != (env, script):
@@ -204,7 +208,9 @@ commit scaffold
 # One case: a name, the exit status the step must end with, then the
 # "file:line" findings it must name, exactly. The step runs in $REPO with a
 # runner temp directory of its own. The trusted commit is $TRUSTED when set
-# (a pull request's base), else the tip (a push). Extra environment is
+# (a pull request's base), else the tip (a push). The scan starts at
+# $SCAN_FROM when it is set, empty for a scheduled run; otherwise at the
+# pull request's base, and a push reads its full history. Extra environment is
 # passed through STEP_ENV; MESSAGE is text the output must hold, required
 # when the step must fail without a finding; NO_SCAN
 # says gitleaks must not have run; after_step checks the checkout before
@@ -218,7 +224,8 @@ expect() {
   mkdir "$runner"
   set +e
   (cd "$REPO" && env PATH="$FAKE_PATH" RUNNER_TEMP="$runner" \
-    TRUSTED_SHA="${TRUSTED-$(tip)}" ${STEP_ENV:-} bash -e "$TMP/step.sh") \
+    TRUSTED_SHA="${TRUSTED-$(tip)}" SCAN_FROM="${SCAN_FROM-${TRUSTED-}}" \
+    ${STEP_ENV:-} bash -e "$TMP/step.sh") \
     >"$TMP/$name.out" 2>&1
   rc=$?
   set -e
@@ -454,6 +461,11 @@ BASE=$(tip)
 printf 'more\n' >>"$REPO/README.md"
 commit later
 on_base "$BASE" trusted-ignore-file 0
+# The later pull request does not bring the leak, so read the full history
+# as a scheduled run would: the trusted exemption still holds there.
+SCAN_FROM=
+on_base "$BASE" trusted-ignore-file-full 0
+unset SCAN_FROM
 
 # A .gitleaks.toml allowlist for it.
 new_repo allowlist
@@ -487,6 +499,9 @@ BASE=$(tip)
 printf 'more\n' >>"$REPO/README.md"
 commit later
 on_base "$BASE" trusted-inline 0
+SCAN_FROM=
+on_base "$BASE" trusted-inline-full 0
+unset SCAN_FROM
 
 # An [extend] path is read from the trusted commit, never the checkout: a
 # pull request that widens the extended file fails, and once merged it
@@ -936,6 +951,52 @@ printf '%s\n' "$PLANTED" >>"$REPO/dir with space/a b.txt"
 printf '%s\n' "$PLANTED" >>"$REPO/$CAFE"
 commit "leaks in them"
 on_base "$BASE" spaced-name-leaks 1 "dir with space/a b.txt:2" "$CAFE:2"
+
+# The scan reads only the commits the event brings (sathyassn/codeflow#48).
+# A leak already in the base does not fail a pull request that does not
+# bring it, while the pull request's own leak does; a push reads its pushed
+# range; a scheduled run, a push that creates the branch and a push whose
+# previous tip is gone read the full history; each run says which.
+new_repo scope
+printf '%s\n' "$PLANTED" >"$REPO/old-leak.txt"
+commit "a leak already on the base"
+BASE=$(tip)
+printf 'more\n' >>"$REPO/README.md"
+commit "a clean pull request"
+MESSAGE="Secret scan reads the 1 commit(s) HEAD holds and $BASE does not."
+on_base "$BASE" scope-pr-clean 0
+MESSAGE=
+printf '%s\n' "$PLANTED" >"$REPO/new-leak.txt"
+commit "the pull request's own leak"
+on_base "$BASE" scope-pr-leak 1 new-leak.txt:1
+SCAN_FROM=$BASE
+MESSAGE="Secret scan reads the 2 commit(s) HEAD holds and $BASE does not."
+expect scope-push 1 new-leak.txt:1
+SCAN_FROM=
+MESSAGE="Secret scan reads the full history of HEAD (a scheduled or manual run)."
+expect scope-scheduled 1 old-leak.txt:1 new-leak.txt:1
+SCAN_FROM=0000000000000000000000000000000000000000
+MESSAGE="Secret scan reads the full history of HEAD (the push created the branch)."
+expect scope-created 1 old-leak.txt:1 new-leak.txt:1
+SCAN_FROM=0123456789abcdef0123456789abcdef01234567
+MESSAGE="the previous tip 0123456789abcdef0123456789abcdef01234567 is not in the checkout"
+expect scope-force-push 1 old-leak.txt:1 new-leak.txt:1
+# A start that is not a commit id is refused; a range that changes no file
+# passes with nothing to scan.
+SCAN_FROM=origin/main
+MESSAGE="scan start origin/main is not a commit id; refusing to scan"
+NO_SCAN=1
+expect scope-bad-start 1
+SCAN_FROM=$(tip)
+MESSAGE="No file changes in the 0 commit(s) HEAD holds"
+expect scope-empty 0
+git -C "$REPO" -c user.name=canary -c user.email=canary@example.invalid \
+  -c commit.gpgsign=false commit -q --allow-empty -m "an empty commit"
+MESSAGE="No file changes in the 1 commit(s) HEAD holds"
+expect scope-no-change 0
+NO_SCAN=
+MESSAGE=
+unset SCAN_FROM
 
 # The README's recipe for a wrapper with no configuration of its own keeps
 # gitleaks' default rules: plain gitleaks with it allows the prose and still

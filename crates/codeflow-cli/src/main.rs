@@ -55,6 +55,12 @@ enum Command {
         /// Replace user-modified managed files instead of merging.
         #[arg(long)]
         force: bool,
+        /// Only pin this codeflow release for CI: download its archives,
+        /// check them against its sha256.sum and write `scaffold_version` and
+        /// their digests (`[scaffold_sha256]`) to .codeflow/project.toml.
+        /// Nothing else changes. Upgrade step one; land it before the update.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["diff", "force"])]
+        pin: Option<String>,
     },
     /// Claude-layer hooks, wired by the settings presets (charter §3.3).
     Hook(cmd::hook::HookArgs),
@@ -278,7 +284,28 @@ fn main() -> anyhow::Result<()> {
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }
-        Command::Update { diff, force } => {
+        Command::Update {
+            pin: Some(version), ..
+        } => {
+            let base = scaffold::release_pin::release_url();
+            match scaffold::release_pin::pin_release(
+                &cwd,
+                &version,
+                &base,
+                &scaffold::release_pin::fetch_with_curl,
+            ) {
+                Ok(report) => println!("{report}"),
+                Err(error) => {
+                    eprintln!("codeflow update --pin: error: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Command::Update {
+            diff,
+            force,
+            pin: None,
+        } => {
             let options = scaffold::UpdateOptions {
                 force,
                 binary_version: BINARY_VERSION.to_string(),

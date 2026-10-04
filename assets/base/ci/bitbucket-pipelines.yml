@@ -102,11 +102,45 @@ pipelines:
                   exit (pa < pb) ? 0 : 1
                 }'
               }
-              # Install release $1 into directory $2, verified against its sha256.sum. A
-              # missing checksum file, a missing entry or a mismatch fails closed.
+              # The [scaffold_sha256] table a commit pins, as "<version> <digest>" for
+              # this triple with "-" for a missing value, or nothing without a table.
+              codeflow_digest() {
+                git show "$1:.codeflow/project.toml" 2>/dev/null | awk -v want="$triple" '
+                  /^[[:space:]]*\[/ {
+                    inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+                    if (inside) table = 1
+                    next
+                  }
+                  inside && /^[[:space:]]*"?[0-9A-Za-z_.-]+"?[[:space:]]*=/ {
+                    key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+                    value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value)
+                    if (value == $0) value = ""; else sub(/".*/, "", value)
+                    if (key == "version") version = value
+                    if (key == want) digest = value
+                  }
+                  END { if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }'
+              }
+              # Install release $1, pinned at commit $3, into directory $2. When $3 pins
+              # the release's archive digests ([scaffold_sha256], written by `codeflow
+              # update --pin`), the archive must match the digest reviewed there for $1;
+              # a table for another version, a missing entry or a mismatch fails closed.
+              # The release's sha256.sum is checked too, and is the only check while no
+              # digest is pinned: a missing checksum file, a missing entry or a mismatch
+              # fails closed.
               codeflow_install() {
                 url="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v$1"
                 asset="codeflow-cli-${triple}.tar.xz"
+                pinned=$(codeflow_digest "$3")
+                digest=
+                if [ -n "$pinned" ]; then
+                  [ "${pinned%% *}" = "$1" ] ||
+                    codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 pins the digests of codeflow ${pinned%% *}, not $1; run \`codeflow update --pin $1\` and land it with the pin"
+                  digest=${pinned#* }
+                  printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' ||
+                    codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 lists no digest for ${triple}; run \`codeflow update --pin $1\` and land it with the pin"
+                else
+                  echo "codeflow: warning: no release digest is pinned in .codeflow/project.toml at $3, so codeflow $1 is checked only against its release's own sha256.sum; run \`codeflow update --pin $1\` and land it to pin the reviewed digest" >&2
+                fi
                 work=$(mktemp -d)
                 curl -fsSL "${url}/sha256.sum" -o "${work}/sha256.sum" ||
                   codeflow_fail "codeflow $1 has no published checksum file (sha256.sum); refusing an unverified binary"
@@ -120,13 +154,19 @@ pipelines:
                 else
                   actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
                 fi
+                [ -z "$digest" ] || [ "$actual" = "$digest" ] ||
+                  codeflow_fail "${asset} for codeflow $1 does not match the digest pinned in .codeflow/project.toml at $3 (pinned ${digest}, got ${actual}); refusing it"
                 [ "$actual" = "$expected" ] ||
                   codeflow_fail "checksum mismatch for ${asset} (codeflow $1): expected ${expected}, got ${actual}; refusing it"
                 tar -xJf "${work}/${asset}" -C "$work"
                 mkdir -p "$2"
                 cp "${work}/codeflow-cli-${triple}/codeflow" "$2/codeflow"
                 chmod +x "$2/codeflow"
-                echo "codeflow $1 installed and verified against sha256.sum"
+                if [ -n "$digest" ]; then
+                  echo "codeflow $1 installed and verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+                else
+                  echo "codeflow $1 installed and verified against sha256.sum"
+                fi
               }
               pin=$(codeflow_pin "$target")
               [ -n "$pin" ] || codeflow_fail "no scaffold_version pinned in .codeflow/project.toml at ${target}"
@@ -141,7 +181,7 @@ pipelines:
               done
               [ "$kept" != yes ] || head_pin="$pin"
               bin=$(mktemp -d)
-              codeflow_install "$pin" "$bin"
+              codeflow_install "$pin" "$bin" "$target"
               PATH="${bin}:${PATH}"
               export PATH
               lowered=
@@ -149,7 +189,7 @@ pipelines:
                 if [ -n "$head_pin" ] && codeflow_older "$pin" "$head_pin"; then
                   # Upgrade step one: test the candidate the head pins, never enforce with it.
                   candidate=$(mktemp -d)
-                  codeflow_install "$head_pin" "$candidate"
+                  codeflow_install "$head_pin" "$candidate" "$head"
                   "${candidate}/codeflow" --version
                   "${candidate}/codeflow" validate --docs
                 else
@@ -163,6 +203,17 @@ pipelines:
               trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
               branch=$(git symbolic-ref --short -q HEAD || true)
               (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
+              # Project setup (optional): a change that holds .codeflow/ci-setup.sh has it
+              # sourced here, after the install and before the test gate, under set -eu,
+              # so the toolchain it installs and the variables it exports reach the gate
+              # and a failing command fails the run. The project owns the file; `codeflow
+              # update` never writes it.
+              if [ -f .codeflow/ci-setup.sh ]; then
+                echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
+                codeflow_root=$(pwd)
+                . ./.codeflow/ci-setup.sh
+                cd "$codeflow_root"
+              fi
               codeflow test --strict
               codeflow validate --docs
               [ -z "$lowered" ] ||

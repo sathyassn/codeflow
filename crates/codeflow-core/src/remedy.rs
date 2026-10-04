@@ -573,7 +573,10 @@ catalog! {
         "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
     /// An upgrade that carries `codeflow update` before its raised pin lands.
     DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
-        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml and land it; then run `codeflow update` on a new branch";
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (`codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch";
+    /// A pinned release digest table the CI installers refuse.
+    DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
+        "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";
