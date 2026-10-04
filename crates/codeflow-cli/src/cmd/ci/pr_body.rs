@@ -389,25 +389,65 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
 /// A body over this many words draws the length warning (TSK-228).
 const BODY_WORD_LIMIT: usize = 1000;
 
-/// HTML elements that sit inside a line of text; any other tag, `<br>` and
-/// `<p>` included, separates the words around it.
-const INLINE_TAGS: &[&str] = &[
-    "a", "abbr", "b", "bdo", "big", "cite", "code", "del", "dfn", "em", "font", "i", "img", "ins",
-    "kbd", "mark", "q", "s", "samp", "small", "span", "strike", "strong", "sub", "sup", "tt", "u",
-    "var",
+/// The HTML elements GitHub keeps that start a new line of text. It strips
+/// every other tag and keeps its text, so the words either side of one of
+/// those join: `<section>`, `<script>` and a stray `<String>` separate
+/// nothing.
+const BLOCK_TAGS: &[&str] = &[
+    "blockquote",
+    "br",
+    "caption",
+    "details",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
 ];
 
-/// The text a reader sees in raw HTML: comments and tags are gone, a tag
-/// that is not inline separates its neighbours, and entities are decoded.
+/// The text a reader sees in raw HTML: comments, declarations, processing
+/// instructions and tags are gone, a block tag separates its neighbours, and
+/// character references are decoded.
 fn html_text(html: &str) -> String {
     let mut out = String::new();
     let mut rest = html;
     while let Some(at) = rest.find('<') {
         out.push_str(&rest[..at]);
         rest = &rest[at..];
-        if let Some(after) = rest.strip_prefix("<!--") {
-            // An unterminated comment hides the rest of the block.
-            rest = after.find("-->").map_or("", |end| &after[end + 3..]);
+        // Comments, CDATA sections, processing instructions and
+        // declarations show nothing; an unterminated one hides the rest.
+        let hidden = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
+            .into_iter()
+            .find_map(|(open, close)| rest.strip_prefix(open).map(|after| (after, close)))
+            .or_else(|| {
+                rest.strip_prefix("<!")
+                    .filter(|after| after.starts_with(|c: char| c.is_ascii_alphabetic()))
+                    .map(|after| (after, ">"))
+            });
+        if let Some((after, close)) = hidden {
+            rest = after
+                .find(close)
+                .map_or("", |end| &after[end + close.len()..]);
             continue;
         }
         let tag_like = rest[1..]
@@ -421,10 +461,13 @@ fn html_text(html: &str) -> String {
                 .next()
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            if !INLINE_TAGS.contains(&name.as_str()) {
+            if BLOCK_TAGS.contains(&name.as_str()) {
                 out.push('\n');
             }
             rest = &rest[end + 1..];
+        } else if tag_like {
+            // A tag that never ends is dropped with everything after it.
+            rest = "";
         } else {
             out.push('<');
             rest = &rest[1..];
@@ -455,6 +498,9 @@ fn tag_end(html: &str) -> Option<usize> {
 /// each separates words as it does on the page; any other reference stays
 /// as written.
 fn reference(rest: &str) -> Option<(&'static str, usize)> {
+    if let Some(numeric) = rest.strip_prefix("&#") {
+        return numeric_reference(numeric).map(|taken| (" ", taken + 2));
+    }
     let end = rest.bytes().take(33).position(|byte| byte == b';');
     if let Some(end) = end {
         let named = match &rest[1..end] {
@@ -481,31 +527,24 @@ fn reference(rest: &str) -> Option<(&'static str, usize)> {
         if let Some(text) = named {
             return Some((text, end + 1));
         }
-        // A numeric reference, padded with zeros or not, that stands for a
-        // space; any other character stays as written.
-        let code = rest[1..end].strip_prefix('#').and_then(|digits| {
-            match digits.strip_prefix(['x', 'X']) {
-                Some(hex) => u32::from_str_radix(hex, 16).ok(),
-                None => digits.parse().ok(),
-            }
-        });
-        let spaced = code
-            .and_then(char::from_u32)
-            .filter(|ch| ch.is_whitespace());
-        if let Some(ch) = spaced {
-            return Some((
-                match ch {
-                    '\t' => "\t",
-                    '\n' => "\n",
-                    '\u{a0}' => "\u{a0}",
-                    _ => " ",
-                },
-                end + 1,
-            ));
-        }
     }
     // HTML also reads `&nbsp` with no semicolon.
     rest.starts_with("&nbsp").then_some(("\u{a0}", 5))
+}
+
+/// The bytes a numeric reference takes after its `&#`, when it stands for a
+/// space: decimal or hex digits, padded or not, then an optional `;`. HTML
+/// replaces the C1 range with other characters, so those are never spaces.
+fn numeric_reference(rest: &str) -> Option<usize> {
+    let (radix, digits) = match rest.strip_prefix(['x', 'X']) {
+        Some(hex) => (16, hex),
+        None => (10, rest),
+    };
+    let count = digits.chars().take_while(|c| c.is_digit(radix)).count();
+    let code = u32::from_str_radix(digits.get(..count).filter(|d| !d.is_empty())?, radix).ok()?;
+    let space =
+        char::from_u32(code).is_some_and(|ch| ch.is_whitespace() && !(0x80..=0x9f).contains(&code));
+    space.then(|| rest.len() - digits.len() + count + usize::from(digits[count..].starts_with(';')))
 }
 
 /// Decode the character references an HTML block can carry.
@@ -2078,10 +2117,50 @@ mod tests {
             assert!(length_message(&body, &sections(&body)).is_some(), "{space}");
         }
         assert_eq!(word_count("<div>one&nbsptwo</div>"), 2, "legacy form");
+        for space in ["&#32", "&#x20", "&#X20", "&#9", "&#160", "&#xA0", "&#00032"] {
+            let body = format!(
+                "{}\n\n<div>one{space}two{space}three</div>",
+                words(BODY_WORD_LIMIT - 2)
+            );
+            assert_eq!(
+                word_count(&body),
+                BODY_WORD_LIMIT + 1,
+                "{space} with no semicolon"
+            );
+        }
+        // HTML turns the C1 range into other characters, so these are not spaces.
+        assert_eq!(word_count("<div>one&#133;two&#x85;three</div>"), 1);
+        assert_eq!(word_count("<div>one&#133two&#x85three</div>"), 1);
         assert_eq!(
             word_count("<div>R&D &amp; Q&A</div>"),
             3,
             "a bare & is text"
+        );
+    }
+
+    /// Checked against GitHub's rendering of each form: it keeps a short
+    /// list of block tags, strips every other tag and keeps its text, and
+    /// shows nothing for CDATA, processing instructions or declarations.
+    #[test]
+    fn word_count_follows_the_tags_github_keeps() {
+        assert_eq!(word_count("<section>one<p>two</p></section>three"), 3);
+        assert_eq!(word_count("<div>one<script>a b</script>two</div>"), 2);
+        assert_eq!(word_count("<div>one<style>.a</style>two</div>"), 1);
+        assert_eq!(word_count("<div>one<foo>two</foo>three</div>"), 1);
+        assert_eq!(word_count("<div>one<article>two</article></div>"), 1);
+        assert_eq!(word_count("<![CDATA[ a b c ]]>\n\none two"), 2);
+        assert_eq!(word_count("<?php a b c ?>\n\none two"), 2);
+        assert_eq!(word_count("<!DOCTYPE html>\n\none two"), 2);
+        assert_eq!(
+            word_count("<div>one <b two three"),
+            1,
+            "an unended tag is dropped"
+        );
+        assert_eq!(
+            word_count(
+                "<table><caption>cap words</caption><tr><th>h1</th><td>a b</td></tr></table>"
+            ),
+            5
         );
     }
 
