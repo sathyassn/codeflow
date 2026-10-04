@@ -128,7 +128,9 @@ sub-table, a backslash in a header or before a line's first `=` anywhere
 (an escaped name or key: an escape for one letter could spell the table's
 name), or three quote marks in a row (`"""` or `'''`) on any line but a
 full-line comment, since a multi-line string's lines could read as a table
-or an entry. These rules also catch a one-line value, an array element on
+or an entry, or a line whose first character after spaces and tabs is not
+printable ASCII (the installers read bytes, in the C locale, so a byte-order
+mark or a Unicode space in front of the header would hide it). These rules also catch a one-line value, an array element on
 its own line or a trailing comment that happens to match; nothing else
 outside the table counts. CodeFlow writes the state so it never trips them:
 a string that needs escapes is written on one line with every quote and

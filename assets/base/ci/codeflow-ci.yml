@@ -74,9 +74,10 @@ jobs:
           asset="codeflow-cli-${triple}.tar.xz"
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
-          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" -v sq="'" '
+          pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
             /^[[:space:]]*#/ { next }
+            /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
             index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
@@ -221,9 +222,10 @@ jobs:
           asset="codeflow-cli-${triple}.tar.xz"
           # The [scaffold_sha256] table as "<version> <digest>" for this triple,
           # with "-" for a missing value, or nothing when no table is pinned.
-          pinned=$(printf '%s\n' "$state" | awk -v want="$triple" -v sq="'" '
+          pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
             function fail(why) { if (bad == "") bad = why }
             /^[[:space:]]*#/ { next }
+            /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
             index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
             /^[[:space:]]*\[/ {
               inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)

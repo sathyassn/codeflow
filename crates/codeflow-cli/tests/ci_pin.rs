@@ -439,6 +439,9 @@ fn an_unread_digest_table_fails_closed_against_a_replaced_release() {
 /// reason they give.
 fn unread_tables(digest: &str) -> Vec<(String, String)> {
     let form = "is written in a form the CI installers do not read".to_string();
+    let start =
+        "may be hidden by a line that starts with a character the CI installers do not read"
+            .to_string();
     let base = project_toml("1.2.3");
     let table = pinned_state("1.2.3", "1.2.3", Some(digest));
     vec![
@@ -479,6 +482,19 @@ fn unread_tables(digest: &str) -> Vec<(String, String)> {
         (
             format!("{table}'x86_64-unknown-linux-gnu' = \"{digest}\"\n"),
             "holds a line other than key = \"value\"".to_string(),
+        ),
+        // An invisible first character hides the header from a byte reader.
+        (
+            format!("{base}\n\u{a0}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            start.clone(),
+        ),
+        (
+            format!("{base}\n\u{2003}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            start.clone(),
+        ),
+        (
+            format!("\u{feff}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n{base}"),
+            start,
         ),
     ]
 }

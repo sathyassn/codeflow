@@ -122,6 +122,13 @@ pub const ESCAPED: &str =
 pub const MULTILINE: &str =
     "may be hidden by a multi-line string, which the CI installers do not read";
 
+/// Why the installers refuse a line whose first character after spaces and
+/// tabs is not printable ASCII: a byte-order mark, a no-break or other
+/// Unicode space or a control character in front of the table's header
+/// would otherwise hide it from a line reader that reads bytes.
+pub const UNREAD_START: &str =
+    "may be hidden by a line that starts with a character the CI installers do not read";
+
 /// Why the installers refuse a table holding anything but plain entries.
 pub const STRAY: &str =
     "holds a line other than key = \"value\", which the CI installers do not read";
@@ -172,8 +179,17 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
         bad.get_or_insert(reason);
     };
     for line in state.lines() {
-        let trimmed = line.trim_start();
+        // POSIX `[[:space:]]` in the C locale the installers run awk in.
+        let trimmed = line.trim_start_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r']);
         if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_ascii_graphic())
+        {
+            flag(UNREAD_START.to_string());
             continue;
         }
         if line.contains("\"\"\"") || line.contains("'''") {
@@ -208,7 +224,7 @@ pub fn pinned_digests(state: &str) -> PinnedDigests {
                 flag(ESCAPED.to_string());
             }
         }
-        if !inside || line.trim().is_empty() {
+        if !inside || trimmed.is_empty() {
             continue;
         }
         let Some(key) = entry.captures(line) else {
@@ -532,6 +548,28 @@ mod tests {
                 "{unread}"
             );
         }
+    }
+
+    #[test]
+    fn refuses_a_line_starting_with_a_character_the_installers_do_not_read() {
+        // A first character a byte reader does not read (a byte-order mark,
+        // a no-break or em space, a control character) could hide the
+        // header, so any is refused; one inside a value is read.
+        for start in ["\u{feff}", "\u{a0}", "\u{2003}", "\u{1}"] {
+            assert_eq!(
+                pinned_digests(&format!(
+                    "{start}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+                )),
+                PinnedDigests::Unreadable(UNREAD_START.into()),
+                "{start:?}"
+            );
+        }
+        assert!(matches!(
+            pinned_digests(&format!(
+                "note = \"caf\u{e9} \u{2014} \u{a0}x\"\n[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{DIGEST}\"\n"
+            )),
+            PinnedDigests::Table { .. }
+        ));
     }
 
     #[test]

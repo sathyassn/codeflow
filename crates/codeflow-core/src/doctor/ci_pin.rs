@@ -896,6 +896,12 @@ mod tests {
                 format!("{}{}{}", state("1.2.3"), table("1.2.3"), table("1.2.3")),
                 "is declared twice",
             ),
+            // A byte-order mark makes the file invalid TOML; doctor still
+            // names the line the installers refuse.
+            (
+                format!("\u{feff}{}{}", table("1.2.3").trim_start(), state("1.2.3")),
+                "may be hidden by a line that starts with a character the CI installers do not read",
+            ),
         ] {
             write(dir.path(), STATE, &text);
             let found = report(dir.path());

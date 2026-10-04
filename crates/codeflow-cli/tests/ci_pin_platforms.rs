@@ -747,6 +747,8 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
         let table =
             format!("{base}\n\n[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n");
         let form = "is written in a form the CI installers do not read";
+        let start =
+            "may be hidden by a line that starts with a character the CI installers do not read";
         for (state, reason) in [
             (format!("{base}\nscaffold_sha256 = {{ version = \"1.2.3\", {t} = \"{reviewed}\" }}\n"), form.to_string()),
             (format!("{base}\n\n[\"scaffold_sha256\"]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"), form.to_string()),
@@ -760,6 +762,14 @@ fn the_shared_run_refuses_a_digest_table_it_does_not_read() {
             (
                 format!("{base}\n\n[scaffold_sha256]\nversion = \"1.2.3\"\nnotes = '''\n{t} = \"{reviewed}\"\n'''\n'{t}' = \"{reviewed}\"\n"),
                 "may be hidden by a multi-line string".to_string(),
+            ),
+            (
+                format!("{base}\n\n\u{a0}[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n"),
+                start.to_string(),
+            ),
+            (
+                format!("\u{feff}[scaffold_sha256]\nversion = \"1.2.3\"\n{t} = \"{reviewed}\"\n{base}\n"),
+                start.to_string(),
             ),
         ] {
             std::fs::write(&path, &state).unwrap();

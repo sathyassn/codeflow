@@ -114,9 +114,10 @@ codeflow:
       # The [scaffold_sha256] table a commit pins, as "<version> <digest>" for
       # this triple with "-" for a missing value, or nothing without a table.
       codeflow_digest() {
-        git show "$1:.codeflow/project.toml" 2>/dev/null | awk -v want="$triple" -v sq="'" '
+        git show "$1:.codeflow/project.toml" 2>/dev/null | LC_ALL=C awk -v want="$triple" -v sq="'" '
           function fail(why) { if (bad == "") bad = why }
           /^[[:space:]]*#/ { next }
+          /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
           index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
           /^[[:space:]]*\[/ {
             inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
