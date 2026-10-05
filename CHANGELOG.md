@@ -185,6 +185,8 @@ erratum below, never an edit of the section.
   `docs/releasing.md` "Critical issues" states the routes and why releases
   stay on `main` with no maintenance branch, and the bug report template
   asks for a severity.
+
+<!-- codeflow:release-impact minor -->
 - **Operator feedback has one tracker at the full tier (issue 75).**
   `codeflow feedback new --topic <topic> --source <source> "<summary>"`
   issues an `FB-NNN` id from the shared registry and writes
