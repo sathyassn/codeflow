@@ -480,43 +480,21 @@ fn refresh_target_worktrees(
     tested_oid: git2::Oid,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
-    let Ok(output) = crate::git::command()
-        .args(["worktree", "list", "--porcelain"])
-        .current_dir(repo_root)
-        .output()
-    else {
+    let Ok(repo) = git2::Repository::open(repo_root) else {
         warnings.push("could not enumerate linked worktrees after landing".to_string());
         return warnings;
     };
-    if !output.status.success() {
-        warnings.push(format!(
-            "could not enumerate linked worktrees after landing: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-        return warnings;
-    }
-
     let current = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.to_path_buf());
     // OS text rule (issue 79): the path below is handed to `reset --hard`, so
-    // it is read as bytes. A lossy spelling could name a different folder.
+    // it comes from git's own files as exact bytes. A text listing could end a
+    // path at a newline or spell it lossily, and then name another checkout.
     let target_ref = format!("refs/heads/{target}");
-    for record in output
-        .stdout
-        .split(|byte| *byte == b'\n')
-        .collect::<Vec<_>>()
-        .split(|line| line.is_empty())
-    {
-        let path = record
-            .iter()
-            .find_map(|line| line.strip_prefix(b"worktree "))
-            .map(crate::git::os_component);
-        let branch = record.iter().find_map(|line| line.strip_prefix(b"branch "));
-        if branch != Some(target_ref.as_bytes()) {
+    for (path, head) in crate::git::checkout_heads(&repo) {
+        if head.as_deref() != Some(target_ref.as_bytes()) {
             continue;
         }
-        let Some(path) = path else { continue };
         if path.canonicalize().unwrap_or_else(|_| path.clone()) == current {
             continue;
         }
@@ -728,6 +706,51 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), tested);
+    }
+
+    /// Review finding on issue 79: a text listing ended a worktree path at a
+    /// newline, so a checkout named `wt\nother` was read as `wt`, and the
+    /// landing reset the wrong checkout. The path now comes from git's files.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_worktree_path_with_a_newline_never_names_another_checkout() {
+        let dir = repo_with_feature_branch();
+        let old = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        git(dir.path(), &["branch", "land"]);
+        git(dir.path(), &["branch", "other"]);
+        let parent = tempfile::tempdir().unwrap();
+        let plain = parent.path().join("wt");
+        let tricky = parent.path().join("wt\nother");
+        for (path, branch) in [(&plain, "other"), (&tricky, "land")] {
+            let added = crate::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(["worktree", "add"])
+                .arg(path)
+                .arg(branch)
+                .output()
+                .unwrap();
+            assert!(added.status.success(), "{added:?}");
+        }
+        let warnings = refresh_target_worktrees(
+            dir.path(),
+            "land",
+            git2::Oid::from_str(&old).unwrap(),
+            git2::Oid::from_str(&tested).unwrap(),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let head = |path: &Path| {
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(path)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        assert_eq!(head(&tricky), tested, "the target worktree is refreshed");
+        assert_eq!(head(&plain), old, "another checkout is left alone");
     }
 
     #[test]

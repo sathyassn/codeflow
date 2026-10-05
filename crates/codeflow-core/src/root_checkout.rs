@@ -1477,6 +1477,19 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
         BranchStep::Reused(target)
     } else {
         let from = default_branch(&repo, policy).name;
+        // OS text rule (issue 79): the default branch is spelled by `ref_text`
+        // when it is not valid UTF-8, and git cannot be given that spelling,
+        // so the new branch cannot start from it. Say so instead of passing
+        // git a name that resolves to nothing.
+        if from.contains('\\') {
+            return Err(stop(
+                format!(
+                    "the default branch of {repo_label} is not valid UTF-8, so the new branch \
+                     cannot start from it"
+                ),
+                "give the root checkout a default branch whose name is valid UTF-8".to_string(),
+            ));
+        }
         let start = if repo.find_branch(&from, git2::BranchType::Local).is_ok() {
             from.clone()
         } else {

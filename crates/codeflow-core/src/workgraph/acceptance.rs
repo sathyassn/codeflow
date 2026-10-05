@@ -270,6 +270,18 @@ pub fn bind_completion(
     )
 }
 
+/// Whether the checked-out branch is the task's declared integration target.
+/// Both must be known: two unknowns (a HEAD name that is not valid UTF-8 and no
+/// declared target) are not a match.
+fn head_is_declared_target(repo: &Repository, task: &RecordView) -> bool {
+    repo.head().ok().is_some_and(|head| {
+        matches!(
+            (head.shorthand().ok(), task.integration_target.as_deref()),
+            (Some(here), Some(declared)) if here == declared
+        )
+    })
+}
+
 /// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
 /// task's own pull request, before the task was ever complete on its
 /// target, a waiver may also name a record-only amendment commit of this
@@ -308,10 +320,7 @@ pub(crate) fn bind_completion_with_amendment(
         base.or_else(|| target.and_then(|tip| repo.merge_base(tip, landing.commit()).ok()));
     let on_target = base.is_none()
         && matches!(landing, Landing::Worktree { .. })
-        && repo
-            .head()
-            .ok()
-            .is_some_and(|head| head.shorthand().ok() == task.integration_target.as_deref());
+        && head_is_declared_target(repo, task);
     // A completion reopened before this range is recovered from the history
     // below. When that completion is on the target at the anchored base, a
     // separate pull request reopened it (R-119 keeps that valid): the range

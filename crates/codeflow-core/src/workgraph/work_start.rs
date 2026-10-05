@@ -2182,6 +2182,16 @@ impl ReviewRepositories {
     /// # Errors
     /// Refuses missing or ambiguous hosted repository identity.
     pub fn repository(&self, branch: &str) -> Result<String, String> {
+        // OS text rule (issue 79): a branch that is not valid UTF-8 reaches
+        // here spelled by `ref_text`, which does not address its
+        // `branch.<name>.remote` key, so the lookup would pick another
+        // repository. The hosted repository is an identity: refuse.
+        if branch.contains('\\') {
+            return Err(
+                "the branch name is not valid UTF-8, so its hosted repository cannot be read"
+                    .to_string(),
+            );
+        }
         let repo = &self.repo;
         let config = repo.config().map_err(|error| error.to_string())?;
         let mut names = std::collections::BTreeSet::new();
@@ -3207,6 +3217,20 @@ permission_preset = "strict"
         let error = check_work_start(dir.path(), "TSK-002", "main").unwrap_err();
         assert!(matches!(error, WorkStartError::InvalidGraph(_)));
         assert!(error.to_string().contains("duplicate work id"));
+    }
+
+    /// Review finding on issue 79: a branch that is not valid UTF-8 reaches
+    /// the hosted-repository lookup spelled by `ref_text`, which does not
+    /// address its raw `branch.<name>.remote` key, so the lookup refuses.
+    #[test]
+    fn a_branch_that_is_not_utf8_has_no_hosted_repository_to_guess() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_refs(dir.path(), &[]);
+        let repositories = ReviewRepositories::open(dir.path()).unwrap();
+        let error = repositories
+            .repository(&crate::git::ref_text(b"task/TSK-001-caf\xe9"))
+            .unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
     /// Review finding on issue 79: one branch whose name is not valid UTF-8

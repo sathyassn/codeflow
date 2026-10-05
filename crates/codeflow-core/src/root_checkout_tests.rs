@@ -1875,3 +1875,33 @@ fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
     let facts = RootCheckout::read(&repo, &lookalike).unwrap();
     assert!(facts.commit_on("release/caf\\xe9").is_some());
 }
+
+/// Review finding on issue 79: a default branch that is not valid UTF-8 was
+/// passed to git as its escaped spelling, which resolves to nothing. The
+/// workspace branch step stops with the reason instead.
+#[test]
+fn a_default_branch_that_is_not_utf8_stops_the_workspace_branch_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    let git_dir = root.join(".git");
+    crate::git::write_packed_refs(
+        &git_dir,
+        &[
+            (tip.clone(), b"refs/heads/main".to_vec()),
+            (tip, b"refs/remotes/origin/caf\xe9".to_vec()),
+        ],
+    );
+    std::fs::create_dir_all(git_dir.join("refs/remotes/origin")).unwrap();
+    std::fs::write(
+        git_dir.join("refs/remotes/origin/HEAD"),
+        b"ref: refs/remotes/origin/caf\xe9\n",
+    )
+    .unwrap();
+    let error = prepare_branch(&root, &GitPolicy::default()).err().unwrap();
+    assert!(
+        error.0.message.contains("not valid UTF-8"),
+        "{}",
+        error.0.message
+    );
+}

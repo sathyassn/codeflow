@@ -204,16 +204,20 @@ fn shown(target: &str) -> String {
 /// configured remote.
 fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
     // OS text rule (issue 79): a remote name that is not valid UTF-8 cannot be
-    // a fetch remote CodeFlow names, so the lookup fails and the caller
-    // refuses with "not configured" instead of choosing another remote.
-    let owned = |buf: git2::Buf| std::str::from_utf8(&buf).ok().map(str::to_owned);
+    // a fetch remote CodeFlow names. The owner decides which remote is
+    // refreshed, so an owner that cannot be read is an error and never a
+    // quiet skip of that remote.
+    let owned = |buf: git2::Buf| {
+        std::str::from_utf8(&buf)
+            .map(str::to_owned)
+            .map_err(|_| format!("target '{declared}' names a remote that is not valid UTF-8"))
+    };
     if declared.starts_with("refs/remotes/") {
         return repo
             .branch_remote_name(declared)
-            .ok()
+            .map_err(|_| format!("target '{declared}' names a remote that is not configured"))
             .and_then(owned)
-            .map(Some)
-            .ok_or_else(|| format!("target '{declared}' names a remote that is not configured"));
+            .map(Some);
     }
     if declared.starts_with("origin/") {
         return Ok(Some("origin".to_string()));
@@ -223,7 +227,11 @@ fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<Strin
         declared.strip_prefix("refs/heads/").unwrap_or(declared)
     );
     if repo.find_reference(&local).is_ok() {
-        return Ok(repo.branch_upstream_remote(&local).ok().and_then(owned));
+        return repo
+            .branch_upstream_remote(&local)
+            .ok()
+            .map(owned)
+            .transpose();
     }
     Ok(Some("origin".to_string()))
 }
@@ -738,6 +746,21 @@ pub struct Claim {
     pub pushed: bool,
 }
 
+/// `git <args>` whose output is spelled by `ref_text`.
+fn git_ref_text(repo_root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = crate::git::command()
+        .arg("-C")
+        .arg(repo_root)
+        .args(args)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if out.status.success() {
+        Ok(crate::git::ref_text(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
     let out = crate::git::command()
         .arg("-C")
@@ -1120,7 +1143,9 @@ fn remote_claims(
     task_id: &str,
     remote: &str,
 ) -> Result<Vec<(String, git2::Oid)>, String> {
-    let listed = git(repo_root, &["ls-remote", "--heads", remote])
+    // OS text rule (issue 79): branch names are read with `ref_text`, so a
+    // name that is not valid UTF-8 stays a claim and never reads as another.
+    let listed = git_ref_text(repo_root, &["ls-remote", "--heads", remote])
         .map_err(|error| format!("cannot list {remote}'s branches: {error}"))?;
     Ok(listed
         .lines()
@@ -1498,6 +1523,24 @@ mod tests {
         assert!(error.to_string().contains("not on 'main'"), "{error}");
         assert!(consumer(&done).is_ok());
         assert!(verdict(root, "TSK-003").is_ok());
+    }
+
+    /// Review finding on issue 79: an upstream remote whose name is not valid
+    /// UTF-8 decoded to nothing, so that remote was silently left out of the
+    /// refresh. The owner is an identity, so it is an error.
+    #[test]
+    fn an_upstream_remote_that_is_not_utf8_is_an_error_not_a_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[b"refs/heads/side"]);
+        let config = repo.path().join("config");
+        let mut text = fs::read(&config).unwrap();
+        text.extend_from_slice(
+            b"[branch \"side\"]\n\tremote = caf\xe9\n\tmerge = refs/heads/side\n",
+        );
+        fs::write(&config, text).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let error = target_fetch_remote(&repo, "side").unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
     /// Review finding on issue 79: a branch whose name is not valid UTF-8 and
