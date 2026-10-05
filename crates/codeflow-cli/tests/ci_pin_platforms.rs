@@ -889,6 +889,19 @@ fn the_shared_run_sources_the_project_setup_hook_before_the_test_gate() {
             "{platform:?}: {:?}",
             fx.calls()
         );
+        // The gate's exit trap still removes the judge worktree, whether the
+        // run passed, failed or was ended by the hook.
+        let listed = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(fx.repo())
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert_eq!(
+            listed.matches("worktree ").count(),
+            1,
+            "{platform:?}: {listed}"
+        );
     }
 }
 

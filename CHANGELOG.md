@@ -269,7 +269,9 @@ erratum below, never an edit of the section.
   with `--no-ignore`, so a `.gitignore` the change edits cannot hide a
   lockfile, and its verdict comes from its exit status, so a file path in
   its output cannot turn an advisory into a pass and a lockfile it cannot
-  read is a scan error. The project setup hook cannot skip the test gate by accident: a
+  read is a scan error. The scanner is downloaded outside the checkout, so
+  a link the change commits at its download path cannot redirect the
+  write. The project setup hook cannot skip the test gate by accident: a
   `codeflow` function, a `PATH` entry, `set +e` or an `exit` in it leaves
   the gate running or fails the run. The hook still runs with the gate's
   authority, like the CI file a change can edit, so `codeflow ci` names a

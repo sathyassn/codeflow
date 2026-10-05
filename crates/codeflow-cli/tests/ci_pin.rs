@@ -851,7 +851,9 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
 /// A repository whose base commit holds `base_policy` (none when `None`)
 /// and whose checked-out head holds `head_policy`; `suppression` names the
 /// side (`"base"` or `"head"`) that adds an `osv-scanner.toml` beside the
-/// lockfile. Returns the base SHA.
+/// lockfile; `"gitignore"` has the head ignore the lockfile and `"symlink"`
+/// has it commit a link named `osv-scanner` to a `victim` file outside the
+/// checkout. Returns the base SHA.
 fn audit_repo(
     work: &Path,
     base_policy: Option<&str>,
@@ -879,6 +881,13 @@ fn audit_repo(
     if suppression == "gitignore" {
         std::fs::write(work.join(".gitignore"), "Cargo.lock\n").unwrap();
     }
+    if suppression == "symlink" {
+        std::os::unix::fs::symlink(
+            work.parent().unwrap().join("victim"),
+            work.join("osv-scanner"),
+        )
+        .unwrap();
+    }
     git(work, &["add", "-A"]);
     git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
     base
@@ -895,6 +904,8 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
     let script = run_blocks(CI, "dependency audit").remove(0);
     let bin = repo.parent().unwrap().join("audit-bin");
     std::fs::create_dir_all(&bin).unwrap();
+    let runner_temp = repo.parent().unwrap().join("runner-temp");
+    std::fs::create_dir_all(&runner_temp).unwrap();
     let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
@@ -919,6 +930,7 @@ fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
         )
         .env("TRUSTED_SHA", trusted)
+        .env("RUNNER_TEMP", &runner_temp)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .envs(fake.iter().copied())
         .output()
@@ -1024,6 +1036,19 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
     let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "broken")]);
     assert!(!ok, "{text}");
     assert!(text.contains("exit 128"), "{text}");
+
+    // The scanner downloads outside the checkout, so a link the change
+    // commits at `osv-scanner` cannot redirect the write.
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, "keep\n").unwrap();
+    let trusted = audit_repo(&work, Some(&block), &block, "symlink");
+    let out = run_audit_step(&work, &trusted, &[]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("GHSA-test"), "{out:?}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
 }
 
 /// sathyassn/codeflow#48: the full-history secret scan runs on a schedule

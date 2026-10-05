@@ -34,7 +34,9 @@
 #     --log-opts "$CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD"   # secret scan of the
 #     merge request's own commits; a scheduled pipeline drops --log-opts to
 #     scan the full history, as the GitHub workflow does weekly
-#   osv-scanner scan -r --no-ignore .                               # dep audit
+#   osv-scanner scan -r --no-ignore .                               # dep audit;
+#     read its levels and osv-scanner.toml suppressions from the target
+#     commit, not the change, as the GitHub workflow does
 
 stages: [verify]
 
@@ -250,13 +252,14 @@ codeflow:
       # update` never writes it.
       # The hook runs with the gate's authority, like this file, so it is
       # reviewed as this file is. These lines keep it from skipping the gate
-      # by accident: the binary and folder are fixed read-only first, set -eu
-      # holds again once it returns, and a run it ends (an `exit`) fails.
+      # by accident: the shell variables naming the binary and folder are
+      # read-only (the binary itself is not), set -eu holds again once it
+      # returns, and a run it ends (an `exit`) fails.
       codeflow_bin=$(command -v codeflow)
       codeflow_root=$(pwd)
       readonly codeflow_bin codeflow_root
       codeflow_gated=
-      trap '[ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }' EXIT
+      trap 'codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"' EXIT
       if [ -f .codeflow/ci-setup.sh ]; then
         echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
         . ./.codeflow/ci-setup.sh
