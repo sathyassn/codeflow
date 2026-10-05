@@ -77,7 +77,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("codeflow-core/src/doctor/mod.rs", "Options::do_exec", "from_utf8_lossy", 2, "probe output that doctor shows"),
     ("codeflow-core/src/doctor/mod.rs", "Options::do_exec_stdin", "from_utf8_lossy", 2, "probe output that doctor shows"),
     ("codeflow-core/src/doctor/mod.rs", "run_captured", "from_utf8_lossy", 2, "process output shown to a person, never compared"),
-    ("codeflow-core/src/git/ci.rs", "parse_gh_single_string_output", "from_utf8_lossy", 1, "gh output of one JSON string value, which is UTF-8 text"),
     ("codeflow-core/src/git/ci.rs", "parse_pr_checks_output", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/hooks/conflict_markers.rs", "check", "name", 1, "a conflict marker kind's own name, not a git name (git2 is in the file)"),
     ("codeflow-core/src/hooks/conflict_markers.rs", "marker_sizes", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),

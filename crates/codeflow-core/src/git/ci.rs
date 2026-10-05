@@ -575,11 +575,16 @@ fn parse_gh_single_string_output(success: bool, stdout: &[u8]) -> Option<String>
     if !success {
         return None;
     }
-    let s = String::from_utf8_lossy(stdout).trim().to_string();
+    // OS text rule (issue 79): the answer names a branch or a repository that
+    // is then looked up, so it is read as exact text: one that is not valid
+    // UTF-8 reads as no answer (the caller falls back to every reported
+    // check), and only the answer's own newline is framing.
+    let s = std::str::from_utf8(stdout).ok()?;
+    let s = s.strip_suffix('\n').unwrap_or(s);
     if s.is_empty() {
         None
     } else {
-        Some(s)
+        Some(s.to_string())
     }
 }
 
@@ -1244,16 +1249,23 @@ mod tests {
     // --- parse_gh_single_string_output: branches of fetch_required_contexts step 1/2 ---
 
     #[test]
-    fn test_parse_gh_single_string_success_returns_trimmed() {
+    fn test_parse_gh_single_string_success_returns_the_exact_text() {
         assert_eq!(
-            parse_gh_single_string_output(true, b"  main\n"),
+            parse_gh_single_string_output(true, b"main\n"),
             Some("main".to_string())
         );
+        // Round fourteen on issue 79: the name is looked up as it is, so
+        // whitespace that is part of it stays, and only the newline goes.
+        assert_eq!(
+            parse_gh_single_string_output(true, "release\u{a0}\n".as_bytes()),
+            Some("release\u{a0}".to_string())
+        );
+        assert!(parse_gh_single_string_output(true, b"caf\xe9\n").is_none());
     }
 
     #[test]
     fn test_parse_gh_single_string_success_but_empty_returns_none() {
-        assert!(parse_gh_single_string_output(true, b"   \n").is_none());
+        assert!(parse_gh_single_string_output(true, b"\n").is_none());
         assert!(parse_gh_single_string_output(true, b"").is_none());
     }
 

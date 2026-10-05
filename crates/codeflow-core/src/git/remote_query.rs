@@ -218,8 +218,13 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
         }
     }
     if configured.is_none() {
-        configured =
-            from_env("GIT_SSH")?.map(|program| format!("'{}'", program.replace('\'', "'\\''")));
+        configured = from_env("GIT_SSH")?.map(|program| {
+            if program.is_empty() {
+                program
+            } else {
+                format!("'{}'", program.replace('\'', "'\\''"))
+            }
+        });
     }
     if configured.as_deref().is_some_and(str::is_empty) {
         return Err(Failure::Other(

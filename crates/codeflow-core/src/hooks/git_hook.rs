@@ -714,7 +714,9 @@ pub fn pre_merge_commit(
 /// `refs/remotes/…` never reaches policy evaluation.
 #[must_use]
 pub fn ref_line_touches_local_branch(line: &str) -> bool {
-    line.split_whitespace()
+    // Git's protocol separates the fields with a single space, and a ref name
+    // holds none: other whitespace (a no-break space) is part of the name.
+    line.splitn(3, ' ')
         .nth(2)
         .is_some_and(|r| r.starts_with("refs/heads/"))
 }
@@ -846,7 +848,9 @@ fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -
 
 /// Parse one `<old-oid> <new-oid> <ref-name>` reference-transaction line.
 fn parse_ref_line(line: &str) -> Option<(&str, &str, &str)> {
-    let mut parts = line.split_whitespace();
+    // The fields are separated by single spaces (see
+    // `ref_line_touches_local_branch`); the ref name is the rest of the line.
+    let mut parts = line.splitn(3, ' ');
     let old = parts.next()?;
     let new = parts.next()?;
     let refname = parts.next()?;
@@ -919,7 +923,9 @@ pub fn parse_push_refs(input: &str) -> Vec<PushRef> {
     input
         .lines()
         .filter_map(|line| {
-            let mut parts = line.split_whitespace();
+            // pre-push's stdin separates the fields with single spaces, and a
+            // ref name holds none, so another whitespace is part of the name.
+            let mut parts = line.splitn(4, ' ');
             Some(PushRef {
                 local_ref: parts.next()?.to_string(),
                 local_sha: parts.next()?.to_string(),
@@ -2306,6 +2312,23 @@ mod tests {
         assert!(!ref_line_touches_local_branch("aaa bbb refs/tags/v1"));
         assert!(!ref_line_touches_local_branch("aaa bbb HEAD"));
         assert!(!ref_line_touches_local_branch("garbage line"));
+    }
+
+    /// Round fourteen on issue 79: git separates the protocol fields with a
+    /// single space, so a no-break space in a ref name is part of the name and
+    /// the protected `release` plus that space is not read as `release`.
+    #[test]
+    fn a_ref_name_keeps_whitespace_that_is_part_of_it() {
+        let name = "refs/heads/release\u{a0}";
+        assert_eq!(
+            parse_ref_line(&format!("aaa bbb {name}")),
+            Some(("aaa", "bbb", name))
+        );
+        assert!(ref_line_touches_local_branch(&format!("aaa bbb {name}")));
+        let pushed = parse_push_refs(&format!("(delete) {} {name} bbb\n", "0".repeat(40)));
+        assert_eq!(pushed.len(), 1);
+        assert_eq!(pushed[0].remote_ref, name);
+        assert_eq!(pushed[0].remote_sha, "bbb");
     }
 
     /// Point `refs/remotes/origin/<branch>` at `oid` (a simulated fetched head).
