@@ -1928,6 +1928,51 @@ fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
     assert_eq!(out.status.code(), Some(2), "PowerShell is never certified");
 }
 
+#[cfg(unix)]
+#[test]
+fn exec_guard_does_not_certify_a_write_that_reaches_a_link_pipe_or_executable() {
+    // A `.md` name proves nothing about what the write reaches. Review 07: a
+    // link named `note.md` to a script, a named pipe and an executable were
+    // all certified by their extension alone.
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = |target: &str| format!("printf '%s\\n' 'true; sudo -n id' > {target}");
+    // The same line into a new document is certified and allowed.
+    let out = exec_guard_tool(dir.path(), "Bash", &line("new.md"));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(dir.path().join("job.sh"), "true\n").unwrap();
+    std::fs::set_permissions(
+        dir.path().join("job.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    symlink("job.sh", dir.path().join("note.md")).unwrap();
+    std::fs::hard_link(dir.path().join("job.sh"), dir.path().join("hard.md")).unwrap();
+    assert!(Command::new("mkfifo")
+        .arg(dir.path().join("pipe.md"))
+        .status()
+        .unwrap()
+        .success());
+    for target in ["note.md", "hard.md", "pipe.md", "/dev/example.md"] {
+        let out = exec_guard_tool(dir.path(), "Bash", &line(target));
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "must refuse a write to {target}"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.privilege_escalation"),
+            "{target}"
+        );
+    }
+}
+
 #[test]
 fn exec_guard_keeps_the_3_0_0_floor_on_every_line_it_cannot_certify() {
     // Each form the design reviews found, plus the other raw rules, through the

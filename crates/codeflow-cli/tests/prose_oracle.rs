@@ -4,18 +4,26 @@
 //! the line must run nothing but `echo`, `printf`, `grep` and `cat`, in every
 //! shell. This test checks that claim against real shells and real programs.
 //! It builds lines from the grammar, mutates each by inserting, replacing and
-//! deleting every printable ASCII character, whitespace form, control character
-//! and a few non-ASCII characters at every position, splices seed lines with
-//! every separator, and for each line `certify` accepts it runs the line in
+//! deleting the shell's metacharacters, quotes, expansion and glob characters,
+//! a few letters and digits, every whitespace and control form and a few
+//! non-ASCII characters at every position, splices seed lines with every
+//! separator, and for each line `certify` accepts it runs the line in
 //! bash (`extglob` and `expand_aliases` on, both Homebrew's and the system
 //! bash when present) and zsh (`extendedglob` on). The real `echo`, `printf`,
 //! `grep` and `cat` run. Every other program the line could reach (privilege
 //! launchers and their variants, headless peers, destructive commands, shells,
 //! interpreters, `git`) is a logging stub earlier on `PATH`, in a directory
 //! that also holds a plain file named after each of them. A certified line must
-//! call no stub and create no file except its redirect targets.
+//! call no stub, create no file except its redirect targets (as `certify`
+//! reports them) and leave every decoy as it was.
 //!
 //! The stubs only record that they ran. Nothing here runs a real launcher.
+//!
+//! Not covered, by design: the real programs' argv is not compared (the
+//! property is that nothing else runs), and inherited shell state such as a
+//! profile alias or function is not modelled; both are stated residuals. A run
+//! that exceeds its deadline (a `grep -r` that a mutation pointed at `/`) is
+//! killed with its process group and counted; too many of them fail the test.
 #![cfg(unix)]
 
 use std::collections::BTreeSet;
@@ -24,7 +32,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use codeflow_core::security::prose::certify;
+use codeflow_core::security::prose::{certify, certify_with_writes};
+
+use std::os::unix::process::CommandExt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Runs killed at their deadline, and runs in all.
+static TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+static RUNS: AtomicUsize = AtomicUsize::new(0);
 
 /// Programs a mutated line could reach by name; each is a logging stub.
 const STUBS: &[&str] = &[
@@ -195,13 +210,19 @@ impl Sandbox {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .process_group(0)
             .spawn()
             .unwrap();
+        RUNS.fetch_add(1, Ordering::Relaxed);
         // A certified `grep -r` or `cat` may read a huge tree or a device when a
         // mutation turns a path into `/`; it executes nothing, so stop it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         while child.try_wait().unwrap().is_none() {
             if std::time::Instant::now() > deadline {
+                TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+                let _ = Command::new("kill")
+                    .args(["-KILL", &format!("-{}", child.id())])
+                    .status();
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
@@ -219,16 +240,6 @@ impl Sandbox {
             })
             .collect()
     }
-}
-
-/// A file a certified line may create: a document file, by extension.
-fn is_document(name: &str) -> bool {
-    ["md", "markdown", "txt", "rst", "log"]
-        .iter()
-        .any(|extension| {
-            name.strip_suffix(extension)
-                .is_some_and(|stem| stem.ends_with('.') && stem.len() > 1)
-        })
 }
 
 const SEEDS: &[&str] = &[
@@ -316,7 +327,10 @@ fn certified_lines() -> BTreeSet<String> {
 }
 
 fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> {
-    let allowed: BTreeSet<String> = STUBS.iter().map(ToString::to_string).collect();
+    let certified = certify_with_writes(line).expect("a certified line");
+    let mut allowed: BTreeSet<String> = STUBS.iter().map(ToString::to_string).collect();
+    // A target in another directory cannot be created; a bare one can.
+    allowed.extend(certified.writes.iter().cloned());
     for shell in shells {
         let calls = sandbox.run(shell, line);
         if !calls.is_empty() {
@@ -326,15 +340,21 @@ fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> 
             ));
         }
         let files = sandbox.files();
-        let extra: Vec<_> = files
-            .difference(&allowed)
-            .filter(|name| !is_document(name))
-            .collect();
+        let extra: Vec<_> = files.difference(&allowed).collect();
         if !extra.is_empty() {
             return Err(format!(
                 "{}: certified line created {extra:?}: {line:?}",
                 shell.program
             ));
+        }
+        for name in STUBS {
+            let content = fs::read_to_string(sandbox.work().join(name)).unwrap_or_default();
+            if content != "decoy" && !certified.writes.iter().any(|target| target == name) {
+                return Err(format!(
+                    "{}: certified line changed the decoy {name}: {line:?}",
+                    shell.program
+                ));
+            }
         }
     }
     Ok(())
@@ -386,6 +406,15 @@ fn certified_lines_run_only_the_four_programs_in_bash_and_zsh() {
             .flat_map(|handle| handle.join().unwrap())
             .collect()
     });
+    let (timeouts, runs) = (
+        TIMEOUTS.load(Ordering::Relaxed),
+        RUNS.load(Ordering::Relaxed),
+    );
+    eprintln!("oracle: {timeouts} of {runs} runs hit the deadline");
+    assert!(
+        timeouts * 20 <= runs,
+        "{timeouts} of {runs} runs hit the deadline; the oracle is not observing them"
+    );
     assert!(
         failures.is_empty(),
         "{} of {} certified lines ran something else:\n{}",
@@ -460,6 +489,8 @@ fn only_document_files_may_be_written_by_a_certified_line() {
         "echo x > .md",
         "echo x > a.MD",
         "echo x > /dev/null",
+        "echo x > /dev/example.md",
+        "echo x > /proc/x.txt",
         "echo x > ../a.py",
         "cat <<'EOF' > run\nx\nEOF",
     ] {

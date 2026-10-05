@@ -757,21 +757,24 @@ erratum below, never an edit of the section.
   `grep` and `cat` with plain, single-quoted or double-quoted words (no
   backslash, `$` or backtick), the separators `;`, `&&`, `||`, `|` and
   newline, redirects to a document file (`.md`, `.markdown`, `.txt`, `.rst`,
-  `.log`), and one quoted heredoc for `cat`. A certified line skips only
-  those three checks; every other guard still runs, and PowerShell lines are
-  never certified. The issue's `printf`, `grep '; su'`, quoted-heredoc and
-  `echo "...; supersedes ..."` lines now pass; a quoted heredoc delimiter
-  (`cat <<'EOF'`) is needed, an unquoted one still refuses. Lines with a
+  `.log`) that is new or an existing plain, non-executable file (never a
+  link, pipe, device or executable), and one quoted heredoc for `cat`. A
+  certified line skips only the privilege, headless and dangerous checks;
+  every other guard still runs, and PowerShell lines are never certified. The
+  issue's `printf`, `grep '; su'`, quoted-heredoc and `echo "...; supersedes
+  ..."` lines now pass. A heredoc needs a quoted delimiter (`cat <<'EOF'`);
+  with an unquoted one the line keeps the raw rules. Lines with a
   double-quoted backslash, and `git commit -m` or `gh pr create --body` text,
   are not certified and still refuse: write that text to a file with the
-  editor tool and pass the file by path. Two limits remain: an alias or
-  function in a user's shell profile that shadows `echo`, `printf`, `grep` or
-  `cat` is not seen, as an alias for `ls` was not seen before, and a
-  certified line can write a document file that is later run as a script, as
-  a plain `printf` into a `.sh` file already could. Projects need no change:
-  this is a binary change with no policy default, scaffold or managed file
-  behind it, and it allows certified prose without refusing anything allowed
-  before.
+  editor tool and pass the file by path. Two limits remain: shell startup
+  state that changes how a certified line runs, such as an alias or function
+  shadowing `echo`, `printf`, `grep` or `cat` or a zsh global alias that
+  expands an argument, is not seen, as an alias for `ls` was not seen
+  before; and a certified line can create a document that a later call runs
+  as a script, as a plain `printf` into a `.sh` file already could. Projects
+  need no change: this is a binary change with no policy default, scaffold or
+  managed file behind it, and it allows certified prose without refusing
+  anything allowed before.
 
 ## [3.0.0]
 

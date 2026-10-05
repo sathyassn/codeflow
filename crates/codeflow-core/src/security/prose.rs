@@ -33,8 +33,8 @@
 //! (other than a newline or a tab), non-ASCII whitespace, a backslash outside
 //! single quotes, `$`, a backtick, `#`, brackets, braces, `*`, `?`, `~`, `!`,
 //! a lone `&`, a program given by path or after an assignment, an unterminated
-//! quote or heredoc, an unquoted or dashed delimiter, and a redirect into
-//! `/dev/` all refuse.
+//! quote or heredoc, an unquoted or dashed delimiter, and a redirect under
+//! `/dev/`, `/proc/` or `/sys/` all refuse.
 //!
 //! `echo`, `grep` and `cat` execute nothing from their arguments. `printf`
 //! does when its format has a conversion other than `%s` or `%%` (`%n` and the
@@ -45,17 +45,36 @@
 //!
 //! A certified line may write a document file (`.md`, `.markdown`, `.txt`,
 //! `.rst` or `.log`) so an agent can write prose to a file and pass it by
-//! path. The file's later use is judged on the line that uses it, as for any
-//! file; this module cannot prove a document is never run as a script.
+//! path. A document name proves nothing about what the write reaches, so the
+//! caller also checks each target on disk with [`writes_are_plain_files`]: a
+//! new file or an existing plain, non-executable file, never a link, a pipe, a
+//! device or an executable. The file's later use is judged on the line that
+//! uses it, as for any file; this module cannot prove a document is never run
+//! as a script.
 //! Whether a line is a POSIX shell line is the caller's call: only the Bash
 //! and `run_terminal_command` tools reach [`certify`].
 
 /// One simple command: the program and its words with quotes removed.
 pub type Argv = Vec<String>;
 
+/// A certified line: its commands, and the files its redirects write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Certified {
+    pub commands: Vec<Argv>,
+    /// Redirect targets exactly as written, relative to the call's directory.
+    pub writes: Vec<String>,
+}
+
 /// The commands of `raw` when it is certified prose, else `None`.
 #[must_use]
 pub fn certify(raw: &str) -> Option<Vec<Argv>> {
+    certify_with_writes(raw).map(|certified| certified.commands)
+}
+
+/// [`certify`] with the redirect targets, so the caller can check what each
+/// one names on disk with [`writes_are_plain_files`].
+#[must_use]
+pub fn certify_with_writes(raw: &str) -> Option<Certified> {
     let mut text = raw;
     while let Some(rest) = text.strip_suffix('\n') {
         text = rest;
@@ -68,6 +87,7 @@ pub fn certify(raw: &str) -> Option<Vec<Argv>> {
         chars: &chars,
         at: 0,
         commands: Vec::new(),
+        writes: Vec::new(),
         heredoc: None,
         heredoc_seen: false,
         multiline_quote: false,
@@ -80,7 +100,37 @@ pub fn certify(raw: &str) -> Option<Vec<Argv>> {
         .commands
         .iter()
         .all(command_allowed)
-        .then_some(parser.commands)
+        .then_some(Certified {
+            commands: parser.commands,
+            writes: parser.writes,
+        })
+}
+
+/// True when every redirect target is a place a prose write cannot do harm:
+/// a file that does not exist yet, or an existing regular file that is not a
+/// symbolic link and has no execute bit. A symbolic link, a named pipe, a
+/// device and an executable file refuse, because a document name proves
+/// nothing about what the write reaches. Checked when the call is judged, so
+/// it covers a file or link made by an earlier call.
+#[must_use]
+pub fn writes_are_plain_files(writes: &[String], cwd: &std::path::Path) -> bool {
+    writes
+        .iter()
+        .all(|target| match std::fs::symlink_metadata(cwd.join(target)) {
+            Ok(meta) => meta.file_type().is_file() && !is_executable(&meta),
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        })
+}
+
+#[cfg(unix)]
+fn is_executable(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// Control characters other than newline and tab, and non-ASCII whitespace,
@@ -105,6 +155,7 @@ struct Parser<'a> {
     chars: &'a [char],
     at: usize,
     commands: Vec<Argv>,
+    writes: Vec<String>,
     /// A heredoc delimiter whose body starts at the next newline.
     heredoc: Option<String>,
     heredoc_seen: bool,
@@ -274,7 +325,11 @@ impl Parser<'_> {
                 self.at += operator.len();
                 self.skip_ws();
                 let target = self.bare()?;
-                return document_file(&target).then_some(());
+                if !document_file(&target) {
+                    return None;
+                }
+                self.writes.push(target);
+                return Some(());
             }
         }
         None
@@ -307,8 +362,15 @@ impl Parser<'_> {
     }
 }
 
-/// A file name that ends in a document extension, with a name before it.
+/// A file name that ends in a document extension, with a name before it, and
+/// is not under `/dev/`, `/proc/` or `/sys/`.
 fn document_file(target: &str) -> bool {
+    if ["/dev/", "/proc/", "/sys/"]
+        .iter()
+        .any(|prefix| target.starts_with(prefix))
+    {
+        return false;
+    }
     let name = target.rsplit('/').next().unwrap_or(target);
     name.rsplit_once('.').is_some_and(|(stem, extension)| {
         !stem.is_empty() && matches!(extension, "md" | "markdown" | "txt" | "rst" | "log")
@@ -350,6 +412,53 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    #[test]
+    fn redirect_targets_are_recorded_and_system_paths_refuse() {
+        let certified =
+            certify_with_writes("echo a > x.md; cat <<'EOF' >> d/y.log\nb\nEOF").unwrap();
+        assert_eq!(certified.writes, ["x.md", "d/y.log"]);
+        assert!(certify_with_writes("echo a 2>&1")
+            .unwrap()
+            .writes
+            .is_empty());
+        for target in ["/dev/example.md", "/proc/x.txt", "/sys/x.log"] {
+            assert!(certify(&format!("echo a > {target}")).is_none(), "{target}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_write_must_reach_a_new_or_plain_non_executable_file() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let check = |name: &str| writes_are_plain_files(&[name.to_string()], cwd);
+        assert!(check("new.md"), "a file that does not exist yet");
+        std::fs::write(cwd.join("plain.md"), "x").unwrap();
+        assert!(check("plain.md"), "an existing plain file");
+        std::fs::write(cwd.join("job.sh"), "x").unwrap();
+        std::fs::set_permissions(cwd.join("job.sh"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::set_permissions(cwd.join("plain.md"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        assert!(!check("job.sh"), "an executable");
+        symlink("job.sh", cwd.join("link.md")).unwrap();
+        assert!(!check("link.md"), "a link to an executable");
+        symlink("missing", cwd.join("dangling.md")).unwrap();
+        assert!(!check("dangling.md"), "a dangling link");
+        std::fs::hard_link(cwd.join("job.sh"), cwd.join("hard.md")).unwrap();
+        assert!(!check("hard.md"), "a hard link to an executable");
+        std::fs::create_dir(cwd.join("dir.md")).unwrap();
+        assert!(!check("dir.md"), "a directory");
+        let fifo = cwd.join("pipe.md");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(!check("pipe.md"), "a named pipe");
     }
 
     #[test]

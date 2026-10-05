@@ -87,10 +87,15 @@ pub fn evaluate_in(
     // compatibility, but a stale or hand-edited weaker value is not authority.
     //
     // A line that the strict prose tokenizer certifies (TSK-233) is judged by
-    // none of the three raw-text checks below: it runs only `echo`, `printf`,
-    // `grep`, `rg` and `cat` with their quoted words as data. Every other
-    // check still runs on it, and every other line keeps the raw rules.
-    let prose = posix && crate::security::prose::certify(command).is_some();
+    // none of the three raw-text checks below (the composed deletion check in
+    // the dangerous module included): it runs only `echo`, `printf`, `grep` and
+    // `cat` with their quoted words as data, and none of them deletes. Its
+    // redirect targets must be plain files on disk. Every other check still
+    // runs on it, and every other line keeps the raw rules.
+    let prose = posix
+        && crate::security::prose::certify_with_writes(command).is_some_and(|certified| {
+            crate::security::prose::writes_are_plain_files(&certified.writes, cwd)
+        });
     let mut violations = if prose {
         Vec::new()
     } else {
