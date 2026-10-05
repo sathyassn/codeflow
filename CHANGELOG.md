@@ -277,10 +277,10 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact minor -->
-- **Agent sessions can no longer write shell startup files (issue 86).** A
+- **The guards and sandboxes refuse writes to shell startup files.** A
   function or alias planted in `~/.zshrc` or another startup file ran under
   every later command, while the guards judged each command by the name it
-  spells, so a planted `git()` was invisible to them. A new class in the
+  spells, so a planted `git()` was invisible to them (issue 86). A new class in the
   action table, `startup_paths`, covers the bash, zsh, ksh, fish and
   PowerShell startup files, the readline, tmux, screen, direnv and
   `~/.ssh/rc` files, the system ones under `/etc`, and `.envrc` anywhere.
@@ -288,13 +288,17 @@ erratum below, never an edit of the section.
   `cf-guard` profile keeps it read only. Codex builder seats now run the
   `cf-builder` profile instead of full access, as the operator amended
   ADR-0075 D1 on 2026-10-05; `codeflow update` brings the presets, the
-  profile and the launch text in. exec-guard and edit-guard refuse every
-  visible write to the class under `security.shell_startup`, a rule with no
+  profile and the launch text in. exec-guard and edit-guard refuse the
+  visible writes to the class under `security.shell_startup`, a rule with no
   key and no relief, and git-guard refuses user- and system-scope git keys
   that run a program. A new doctor check, `startup-files`, reports a
   project whose settings lack the class and the files the home's startup
-  files source from outside it. A path built at run time, or a script
-  written and then run, is beyond the guards; the sandboxes hold those.
+  files source from outside it, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`,
+  and a Codex config that selects another profile. A path built at run
+  time, a script written and then run, a relocated startup directory under
+  Claude's file tools and a nested `.envrc` under Codex are beyond what
+  ships; the residuals are listed per harness in the enforcement planes
+  page.
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with

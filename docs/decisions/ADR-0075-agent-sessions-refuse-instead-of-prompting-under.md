@@ -524,12 +524,14 @@ while the guards judge each command by the name it spells.
    unwritable; a nested `.envrc` has no Grok rule, since a Grok deny also
    blocks reads.
 3. **The guards are the backstop, with no relief.** exec-guard and
-   edit-guard refuse every visible write under `security.shell_startup`,
+   edit-guard refuse the visible writes under `security.shell_startup`,
    which has no policy key and holds at every integrity level: the operator
    edits their own startup files. git-guard refuses user- and system-scope
    git keys that run a program. The guards cannot stop a path built at run
    time, a script written then run, or a compiled program that writes the
-   file; on a seat without a sandbox those stay open.
+   file; on a seat without a sandbox those stay open. The residuals per
+   harness and platform are listed in
+   `docs/architecture/enforcement-planes.md`.
 4. **No run-time source following.** The guards do not read what a startup
    file sources. `codeflow doctor --check startup-files` lists the files the
    home's startup files source from outside the class.

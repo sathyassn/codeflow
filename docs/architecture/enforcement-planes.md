@@ -319,12 +319,34 @@ level:
 git-guard refuses a user- or system-scope git key that runs a program, such
 as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
 
-The guards cannot stop a path built at run time, a script written in one
-call and run in another, or a compiled program that writes the file. On a
-seat without a sandbox those stay open. `codeflow doctor --check
-startup-files` reports a project whose settings lack the class, and the
-files the home's startup files source from outside it, which no rule
-protects.
+What stays open, by harness and platform:
+
+- **Every harness.** The guards cannot see a path built at run time, a
+  script written in one call and run in another, or a compiled program
+  that writes the file; only a sandbox holds those, so on a seat without
+  one they stay open. An interpreter call whose code names a startup file
+  is refused even when it only reads; read with `cat` or `grep` instead.
+- **Claude Code.** The generated denies name the default locations. A
+  `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
+  Claude's file tools do not run edit-guard, so a native `Write` there is
+  not refused. `.envrc` is an `Edit` deny only: a nested `.envrc` written
+  from Bash is refused by exec-guard, not by the sandbox.
+- **Codex.** The profile keeps the home and `/etc` entries and the
+  workspace root's `.envrc` read only. A nested `.envrc`, including one in
+  a linked worktree or a temporary directory, is writable to the profile
+  (probed on Codex 0.160.0) and left to the guards. A `--sandbox` flag or
+  the operator's own profile override replaces these entries.
+- **Grok Build.** Its `workspace` sandbox leaves the home unwritable (not
+  probed in this task). `.envrc` in the workspace has no Grok rule, since a
+  Grok deny also blocks reads; the guards refuse it.
+- **Windows.** A PowerShell profile under a redirected `Documents` folder,
+  such as one in OneDrive, is outside the class.
+- **Sourced files.** The guards do not follow what a startup file sources.
+
+`codeflow doctor --check startup-files` reports a project whose settings
+lack the class or select another Codex profile, a moved `ZDOTDIR` or
+`XDG_CONFIG_HOME`, and the files the home's startup files source from
+outside the class.
 
 ### how far each plane reaches
 
