@@ -1051,11 +1051,12 @@ impl ReviewedPin {
 }
 
 /// How a pin's review is looked up: the predecessor's branch, the pin (its
-/// tip), and the revisions a review row may name for it
-/// ([`reviewable_revisions`]), computed only when called, so a lookup that
-/// finds no pull request with that head never reads them. It answers
-/// whether the pull request of that branch has the pin as its head and an
-/// approving review row naming one of those revisions.
+/// tip), and the revisions a review row may name for it (the pin, then
+/// each commit it follows only by its status and Closeout), computed only
+/// when called, so a lookup that finds no pull request with that head
+/// never reads them. It answers whether the pull request of that branch
+/// has the pin as its head and an approving review row naming one of those
+/// revisions.
 pub type ReviewLookup<'a> =
     dyn Fn(&str, &str, &dyn Fn() -> Vec<String>) -> Result<bool, String> + 'a;
 
