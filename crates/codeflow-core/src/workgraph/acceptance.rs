@@ -618,7 +618,7 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
     Ok(repo
         .statuses(Some(&mut options))?
         .iter()
-        .map(|entry| String::from_utf8_lossy(entry.path_bytes()).into_owned())
+        .map(|entry| git_name(entry.path_bytes()))
         .collect())
 }
 
@@ -1040,9 +1040,8 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
         return unreadable(error);
     }
     // Entries compare by their raw path bytes, so two paths that read alike
-    // once converted stay two. Git separates directories with `/`, so a
-    // backslash stays part of a name.
-    let path = |raw: &[u8]| String::from_utf8_lossy(raw).into_owned();
+    // once converted stay two; each is reported as [`git_name`] writes it.
+    let path = git_name;
     // Stage 0 holds a merged entry; stages 1 to 3 hold a conflict's sides.
     let entries = |index: &git2::Index| {
         index
@@ -1142,7 +1141,7 @@ pub fn owned_paths(
                 .into_iter()
                 .flatten()
             {
-                paths.insert(file.to_string_lossy().into_owned());
+                paths.insert(git_name(file.as_os_str().as_encoded_bytes()));
             }
         }
     }
@@ -1171,7 +1170,7 @@ pub(super) fn later_change(
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
         .filter(|changed| exact_path(changed) != Some(path))
-        .map(|changed| changed.to_string_lossy().into_owned())
+        .map(|changed| git_name(changed.as_os_str().as_encoded_bytes()))
         .collect();
     if let Some(changed) = other.first() {
         return Some(format!("{changed} changed"));
@@ -1597,6 +1596,9 @@ pub(super) fn task_entries_in(
     }
     if let Some(epics) = subtree(records, "epics")? {
         for epic in &epics {
+            if epic.kind() != Some(git2::ObjectType::Tree) {
+                continue;
+            }
             // Any epic directory may hold task records, so one whose name
             // cannot be read hides them: no answer, never an empty one.
             let Ok(name) = epic.name() else {
@@ -1823,8 +1825,30 @@ pub(super) fn non_planning_change(
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
         .find(|path| !exact_path(path).is_some_and(is_planning_path))
-        .map(|path| path.to_string_lossy().into_owned());
+        .map(|path| git_name(path.as_os_str().as_encoded_bytes()));
     Ok(outside)
+}
+
+/// A name git records, as text: the name itself when it is UTF-8, else its
+/// UTF-8 parts with each other byte written in octal after a backslash
+/// (`EPC-\377`). Such a name keeps its directories, so path rules still
+/// see where it lives, and it holds a backslash, which no record's or task
+/// directory's name does, so it never reads as a record's path (TSK-234).
+/// Git separates directories with `/`, so a backslash is part of a name.
+#[must_use]
+pub fn git_name(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    if let Ok(text) = std::str::from_utf8(raw) {
+        return text.to_string();
+    }
+    let mut written = String::new();
+    for chunk in raw.utf8_chunks() {
+        written.push_str(chunk.valid());
+        for byte in chunk.invalid() {
+            let _ = write!(written, "\\{byte:03o}");
+        }
+    }
+    written
 }
 
 /// A path git reports, as the text a decision compares, or `None` when it

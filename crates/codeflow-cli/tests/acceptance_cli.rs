@@ -4947,3 +4947,109 @@ fn an_epic_directory_named_in_other_bytes_is_no_proof_of_absence() {
         &["work.criteria_frozen", "not UTF-8"],
     );
 }
+
+/// Write `content` as a blob and stage it at the raw name `name`, which
+/// need not be UTF-8.
+#[cfg(unix)]
+fn stage_raw(root: &Path, name: &[u8], content: &[u8]) -> std::ffi::OsString {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::{Command, Stdio};
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hash.stdin.take().unwrap().write_all(content).unwrap();
+    let blob = String::from_utf8(hash.wait_with_output().unwrap().stdout).unwrap();
+    let raw = std::ffi::OsString::from_vec(name.to_vec());
+    let out = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(&raw)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    raw
+}
+
+/// TSK-234 review round 9: the task lives under an epic directory named
+/// with a literal U+FFFD; a staged file under a directory named with the
+/// byte FF reads alike once decoded lossily, but it is another file, so
+/// the verb refuses to complete the task with it staged.
+#[cfg(unix)]
+#[test]
+fn the_verb_keeps_every_byte_of_a_staged_name() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let real = "project-management/epics/EPC-\u{fffd}/tasks/TSK-001.md";
+    write(
+        root,
+        real,
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    git(root, &["rm", "-q", &record_path("TSK-001")]);
+    commit(root, "docs: keep the task under its epic");
+    let reviewed = code_change(root, BRANCH, "pub fn reviewed() {}\n");
+    write(
+        root,
+        real,
+        &task("TSK-001", "todo", OWN_JOURNEY, &valid_block(&reviewed)),
+    );
+    stage_raw(
+        root,
+        b"project-management/epics/EPC-\xff/tasks/TSK-001.md",
+        b"an unreviewed file\n",
+    );
+    let out = status_complete(root, "TSK-001");
+    assert_ne!(out.0, 0, "a staged file is not the record:\n{}", out.1);
+}
+
+/// TSK-234 review round 9: only a directory under `epics/` can hold task
+/// records, so a plain file there named in other bytes is no unreadable
+/// epic directory, and a planned task's own pull request may still change
+/// its criteria.
+#[cfg(unix)]
+#[test]
+fn a_plain_file_under_epics_named_in_other_bytes_is_not_a_directory() {
+    use std::process::Command;
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let raw = stage_raw(
+        root,
+        b"project-management/epics/note-\xff.txt",
+        b"an unrelated note\n",
+    );
+    git(root, &["commit", "-qm", "docs: a note that is no record"]);
+    let out = Command::new("git")
+        .args(["update-index", "--force-remove"])
+        .arg(&raw)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    git(root, &["commit", "-qm", "docs: remove the note"]);
+    git(root, &["switch", "-c", BRANCH]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", REOPEN_ADDS, "Pending.\n"),
+    );
+    commit(root, "docs: change its planned criteria");
+    assert_passes(
+        &ci(root, BRANCH, "TSK-001"),
+        "a plain file under epics named in other bytes",
+    );
+}
