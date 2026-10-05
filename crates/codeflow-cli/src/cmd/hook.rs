@@ -444,7 +444,11 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let policy = &authority.policy;
     let violations = exec_guard::evaluate_in(
         command,
-        matches!(payload.tool_name.as_str(), "Bash" | "run_terminal_command"),
+        exec_guard::shell_is_posix(
+            &payload.tool_name,
+            std::env::var("SHELL").ok().as_deref(),
+            cfg!(unix),
+        ),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,

@@ -121,7 +121,9 @@ tokenizer (`security/prose.rs`) certifies all of it:
 
 Any other character or construct leaves the line uncertified and every 3.0.0
 rule applies to it unchanged, as for a PowerShell payload, which is never
-certified. A certified line skips the privilege, headless-peer and
+certified. The `Bash` tool is certified by name; a `run_terminal_command` call
+runs in the user's own shell, so it is certified only on a Unix host whose
+`SHELL` names bash or zsh, and otherwise keeps the raw rules. A certified line skips the privilege, headless-peer and
 dangerous-command checks (the composed deletion check in the dangerous module
 included, since none of the four programs deletes); the outward, interpreter,
 edit and git checks still run on it. Text that cannot take this shape, such as a

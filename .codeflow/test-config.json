@@ -416,6 +416,22 @@
       "timeout_seconds": 2400
     },
     {
+      "name": "prose-exhaustive",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "CODEFLOW_ORACLE_FULL=1 cargo test --release -p codeflow-core --test prose_differential && CODEFLOW_ORACLE_FULL=1 cargo test --release -p codeflow-cli --test prose_oracle"
+        }
+      },
+      "requires": [
+        "rust-build"
+      ],
+      "outputs": [],
+      "exclusive": false,
+      "timeout_seconds": 7200
+    },
+    {
       "name": "present-supply-chain",
       "enabled": true,
       "runner": "custom",

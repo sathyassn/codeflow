@@ -1880,16 +1880,23 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
 
 /// The exec-guard's answer to `command` sent as a `tool` payload from `dir`.
 fn exec_guard_tool(dir: &Path, tool: &str, command: &str) -> Output {
+    exec_guard_tool_in_shell(dir, tool, command, Some("/bin/zsh"))
+}
+
+/// [`exec_guard_tool`] with the hook's `SHELL` set to `shell`, or removed.
+fn exec_guard_tool_in_shell(dir: &Path, tool: &str, command: &str, shell: Option<&str>) -> Output {
     let payload = serde_json::json!({
         "tool_name": tool,
         "tool_input": {"command": command},
         "cwd": dir,
     })
     .to_string();
-    run_with_stdin(
-        codeflow().args(["hook", "exec-guard"]).current_dir(dir),
-        &payload,
-    )
+    let mut hook = codeflow();
+    match shell {
+        Some(shell) => hook.env("SHELL", shell),
+        None => hook.env_remove("SHELL"),
+    };
+    run_with_stdin(hook.args(["hook", "exec-guard"]).current_dir(dir), &payload)
 }
 
 #[test]
@@ -1926,6 +1933,41 @@ fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
     // PowerShell reads `1,2` and `@name` differently, so nothing is certified.
     let out = exec_guard_tool(dir.path(), "PowerShell", allowed[1]);
     assert_eq!(out.status.code(), Some(2), "PowerShell is never certified");
+}
+
+#[test]
+fn exec_guard_certifies_run_terminal_command_only_in_a_shell_shown_to_be_posix() {
+    // `run_terminal_command` runs in the user's own shell, so it is certified
+    // only when SHELL names bash or zsh on a Unix host; otherwise the line
+    // keeps the 3.0.0 floor. The Bash tool is bash by name.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = "grep -n '; su' file.txt";
+    let code = |tool: &str, shell: Option<&str>| {
+        exec_guard_tool_in_shell(dir.path(), tool, line, shell)
+            .status
+            .code()
+    };
+    let unix = cfg!(unix);
+    for (shell, certified) in [
+        (Some("/bin/zsh"), true),
+        (Some("/usr/local/bin/bash"), true),
+        (Some("bash"), true),
+        (Some("/usr/bin/fish"), false),
+        (Some("/bin/dash"), false),
+        (Some("C:\\Windows\\System32\\cmd.exe"), false),
+        (Some("pwsh"), false),
+        (Some(""), false),
+        (None, false),
+    ] {
+        let want = if certified && unix { 0 } else { 2 };
+        assert_eq!(
+            code("run_terminal_command", shell),
+            Some(want),
+            "run_terminal_command with SHELL={shell:?}"
+        );
+        assert_eq!(code("Bash", shell), Some(0), "Bash with SHELL={shell:?}");
+    }
 }
 
 #[cfg(unix)]

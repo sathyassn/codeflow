@@ -778,7 +778,9 @@ erratum below, never an edit of the section.
   executable, or a path under `/dev`, `/proc` or `/sys`), and one quoted
   heredoc for `cat`. A
   certified line skips only the privilege, headless and dangerous checks;
-  every other guard still runs, and PowerShell lines are never certified. The
+  every other guard still runs, PowerShell lines are never certified, and a
+  `run_terminal_command` call is certified only on a Unix host whose `SHELL`
+  names bash or zsh. The
   issue's `printf`, `grep '; su'`, quoted-heredoc and `echo "...; supersedes
   ..."` lines now pass. A heredoc needs a quoted delimiter (`cat <<'EOF'`);
   with an unquoted one the line keeps the raw rules. Lines with a

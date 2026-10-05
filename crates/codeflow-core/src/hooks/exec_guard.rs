@@ -58,6 +58,27 @@ pub fn evaluate_at(
     evaluate_in(command, false, levels, integrity, cwd, root)
 }
 
+/// Whether a call's command will run in a POSIX shell the prose grammar was
+/// proved against (TSK-233). The `Bash` tool is a bash by name. A
+/// `run_terminal_command` call runs in the user's own shell, so it counts only
+/// on a Unix host whose `SHELL` names bash or zsh; on any other host, or when
+/// the shell is unset or anything else, it is not shown to be POSIX and the
+/// line keeps the raw 3.0.0 rules. Every other tool, `PowerShell` included, is
+/// never POSIX here.
+#[must_use]
+pub fn shell_is_posix(tool_name: &str, shell: Option<&str>, unix_host: bool) -> bool {
+    match tool_name {
+        "Bash" => true,
+        "run_terminal_command" => {
+            unix_host
+                && shell
+                    .and_then(|path| path.rsplit('/').next())
+                    .is_some_and(|name| matches!(name, "bash" | "zsh"))
+        }
+        _ => false,
+    }
+}
+
 /// [`evaluate_at`] for a call whose shell is known. `posix` is true for the
 /// Bash and `run_terminal_command` tools; only those lines can be certified
 /// as prose (TSK-233), because the grammar is POSIX shell grammar and
@@ -199,6 +220,33 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_shell_is_posix_by_tool_and_shell() {
+        use super::shell_is_posix;
+        assert!(shell_is_posix("Bash", None, true));
+        assert!(shell_is_posix("Bash", Some("/usr/bin/fish"), false));
+        for shell in ["/bin/zsh", "/opt/homebrew/bin/bash", "zsh"] {
+            assert!(shell_is_posix("run_terminal_command", Some(shell), true));
+            assert!(!shell_is_posix("run_terminal_command", Some(shell), false));
+        }
+        for shell in [
+            None,
+            Some(""),
+            Some("/usr/bin/fish"),
+            Some("/bin/dash"),
+            Some("pwsh"),
+            Some("C:\\x\\cmd.exe"),
+        ] {
+            assert!(
+                !shell_is_posix("run_terminal_command", shell, true),
+                "{shell:?}"
+            );
+        }
+        for tool in ["PowerShell", "Read", "", "bash"] {
+            assert!(!shell_is_posix(tool, Some("/bin/bash"), true), "{tool}");
+        }
+    }
+
     use super::*;
     use crate::hooks::any_blocking;
 
