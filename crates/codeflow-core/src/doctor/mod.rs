@@ -7,7 +7,7 @@
 //! `.codeflow/` config validity and writability, and network reachability.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -226,22 +226,13 @@ impl Options {
         if let Some(f) = self.exec_command_stdin {
             f(cmd, args, stdin)
         } else {
-            let mut child = crate::git::process(cmd)
-                .args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|error| error.to_string())?;
-            child
-                .stdin
-                .as_mut()
-                .ok_or_else(|| "command stdin was not piped".to_string())?
-                .write_all(stdin.as_bytes())
-                .map_err(|error| error.to_string())?;
-            let output = child
-                .wait_with_output()
-                .map_err(|error| error.to_string())?;
+            // Stdin is written while stdout and stderr are drained, so the
+            // command's output cannot deadlock against a large input.
+            let output = crate::git::output_with_input(
+                crate::git::process(cmd).args(args),
+                stdin.as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
             if output.status.success() {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             } else {
@@ -1801,9 +1792,6 @@ fn run_captured(
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if stdin.is_some() {
-        command.stdin(Stdio::piped());
-    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -1812,12 +1800,24 @@ fn run_captured(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        // A child that exits without reading closes the pipe; its exit
-        // status, not this write, is the result.
-        let _ = pipe.write_all(text.as_bytes());
-    }
+    // The input is written from its own thread (`git::spawn_with_input_stopping`),
+    // so an answer larger than a pipe cannot block the write and with it the
+    // timeout below. A child that exits without reading closes the pipe; its
+    // exit status, not this write, is the result, and a killed child ends the
+    // write the same way. The write must also finish by the deadline: a
+    // descendant that keeps the pipe open and never reads would leave it
+    // blocked, so the tree is stopped and the run times out.
+    let (mut child, writer) = match stdin {
+        Some(text) => crate::git::spawn_with_input_stopping(
+            &mut command,
+            text.as_bytes().to_vec(),
+            terminate_process_tree,
+        )
+        .map(|(child, writer)| (child, Some(writer)))
+        .map_err(|error| error.to_string())?,
+        // No input: the child inherits doctor's stdin, as documented above.
+        None => (command.spawn().map_err(|error| error.to_string())?, None),
+    };
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
     let started = Instant::now();
@@ -1848,6 +1848,15 @@ fn run_captured(
             error
         }
     })?;
+    if let Some(writer) = writer {
+        while !writer.is_finished() {
+            if started.elapsed() >= timeout {
+                terminate_process_tree(&mut child);
+                return Err(probe_timeout_message(timeout));
+            }
+            std::thread::sleep(VERSION_PROBE_POLL);
+        }
+    }
     Ok(CapturedRun {
         code: status.code(),
         stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
@@ -6227,5 +6236,94 @@ mod tests {
         let opts = test_opts();
         let result = run_check("claude", &opts).unwrap();
         assert_eq!(result.name, "claude");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_larger_than_a_pipe_does_not_block_a_large_stdin() {
+        // `cat` echoes its stdin as it reads, so a writer that sent all of
+        // stdin before it read stdout would block with the pipes full.
+        let input = "x".repeat(2 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let captured = run_captured("cat", &[], Duration::from_secs(30), Some(&input), None);
+            let exec = Options::default().do_exec_stdin("cat", &[], &input);
+            let _ = sender.send((captured, exec));
+        });
+        let (captured, exec) = receiver
+            .recv_timeout(Duration::from_secs(90))
+            .expect("the child exchange finished instead of deadlocking on a pipe");
+        let captured = captured.unwrap();
+        assert_eq!(captured.code, Some(0));
+        assert!(captured.stdout.starts_with('x'));
+        assert_eq!(exec.unwrap().len(), 2 * 1024 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_that_keeps_stdin_open_and_never_reads_times_out() {
+        // The child exits at once; its background `sleep` keeps only the
+        // stdin pipe open, so a 4 MiB write would stay blocked forever. The
+        // shell copies stdin to fd 3 first, which every child inherits. Some
+        // shells (dash, Linux's /bin/sh) give a background job /dev/null as
+        // stdin even with an explicit `<&0`, so fd 0 cannot carry the pipe
+        // on every platform.
+        let input = "x".repeat(4 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            let run = run_captured(
+                "sh",
+                &["-c", "exec 3<&0; sleep 30 >/dev/null 2>&1 & exit 0"],
+                Duration::from_millis(500),
+                Some(&input),
+                None,
+            );
+            let _ = sender.send((run, started.elapsed()));
+        });
+        let (run, elapsed) = receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("run_captured returned instead of waiting on the blocked write");
+        assert!(run.unwrap_err().contains("timed out"));
+        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_exits_without_reading_ends_the_write_and_returns_its_status() {
+        // Nothing else holds the pipe, so the write ends with a broken pipe
+        // and the exit status is the result, not a timeout.
+        let input = "x".repeat(4 * 1024 * 1024);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let run = run_captured(
+                "sh",
+                &["-c", "exit 3"],
+                Duration::from_secs(30),
+                Some(&input),
+                None,
+            );
+            let _ = sender.send(run);
+        });
+        let run = receiver
+            .recv_timeout(Duration::from_secs(60))
+            .expect("run_captured returned instead of waiting on the write");
+        assert_eq!(run.unwrap().code, Some(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writer_that_cannot_start_ends_the_run_with_an_error() {
+        let fail = &crate::git::stdin::tests::FAIL_WRITER_START;
+        fail.with(|flag| flag.set(true));
+        let run = run_captured(
+            "sleep",
+            &["30"],
+            Duration::from_secs(30),
+            Some("input"),
+            None,
+        );
+        fail.with(|flag| flag.set(false));
+        assert!(run.unwrap_err().contains("injected"));
     }
 }

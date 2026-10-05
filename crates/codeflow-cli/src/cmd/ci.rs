@@ -15,9 +15,7 @@
 //! plus explicit `--base`/`--head`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 mod acceptance;
 mod adopter;
@@ -1937,34 +1935,19 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
         input.push_str(blob);
         input.push('\n');
     }
-    let out = git_with_stdin(root, &["cat-file", "--batch"], input)?;
+    let out = git_with_stdin(root, &["cat-file", "--batch"], &input)?;
     parse_batch(&out, blobs)
 }
 
 /// Run `git <args>` in `root` with `input` on stdin and return its stdout.
 /// The input is written from its own thread, so a large output cannot
 /// deadlock the pipes.
-fn git_with_stdin(root: &Path, args: &[&str], input: String) -> Result<Vec<u8>, String> {
-    let name = args.first().copied().unwrap_or_default();
-    let mut child = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("git {name}: no stdin"))?;
-    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    writer
-        .join()
-        .map_err(|_| format!("git {name}: input writer panicked"))?
-        .map_err(|e| e.to_string())?;
+fn git_with_stdin(root: &Path, args: &[&str], input: &str) -> Result<Vec<u8>, String> {
+    let out = codeflow_core::git::output_with_input(
+        codeflow_core::git::command().arg("-C").arg(root).args(args),
+        input.as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
@@ -2150,7 +2133,7 @@ fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
         input.push_str(sha);
         input.push('\n');
     }
-    let Ok(out) = git_with_stdin(root, &["diff-tree", "--stdin", "-r", "--raw", "-z"], input)
+    let Ok(out) = git_with_stdin(root, &["diff-tree", "--stdin", "-r", "--raw", "-z"], &input)
     else {
         return files;
     };
