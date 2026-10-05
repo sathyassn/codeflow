@@ -325,8 +325,10 @@ level:
   the link reaches the file, and a copy or move that keeps a source link
   to one, or whose text reaches one from where the copy lands (`cp -P`,
   `cp -a`, `rsync -l`, `mv`); long options are read with the prefixes GNU
-  accepts (`cp --sym`), and `-L`, `-H` and `-P` in the order cp reads
-  them;
+  accepts (`cp --sym`), and `-L` and `-P` in the order cp reads them;
+  `-H` and rsync's `--copy-unsafe-links` keep some links, so they do not
+  relax the check; a copied link to the home or another directory that
+  holds startup files refuses too;
 - `rg` without `--no-config`, since its configuration file can name a
   `--pre` program, and `sed` unless its options change no file and its
   script is only addressed print commands (GNU sed's `e` and `w` run a
@@ -346,8 +348,10 @@ What stays open, by harness and platform:
   one they stay open. An interpreter call whose code names a startup file
   is refused even when it only reads; read with `cat` or `grep` instead.
   A tree copied or moved with its links kept is walked up to 4096
-  entries; in a larger one, a link to a startup file already inside it is
-  copied unseen. A home whose startup files are
+  entries, following links to directories; in a larger one, a link to a
+  startup file past that point is copied unseen, and a write through the
+  copy in the same call is not refused, since the copy does not exist
+  when the call is judged. A home whose startup files are
   themselves links, as dotfile managers make them, sees `cp -a ~/.zshrc
   backup` refused; `cp ~/.zshrc backup` follows the link and passes.
 - **Claude Code.** The generated denies name the default locations. A
