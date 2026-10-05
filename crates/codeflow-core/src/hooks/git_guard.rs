@@ -5300,6 +5300,30 @@ fn check_git(
         }
     }
 
+    // A relative `--file` read from the directories git runs in: `git -C
+    // ~/.config/git config --file config alias.x y` writes the user's
+    // configuration (review round three). The plain reading is judged per
+    // case below.
+    if sub == "config"
+        && ctx.policy.hook_integrity.is_active()
+        && config_writes_code_key(rest, None).is_none()
+    {
+        let dirs: Vec<PathBuf> = compose_targets(args, moved)
+            .map(|specs| {
+                specs
+                    .into_iter()
+                    .map(|spec| spec.map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(key) = config_writes_code_key(rest, Some(&dirs)) {
+            out.push(hook_integrity_violation(
+                ctx.policy.hook_integrity,
+                format!("`git config` would set `{key}` in the user or system configuration, which makes a later git command run a program the guards never see"),
+            ));
+        }
+    }
+
     let judged = judge_target(args, branches, moved, ctx);
     if let Some(u) = &unclassified {
         let known = match u {
@@ -6324,7 +6348,7 @@ fn judge_git_sub(
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
             } else if policy.hook_integrity.is_active() {
-                if let Some(key) = config_writes_code_key(rest) {
+                if let Some(key) = config_writes_code_key(rest, None) {
                     let what = if key == "--edit" {
                         "`git config --edit` would open the user or system configuration, where a key can make".to_string()
                     } else {
@@ -6528,8 +6552,12 @@ fn code_running_key(key: &str) -> bool {
 /// is exactly `.gitconfig` or `.config/git/config`, which the home would
 /// make it; one that climbs with `..` or is filled in at run time is
 /// treated as one. A project file such as `fixtures/.gitconfig` is not
-/// (review round two).
-fn user_config_file(file: &str) -> bool {
+/// (review round two). With the directories git runs in, `dirs`, a
+/// relative path is also read from each of them, and every path through
+/// its symbolic links, so `--file config` run in `~/.config/git` counts; an
+/// empty `dirs` means the directory is unknown and a relative path counts
+/// (review round three).
+fn user_config_file(file: &str, dirs: Option<&[PathBuf]>) -> bool {
     let file = file.replace('\\', "/");
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -6567,25 +6595,52 @@ fn user_config_file(file: &str) -> bool {
         }
         parts.join("/").to_lowercase()
     };
+    let mut user_paths = vec![PathBuf::from("/etc/gitconfig")];
+    if let Some(home) = &home {
+        user_paths.push(home.join(".gitconfig"));
+        user_paths.push(home.join(".config/git/config"));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        user_paths.push(PathBuf::from(xdg).join("git/config"));
+    }
+    // A path through its symbolic links: the file itself, else its
+    // directory with the name added.
+    let real = |path: &Path| {
+        std::fs::canonicalize(path)
+            .ok()
+            .or_else(|| {
+                let parent = std::fs::canonicalize(path.parent()?).ok()?;
+                Some(parent.join(path.file_name()?))
+            })
+            .map(|p| lexical(&p.to_string_lossy()))
+    };
+    let mut user: Vec<String> = user_paths
+        .iter()
+        .map(|p| lexical(&p.to_string_lossy()))
+        .collect();
+    user.extend(user_paths.iter().filter_map(|p| real(p)));
+    let is_user = |path: &str| {
+        user.contains(&lexical(path)) || real(Path::new(path)).is_some_and(|r| user.contains(&r))
+    };
     if !expanded.starts_with('/') {
         let trimmed = expanded.trim_start_matches("./");
-        return trimmed.split('/').any(|part| part == "..")
+        if trimmed.split('/').any(|part| part == "..")
             || matches!(
                 lexical(trimmed).as_str(),
                 ".gitconfig" | ".config/git/config"
-            );
+            )
+        {
+            return true;
+        }
+        return match dirs {
+            None => false,
+            Some([]) => true,
+            Some(dirs) => dirs
+                .iter()
+                .any(|dir| is_user(&dir.join(trimmed).to_string_lossy())),
+        };
     }
-    let target = lexical(&expanded);
-    let mut user = vec!["etc/gitconfig".to_string()];
-    if let Some(home) = &home {
-        let home = home.to_string_lossy();
-        user.push(lexical(&format!("{home}/.gitconfig")));
-        user.push(lexical(&format!("{home}/.config/git/config")));
-    }
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        user.push(lexical(&format!("{}/git/config", xdg.to_string_lossy())));
-    }
-    user.contains(&target)
+    is_user(&expanded)
 }
 
 /// Whether a section, renamed or written whole, holds a key whose value
@@ -6604,13 +6659,13 @@ fn section_runs_code(section: &str) -> bool {
 /// scope (`--global`, `--system`, or `--file` naming the user's
 /// configuration), or an interactive edit of that scope. Repository scope
 /// and every read stay allowed.
-fn config_writes_code_key(rest: &[String]) -> Option<String> {
+fn config_writes_code_key(rest: &[String], dirs: Option<&[PathBuf]>) -> Option<String> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
     let file_is_user = parsed
         .values_of('f', "--file")
         .into_iter()
-        .any(user_config_file);
+        .any(|file| user_config_file(file, dirs));
     if !(any_long(&["--global", "--system"]) || file_is_user) || config_only_reads(rest) {
         return None;
     }
@@ -9835,6 +9890,47 @@ mod tests {
             "git config --global --remove-section alias",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        // Review round three: a relative `--file` is read from the directory
+        // git runs in. Nothing is written; only the verdict is read.
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let user_dir = home.join(".config/git");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        for (cmd, cwd) in [
+            (
+                "git config --file config alias.x y".to_string(),
+                user_dir.as_path(),
+            ),
+            (
+                "git config --file .config/git/config alias.x y".to_string(),
+                home.as_path(),
+            ),
+            (
+                format!(
+                    "git -C {} config --file config alias.x y",
+                    user_dir.display()
+                ),
+                elsewhere.path(),
+            ),
+            (
+                "git -C \"$D\" config --file config alias.x y".to_string(),
+                elsewhere.path(),
+            ),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        for cmd in [
+            "git config --file config alias.x y",
+            "git config --file fixtures/.gitconfig alias.x y",
+        ] {
+            let v = at(cmd, elsewhere.path());
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
     }
