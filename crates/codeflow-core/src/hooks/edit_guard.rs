@@ -245,8 +245,17 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     };
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
+    let startup = crate::security::startup::StartupEnv::with_home(ctx.home);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
+        // Shell startup files refuse whatever the integrity level (TSK-242).
+        if let Some(file) = crate::security::startup::class_target(&absolute, &startup) {
+            violations.push(Violation::always_blocking(
+                crate::security::startup::RULE,
+                format!("file edit targets the shell startup file `{file}`"),
+                crate::security::startup::SANCTIONED,
+            ));
+        }
         let lexical = normalized(&absolute, false)?;
         let resolved = normalized(&absolute, true)?;
         for candidate in [&lexical, &resolved] {
@@ -987,6 +996,76 @@ mod tests {
                 .replace(".codex/config.toml", "notes.md");
             let request = parse_payload(&ordinary).unwrap().unwrap();
             assert!(evaluate(&request, &fixture.ctx()).unwrap().is_empty());
+        }
+    }
+
+    /// TSK-242 AC-1: a native edit of a shell startup file refuses under
+    /// `security.shell_startup` through every edit payload, in each
+    /// spelling, whatever the integrity level; an ordinary file passes.
+    #[test]
+    fn startup_files_refuse_through_every_edit_payload() {
+        let f = Fixture::new();
+        let home = f.home.to_str().unwrap().to_string();
+        let startup = |request: &EditRequest, ctx: &EditContext<'_>| {
+            evaluate(request, ctx)
+                .unwrap()
+                .iter()
+                .any(|v| v.rule == "security.shell_startup" && v.level_fixed)
+        };
+        let spellings = [
+            "~/.zshrc".to_string(),
+            format!("{home}/.bashrc"),
+            format!("{home}/.ZSHENV"),
+            format!("{home}/.config/fish/conf.d/x.fish"),
+            format!("{home}/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            ".envrc".to_string(),
+            "sub/.envrc".to_string(),
+            "/etc/profile.d/x.sh".to_string(),
+        ];
+        for path in &spellings {
+            let patch = format!("*** Begin Patch\n*** Add File: {path}\n+x\n*** End Patch\n");
+            for request in [
+                synthetic("Write", json!({"file_path": path})),
+                synthetic(
+                    "Edit",
+                    json!({"file_path": path, "old_string": "a", "new_string": "b"}),
+                ),
+                synthetic("write", json!({"path": path})),
+                synthetic("search_replace", json!({"path": path})),
+                synthetic("apply_patch", json!(patch)),
+            ] {
+                assert!(startup(&request, &f.ctx()), "{path}");
+                let off = EditContext {
+                    level: PolicyLevel::Off,
+                    ..f.ctx()
+                };
+                assert!(startup(&request, &off), "{path} with integrity off");
+            }
+        }
+        // Relative from a home working directory, and through a link.
+        let in_home = EditContext {
+            cwd: &f.home,
+            ..f.ctx()
+        };
+        assert!(startup(
+            &synthetic("Write", json!({"file_path": ".zprofile"})),
+            &in_home
+        ));
+        #[cfg(unix)]
+        {
+            std::fs::write(f.home.join(".zshrc"), "x").unwrap();
+            std::os::unix::fs::symlink(f.home.join(".zshrc"), f.root.join("rc")).unwrap();
+            assert!(startup(
+                &synthetic("Write", json!({"file_path": "rc"})),
+                &f.ctx()
+            ));
+        }
+        for ordinary in ["notes.md", "src/zshrc.rs", "docs/profile.md"] {
+            let request = synthetic("Write", json!({"file_path": ordinary}));
+            assert!(
+                evaluate(&request, &f.ctx()).unwrap().is_empty(),
+                "{ordinary}"
+            );
         }
     }
 

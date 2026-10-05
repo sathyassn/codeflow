@@ -4,7 +4,9 @@
 //! reads and headless peer runs use their existing policy levels. The family
 //! classifier unwraps supported launchers; interpreter literals use the same
 //! rule as the action they name. Enforcement-path references use
-//! `git.hook_integrity`. Opaque child programs remain outside this parser.
+//! `git.hook_integrity`. Writes to shell startup files refuse under
+//! `security.shell_startup`, which no policy relaxes (TSK-242). Opaque
+//! child programs remain outside this parser.
 
 use crate::security::dangerous::DangerousModule;
 use crate::security::headless::{headless_peer_run, HeadlessRun};
@@ -69,6 +71,16 @@ pub fn evaluate_at(
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
     let mut violations = evaluate_floor(command);
+    // Shell startup files: always blocking, no policy key (TSK-242). A
+    // command the catastrophic floor already refuses (`rm -rf /etc/*`)
+    // gets that one finding.
+    if violations.is_empty() {
+        violations.extend(crate::security::startup::evaluate(
+            command,
+            cwd,
+            &crate::security::startup::StartupEnv::from_process(),
+        ));
+    }
     if levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));

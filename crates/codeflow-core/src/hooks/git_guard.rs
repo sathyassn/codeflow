@@ -684,7 +684,7 @@ fn program_kind(program: &str) -> ProgramKind {
 }
 
 /// The final path component of a token (`/usr/bin/git` -> `git`).
-fn basename(token: &str) -> &str {
+pub(crate) fn basename(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
@@ -1395,7 +1395,7 @@ fn token_integrity_path_literal(
 /// Whether a word holds pattern syntax some shell reads at run time: Bash's
 /// `*`, `?` and `[`, and the forms the guard reads conservatively
 /// ([`conservative_glob`]).
-fn has_glob(word: &str) -> bool {
+pub(crate) fn has_glob(word: &str) -> bool {
     word.contains(['*', '?', '[']) || conservative_glob(word)
 }
 
@@ -1449,7 +1449,7 @@ fn numeric_range_len(chars: &[char]) -> Option<usize> {
 /// after its first character, also the part before that `~`, since zsh's
 /// exclusion `pat~other` matches only names `pat` matches (TSK-216 round
 /// 18). `None` when the braces are too many to read.
-fn word_readings(word: &str) -> Option<Vec<String>> {
+pub(crate) fn word_readings(word: &str) -> Option<Vec<String>> {
     let mut words = brace_words(word)?;
     let excluded: Vec<String> = words
         .iter()
@@ -2160,14 +2160,14 @@ const EVERY_PATH_PATTERN: &str =
 const RUN_DIR_LIMIT: usize = 64;
 
 /// Every directory the commands of a script can run in (TSK-216 round 5).
-struct RunDirs {
+pub(crate) struct RunDirs {
     /// The starting directory and each one a literal `cd`, `pushd` or
     /// `env -C` on the script can reach from a directory listed before it.
-    dirs: Vec<PathBuf>,
+    pub(crate) dirs: Vec<PathBuf>,
     /// Why the list may miss one: a directory filled in at run time, a
     /// program that can move the shell untracked, a move that repeats, or
     /// a rotation that can reach a `pushd -n` directory.
-    unknown: Option<String>,
+    pub(crate) unknown: Option<String>,
 }
 
 /// The directories the commands in `segments` can run in, starting from
@@ -2179,7 +2179,7 @@ struct RunDirs {
 /// then, so once one is stacked a rotation or `popd` makes the directory
 /// unknown (TSK-216 round 10). It over-approximates: a command is judged
 /// from each listed directory.
-fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
+pub(crate) fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
     let mut run = RunDirs {
         dirs: vec![start.to_path_buf()],
         unknown: None,
@@ -2537,7 +2537,7 @@ fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option
 /// round 12). The reader does not read ANSI-C or locale quoting (`$'...'`,
 /// `$"..."`): on a command that holds either and a `>`, every word is kept
 /// in [`Redirects::unread`] and judged by name.
-fn redirect_writes(segment: &str) -> Redirects {
+pub(crate) fn redirect_writes(segment: &str) -> Redirects {
     let joined = join_continuations(segment);
     if (joined.contains("$'") || joined.contains("$\"")) && joined.contains('>') {
         let unread = line_words(&joined.replace(['\'', '"', '$', '\\'], " "))
@@ -2556,12 +2556,12 @@ fn redirect_writes(segment: &str) -> Redirects {
 
 /// What the redirections of one command can write ([`redirect_writes`]).
 #[derive(Default)]
-struct Redirects {
+pub(crate) struct Redirects {
     /// The targets of its write redirections, read as written.
-    targets: Vec<String>,
+    pub(crate) targets: Vec<String>,
     /// Every word of a command whose quoting the reader does not read:
     /// any of them may be a write target, so each is judged by name.
-    unread: Vec<String>,
+    pub(crate) unread: Vec<String>,
 }
 
 /// `text` with each backslash-newline outside single quotes removed, as the
@@ -3029,7 +3029,7 @@ fn line_words(line: &str) -> impl Iterator<Item = &str> {
 
 /// Whether the shell fills in part of `word` when the command runs: a
 /// variable, or a command substitution the tokenizer cut out.
-fn unresolved_word(word: &str) -> bool {
+pub(crate) fn unresolved_word(word: &str) -> bool {
     word.contains(['$', '`']) || has_substitution(word)
 }
 
@@ -6323,6 +6323,18 @@ fn judge_git_sub(
                     policy.hook_integrity,
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
+            } else if policy.hook_integrity.is_active() {
+                if let Some(key) = config_writes_code_key(rest) {
+                    let what = if key == "--edit" {
+                        "`git config --edit` would open the user or system configuration, where a key can make".to_string()
+                    } else {
+                        format!("`git config` would set `{key}` in the user or system configuration, which makes")
+                    };
+                    out.push(hook_integrity_violation(
+                        policy.hook_integrity,
+                        format!("{what} a later git command run a program the guards never see"),
+                    ));
+                }
             }
         }
         "update-ref" => check_update_ref(rest, ctx, out),
@@ -6441,6 +6453,113 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
+}
+
+/// The git configuration keys whose value is a program or command a later
+/// git command runs, or a file git reads more configuration from (TSK-242).
+/// `*` stands for one subsection name.
+const CODE_RUNNING_KEYS: &[&str] = &[
+    "alias.*",
+    "core.pager",
+    "core.editor",
+    "core.sshcommand",
+    "core.fsmonitor",
+    "core.askpass",
+    "core.gitproxy",
+    "credential.helper",
+    "credential.*.helper",
+    "diff.external",
+    "diff.*.command",
+    "diff.*.textconv",
+    "difftool.*.cmd",
+    "merge.*.driver",
+    "mergetool.*.cmd",
+    "filter.*.clean",
+    "filter.*.smudge",
+    "filter.*.process",
+    "include.path",
+    "includeif.*.path",
+    "init.templatedir",
+    "sequence.editor",
+    "gpg.program",
+    "gpg.*.program",
+    "pager.*",
+    "interactive.difffilter",
+    "web.browser",
+    "browser.*.cmd",
+    "man.*.cmd",
+    "remote.*.uploadpack",
+    "remote.*.receivepack",
+    "sendemail.smtpserver",
+    "uploadpack.packobjectshook",
+];
+
+/// Whether `key` (as git reads it: section and variable in any case, the
+/// subsection as written) is one of [`CODE_RUNNING_KEYS`].
+fn code_running_key(key: &str) -> bool {
+    let (Some((section, rest)), Some((_, variable))) = (key.split_once('.'), key.rsplit_once('.'))
+    else {
+        return false;
+    };
+    let middle = rest.rsplit_once('.').map(|(sub, _)| sub);
+    CODE_RUNNING_KEYS.iter().any(|pattern| {
+        let parts: Vec<&str> = pattern.split('.').collect();
+        match parts.as_slice() {
+            [s, v] if *v == "*" => section.eq_ignore_ascii_case(s),
+            [s, v] => {
+                middle.is_none()
+                    && section.eq_ignore_ascii_case(s)
+                    && variable.eq_ignore_ascii_case(v)
+            }
+            [s, _, v] => {
+                middle.is_some()
+                    && section.eq_ignore_ascii_case(s)
+                    && variable.eq_ignore_ascii_case(v)
+            }
+            _ => false,
+        }
+    })
+}
+
+/// The code-running key a `git config` invocation sets at user or system
+/// scope (`--global`, `--system`, or `--file` naming the user's
+/// configuration), or an interactive edit of that scope. Repository scope
+/// and every read stay allowed.
+fn config_writes_code_key(rest: &[String]) -> Option<String> {
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    let file_is_user = parsed.values_of('f', "--file").into_iter().any(|file| {
+        let file = file.replace('\\', "/");
+        file.ends_with(".gitconfig") || (file.ends_with("git/config") && !file.contains(".git/"))
+    });
+    if !(any_long(&["--global", "--system"]) || file_is_user) || config_only_reads(rest) {
+        return None;
+    }
+    let subcommand = parsed.operands.first().copied().filter(|word| {
+        matches!(
+            *word,
+            "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
+        )
+    });
+    if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
+        return Some("--edit".to_string());
+    }
+    if any_long(&[
+        "--unset",
+        "--unset-all",
+        "--remove-section",
+        "--rename-section",
+    ]) || matches!(
+        subcommand,
+        Some("unset" | "remove-section" | "rename-section")
+    ) {
+        return None;
+    }
+    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    operands
+        .first()
+        .filter(|key| code_running_key(key))
+        .map(|key| (*key).to_string())
 }
 
 /// Does this `git config` invocation only read? A get, list or single-name
@@ -8065,7 +8184,7 @@ fn is_duration(word: &str) -> bool {
 /// guard cannot read with certainty: an `env` option it does not know, an
 /// `env -C` without a directory, or a `timeout` without a duration. `env
 /// -S`, which packs the command into one word, is a stated limit.
-fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
+pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
     let assignment = |t: &str| {
         t.split_once('=')
             .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -8273,7 +8392,7 @@ fn takes_next_word(launcher: &str, a: &str) -> bool {
 }
 
 /// `true` when `name` is a POSIX shell whose `-c` argument is a command string.
-fn is_shell(name: &str) -> bool {
+pub(crate) fn is_shell(name: &str) -> bool {
     matches!(name, "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash")
 }
 
@@ -9568,6 +9687,56 @@ mod tests {
             "git config core.hooksPath > /tmp/hooks-path",
             "git config core.hooksPath || echo unset",
             "git -C /repo config core.hooksPath",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn code_running_keys_refuse_at_user_and_system_scope() {
+        // TSK-242: a key whose value git runs later, set where every
+        // repository reads it, makes a later git command run a program no
+        // guard sees. Repository scope and reads stay allowed.
+        let p = default_policy();
+        for cmd in [
+            "git config --global alias.co '!sudo id'",
+            "git config --global Alias.co checkout",
+            "git config --system core.pager 'less; id'",
+            "git config --global core.editor vim",
+            "git config --global core.sshCommand 'ssh -i k'",
+            "git config --global core.fsmonitor ./hook",
+            "git config --global credential.helper store",
+            "git config --global credential.https://example.invalid.helper store",
+            "git config --global diff.external ./d",
+            "git config --global diff.tool.command ./d",
+            "git config --global filter.x.clean ./c",
+            "git config --global filter.x.smudge ./s",
+            "git config --global include.path ~/evil.inc",
+            "git config --global includeIf.gitdir:~/w/.path ~/evil.inc",
+            "git config --global init.templateDir ~/t",
+            "git config --global sequence.editor ./e",
+            "git config --global gpg.program ./g",
+            "git config --global --add alias.st status",
+            "git config set --global alias.co checkout",
+            "git config --file ~/.gitconfig alias.co checkout",
+            "git config -f ~/.config/git/config core.pager cat",
+            "git config --global --edit",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global user.name x",
+            "git config --global user.email x@example.invalid",
+            "git config --global init.defaultBranch main",
+            "git config --global --get alias.co",
+            "git config --global --list",
+            "git config --global --unset alias.co",
+            "git config alias.co checkout",
+            "git config --local core.pager cat",
+            "git config --file .git/config alias.co checkout",
+            "git config get --global core.editor",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");

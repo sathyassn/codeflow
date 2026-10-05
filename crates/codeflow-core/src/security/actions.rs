@@ -159,8 +159,63 @@ pub struct ActionTable {
     pub sandbox_env_denies: Vec<String>,
     /// Secret stores the Claude sandbox denies to every subprocess.
     pub sandbox_read_denies: Vec<String>,
+    /// The shell startup class (issue 86, TSK-242).
+    pub startup_paths: StartupPaths,
     /// The delegate settings fragment.
     pub delegate_denies: DelegateDenies,
+}
+
+/// The shell startup files and the files that run commands when a shell or
+/// terminal starts (TSK-242). An entry ending in `/` is a directory and
+/// everything below it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartupPaths {
+    /// Why the class exists.
+    pub why: String,
+    /// Paths relative to the home directory.
+    pub home: Vec<String>,
+    /// Absolute system paths.
+    pub absolute: Vec<String>,
+    /// File names protected in every directory.
+    pub anywhere: Vec<String>,
+}
+
+impl StartupPaths {
+    /// The Claude `Edit(...)` denies of the class: `~/` for the home
+    /// entries, `//` for the absolute ones and `//**/` for a name in every
+    /// directory, with `/**` after a directory.
+    #[must_use]
+    pub fn claude_edit_denies(&self) -> Vec<String> {
+        let dir = |entry: &str| {
+            entry
+                .strip_suffix('/')
+                .map_or_else(|| entry.to_string(), |d| format!("{d}/**"))
+        };
+        self.home
+            .iter()
+            .map(|e| format!("Edit(~/{})", dir(e)))
+            .chain(self.absolute.iter().map(|e| format!("Edit(/{})", dir(e))))
+            .chain(self.anywhere.iter().map(|e| format!("Edit(//**/{e})")))
+            .collect()
+    }
+
+    /// The Claude sandbox `denyWrite` entries of the class: the home and
+    /// absolute entries as plain paths, since the Linux sandbox skips an
+    /// entry with a wildcard. The names protected in every directory have
+    /// no plain path; their `Edit(//**/...)` deny covers them on macOS.
+    #[must_use]
+    pub fn sandbox_write_denies(&self) -> Vec<String> {
+        self.home
+            .iter()
+            .map(|e| format!("~/{}", e.trim_end_matches('/')))
+            .chain(
+                self.absolute
+                    .iter()
+                    .map(|e| e.trim_end_matches('/').to_string()),
+            )
+            .collect()
+    }
 }
 
 /// The embedded action table, parsed once.
@@ -229,8 +284,9 @@ impl ActionTable {
     }
 
     /// The Claude `permissions.deny` array, in its required order: the read
-    /// groups (each group's denies, then its carve-outs), the `Edit` denies,
-    /// then the families.
+    /// groups (each group's denies, then its carve-outs), the `Edit` denies
+    /// of the enforcement paths and of the shell startup class, then the
+    /// families.
     #[must_use]
     pub fn claude_deny(&self) -> Vec<String> {
         self.claude_read_groups
@@ -238,6 +294,7 @@ impl ActionTable {
             .flat_map(|group| group.denies.iter().chain(&group.carveouts))
             .chain(&self.claude_edit_denies)
             .cloned()
+            .chain(self.startup_paths.claude_edit_denies())
             .chain(self.family_rules(Decision::Deny))
             .collect()
     }
@@ -282,6 +339,13 @@ impl ActionTable {
             let path = Value::String(path.clone());
             if !deny_read.contains(&path) {
                 deny_read.push(path);
+            }
+        }
+        let deny_write = array_at(filesystem, "denyWrite");
+        for path in self.startup_paths.sandbox_write_denies() {
+            let path = Value::String(path);
+            if !deny_write.contains(&path) {
+                deny_write.push(path);
             }
         }
     }

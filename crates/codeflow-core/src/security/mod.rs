@@ -14,6 +14,8 @@
 //!
 //! - [`actions`]: the action table the permission presets for Claude, Codex
 //!   and Grok are generated from (ADR-0075, TSK-171).
+//! - [`startup`]: the shell startup class, refused for native edits by
+//!   edit-guard and for shell writes by the exec-guard (issue 86, TSK-242).
 //!
 //! The unwired v1 modules (`git` command scanning, `path`, `fileops`,
 //! `branch`, `tmp`, `network`) and the `SecurityChecker` orchestrator were
@@ -34,6 +36,7 @@ pub(crate) mod outward;
 pub mod pattern;
 pub mod policy;
 pub mod privilege;
+pub mod startup;
 
 pub use policy::SecurityPolicy;
 
