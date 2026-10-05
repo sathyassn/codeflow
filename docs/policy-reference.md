@@ -111,7 +111,7 @@ tokenizer (`security/prose.rs`) certifies all of it:
 - a redirect writes a document file (`.md`, `.markdown`, `.txt`, `.rst`,
   `.log`), or is `2>&1` or `>&2`; when the call is judged the target must be a
   file that does not exist yet or an existing plain file with no execute bit
-  and one hard link, in a directory that exists and, with links resolved, is not
+  and one hard link (on Windows only a new file is certified), in a directory that exists and, with links resolved, is not
   under `/dev`, `/proc` or `/sys`; a symbolic link, a hard-linked file, a named
   pipe, a device and an executable refuse;
 - `cat` may take one heredoc whose delimiter is quoted (`cat <<'EOF' > a.md`),
@@ -126,9 +126,11 @@ included, since none of the four programs deletes); the outward, interpreter,
 edit and git checks still run on it. Text that cannot take this shape, such as a
 commit or pull request body, goes in a file written with the editor tool and is
 passed by path (`git commit -F`, `gh pr create --body-file`). Two limits are
-stated: shell startup state that changes how a certified line runs (an alias or
-function that shadows one of the four programs, or a zsh global alias that
-expands an argument) is not seen, and a certified line can create a document
+stated: a definition in a shell startup file that changes how a certified line
+runs (an alias or function that shadows one of the four programs, or a zsh
+global alias that expands an argument) is not seen; agents are blocked from
+writing such files where a filesystem sandbox exists and the guard refuses it on
+a best-effort basis elsewhere (issue 86). And a certified line can create a document
 that a later call runs as a script.
 
 ## Git hook stages

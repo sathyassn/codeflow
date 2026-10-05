@@ -768,11 +768,13 @@ erratum below, never an edit of the section.
   with an unquoted one the line keeps the raw rules. Lines with a
   double-quoted backslash, and `git commit -m` or `gh pr create --body` text,
   are not certified and still refuse: write that text to a file with the
-  editor tool and pass the file by path. Two limits remain: shell startup
-  state that changes how a certified line runs, such as an alias or function
-  shadowing `echo`, `printf`, `grep` or `cat` or a zsh global alias that
-  expands an argument, is not seen, as an alias for `ls` was not seen
-  before; and a certified line can create a document that a later call runs
+  editor tool and pass the file by path. Two limits remain: a definition in
+  a shell startup file that changes how a certified line runs, such as an
+  alias or function shadowing `echo`, `printf`, `grep` or `cat` or a zsh
+  global alias that expands an argument, is not seen, as an alias for `ls`
+  was not seen before (agents are blocked from writing startup files where a
+  sandbox exists and the guard refuses it on a best-effort basis elsewhere,
+  issue 86); and a certified line can create a document that a later call runs
   as a script, as a plain `printf` into a `.sh` file already could. Projects
   need no change: this is a binary change with no policy default, scaffold or
   managed file behind it, and it allows certified prose without refusing

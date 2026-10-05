@@ -149,9 +149,11 @@ fn is_executable(meta: &std::fs::Metadata) -> bool {
     meta.permissions().mode() & 0o111 != 0
 }
 
+/// Without Unix modes an existing file cannot be shown to be plain, so any
+/// existing target refuses certification; only a new file is certified.
 #[cfg(not(unix))]
 fn is_executable(_meta: &std::fs::Metadata) -> bool {
-    false
+    true
 }
 
 /// True when the file has another hard link, so a write here may also change
