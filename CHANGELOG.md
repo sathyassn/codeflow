@@ -238,11 +238,15 @@ erratum below, never an edit of the section.
   would pass an unchecked change (a remote name, a worktree name, the
   policy source). A config key that is not UTF-8 is never read as another
   remote's key. A checked-out branch whose name is not UTF-8 stays
-  protected instead of reading as detached, a linked worktree or task
-  branch with such a name is listed instead of dropped, and the gate's
-  snapshot hashes a symlink target by its exact bytes. One rule for this
-  text is in `docs/architecture.md`, and each site that stays strict says
-  why next to the code.
+  protected instead of reading as detached, and a branch, task branch or
+  linked worktree with such a name is listed instead of dropped or read as
+  another branch: each invalid byte is spelled `\xNN`, so two different
+  names never read as one. `codeflow integrate` refuses to start from such
+  a branch, since it could not restore it, and refreshes another worktree
+  at its exact path. The gate's snapshot hashes a symlink target and the
+  repository's own folder by their exact bytes. One rule for this text is
+  in `docs/architecture.md`, and each site that stays strict says why next
+  to the code.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A
