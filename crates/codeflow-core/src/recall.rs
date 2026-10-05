@@ -136,9 +136,9 @@ pub fn runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
         return Some(dot_git.join("codeflow"));
     }
     if dot_git.is_file() {
-        let content = fs::read_to_string(&dot_git).ok()?;
-        let gitdir = content.strip_prefix("gitdir:")?.trim();
-        let mut gitdir = PathBuf::from(gitdir);
+        // OS text rule (issue 79): the file names a folder, so its exact bytes
+        // are used and only git's own framing is removed.
+        let mut gitdir = crate::git::gitfile_dir(&fs::read(&dot_git).ok()?)?;
         if !gitdir.is_absolute() {
             gitdir = repo_root.join(gitdir);
         }

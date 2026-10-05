@@ -771,15 +771,14 @@ fn git_marker(dir: &Path) -> Option<PathBuf> {
 /// Whether the `.git` file at `marker` points into `common_dir/worktrees/`:
 /// a linked worktree of this repository, not a nested repository.
 fn is_own_worktree(marker: &Path, common_dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(marker) else {
+    let Ok(bytes) = std::fs::read(marker) else {
         return false;
     };
-    let Some(gitdir) = text.lines().find_map(|l| l.strip_prefix("gitdir:")) else {
+    let Some(target) = crate::git::gitfile_dir(&bytes) else {
         return false;
     };
-    let target = Path::new(gitdir.trim());
     let target = if target.is_absolute() {
-        target.to_path_buf()
+        target
     } else {
         marker.parent().unwrap_or(marker).join(target)
     };

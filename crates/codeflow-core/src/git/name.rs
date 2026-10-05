@@ -307,6 +307,20 @@ pub fn tracking_branch(name: &GitName, remotes: &[GitName]) -> Option<GitName> {
     Some(GitName::from_bytes(&bytes[at + 1..]))
 }
 
+/// The folder a `.git` file names: its first `gitdir:` line, as an exact path.
+/// Git writes `gitdir: <path>` and a newline, so the single space and the
+/// newline are framing and any other whitespace belongs to the path (OS text
+/// rule, issue 79). `None` when there is no such line or the platform cannot
+/// hold the path.
+#[must_use]
+pub fn gitfile_dir(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    let line = bytes
+        .split(|byte| *byte == b'\n')
+        .find_map(|line| line.strip_prefix(b"gitdir:"))?;
+    let line = line.strip_prefix(b" ").unwrap_or(line);
+    GitName::from_bytes(line).os_path().ok()
+}
+
 /// The path of every file a diff touches (the old and the new path of each
 /// delta, one when they are the same), as exact bytes.
 #[must_use]
@@ -557,6 +571,26 @@ mod tests {
             b"task/TSK-003-x"
         );
         assert!(tracking_branch(&GitName::from_bytes(b"flat"), &remotes).is_none());
+    }
+
+    /// Round fourteen on issue 79: a `.git` file names a folder exactly, so
+    /// whitespace that ends the path is part of it.
+    #[test]
+    fn a_gitfile_names_its_folder_exactly() {
+        let dir = |bytes: &[u8]| gitfile_dir(bytes).map(|path| path.display().to_string());
+        assert_eq!(dir(b"gitdir: /a/b\n").as_deref(), Some("/a/b"));
+        assert_eq!(
+            dir("gitdir: /a/b\u{a0}\n".as_bytes()).as_deref(),
+            Some("/a/b\u{a0}")
+        );
+        assert_eq!(dir(b"gitdir: /a/b\r\n").as_deref(), Some("/a/b\r"));
+        assert_eq!(dir(b"nothing here\n"), None);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt as _;
+            let path = gitfile_dir(b"gitdir: /a/caf\xe9\n").unwrap();
+            assert_eq!(path.as_os_str().as_bytes(), b"/a/caf\xe9");
+        }
     }
 
     #[test]
