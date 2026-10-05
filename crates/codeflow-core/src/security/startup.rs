@@ -495,6 +495,13 @@ impl Line<'_> {
                 }
             }
         }
+        // The walk is bounded by the directories it lists, which the match
+        // limit below does not count: a recursive `**` or more than two
+        // wild components is not walked and stays unresolved (review F-1).
+        let wild = pattern.split('/').filter(|part| has_glob(part)).count();
+        if pattern.contains("**") || wild > 2 {
+            return Judged::Unresolved(pattern.to_string());
+        }
         let Ok(paths) = glob::glob_with(pattern, options) else {
             return Judged::Unresolved(pattern.to_string());
         };
@@ -536,7 +543,16 @@ impl Line<'_> {
         let literal = &known[..cut];
         let dir_part = literal.rfind('/').map_or("", |at| &literal[..=at]);
         if dir_part.is_empty() {
-            return None;
+            // A relative name filled in at run time (`"$DEST"`, `.$NAME`)
+            // lands in the directory the command runs in.
+            if literal.starts_with('/') {
+                return None;
+            }
+            return dirs.iter().find_map(|dir| {
+                self.class
+                    .placement(dir)
+                    .map(|p| format!("it lands in `{p}` when it is a relative name"))
+            });
         }
         for dir in dirs {
             if let Some(path) = self.expand(dir_part.trim_end_matches('/'), dir) {
@@ -560,9 +576,9 @@ impl Line<'_> {
 
 /// Programs that only read the files they are given and write nothing but
 /// their standard output, judged by operation: `printf -v`, `file -C` and
-/// the git subcommands with `--output` are writers. `less`, `more`, `bat`,
-/// `rg` and `sed` are not here: a log file, a shell escape, a preprocessor
-/// from a configuration file or a script command can write.
+/// the git subcommands with `--output` are writers. `less`, `more` and
+/// `bat` are not here: a log file, a shell escape or a preprocessor from a
+/// configuration file can write; `rg` and `sed` are judged by operation.
 const READERS: &[&str] = &[
     "cat",
     "head",
@@ -739,18 +755,7 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         dirs: run.dirs.clone(),
         unknown: run.unknown.clone(),
     };
-    for segment in &segments {
-        for token in shell_tokens(segment) {
-            if let Some((name, value)) = token.split_once('=') {
-                let assignment = !name.is_empty()
-                    && !name.starts_with(|c: char| c.is_ascii_digit())
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-                if assignment && !unresolved_word(value) {
-                    line.assigned.insert(name.to_string(), value.to_string());
-                }
-            }
-        }
-    }
+    line.assigned = literal_assignments(&segments);
     if let Some(v) = direnv_trust(&segments) {
         return vec![v];
     }
@@ -773,6 +778,73 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         }
     }
     Vec::new()
+}
+
+/// The literal values the line assigns, read only where the shell reads an
+/// assignment: the words before a command, and the operands of `export`,
+/// `declare`, `typeset`, `local` and `readonly`. A name assigned anywhere
+/// with more than one value, or with a value the guard cannot read, is
+/// left out, so a word that uses it stays unresolved and is judged as such.
+fn literal_assignments(segments: &[String]) -> BTreeMap<String, String> {
+    let is_name = |name: &str| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let mut values: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let note = |values: &mut BTreeMap<String, Option<String>>, name: &str, value: Option<&str>| {
+        let value = value.filter(|v| !unresolved_word(v)).map(str::to_string);
+        values
+            .entry(name.to_string())
+            .and_modify(|seen| {
+                if *seen != value {
+                    *seen = None;
+                }
+            })
+            .or_insert(value);
+    };
+    for segment in segments {
+        let tokens = shell_tokens(segment);
+        let mut words = tokens.iter().map(String::as_str);
+        let mut declaring = false;
+        for word in words.by_ref() {
+            if let Some((name, value)) = word.split_once('=') {
+                if is_name(name) {
+                    note(&mut values, name, Some(value));
+                    continue;
+                }
+            }
+            if declaring && word.starts_with(['-', '+']) {
+                continue;
+            }
+            if matches!(
+                word,
+                "export" | "declare" | "typeset" | "local" | "readonly"
+            ) {
+                declaring = true;
+                continue;
+            }
+            if declaring && is_name(word) {
+                continue;
+            }
+            // The command word: the rest are its arguments.
+            break;
+        }
+        // An argument that looks like an assignment (`echo p=x`) assigns
+        // nothing, but a name it shares with a real one makes that name
+        // unclear, so it is dropped.
+        for word in words {
+            if let Some((name, _)) = word.split_once('=') {
+                if is_name(name) && values.contains_key(name) {
+                    note(&mut values, name, None);
+                }
+            }
+        }
+    }
+    values
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|v| (name, v)))
+        .collect()
 }
 
 /// `direnv allow`, `permit` or `grant` trusts an `.envrc`, which then runs
@@ -835,12 +907,53 @@ fn startup_environment(segments: &[String]) -> Option<Violation> {
     None
 }
 
+/// Whether a zsh launch ends with its startup files off: `-f`,
+/// `--no-rcs`, `--norcs` or `-o norcs` turn them off, and `+f`, `--rcs`,
+/// `+o norcs` or `-o rcs` turn them back on; the last one wins. Anything
+/// the guard does not read leaves them on.
+fn zsh_skips_rcs(args: &[String]) -> bool {
+    let mut off = false;
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        let a = arg.as_str();
+        match a {
+            "--no-rcs" | "--norcs" => off = true,
+            "--rcs" => off = false,
+            "-o" | "+o" => {
+                let option = args.get(at + 1).map(|o| o.to_lowercase().replace('_', ""));
+                match option.as_deref() {
+                    Some("norcs") => off = a == "-o",
+                    Some("rcs") => off = a == "+o",
+                    _ => {}
+                }
+                at += 1;
+            }
+            "--" | "-" => break,
+            _ if a.starts_with("--") => {}
+            _ if a.starts_with('-') || a.starts_with('+') => {
+                if a[1..].contains('f') {
+                    off = a.starts_with('-');
+                }
+                if a[1..].contains(['c', 's']) {
+                    // `-c CODE` or `-s`: the rest are the command's.
+                    break;
+                }
+            }
+            _ => break,
+        }
+        at += 1;
+    }
+    off
+}
+
 /// The startup variables a shell launch reads, or `None` for a program
 /// that reads none.
 fn startup_reader(name: &str, args: &[String]) -> Option<&'static [&'static str]> {
+    // Only `-` options: a `+` option turns the same setting off.
     let has = |flags: &[&str]| {
         args.iter()
             .take_while(|a| a.starts_with('-') || a.starts_with('+'))
+            .filter(|a| a.starts_with('-'))
             .any(|a| {
                 flags.contains(&a.as_str())
                     || (!a.starts_with("--")
@@ -853,7 +966,7 @@ fn startup_reader(name: &str, args: &[String]) -> Option<&'static [&'static str]
     };
     let interactive_or_login = has(&["-i", "-l", "--login"]);
     match name {
-        "zsh" if has(&["-f", "--no-rcs", "--norcs"]) => None,
+        "zsh" if zsh_skips_rcs(args) => None,
         "zsh" => Some(&["ZDOTDIR", "HOME"]),
         "bash" if interactive_or_login => Some(&["BASH_ENV", "HOME", "ENV", "PROMPT_COMMAND"]),
         "bash" => Some(&["BASH_ENV"]),
@@ -987,6 +1100,8 @@ fn reads_only(name: &str, args: &[String]) -> bool {
                 || a.starts_with("--file")
                 || a.contains(['w', 'W'])
         }),
+        // ripgrep writes nothing; `--pre` runs a program on each file.
+        "rg" => !args.iter().any(|a| a == "--pre" || a.starts_with("--pre=")),
         "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
             GIT_READS.contains(&sub)
                 && !rest
@@ -1080,6 +1195,17 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
         if let Some((key, value)) = word.split_once('=') {
             if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                 if let Some(v) = word_violation(name, value, line, dirs) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    // A short option with its value attached (`-o~/.zshrc`, `-so$HOME/x`):
+    // every tail that can start a path is judged as one.
+    if word.starts_with('-') && !word.starts_with("--") {
+        for (at, c) in word.char_indices().skip(2) {
+            if matches!(c, '~' | '/' | '$' | '.') {
+                if let Some(v) = word_violation(name, &word[at..], line, dirs) {
                     return Some(v);
                 }
             }
@@ -1265,6 +1391,24 @@ fn copy_judgment(
                 Judged::Placement(_) | Judged::Ordinary => {}
             }
         }
+        let existing_dir = dirs
+            .iter()
+            .filter_map(|d| line.expand(dest, d))
+            .any(|p| p.is_dir());
+        let base = Path::new(source.trim_end_matches('/'))
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Into any existing directory, the file lands at its base name
+        // there, which can be a link to a startup file (`out/x -> ~/.zshrc`).
+        if existing_dir && !base.is_empty() {
+            let landing = format!("{}/{base}", dest.trim_end_matches('/'));
+            if let Judged::Class(label) = line.judge(&landing, dirs) {
+                return Some(finding(format!(
+                    "`{name}` places `{source}` at the shell startup file `{label}`"
+                )));
+            }
+        }
         let Judged::Placement(dest_dir) = &dest_judged else {
             continue;
         };
@@ -1279,19 +1423,11 @@ fn copy_judgment(
                 "`{name}` copies the contents of `{source}` into `{dest_dir}`, where shell startup files live"
             )));
         }
-        let existing_dir = dirs
-            .iter()
-            .filter_map(|d| line.expand(dest, d))
-            .any(|p| p.is_dir());
         if tree && !existing_dir {
             return Some(finding(format!(
                 "`{name}` puts the tree `{source}` at `{dest_dir}`, above shell startup files"
             )));
         }
-        let base = Path::new(source.trim_end_matches('/'))
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
         if base.is_empty() || !existing_dir {
             continue;
         }

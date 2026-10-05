@@ -6521,6 +6521,18 @@ fn code_running_key(key: &str) -> bool {
     })
 }
 
+/// Whether a section, renamed or written whole, holds a key whose value
+/// git runs: its first part names a section of `CODE_RUNNING_KEYS`.
+fn section_runs_code(section: &str) -> bool {
+    let first = section.split('.').next().unwrap_or(section);
+    CODE_RUNNING_KEYS.iter().any(|pattern| {
+        pattern
+            .split('.')
+            .next()
+            .is_some_and(|s| s.eq_ignore_ascii_case(first))
+    })
+}
+
 /// The code-running key a `git config` invocation sets at user or system
 /// scope (`--global`, `--system`, or `--file` naming the user's
 /// configuration), or an interactive edit of that scope. Repository scope
@@ -6528,9 +6540,16 @@ fn code_running_key(key: &str) -> bool {
 fn config_writes_code_key(rest: &[String]) -> Option<String> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    // The user's or the system's file by name: `.gitconfig`, `gitconfig`
+    // (`/etc/gitconfig`) or `git/config` outside a `.git` directory,
+    // wherever the path puts it, since a relative one may be read from the
+    // home. A project file such as `fixture.gitconfig` is not.
     let file_is_user = parsed.values_of('f', "--file").into_iter().any(|file| {
         let file = file.replace('\\', "/");
-        file.ends_with(".gitconfig") || (file.ends_with("git/config") && !file.contains(".git/"))
+        let name = file.rsplit('/').next().unwrap_or(&file);
+        name.eq_ignore_ascii_case(".gitconfig")
+            || name.eq_ignore_ascii_case("gitconfig")
+            || (file.ends_with("git/config") && !file.contains(".git/"))
     });
     if !(any_long(&["--global", "--system"]) || file_is_user) || config_only_reads(rest) {
         return None;
@@ -6544,15 +6563,18 @@ fn config_writes_code_key(rest: &[String]) -> Option<String> {
     if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
         return Some("--edit".to_string());
     }
-    if any_long(&[
-        "--unset",
-        "--unset-all",
-        "--remove-section",
-        "--rename-section",
-    ]) || matches!(
-        subcommand,
-        Some("unset" | "remove-section" | "rename-section")
-    ) {
+    // A section renamed into one whose keys run code (`harmless` to
+    // `alias`) makes every key it holds one of them.
+    if any_long(&["--rename-section"]) || subcommand == Some("rename-section") {
+        let names = &parsed.operands[usize::from(subcommand.is_some())..];
+        return names
+            .get(1)
+            .filter(|new| section_runs_code(new))
+            .map(|new| (*new).to_string());
+    }
+    if any_long(&["--unset", "--unset-all", "--remove-section"])
+        || matches!(subcommand, Some("unset" | "remove-section"))
+    {
         return None;
     }
     let operands = &parsed.operands[usize::from(subcommand.is_some())..];
@@ -9722,6 +9744,11 @@ mod tests {
             "git config --file ~/.gitconfig alias.co checkout",
             "git config -f ~/.config/git/config core.pager cat",
             "git config --global --edit",
+            // Review round one: a rename into a code-running section, and
+            // the system file by name.
+            "git config --global --rename-section harmless alias",
+            "git config rename-section --global harmless.x credential.x",
+            "git config --file /etc/gitconfig core.pager cat",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
@@ -9737,6 +9764,9 @@ mod tests {
             "git config --local core.pager cat",
             "git config --file .git/config alias.co checkout",
             "git config get --global core.editor",
+            "git config --file fixture.gitconfig alias.x y",
+            "git config --global --rename-section old.x user.x",
+            "git config --global --remove-section alias",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
