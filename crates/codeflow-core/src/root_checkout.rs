@@ -1091,16 +1091,16 @@ pub fn worktree_findings(
             // OS text rule (issue 79): a folder name that is not valid UTF-8
             // cannot be asked about, so no rule is known to cover it and the
             // warning stays (it is shown with escapes).
-            let rel_name = GitName::from_os_str(rel.as_os_str());
-            let ignored = rel_name.rule_text().is_ok_and(|text| {
-                let rel = text.replace('\\', "/");
-                ignore_sources(&root, std::slice::from_ref(&rel))
+            // The key swaps platform separators only (a backslash is a name
+            // character on Unix), then a name that is not text is escaped.
+            let key = crate::portable_path::slashed(rel);
+            let ignored = crate::git::key_is_text(&key)
+                && ignore_sources(&root, std::slice::from_ref(&key))
                     .into_iter()
                     .next()
                     .flatten()
-                    .is_some()
-            });
-            let rel = rel_name.display().to_string().replace('\\', "/");
+                    .is_some();
+            let rel = crate::git::display_key(&key);
             if !ignored {
                 out.push(Finding {
                     severity: Severity::Warn,

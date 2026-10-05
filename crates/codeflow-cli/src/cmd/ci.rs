@@ -1732,8 +1732,8 @@ fn origin_url(root: &Path) -> Result<Option<String>, String> {
         .map_err(|_| {
             "the URL of `origin` is not valid UTF-8, so its policy cannot be asked".to_string()
         })?
-        .trim()
         .to_string();
+    // Only git's own newline is framing: a path may end in a carriage return.
     Ok((!url.is_empty()).then_some(url))
 }
 
@@ -2319,6 +2319,31 @@ mod tests {
             .unwrap();
         let error = origin_url(dir.path()).unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Round eleven on issue 79: a URL that is a path ending in a carriage
+    /// return is that destination, not its sibling without the return.
+    #[test]
+    fn an_origin_url_keeps_a_trailing_carriage_return() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let init = codeflow_core::git::command()
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[remote \"origin\"]\n\turl = \"/srv/destination\r\"\n")
+            .unwrap();
+        assert_eq!(
+            origin_url(dir.path()).unwrap().as_deref(),
+            Some("/srv/destination\r")
+        );
     }
 
     // -- commit-range evaluation -----------------------------------------

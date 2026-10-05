@@ -760,7 +760,8 @@ fn blocking(policy: &GitPolicy) -> GitPolicy {
 /// candidate authority read here.
 fn fork(root: &Path, url: Option<&str>) -> Option<String> {
     let upstream = git(root, &["remote", "get-url", "upstream"])?;
-    let upstream = upstream.trim();
+    // Only git's own newline is framing: a path may end in a carriage return.
+    let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
     (url != Some(upstream)).then(|| {
         format!(
             "the push goes to {}, not the configured upstream {upstream}; a pull request from it may target the upstream, whose policy can differ from the candidate authority read here",
@@ -922,7 +923,8 @@ impl Destination<'_> {
 /// Whether remote `name` fetches from `url`, so that its tracking refs
 /// describe the location pushed to. A `pushurl` elsewhere does not.
 fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
-    git(root, &["remote", "get-url", name]).is_some_and(|fetch| fetch.trim() == url)
+    git(root, &["remote", "get-url", name])
+        .is_some_and(|fetch| fetch.strip_suffix('\n').unwrap_or(&fetch) == url)
 }
 
 /// How a pushed branch's range is chosen, by its scope at the destination.
