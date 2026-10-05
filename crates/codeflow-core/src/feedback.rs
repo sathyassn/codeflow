@@ -673,6 +673,9 @@ fn propose(
     let today = crate::ids::today();
     let mut proposed = content.to_string();
     let target = change.target.as_str();
+    let mut want_placed = item.placed_in.clone();
+    let mut want_successor = item.superseded_by.clone();
+    let mut want_confirmed = item.confirmed_by.clone();
     match target {
         "placed" => {
             if change.placements.is_empty() {
@@ -697,6 +700,7 @@ fn propose(
                 placed.push(reference);
             }
             proposed = set_frontmatter_value(&proposed, "placed_in", &flow_list(&placed))?;
+            want_placed = placed;
         }
         "closed" => {
             let evidence = required(change.evidence.as_ref(), "--evidence", "closing")?;
@@ -715,6 +719,7 @@ fn propose(
             }
             let reason = required(change.reason.as_ref(), "--reason", "declining")?;
             proposed = set_frontmatter_value(&proposed, "confirmed_by", "operator")?;
+            want_confirmed = Some("operator".to_string());
             proposed = append_to_section(
                 &proposed,
                 "## Closure",
@@ -737,6 +742,7 @@ fn propose(
                 ));
             }
             proposed = set_frontmatter_value(&proposed, "superseded_by", &successor.to_string())?;
+            want_successor = Some(successor.to_string());
             proposed = append_to_section(
                 &proposed,
                 "## Closure",
@@ -746,7 +752,49 @@ fn propose(
         _ => {}
     }
     proposed = set_frontmatter_value(&proposed, "status", target)?;
+    let wanted = Wanted {
+        status: target,
+        placed_in: &want_placed,
+        superseded_by: want_successor.as_deref(),
+        confirmed_by: want_confirmed.as_deref(),
+    };
+    if !reads_back_as_intended(item, &proposed, &wanted) {
+        return Err(format!(
+            "{id}: the change cannot be written safely; write each of `status`, `placed_in`, `superseded_by` and `confirmed_by` on one line (a list as `[\"a\", \"b\"]`) and retry"
+        ));
+    }
     Ok(proposed)
+}
+
+/// The frontmatter a status change must leave.
+struct Wanted<'a> {
+    status: &'a str,
+    placed_in: &'a [String],
+    superseded_by: Option<&'a str>,
+    confirmed_by: Option<&'a str>,
+}
+
+/// Whether `proposed` reads back as `item` with exactly the `wanted`
+/// changes. The edit replaces one frontmatter line per key, so a value
+/// written over several lines (a block list) would leave its old lines
+/// behind; such a change is refused and nothing is written.
+fn reads_back_as_intended(item: &Item, proposed: &str, wanted: &Wanted<'_>) -> bool {
+    let Ok(after) = parse_item(&item.path, proposed) else {
+        return false;
+    };
+    after.status == wanted.status
+        && after.placed_in == wanted.placed_in
+        && after.superseded_by.as_deref() == wanted.superseded_by
+        && after.confirmed_by.as_deref() == wanted.confirmed_by
+        && Item {
+            status: item.status.clone(),
+            placed_in: item.placed_in.clone(),
+            superseded_by: item.superseded_by.clone(),
+            confirmed_by: item.confirmed_by.clone(),
+            placement: item.placement.clone(),
+            closure: item.closure.clone(),
+            ..after
+        } == *item
 }
 
 /// `value` as a double-quoted YAML string, so a value such as `true`,
@@ -1240,6 +1288,59 @@ mod tests {
         assert!(!placement_resolves(root, "../AGENTS.md"));
         assert!(!placement_resolves(root, "/etc/hosts"));
         assert!(!placement_resolves(root, ""));
+    }
+
+    /// A value written over several lines cannot be replaced line by line:
+    /// the change is refused and the item keeps every byte, for each key a
+    /// status change writes.
+    #[test]
+    fn a_change_that_would_not_read_back_is_refused_and_writes_nothing() {
+        let dir = project();
+        let root = dir.path();
+        item(root, "002", |text| text);
+        let cases = [
+            (
+                "placed_in: []",
+                "placed_in:\n  - AGENTS.md",
+                "placed",
+                StatusChange {
+                    placements: vec!["TSK-001".to_string()],
+                    ..StatusChange::default()
+                },
+            ),
+            (
+                "confirmed_by: null",
+                "confirmed_by:\n  null",
+                "declined",
+                StatusChange {
+                    confirmed_by: Some("operator".to_string()),
+                    reason: Some("not now".to_string()),
+                    ..StatusChange::default()
+                },
+            ),
+            (
+                "superseded_by: null",
+                "superseded_by:\n  null",
+                "superseded",
+                StatusChange {
+                    by: Some("FB-002".to_string()),
+                    ..StatusChange::default()
+                },
+            ),
+        ];
+        for (flow, block, target, mut change) in cases {
+            let path = item(root, "001", |text| {
+                let start = text.find(flow).unwrap();
+                let end = start + text[start..].find('\n').unwrap();
+                format!("{}{block}{}", &text[..start], &text[end..])
+            });
+            assert!(parse_item("x", &std::fs::read_to_string(&path).unwrap()).is_ok());
+            let before = std::fs::read_to_string(&path).unwrap();
+            change.target = target.to_string();
+            let refused = set_status(root, "FB-001", &change).unwrap_err();
+            assert!(refused.contains("cannot be written safely"), "{refused}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "{target}");
+        }
     }
 
     #[test]
