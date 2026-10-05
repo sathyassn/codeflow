@@ -331,22 +331,22 @@ pub(super) fn review_lookup(
     root: &std::path::Path,
     branch: &str,
     sha: &str,
-    named: &[String],
+    named: &dyn Fn() -> Vec<String>,
 ) -> Result<bool, String> {
     let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
     reviewed(root, &repository, branch, sha, named)
 }
 
 /// Whether the pull request of `branch` in `repository` has `sha` as its
-/// head and an approving review row naming one of `named`: the head
+/// head and an approving review row naming one of `named()`: the head
 /// itself, or a commit the head follows only by the predecessor's status
-/// and Closeout.
+/// and Closeout. The names are read only once that pull request is found.
 fn reviewed(
     root: &std::path::Path,
     repository: &str,
     branch: &str,
     sha: &str,
-    named: &[String],
+    named: &dyn Fn() -> Vec<String>,
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
     if proof["headRefName"].as_str() != Some(branch)
@@ -361,7 +361,7 @@ fn reviewed(
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
     let body = proof["body"].as_str().unwrap_or_default();
-    Ok(named
+    Ok(named()
         .iter()
         .any(|revision| super::ci::pr_body::review_names_revision(body, &headings[0], revision)))
 }

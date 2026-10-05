@@ -837,7 +837,7 @@ impl StackHints {
         if values.is_empty() {
             return Err("no unlanded code dependencies".into());
         }
-        let reviewed = |branch: &str, sha: &str, named: &[String]| {
+        let reviewed = |branch: &str, sha: &str, named: &dyn Fn() -> Vec<String>| {
             self.reviews
                 .borrow_mut()
                 .entry((branch.to_string(), sha.to_string()))

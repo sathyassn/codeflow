@@ -1153,6 +1153,9 @@ fn judge(
         .unwrap_or_default();
     let mut notes = Vec::new();
     let mut findings = Vec::new();
+    // The tasks each landing reopened, judged once per landing however many
+    // brought records it landed (R-103).
+    let mut reopened = Reopened::new();
     let mut work: Vec<Work> = Vec::new();
     // Each task completed directly: the commit that made it and the record
     // as it made it. The finding is the one that record earns at the head,
@@ -1289,7 +1292,7 @@ fn judge(
                 });
                 if criteria_changed(then.as_ref(), Some(&now)) {
                     match source {
-                        Some(source) => match landed_criteria(&repo, &now, path, source) {
+                        Some(source) => match landed_criteria(&repo, &now, path, source, &mut reopened) {
                             Landed::Planning => {}
                             Landed::OwnTask { landing } => notes.push(format!(
                                 "own-task amendment: {} changed its criteria in its own reviewed pull request, landed on its line at {}",
@@ -1748,12 +1751,22 @@ enum Landed {
     Frozen(Finding),
 }
 
+/// The tasks each landing commit reopened ([`super::acceptance::reopened_ids`]),
+/// or why its range cannot be read.
+type Reopened = HashMap<Oid, Result<BTreeSet<String>, String>>;
+
 /// A brought criteria change is judged again at the commit that landed it
 /// on its line: walking `source`'s first-parent chain, the first commit
 /// whose first parent does not carry the brought criteria. That landing
 /// must change planning records only, or be the task's own reviewed pull
 /// request ([`own_task_landing`]).
-fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid) -> Landed {
+fn landed_criteria(
+    repo: &Repository,
+    now: &RecordView,
+    path: &str,
+    source: Oid,
+    reopened: &mut Reopened,
+) -> Landed {
     let signature = now.criteria.signature();
     let carries = |oid: Oid| {
         record_at(repo, oid, path).is_some_and(|there| there.criteria.signature() == signature)
@@ -1778,11 +1791,13 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
     // Resolution 43: a reopened task keeps its criteria. Judged first, as
     // the task pull request rule judges it before the class exemptions.
     if let Ok(parent) = landing.parent_id(0) {
-        let base = parent.to_string();
-        let head = landing.id().to_string();
-        let reopened = Graph::from_revision(repo, &head)
-            .and_then(|after| super::acceptance::reopened_ids(repo, &base, &head, &after));
-        match reopened {
+        let found = reopened.entry(landing.id()).or_insert_with(|| {
+            let base = parent.to_string();
+            let head = landing.id().to_string();
+            Graph::from_revision(repo, &head)
+                .and_then(|after| super::acceptance::reopened_ids(repo, &base, &head, &after))
+        });
+        match found {
             Ok(ids) if ids.contains(&now.id) => {
                 return Landed::Frozen(finding(
                     FROZEN_RULE,
