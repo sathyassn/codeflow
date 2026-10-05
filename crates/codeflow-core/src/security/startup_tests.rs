@@ -461,6 +461,8 @@ fn review_round_one_forms_refuse() {
         "ZDOTDIR=/tmp/z zsh -f +f -c true",
         "ZDOTDIR=/tmp/z zsh -f -o rcs -c true",
         "ZDOTDIR=/tmp/z zsh +o norcs -c true",
+        // Any `-o` leaves the startup files on (round two).
+        "ZDOTDIR=/tmp/z zsh -o norcs -c true",
         "echo x > ~/**/.zshrc",
         "rg --pre ./x alias ~/.zshrc",
     ];
@@ -479,11 +481,63 @@ fn review_round_one_forms_refuse() {
         "p=notes; echo x > \"$p\"",
         "echo x > \"$DEST\"",
         "ZDOTDIR=/tmp/z zsh -fc true",
-        "ZDOTDIR=/tmp/z zsh -f +x -c true",
-        "ZDOTDIR=/tmp/z zsh -o norcs -c true",
         "rg --no-config alias ~/.zshrc",
         "rm -rf build/**/tmp",
         "cp notes.txt out/",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// The forms the second holistic review found passing at 6ce696b69: a use
+/// before a later assignment, `cp -f` read as taking a value, a link made
+/// earlier in the same call, attached `-o` and `+f` after `-s` in zsh, a
+/// recursive glob reaching a link, and ripgrep reading a configuration.
+#[test]
+fn review_round_two_forms_refuse() {
+    let f = Fixture::new();
+    let out = f.project.join("out");
+    let links = f.project.join("links");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(&links).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(f.home.join(".zshrc"), out.join("payload")).unwrap();
+        std::os::unix::fs::symlink(f.home.join(".zshrc"), links.join("one")).unwrap();
+    }
+    let mut wrong = Vec::new();
+    let mut refuse = vec![
+        "ln -s ~/.zshrc rc; echo x >> rc",
+        "ln -sf H/.bashrc rc",
+        "ZDOTDIR=/tmp/z zsh -f -orcs -c true",
+        "ZDOTDIR=/tmp/z zsh -f -s +f",
+        "ZDOTDIR=/tmp/z zsh -f --rcs -c true",
+        "ZDOTDIR=/tmp/z zsh -f +x -c true",
+        "rg marker ~/.zshrc",
+        "RIPGREP_CONFIG_PATH=rgconfig rg marker ~/.zshrc",
+    ];
+    if cfg!(unix) {
+        refuse.extend(["cp -f payload out/", "echo x >> links/**"]);
+    }
+    for command in refuse {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    if !refused(&f.judge_in("echo x > \"$p\"; p=notes", &f.home, &f.env())) {
+        wrong.push("allowed from the home: echo x > \"$p\"; p=notes".to_string());
+    }
+    for command in [
+        "echo x > \"$p\"; p=notes",
+        "cp -f notes.txt out/",
+        "ln -s ../shared shared",
+        "rm -rf build/**/tmp",
+        "ZDOTDIR=/tmp/z zsh -f -c true",
+        "rg --no-config marker ~/.zshrc",
     ] {
         let found = f.judge(command);
         if refused(&found) {

@@ -345,6 +345,7 @@ enum Judged {
 }
 
 /// The facts of one command line that every word is judged against.
+#[derive(Clone)]
 struct Line<'a> {
     class: &'a Class,
     env: &'a StartupEnv,
@@ -431,9 +432,38 @@ impl Line<'_> {
         vars
     }
 
+    /// Judge `word` as a write target. A word that uses a variable the
+    /// line assigns is judged with that value, and also as unresolved: the
+    /// assignment can come after the use, so the inherited value may be
+    /// the one the shell expands (review round two).
+    fn judge(&self, word: &str, dirs: &[PathBuf]) -> Judged {
+        let judged = self.judge_literal(word, dirs);
+        if matches!(judged, Judged::Ordinary) && self.uses_assigned(word) {
+            return Judged::Unresolved(word.to_string());
+        }
+        judged
+    }
+
+    /// Whether `word` expands a variable the line assigns.
+    fn uses_assigned(&self, word: &str) -> bool {
+        self.assigned.keys().any(|name| {
+            [
+                format!("${{{name}}}"),
+                format!("${{{name}:"),
+                format!("${{{name}-"),
+            ]
+            .iter()
+            .any(|form| word.contains(form.as_str()))
+                || word.match_indices(&format!("${name}")).any(|(at, m)| {
+                    !word[at + m.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                })
+        })
+    }
+
     /// Judge `word` as a write target from every directory the command can
     /// run in, each brace reading of it, and each path a glob in it reaches.
-    fn judge(&self, word: &str, dirs: &[PathBuf]) -> Judged {
+    fn judge_literal(&self, word: &str, dirs: &[PathBuf]) -> Judged {
         if word.is_empty() {
             return Judged::Ordinary;
         }
@@ -495,29 +525,38 @@ impl Line<'_> {
                 }
             }
         }
-        // The walk is bounded by the directories it lists, which the match
-        // limit below does not count: a recursive `**` or more than two
-        // wild components is not walked and stays unresolved (review F-1).
-        let wild = pattern.split('/').filter(|part| has_glob(part)).count();
-        if pattern.contains("**") || wild > 2 {
+        // The walk is bounded by the entries it lists, which the match limit
+        // below does not count: a tree over the budget, or one a directory
+        // link could extend, is not walked and refuses near the class
+        // (review F-1 and round two).
+        if !glob_within_budget(pattern) {
             return Judged::Unresolved(pattern.to_string());
         }
-        let Ok(paths) = glob::glob_with(pattern, options) else {
-            return Judged::Unresolved(pattern.to_string());
-        };
+        // A shell without `globstar` reads `**` as `*`, which also matches
+        // files; the glob crate reads it as directories only. Both readings
+        // are walked (review round two).
+        let mut readings = vec![pattern.to_string()];
+        if pattern.contains("**") {
+            readings.push(pattern.replace("**", "*"));
+        }
         let mut placement = None;
-        for (seen, path) in paths.enumerate() {
-            if seen >= GLOB_LIMIT {
-                return Judged::Unresolved(pattern.to_string());
-            }
-            let Ok(path) = path else {
+        for reading in &readings {
+            let Ok(paths) = glob::glob_with(reading, options) else {
                 return Judged::Unresolved(pattern.to_string());
             };
-            if let Some(label) = self.class.target(&path) {
-                return Judged::Class(label);
-            }
-            if placement.is_none() {
-                placement = self.class.placement(&path);
+            for (seen, path) in paths.enumerate() {
+                if seen >= GLOB_LIMIT {
+                    return Judged::Unresolved(pattern.to_string());
+                }
+                let Ok(path) = path else {
+                    return Judged::Unresolved(pattern.to_string());
+                };
+                if let Some(label) = self.class.target(&path) {
+                    return Judged::Class(label);
+                }
+                if placement.is_none() {
+                    placement = self.class.placement(&path);
+                }
             }
         }
         placement.map_or(Judged::Ordinary, Judged::Placement)
@@ -529,6 +568,26 @@ impl Line<'_> {
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
         if let Some(name) = self.class.named_in(self.text) {
             return Some(format!("the line names `{name}`"));
+        }
+        for dir in dirs {
+            if let Some(path) = self.expand(word, dir) {
+                let text = shown(&path);
+                if has_glob(&text) && !glob_within_budget(&text) {
+                    return Some(format!(
+                        "its glob reaches more than the {GLOB_LIMIT} entries the guard reads, or a directory link"
+                    ));
+                }
+            }
+        }
+        if self.uses_assigned(word) {
+            // Judged with the inherited value as well as the assigned one.
+            let bare = Line {
+                assigned: BTreeMap::new(),
+                ..self.clone()
+            };
+            if let Some(why) = bare.unresolved_near_class(word, dirs) {
+                return Some(why);
+            }
         }
         if let Some(rest) = word.strip_prefix('~') {
             let user = rest.split('/').next().unwrap_or_default();
@@ -907,39 +966,38 @@ fn startup_environment(segments: &[String]) -> Option<Violation> {
     None
 }
 
-/// Whether a zsh launch ends with its startup files off: `-f`,
-/// `--no-rcs`, `--norcs` or `-o norcs` turn them off, and `+f`, `--rcs`,
-/// `+o norcs` or `-o rcs` turn them back on; the last one wins. Anything
-/// the guard does not read leaves them on.
+/// Whether a zsh launch has its startup files off: a `-f`, `--no-rcs` or
+/// `--norcs` among the options, and nothing that could turn them back on.
+/// Any `+` option, any `-o` (attached or not) and any long option other
+/// than those two leave them on, since the guard does not read zsh's whole
+/// option grammar; `-c` takes the next word as its code, and options are
+/// read up to the first other word (review round two).
 fn zsh_skips_rcs(args: &[String]) -> bool {
     let mut off = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let a = arg.as_str();
-        match a {
-            "--no-rcs" | "--norcs" => off = true,
-            "--rcs" => off = false,
-            "-o" | "+o" => {
-                let option = args.get(at + 1).map(|o| o.to_lowercase().replace('_', ""));
-                match option.as_deref() {
-                    Some("norcs") => off = a == "-o",
-                    Some("rcs") => off = a == "+o",
-                    _ => {}
-                }
+        if a == "--" || a == "-" || !(a.starts_with('-') || a.starts_with('+')) {
+            break;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            if matches!(long, "no-rcs" | "norcs") {
+                off = true;
+            } else {
+                return false;
+            }
+        } else {
+            let body = &a[1..];
+            if a.starts_with('+') || body.contains('o') {
+                return false;
+            }
+            if body.contains('f') {
+                off = true;
+            }
+            if body.contains('c') {
+                // The code string is not an option.
                 at += 1;
             }
-            "--" | "-" => break,
-            _ if a.starts_with("--") => {}
-            _ if a.starts_with('-') || a.starts_with('+') => {
-                if a[1..].contains('f') {
-                    off = a.starts_with('-');
-                }
-                if a[1..].contains(['c', 's']) {
-                    // `-c CODE` or `-s`: the rest are the command's.
-                    break;
-                }
-            }
-            _ => break,
         }
         at += 1;
     }
@@ -1100,8 +1158,12 @@ fn reads_only(name: &str, args: &[String]) -> bool {
                 || a.starts_with("--file")
                 || a.contains(['w', 'W'])
         }),
-        // ripgrep writes nothing; `--pre` runs a program on each file.
-        "rg" => !args.iter().any(|a| a == "--pre" || a.starts_with("--pre=")),
+        // ripgrep writes nothing, but `--pre`, on the command line or in the
+        // file `RIPGREP_CONFIG_PATH` names, runs a program on each file.
+        "rg" => {
+            args.iter().any(|a| a == "--no-config")
+                && !args.iter().any(|a| a == "--pre" || a.starts_with("--pre="))
+        }
         "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
             GIT_READS.contains(&sub)
                 && !rest
@@ -1249,33 +1311,45 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
     }
 }
 
-/// The options of the copying programs that take a value, so the value is
-/// not read as a source or destination.
-const COPY_VALUE_OPTIONS: &[&str] = &[
-    "-t",
-    "--target-directory",
-    "-S",
-    "--suffix",
-    "-m",
-    "--mode",
-    "-o",
-    "--owner",
-    "-g",
-    "--group",
-    "-e",
-    "--rsh",
-    "--exclude",
-    "--include",
-    "--filter",
-    "-f",
-    "--backup-dir",
-    "--link-dest",
-    "--compare-dest",
-    "--copy-dest",
-    "--chmod",
-    "--chown",
-    "-B",
-];
+/// Whether an option of this copying program takes the next word as its
+/// value, so that word is not read as a source or destination. Each program
+/// has its own table: `cp -f` forces, `rsync -f` takes a filter (review
+/// round two).
+fn copy_value_option(name: &str, a: &str) -> bool {
+    match name {
+        "cp" | "mv" | "ln" => matches!(a, "-S" | "--suffix"),
+        "install" => matches!(
+            a,
+            "-S" | "--suffix" | "-m" | "--mode" | "-o" | "--owner" | "-g" | "--group"
+        ),
+        "rsync" => matches!(
+            a,
+            "-e" | "--rsh"
+                | "-f"
+                | "--filter"
+                | "--exclude"
+                | "--include"
+                | "--exclude-from"
+                | "--include-from"
+                | "--files-from"
+                | "--backup-dir"
+                | "--suffix"
+                | "--link-dest"
+                | "--compare-dest"
+                | "--copy-dest"
+                | "--chmod"
+                | "--chown"
+                | "--temp-dir"
+                | "-T"
+                | "--partial-dir"
+                | "-B"
+                | "--block-size"
+        ),
+        "scp" => matches!(a, "-i" | "-o" | "-P" | "-F" | "-c" | "-l" | "-S" | "-J"),
+        "ditto" => matches!(a, "--arch" | "--bom"),
+        _ => false,
+    }
+}
 
 /// A copy, link or move with a source and a destination.
 struct CopyCall {
@@ -1308,7 +1382,7 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
                 target = Some(dir.to_string());
             } else if a == "-t" || a == "--target-directory" {
                 target = iter.next().cloned();
-            } else if COPY_VALUE_OPTIONS.contains(&a) {
+            } else if copy_value_option(name, a) {
                 iter.next();
             }
             let short = !a.starts_with("--");
@@ -1374,11 +1448,11 @@ fn copy_judgment(
         Judged::Placement(_) | Judged::Ordinary => {}
     }
     for source in sources {
-        if moves || hard_link {
+        if moves || hard_link || name == "ln" {
             match line.judge(source, dirs) {
                 Judged::Class(label) => {
                     return Some(finding(format!(
-                        "`{name}` moves or hard-links the shell startup file `{label}`, so a later write through the new name edits it"
+                        "`{name}` moves or links the shell startup file `{label}`, so a later write through the new name edits it"
                     )))
                 }
                 Judged::Unresolved(w) => {
@@ -1605,6 +1679,58 @@ fn option_values<'a>(args: &'a [String], names: &[&str]) -> Vec<&'a str> {
         }
     }
     out
+}
+
+/// Whether a glob's tree can be read within the budget: the entries below
+/// its literal directory, to the depth its wild parts reach (any depth for
+/// `**`), number at most [`GLOB_LIMIT`], and no directory link sits where
+/// the walk would follow it.
+fn glob_within_budget(pattern: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('/').collect();
+    let Some(first_wild) = parts.iter().position(|part| has_glob(part)) else {
+        return true;
+    };
+    let prefix = parts[..first_wild].join("/");
+    let root = if prefix.is_empty() {
+        if pattern.starts_with('/') {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(".")
+        }
+    } else {
+        PathBuf::from(prefix)
+    };
+    let depth = if pattern.contains("**") {
+        usize::MAX
+    } else {
+        parts.len() - first_wild - 1
+    };
+    let mut seen = 0usize;
+    let mut stack = vec![(root, 0usize)];
+    while let Some((dir, level)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > GLOB_LIMIT {
+                return false;
+            }
+            if level >= depth {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                return false;
+            };
+            if kind.is_symlink() && entry.path().is_dir() {
+                return false;
+            }
+            if kind.is_dir() {
+                stack.push((entry.path(), level + 1));
+            }
+        }
+    }
+    true
 }
 
 /// The class entry a native edit targets, for edit-guard.

