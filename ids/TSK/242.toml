@@ -1,0 +1,11 @@
+id = "TSK-242"
+uid = "982b280a-5a81-4832-b06f-6e2e69c92196"
+kind = "TSK"
+title = "Guards protect shell startup files from agent writes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-05T06:45:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
