@@ -532,7 +532,13 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .replacen(&from.to_string(), &to.to_string(), 1);
     let new_path = path.with_file_name(file);
     let content = std::fs::read_to_string(path)?;
-    let content = replace_id(&content, from, &to).unwrap_or(content);
+    let rel = path
+        .strip_prefix(git.root())
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let content =
+        replace_id(&content, from, &to, kept_range(&rel, &content).as_ref()).unwrap_or(content);
     let content = add_former_id(&content, from);
     std::fs::write(&new_path, content)?;
     if new_path != *path {
@@ -571,15 +577,31 @@ fn add_former_id(text: &str, from: &RegId) -> String {
     insert_after(text, "uid", &format!("former_ids: [{from}]")).unwrap_or_else(|| text.to_string())
 }
 
-/// Replace whole-word `from` with `to`. A longer id that starts with
-/// `from` (`TSK-005-001`) is kept.
-fn replace_id(text: &str, from: &RegId, to: &RegId) -> Option<String> {
+/// The part of a record that a renumbering never rewrites: a feedback
+/// item's Verbatim section, which quotes the operator exactly.
+fn kept_range(rel: &str, text: &str) -> Option<std::ops::Range<usize>> {
+    rel.starts_with(&format!("{}/", crate::feedback::FEEDBACK_DIR))
+        .then(|| crate::feedback::verbatim_range(text))
+        .flatten()
+}
+
+/// Replace whole-word `from` with `to`, outside `kept`. A longer id that
+/// starts with `from` (`TSK-005-001`) is kept.
+fn replace_id(
+    text: &str,
+    from: &RegId,
+    to: &RegId,
+    kept: Option<&std::ops::Range<usize>>,
+) -> Option<String> {
     let pattern = regex::Regex::new(&format!(r"\b{}\b", regex::escape(&from.to_string()))).ok()?;
     let replacement = to.to_string();
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
     let mut any = false;
     for found in pattern.find_iter(text) {
+        if kept.is_some_and(|kept| kept.contains(&found.start())) {
+            continue;
+        }
         let after = &text[found.end()..];
         if after.starts_with('-') && after[1..].starts_with(|c: char| c.is_ascii_digit()) {
             continue;
@@ -607,7 +629,7 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        if let Some(updated) = replace_id(&text, from, to) {
+        if let Some(updated) = replace_id(&text, from, to, kept_range(&file, &text).as_ref()) {
             std::fs::write(&path, updated)?;
             changed.push(path);
         }
@@ -642,6 +664,37 @@ mod tests {
             &RegId::parse("TSK-009").unwrap(),
         );
         assert!(again.contains("former_ids: [TSK-005, TSK-009]"), "{again}");
+    }
+
+    /// Renumbering rewrites a feedback item's frontmatter and Placement but
+    /// never its Verbatim quote; other records are rewritten throughout.
+    #[test]
+    fn renumbering_keeps_the_operators_words() {
+        let from = RegId::parse("TSK-005").unwrap();
+        let to = RegId::parse("TSK-009").unwrap();
+        let item = "---\nid: FB-001\nplaced_in: [\"TSK-005\"]\n---\n\n# FB-001: x\n\n## Verbatim\n\nkeep TSK-005 first\n\n## Reading\n\nTSK-005\n";
+        let rewritten = replace_id(
+            item,
+            &from,
+            &to,
+            kept_range("project-management/feedback/FB-001.md", item).as_ref(),
+        )
+        .unwrap();
+        assert_eq!(
+            rewritten,
+            "---\nid: FB-001\nplaced_in: [\"TSK-009\"]\n---\n\n# FB-001: x\n\n## Verbatim\n\nkeep TSK-005 first\n\n## Reading\n\nTSK-009\n"
+        );
+        let task = "## Verbatim\n\nTSK-005\n";
+        assert_eq!(
+            replace_id(
+                task,
+                &from,
+                &to,
+                kept_range("project-management/tasks/TSK-001.md", task).as_ref()
+            )
+            .unwrap(),
+            "## Verbatim\n\nTSK-009\n"
+        );
     }
 
     #[test]

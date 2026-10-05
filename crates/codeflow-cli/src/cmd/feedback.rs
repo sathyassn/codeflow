@@ -8,8 +8,10 @@ use std::path::Path;
 use clap::{Args, Subcommand, ValueEnum};
 use codeflow_core::feedback::{self, Item, StatusChange};
 use codeflow_core::ids::Kind;
+use codeflow_core::scaffold::manifest::Tier;
 use codeflow_core::scaffold::state::{FeedbackConfig, ProjectState};
 use codeflow_core::scaffold::AssetSource;
+use codeflow_core::scaffold::ScaffoldError;
 use codeflow_core::workgraph::durable_work_tracking_enabled;
 
 use super::new::Issuer;
@@ -184,20 +186,25 @@ pub fn run(args: &FeedbackArgs) -> i32 {
     }
 }
 
-/// The reason `feedback new` refuses at this project's tier, or `None`
-/// when the project tracks durable work.
+/// The reason `feedback new` refuses at this project's tier, or `None` at
+/// the full tier. The installed tier decides, not the presence of task
+/// records, so a standard or minimal project that keeps some records still
+/// refuses.
 fn tier_refusal(root: &Path) -> Option<String> {
+    let refusal = |tier: &str| {
+        format!(
+            "operator feedback records live in project-management/, which the full tier installs; at the {tier} tier, feedback stays with its unit in the harness's task tools, and nothing was written"
+        )
+    };
+    match ProjectState::load(root) {
+        Ok(state) if state.tier == Tier::Full => {}
+        Ok(state) => return Some(refusal(state.tier.as_str())),
+        Err(ScaffoldError::NotInitialized) => return Some(refusal("unscaffolded")),
+        Err(error) => return Some(error.to_string()),
+    }
     match durable_work_tracking_enabled(root) {
         Ok(true) => None,
-        Ok(false) => {
-            let tier = ProjectState::load(root).map_or_else(
-                |_| "unscaffolded".to_string(),
-                |state| state.tier.as_str().to_string(),
-            );
-            Some(format!(
-                "operator feedback records live in project-management/, which the full tier installs; at the {tier} tier, feedback stays with its unit in the harness's task tools, and nothing was written"
-            ))
-        }
+        Ok(false) => Some(refusal("full")),
         Err(error) => Some(codeflow_core::workgraph::work_start::tracking_state_message(error)),
     }
 }
@@ -316,13 +323,13 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
             return 1;
         }
         let index = feedback::render_index(&loaded.items, &topics);
-        return match std::fs::write(root.join(feedback::INDEX_PATH), index) {
+        return match feedback::write_index(root, &index) {
             Ok(()) => {
                 println!("wrote {}", feedback::INDEX_PATH);
                 0
             }
             Err(error) => {
-                eprintln!("error: cannot write {}: {error}", feedback::INDEX_PATH);
+                eprintln!("error: {error}");
                 1
             }
         };

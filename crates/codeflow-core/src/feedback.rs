@@ -193,6 +193,24 @@ fn section_text(content: &str, heading: &str) -> String {
         .to_string()
 }
 
+/// The bytes of the Verbatim section's body (after its heading line, up to
+/// the next heading), which nothing rewrites: the operator's words stay as
+/// given even when an id they mention is renumbered.
+#[must_use]
+pub fn verbatim_range(content: &str) -> Option<std::ops::Range<usize>> {
+    let lines: Vec<&str> = content.split('\n').collect();
+    let scanned = scan_record(&lines);
+    let (start, end) = section_span(&scanned, "## Verbatim")?;
+    let offset = |line: usize| -> usize {
+        lines[..line]
+            .iter()
+            .map(|text| text.len() + 1)
+            .sum::<usize>()
+            .min(content.len())
+    };
+    Some(offset(start + 1)..offset(end))
+}
+
 /// Parse one item. Only a missing or broken frontmatter fails; every other
 /// problem is left for [`lint`].
 ///
@@ -226,17 +244,22 @@ pub fn parse_item(path: &str, content: &str) -> Result<Item, String> {
 
 /// The item files under [`FEEDBACK_DIR`]: every Markdown file directly in
 /// it except the index, sorted. Empty when the directory is absent.
+/// A symbolic link is never followed: the directory is skipped when a part
+/// of its path is one, and a linked entry is left out.
 #[must_use]
 pub fn item_files(root: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(root.join(FEEDBACK_DIR)) else {
+    let Ok(dir) = contained_path(root, FEEDBACK_DIR) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|entry| entry.path())
         .filter(|path| {
-            path.is_file()
-                && path.extension().is_some_and(|ext| ext == "md")
+            path.extension().is_some_and(|ext| ext == "md")
                 && path.file_name().is_some_and(|name| name != "INDEX.md")
         })
         .collect();
@@ -248,6 +271,73 @@ pub fn item_files(root: &Path) -> Vec<PathBuf> {
 #[must_use]
 pub fn tracked(root: &Path) -> bool {
     root.join(FEEDBACK_DIR).is_dir()
+}
+
+/// Whether a repository-relative path is a feedback item (`FB-NNN.md`) or
+/// the index, directly in [`FEEDBACK_DIR`].
+#[must_use]
+pub fn is_feedback_path(path: &str) -> bool {
+    let Some(name) = path
+        .strip_prefix(FEEDBACK_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return false;
+    };
+    if name == "INDEX.md" {
+        return true;
+    }
+    name.strip_suffix(".md").is_some_and(|stem| {
+        RegId::parse(stem).is_some_and(|id| id.kind() == Kind::Fb && id.to_string() == stem)
+    })
+}
+
+/// `rel` under `root`, refused when a part of it below `root` is a
+/// symbolic link or `rel` is not a plain relative path; a part that does
+/// not exist yet is allowed. Feedback reads and writes go through it, so a
+/// committed link cannot point them outside the repository.
+///
+/// # Errors
+///
+/// The reason the path is refused.
+pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let mut path = root.to_path_buf();
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(name) => path.push(name),
+            Component::CurDir => continue,
+            _ => return Err(format!("{rel} is not a path inside the repository")),
+        }
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(format!(
+                "{} is a symbolic link; feedback files are never read or written through one",
+                relative(root, &path)
+            ));
+        }
+    }
+    Ok(path)
+}
+
+/// Write the index generated from the items: refused when the index or a
+/// directory above it is a symbolic link, and written to a temporary file
+/// beside it that is then renamed over it, so a reader never sees half an
+/// index.
+///
+/// # Errors
+///
+/// A refused path or an I/O error.
+pub fn write_index(root: &Path, content: &str) -> Result<(), String> {
+    let path = contained_path(root, INDEX_PATH)?;
+    let temporary = path.with_file_name(format!(".INDEX.md.{}.tmp", std::process::id()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, content.as_bytes()))
+        .and_then(|()| std::fs::rename(&temporary, &path));
+    written.map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("cannot write {INDEX_PATH}: {error}")
+    })
 }
 
 /// Every item the project keeps, and each file that could not be read.
@@ -295,7 +385,8 @@ pub fn topics(root: &Path) -> Result<Vec<String>, String> {
 
 /// Whether `reference` names a work item or a path that exists: a `TSK-NNN`
 /// or `EPC-NNN` record in the checkout, or a repository-relative path (an
-/// optional `#anchor` is ignored) that stays inside the repository.
+/// optional `#anchor` is ignored) that stays inside the repository and
+/// reaches its target through no symbolic link.
 #[must_use]
 pub fn placement_resolves(root: &Path, reference: &str) -> bool {
     let reference = reference.trim();
@@ -318,7 +409,7 @@ pub fn placement_resolves(root: &Path, reference: &str) -> bool {
     {
         return false;
     }
-    root.join(relative).exists()
+    contained_path(root, path).is_ok_and(|target| std::fs::symlink_metadata(target).is_ok())
 }
 
 fn one_line(value: &str, what: &str) -> Result<String, String> {
@@ -345,13 +436,13 @@ pub fn check_template(text: &str) -> Result<(), String> {
         "{{UID}}",
         "{{TITLE_YAML}}",
         "{{DATE}}",
-        "{{TOPIC}}",
+        "{{TOPIC_YAML}}",
         "{{SOURCE}}",
     ];
     if let Some(missing) = PLACEHOLDERS.iter().find(|p| !text.contains(**p)) {
         return Err(format!("missing placeholder {missing}"));
     }
-    for (nnn, topic, source) in [("986", "process", "chat"), ("987", "design", "review")] {
+    for (nnn, topic, source) in [("986", "process", "chat"), ("987", "null", "review")] {
         let uid = crate::ids::new_uid();
         let rendered = render(
             text,
@@ -394,7 +485,8 @@ fn render(
     source: &str,
     date: &str,
 ) -> String {
-    let title_yaml = serde_json::to_string(title).unwrap_or_else(|_| "\"\"".to_string());
+    let title_yaml = yaml_string(title);
+    let topic_yaml = yaml_string(topic);
     let mut context = TemplateContext::new();
     for (key, value) in [
         ("NNN", nnn),
@@ -402,6 +494,7 @@ fn render(
         ("TITLE", title),
         ("TITLE_YAML", title_yaml.as_str()),
         ("TOPIC", topic),
+        ("TOPIC_YAML", topic_yaml.as_str()),
         ("SOURCE", source),
         ("DATE", date),
     ] {
@@ -447,6 +540,7 @@ pub fn create_with(
             SOURCES.join(", ")
         )));
     }
+    let dir = contained_path(root, FEEDBACK_DIR).map_err(StoreError::Invalid)?;
     let pm = root.join("project-management");
     let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(&pm))?;
     let parsed = RegId::parse(&id).filter(|parsed| parsed.kind() == Kind::Fb);
@@ -465,8 +559,8 @@ pub fn create_with(
         source,
         &date,
     );
-    let dir = root.join(FEEDBACK_DIR);
     std::fs::create_dir_all(&dir)?;
+    // `create_new` refuses an existing name, a symbolic link included.
     let path = dir.join(format!("{id}.md"));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -537,7 +631,7 @@ pub fn set_status(root: &Path, id: &str, change: &StatusChange) -> Result<Status
     let Some(parsed) = RegId::parse(id).filter(|parsed| parsed.kind() == Kind::Fb) else {
         return Err(format!("`{id}` is not a feedback id (FB-NNN)"));
     };
-    let path = root.join(FEEDBACK_DIR).join(format!("{parsed}.md"));
+    let path = contained_path(root, &format!("{FEEDBACK_DIR}/{parsed}.md"))?;
     let content = std::fs::read_to_string(&path)
         .map_err(|_| format!("{id} not found under {FEEDBACK_DIR}/"))?;
     let rel = relative(root, &path);
@@ -636,8 +730,8 @@ fn propose(
             if &successor == parsed {
                 return Err(format!("{id} cannot supersede itself"));
             }
-            let successor_path = root.join(FEEDBACK_DIR).join(format!("{successor}.md"));
-            if !successor_path.is_file() {
+            let successor_path = contained_path(root, &format!("{FEEDBACK_DIR}/{successor}.md"))?;
+            if !std::fs::symlink_metadata(&successor_path).is_ok_and(|meta| meta.is_file()) {
                 return Err(format!(
                     "--by {successor} does not exist under {FEEDBACK_DIR}/"
                 ));
@@ -655,21 +749,15 @@ fn propose(
     Ok(proposed)
 }
 
-/// A YAML flow list of plain or quoted strings.
+/// `value` as a double-quoted YAML string, so a value such as `true`,
+/// `null` or `[ux]` reads back as the same string.
+fn yaml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// A YAML flow list of double-quoted strings.
 fn flow_list(values: &[String]) -> String {
-    let rendered: Vec<String> = values
-        .iter()
-        .map(|value| {
-            let plain = value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'));
-            if plain && !value.is_empty() {
-                value.clone()
-            } else {
-                serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-            }
-        })
-        .collect();
+    let rendered: Vec<String> = values.iter().map(|value| yaml_string(value)).collect();
     format!("[{}]", rendered.join(", "))
 }
 
@@ -728,7 +816,27 @@ pub fn lint(root: &Path) -> Lint {
     for item in &loaded.items {
         lint_item(root, item, &topics, &ids, &mut uids, &mut lint.errors);
     }
-    if let Ok(written) = std::fs::read_to_string(root.join(INDEX_PATH)) {
+    if let Err(reason) = contained_path(root, FEEDBACK_DIR) {
+        lint.errors.push(LintFinding {
+            path: FEEDBACK_DIR.to_string(),
+            line: 1,
+            message: format!("{reason}; keep the items in the directory itself"),
+        });
+    }
+    let written =
+        contained_path(root, INDEX_PATH).and_then(|path| match std::fs::symlink_metadata(&path) {
+            Ok(_) => std::fs::read_to_string(path)
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            Err(_) => Ok(None),
+        });
+    if let Err(reason) = &written {
+        lint.warnings.push(crate::remedy::Finding::new(
+            format!("{INDEX_PATH} cannot be checked: {reason}"),
+            crate::remedy::FEEDBACK_INDEX_STALE.remedy(),
+        ));
+    }
+    if let Ok(Some(written)) = written {
         if loaded.unreadable.is_empty() && written != render_index(&loaded.items, &topics) {
             lint.warnings.push(crate::remedy::Finding::new(
                 format!("{INDEX_PATH} does not match the feedback items"),
@@ -1030,8 +1138,10 @@ mod tests {
         check_template(TEMPLATE).unwrap();
         let broken = TEMPLATE.replace("status: received", "status: placed");
         assert!(check_template(&broken).unwrap_err().contains("status"));
-        let missing = TEMPLATE.replace("{{TOPIC}}", "process");
-        assert!(check_template(&missing).unwrap_err().contains("{{TOPIC}}"));
+        let missing = TEMPLATE.replace("{{TOPIC_YAML}}", "process");
+        assert!(check_template(&missing)
+            .unwrap_err()
+            .contains("{{TOPIC_YAML}}"));
     }
 
     #[test]
@@ -1069,7 +1179,7 @@ mod tests {
         item(root, "003", |text| text.replace("id: FB-003", "id: FB-033"));
         // An unknown topic.
         item(root, "004", |text| {
-            text.replace("topic: process", "topic: mood")
+            text.replace("topic: \"process\"", "topic: mood")
         });
         // Placed with no resolving placement.
         item(root, "005", |text| {
@@ -1214,7 +1324,7 @@ mod tests {
         });
         item(root, "002", |text| text);
         item(root, "003", |text| {
-            text.replace("topic: process", "topic: design")
+            text.replace("topic: \"process\"", "topic: \"design\"")
         });
         let topics = topics(root).unwrap();
         let loaded = load(root);

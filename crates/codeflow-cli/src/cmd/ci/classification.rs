@@ -661,7 +661,8 @@ fn journey(
 
 /// Whether an added path is a work record a task pull request may not add
 /// beyond its own: Markdown under `project-management/`, except the record
-/// templates and operator feedback items, which are not work records and
+/// templates and operator feedback items (`FB-NNN.md` and the index
+/// directly in the feedback directory), which are not work records and
 /// whose ids the registry merge rule binds (TSK-241).
 fn is_added_work_record(path: &str) -> bool {
     path.starts_with("project-management/")
@@ -669,7 +670,7 @@ fn is_added_work_record(path: &str) -> bool {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         && !path.starts_with("project-management/templates/")
-        && !path.starts_with(&format!("{}/", codeflow_core::feedback::FEEDBACK_DIR))
+        && !codeflow_core::feedback::is_feedback_path(path)
 }
 
 fn is_record_of(path: &str, task_id: &str) -> bool {
@@ -764,6 +765,17 @@ mod tests {
         assert!(is_added_work_record(
             "project-management/feedbackx/TSK-001.md"
         ));
+        // Only canonical items and the index directly in the directory.
+        for smuggled in [
+            "project-management/feedback/archive/TSK-002.md",
+            "project-management/feedback/TSK-002.md",
+            "project-management/feedback/FB-1.md",
+            "project-management/feedback/FB-001.MD",
+            "project-management/feedback/notes.md",
+            "project-management/feedback/archive/INDEX.md",
+        ] {
+            assert!(is_added_work_record(smuggled), "{smuggled}");
+        }
     }
 
     #[test]

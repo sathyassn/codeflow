@@ -157,7 +157,7 @@ fn feedback_new_issues_ids_through_the_registry_and_writes_the_topics_once() {
     for line in [
         "id: FB-001\n",
         "title: \"Track the operator's input in order\"\n",
-        "topic: process ",
+        "topic: \"process\" ",
         "source: chat ",
         "status: received ",
         "# FB-001: Track the operator's input in order\n",
@@ -363,7 +363,7 @@ fn feedback_status_moves_only_by_the_transition_table() {
     );
     let record = std::fs::read_to_string(&path).unwrap();
     assert!(record.contains("status: superseded "), "{record}");
-    assert!(record.contains("placed_in: [README.md] "), "{record}");
+    assert!(record.contains("placed_in: [\"README.md\"] "), "{record}");
     assert!(record.contains("superseded_by: FB-002 "), "{record}");
     assert!(record.contains("- closed by README.md line 1"), "{record}");
     let validated = ok(&codeflow(&root, &["validate", "--docs"]), "validate --docs");
@@ -545,11 +545,26 @@ fn ids_check_passes_with_feedback_records_as_the_policy_workflow_runs_it() {
 }
 
 /// AC-8: at the standard and minimal tiers `feedback new` refuses with the
-/// tier reason and writes nothing.
+/// tier reason and writes nothing, also in a project that already keeps a
+/// task record (which turns durable tracking on below the full tier).
 #[test]
 fn lower_tiers_refuse_feedback_new_and_write_nothing() {
-    for tier in ["standard", "minimal"] {
+    for (tier, with_task) in [
+        ("standard", false),
+        ("minimal", false),
+        ("standard", true),
+        ("minimal", true),
+    ] {
         let (_dir, root, bare) = project(tier);
+        if with_task {
+            let tasks = root.join("project-management/tasks");
+            std::fs::create_dir_all(&tasks).unwrap();
+            std::fs::write(
+                tasks.join("TSK-001.md"),
+                "---\nid: TSK-001\ntitle: x\nstatus: todo\n---\n",
+            )
+            .unwrap();
+        }
         let before = std::fs::read_to_string(root.join(".codeflow/project.toml")).unwrap();
         let out = refused(
             &codeflow(
@@ -565,7 +580,7 @@ fn lower_tiers_refuse_feedback_new_and_write_nothing() {
                 && out.contains(&format!("at the {tier} tier")),
             "{out}"
         );
-        assert!(!root.join("project-management").exists());
+        assert!(!root.join("project-management/feedback").exists());
         assert_eq!(
             std::fs::read_to_string(root.join(".codeflow/project.toml")).unwrap(),
             before
@@ -573,4 +588,98 @@ fn lower_tiers_refuse_feedback_new_and_write_nothing() {
         let branches = git(&bare, &["branch", "--list", "codeflow/registry"]);
         assert!(branches.is_empty(), "no registry entry: {branches}");
     }
+}
+
+/// Topics and placements that read as other YAML types (`null`, `[ux]`, a
+/// file named `true`) are written as strings and read back unchanged.
+#[test]
+fn topics_and_placements_keep_their_exact_strings() {
+    let (_dir, root, _bare) = project("full");
+    let state_path = root.join(".codeflow/project.toml");
+    let mut state_text = std::fs::read_to_string(&state_path).unwrap();
+    state_text.push_str("\n[feedback]\ntopics = [\"null\", \"[ux]\"]\n");
+    std::fs::write(&state_path, state_text).unwrap();
+    new_item(&root, "null", "first");
+    new_item(&root, "[ux]", "second");
+    std::fs::write(root.join("true"), "x\n").unwrap();
+    ok(
+        &codeflow(
+            &root,
+            &["feedback", "status", "FB-001", "placed", "--in", "true"],
+        ),
+        "placed in a file named true",
+    );
+    let out = codeflow(&root, &["feedback", "list", "--json"]);
+    ok(&out, "list --json");
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(value[0]["topic"], "null", "{value}");
+    assert_eq!(value[0]["items"][0]["topic"], "null", "{value}");
+    assert_eq!(
+        value[0]["items"][0]["placed_in"],
+        serde_json::json!(["true"]),
+        "{value}"
+    );
+    assert_eq!(value[1]["items"][0]["topic"], "[ux]", "{value}");
+    quote(&root, "FB-001", "first words");
+    quote(&root, "FB-002", "second words");
+    let validated = ok(&codeflow(&root, &["validate", "--docs"]), "validate --docs");
+    assert!(validated.contains("doc graph clean"), "{validated}");
+}
+
+/// No feedback read or write goes through a symbolic link: a linked index
+/// is not written through, a placement reached through a link does not
+/// resolve, and a linked feedback directory takes no new item.
+#[cfg(unix)]
+#[test]
+fn feedback_files_are_never_written_or_resolved_through_a_symbolic_link() {
+    use std::os::unix::fs::symlink;
+    let (dir, root, _bare) = project("full");
+    std::fs::write(root.join("AGENTS.md"), "rules\n").unwrap();
+    new_item(&root, "process", "first");
+    let index = root.join("project-management/feedback/INDEX.md");
+    symlink("../../AGENTS.md", &index).unwrap();
+    let out = refused(
+        &codeflow(&root, &["feedback", "list", "--write"]),
+        "list --write through a link",
+    );
+    assert!(out.contains("symbolic link"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("AGENTS.md")).unwrap(),
+        "rules\n"
+    );
+
+    symlink("AGENTS.md", root.join("linked.md")).unwrap();
+    let out = refused(
+        &codeflow(
+            &root,
+            &[
+                "feedback",
+                "status",
+                "FB-001",
+                "placed",
+                "--in",
+                "linked.md",
+            ],
+        ),
+        "placed through a link",
+    );
+    assert!(out.contains("does not resolve"), "{out}");
+
+    std::fs::remove_file(&index).unwrap();
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let feedback_dir = root.join("project-management/feedback");
+    std::fs::rename(&feedback_dir, root.join("moved")).unwrap();
+    symlink(&elsewhere, &feedback_dir).unwrap();
+    let out = refused(
+        &codeflow(
+            &root,
+            &[
+                "feedback", "new", "--topic", "process", "--source", "chat", "x",
+            ],
+        ),
+        "feedback new into a linked directory",
+    );
+    assert!(out.contains("symbolic link"), "{out}");
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }

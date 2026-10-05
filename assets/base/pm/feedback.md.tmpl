@@ -2,7 +2,7 @@
 id: FB-{{NNN}}
 uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
-topic: {{TOPIC}}          # one of `[feedback] topics` in .codeflow/project.toml
+topic: {{TOPIC_YAML}}     # one of `[feedback] topics` in .codeflow/project.toml
 also: []                  # other topics, for cross-reference only
 source: {{SOURCE}}        # chat | pr | review | issue
 status: received          # received | placed | closed | declined | superseded; change it with `codeflow feedback status`

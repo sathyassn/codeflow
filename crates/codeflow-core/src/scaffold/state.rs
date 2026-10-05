@@ -290,9 +290,9 @@ impl FeedbackConfig {
         })
     }
 
-    /// Write the default list as a `[feedback]` section appended to an
-    /// existing `project.toml`, when it has no `feedback.topics`; the rest of
-    /// the file keeps its bytes. Returns the topics in force afterwards and
+    /// Write the default list into an existing `project.toml` that has no
+    /// `feedback.topics`: under its `[feedback]` header, or as a new section
+    /// appended; the rest of the file keeps its bytes. Returns the topics in force afterwards and
     /// whether the file was written.
     ///
     /// # Errors
@@ -307,45 +307,50 @@ impl FeedbackConfig {
         if let Some(topics) = current.topics {
             return Ok((topics, false));
         }
-        let mut table: toml::Table =
+        let table: toml::Table =
             toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
                 what: PROJECT_TOML.to_string(),
                 detail: e.to_string(),
             })?;
-        let defaults = toml::Value::Array(
-            Self::DEFAULT_TOPICS
-                .iter()
-                .map(|topic| toml::Value::String((*topic).to_string()))
-                .collect(),
-        );
-        let updated = if let Some(section) = table.get_mut("feedback") {
-            // A `[feedback]` table without `topics`: add the key and write the
-            // table back, as `ProjectState::store` does.
-            section
-                .as_table_mut()
-                .ok_or_else(|| ScaffoldError::InvalidState {
+        let mut topics_line = String::from("topics = [\n");
+        for topic in Self::DEFAULT_TOPICS {
+            topics_line.push_str("    \"");
+            topics_line.push_str(topic);
+            topics_line.push_str("\",\n");
+        }
+        topics_line.push_str("]\n");
+        // Either way every other byte of the file stays as the project wrote
+        // it: the key goes right under an existing `[feedback]` header, or a
+        // new section is appended.
+        let updated = if table.contains_key("feedback") {
+            let header = text.split_inclusive('\n').position(|line| {
+                let code = line.split('#').next().unwrap_or_default().trim();
+                code == "[feedback]"
+            });
+            let Some(header) = header else {
+                return Err(ScaffoldError::InvalidState {
                     what: PROJECT_TOML.to_string(),
-                    detail: "feedback: expected a table".to_string(),
-                })?
-                .insert("topics".to_string(), defaults);
-            toml::to_string_pretty(&table).map_err(|e| ScaffoldError::InvalidState {
-                what: PROJECT_TOML.to_string(),
-                detail: e.to_string(),
-            })?
+                    detail: "`feedback` is set without a `[feedback]` header line; add `topics` to it by hand".to_string(),
+                });
+            };
+            let mut updated = String::with_capacity(text.len() + topics_line.len() + 1);
+            for (index, line) in text.split_inclusive('\n').enumerate() {
+                updated.push_str(line);
+                if index == header {
+                    if !line.ends_with('\n') {
+                        updated.push('\n');
+                    }
+                    updated.push_str(&topics_line);
+                }
+            }
+            updated
         } else {
-            // The common case: append a new section, so every other byte of
-            // the file stays as the project wrote it.
             let mut updated = text.clone();
             if !updated.is_empty() && !updated.ends_with('\n') {
                 updated.push('\n');
             }
-            updated.push_str("\n[feedback]\ntopics = [\n");
-            for topic in Self::DEFAULT_TOPICS {
-                updated.push_str("    \"");
-                updated.push_str(topic);
-                updated.push_str("\",\n");
-            }
-            updated.push_str("]\n");
+            updated.push_str("\n[feedback]\n");
+            updated.push_str(&topics_line);
             updated
         };
         let check: toml::Table =
@@ -1352,15 +1357,30 @@ mod tests {
             own
         );
 
-        // A `[feedback]` table without topics gains the key.
-        write_file(
-            &ProjectState::path(root),
-            b"schema_version = 1\n\n[feedback]\nnote = \"x\"\n",
-        )
-        .unwrap();
+        // A `[feedback]` table without topics gains the key under its
+        // header; comments and every other line keep their bytes.
+        let partial = "# top\nschema_version = 1 # kept\n\n[feedback] # mine\nnote = \"x\"\n\n[scaffold]\n# why\nignore = []\n";
+        write_file(&ProjectState::path(root), partial.as_bytes()).unwrap();
         let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
         assert!(written);
-        assert_eq!(topics.len(), FeedbackConfig::DEFAULT_TOPICS.len());
+        assert_eq!(topics, FeedbackConfig::DEFAULT_TOPICS.to_vec());
+        let text = std::fs::read_to_string(ProjectState::path(root)).unwrap();
+        let (head, tail) = partial.split_at(partial.find("note").unwrap());
+        assert!(text.starts_with(head), "{text}");
+        assert!(text.ends_with(tail), "{text}");
+        assert!(
+            text[head.len()..].starts_with("topics = [\n    \"process\",\n"),
+            "{text}"
+        );
+
+        // `feedback` set without a header line is refused, the file untouched.
+        let dotted = "schema_version = 1\nfeedback.note = \"x\"\n";
+        write_file(&ProjectState::path(root), dotted.as_bytes()).unwrap();
+        assert!(FeedbackConfig::write_defaults(root).is_err());
+        assert_eq!(
+            std::fs::read_to_string(ProjectState::path(root)).unwrap(),
+            dotted
+        );
 
         write_file(
             &ProjectState::path(root),

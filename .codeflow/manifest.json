@@ -1865,7 +1865,7 @@
     "project-management/templates/feedback.md": {
       "src": "pm/feedback.md.tmpl",
       "ownership": "managed",
-      "sha256": "c2851a9ec64e96de0bd0c1441d6e1a00cc165d981eb0107447e9fa64662d8d54",
+      "sha256": "7fc1f2c09918266bbdf0cfbf49d4aa80716c5efb715ee0016c67fa1b83c2c672",
       "exec": false
     },
     "project-management/templates/spec.md": {
