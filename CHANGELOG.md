@@ -267,8 +267,9 @@ erratum below, never an edit of the section.
   It runs one trial at a time, holding a lock on the Codex and Grok
   evaluator homes from launch to finish, answers a subject's `mcp list`
   as an information call, and waits up to 10 seconds when Herdr still
-  reports a seat blocked after its accepted trust dialog. It reads Codex
-  0.160.0's animated welcome particles as blank screen.
+  reports a seat blocked after its accepted trust dialog. Codex delivery
+  reads the screen again while Codex 0.160.0's welcome animation covers the
+  input box, and still sends only on an exact match.
 
 <!-- codeflow:release-impact patch -->
 - **The full gate runs inside CodeFlow's own Claude sandbox.** The full

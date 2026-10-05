@@ -391,8 +391,13 @@ def codex_expectation(native: list[str], repository: Path) -> dict:
     return {"model": model, "effort": effort, "repository": repository}
 
 
-# Unicode braille patterns, the characters of Codex's logo and welcome animation.
-CODEX_PARTICLES = re.compile("[\u2800-\u28ff]")
+# Codex 0.160.0's welcome screen animates braille particles across its blank
+# rows, the composer row included (trial 13t2, 2026-10-04), so a single read
+# can catch a particle where the composer is checked. A capture cannot tell a
+# particle from typed text, so nothing is erased: delivery reads the frame
+# again, up to this many times about 0.3 s apart, until it verifies exactly,
+# and refuses if it never does.
+CODEX_FRAME_READS = 30
 
 
 def codex_status(line: str, model: str, effort: str | None, repository: Path) -> bool:
@@ -415,10 +420,7 @@ def codex_composer(screen: str, model: str, effort: str | None, repository: Path
     status line was not captured, so it is not pinned and may be absent; a
     bottom-pane dialog replaces the composer, which is checked in full.
     """
-    # Codex 0.160.0's welcome screen animates braille particles across the
-    # blank rows, the composer row included (trial 13t2, 2026-10-04). They are
-    # drawn, never typed: the frame is read with them as blanks.
-    lines = [CODEX_PARTICLES.sub(" ", line).rstrip() for line in screen.splitlines()]
+    lines = [line.rstrip() for line in screen.splitlines()]
     while lines and not lines[-1]:
         lines.pop()
     if len(lines) >= 3 and codex_status(lines[-1], model, effort, repository):
@@ -578,14 +580,23 @@ def deliver_codex(pane: str, prompt: str, initial: dict, seconds: float, codex: 
             (evidence / name).write_text(screen, encoding="utf-8")
         return screen
 
-    before = capture("editor-before.txt")
-    if codex_composer(before, **codex) != "":
+    def verified(name: str, check) -> str | None:
+        for attempt in range(CODEX_FRAME_READS):
+            if attempt:
+                time.sleep(0.3)
+            screen = capture(name)
+            if check(screen):
+                return screen
+        return None
+
+    before = verified("editor-before.txt", lambda screen: codex_composer(screen, **codex) == "")
+    if before is None:
         raise Refused("no verified empty Codex composer; nothing sent")
     frames.append(frame_event("codex", "before-paste", before))
     herdr("pane", "send-text", pane, prompt)
     time.sleep(2)
-    pending = capture("editor-pasted.txt")
-    if not codex_holds(codex_composer(pending, **codex), prompt):
+    pending = verified("editor-pasted.txt", lambda screen: codex_holds(codex_composer(screen, **codex), prompt))
+    if pending is None:
         raise Refused("the visible Codex composer does not hold this prompt; no Enter sent")
     frames.append(frame_event("codex", "pending", pending))
     herdr("pane", "send-keys", pane, "Enter")

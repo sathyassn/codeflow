@@ -5690,6 +5690,7 @@ class ProcessRepairTests(unittest.TestCase):
 
     def test_codex_delivery_pastes_only_into_the_verified_composer(self):
         runner = self.runner(); path = Path("/disposable/subject/repository"); expect = self.codex_expect(path)
+        runner.CODEX_FRAME_READS = 1  # one read per check here; rereads have their own test
         prompt = "Which branch holds the customer search work?\n"
         idle = self.codex_frame(path)
         for pending in [self.codex_frame(path, "› " + prompt.strip(), footer="  enter send"),
@@ -9469,24 +9470,55 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             with self.subTest(other=other[-200:]):
                 self.assertNotEqual("", runner.codex_composer(other, **expect))
 
-    def test_codex_0_160_0_welcome_animation_is_read_as_blank(self):
+    def test_codex_0_160_0_welcome_animation_waits_for_an_exact_frame(self):
         runner = self.runner()
         path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
         animated = (self.FRAMES / "codex-0.160.0-idle-animated.txt").read_text().replace("{path}", str(path))
+        idle = (self.FRAMES / "codex-0.160.0-idle.txt").read_text().replace("{path}", str(path))
         expect = {"model": "gpt-6-astra", "effort": "high", "repository": path}
-        # Trial 13t2 of 2026-10-04: particles on the rows around the composer
-        # and on the composer row itself, after its placeholder.
+        placeholder = "› Ask Codex to do anything"
+        # Trial 13t2 of 2026-10-04: particles on the composer row itself.
         composer = next(line for line in animated.splitlines() if line.startswith("› "))
         self.assertRegex(composer, "^› Ask Codex to do anything +[\u2800-\u28ff]")
-        self.assertEqual("", runner.codex_composer(animated, **expect))
-        prompt = "Quick question from the operator: which branch does the customer search work land on?"
-        pending = animated.replace("› Ask Codex to do anything", "› " + prompt)
-        self.assertTrue(runner.codex_holds(runner.codex_composer(pending, **expect), prompt))
-        # Anything other than particles still counts as text in the composer.
-        for other in [animated.replace("› Ask Codex to do anything", "› leftover draft"),
-                      animated.replace("Ask Codex to do anything   ", "Ask Codex to do anything x ")]:
-            with self.subTest(other=next(line for line in other.splitlines() if line.startswith("› "))[:60]):
-                self.assertNotEqual("", runner.codex_composer(other, **expect))
+        self.assertIsNone(runner.codex_composer(animated, **expect))
+        self.assertEqual("", runner.codex_composer(idle, **expect))
+
+        def deliver(screens, prompt, started=True):
+            reads = iter(screens)
+            def transport(*argv, **kwargs):
+                if argv[:2] == ("pane", "read"):
+                    return next(reads)
+                return "sent"
+            with patch.object(runner, "herdr", side_effect=transport) as calls, \
+                 patch.object(runner, "started", return_value=started), patch.object(runner.time, "sleep"):
+                try:
+                    result = runner.deliver_codex("owned", prompt, {}, 1, expect, [])
+                except runner.Refused as exc:
+                    result = exc
+            sends = [c.args[1] for c in calls.call_args_list if c.args[0] == "pane" and c.args[1] != "read"]
+            return result, sends
+
+        prompt = "Reply OK."
+        pending = idle.replace(placeholder, "› " + prompt)
+        animated_pending = animated.replace(placeholder, "› " + prompt)
+        # A particle frame is read again until the exact idle frame shows.
+        self.assertEqual((1, ["send-text", "send-keys"]), deliver([animated, animated, idle, animated_pending, pending], prompt))
+        # Particles that never clear: nothing is pasted.
+        result, sends = deliver([animated] * runner.CODEX_FRAME_READS, prompt)
+        self.assertIsInstance(result, runner.Refused)
+        self.assertEqual([], sends)
+        # Braille is text, never erased: a draft that holds it is not empty,
+        # pending text with a stray braille character is not the prompt, and a
+        # prompt that holds braille is verified exactly.
+        draft = idle.replace(placeholder, placeholder + "⠓")
+        result, sends = deliver([draft] * runner.CODEX_FRAME_READS, prompt)
+        self.assertEqual(([], runner.Refused), (sends, type(result)))
+        stray = idle.replace(placeholder, "› Reply⠓ OK.")
+        result, sends = deliver([idle, *[stray] * runner.CODEX_FRAME_READS], prompt)
+        self.assertEqual((["send-text"], runner.Refused), (sends, type(result)))
+        braille = "Reply ⠓ OK."
+        self.assertEqual((1, ["send-text", "send-keys"]),
+                         deliver([idle, idle.replace(placeholder, "› " + braille)], braille))
 
     @unittest.skipUnless(sys.platform == "darwin", "libproc is macOS only")
     def test_working_directory_comes_from_libproc_without_lsof(self):
