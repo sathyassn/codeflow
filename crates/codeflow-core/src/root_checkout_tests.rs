@@ -1982,3 +1982,22 @@ fn a_folder_that_is_not_utf8_does_not_hide_or_rename_a_nested_repository() {
         .collect();
     assert_eq!(found, ["plain"]);
 }
+
+/// Round eight on issue 79: a tracked file whose name is not valid UTF-8 and
+/// that is gone from the working tree is uncommitted work, so the branch
+/// switch is refused instead of seeing a clean tree.
+#[test]
+fn a_tracked_change_to_a_name_that_is_not_utf8_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(b"docs/caf\xe9.md", b"x"), (b"docs/plain.md", b"y")],
+    );
+    let changes = tracked_changes(&repo).unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|name| name.bytes() == b"docs/caf\xe9.md"),
+        "{changes:?}"
+    );
+}

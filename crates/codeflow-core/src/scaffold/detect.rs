@@ -172,7 +172,8 @@ fn display_from(root: &Path, path: &Path) -> String {
         |p: &Path| crate::portable_path::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let (root, path): (PathBuf, PathBuf) = (canonical(root), canonical(path));
     match path.strip_prefix(&root) {
-        Ok(relative) => crate::portable_path::slashed(relative),
+        // A report line: the key of a name that is not text is shown as escapes.
+        Ok(relative) => crate::git::display_key(&crate::portable_path::slashed(relative)),
         Err(_) => path.display().to_string(),
     }
 }

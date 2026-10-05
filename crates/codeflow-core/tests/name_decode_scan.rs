@@ -151,7 +151,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("codeflow-core/src/workgraph/readiness.rs", "git_bytes", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/workgraph/release_line.rs", "config_at", "from_utf8_lossy", 1, "file or blob content, a format contract and not a name"),
     ("codeflow-core/src/workgraph/release_line.rs", "record_of", "from_utf8_lossy", 1, "file or blob content, a format contract and not a name"),
-    ("codeflow-present/src/browser.rs", "windows_output_text", "from_utf8_lossy", 1, "Windows only, where paths are UTF-16 and have no invalid bytes, and decided in the file"),
+    ("codeflow-present/src/browser.rs", "windows_output_text", "from_utf8_lossy", 1, "Windows only: PowerShell output arrives as U+FFFD for an invalid unit, so refuse_ambiguous_identity_text stops the one case where the lossy text could equal the expected profile path, and the instance argument is a random UUID, exact either way"),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {

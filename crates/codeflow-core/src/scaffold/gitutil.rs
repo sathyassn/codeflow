@@ -57,9 +57,10 @@ pub fn common_dir(root: &Path) -> Option<std::path::PathBuf> {
     }
     // OS text rule (issue 79): the folder is joined to a path, so its exact
     // bytes are used, never a lossy spelling.
-    let dir = crate::git::GitName::from_bytes(out.stdout.trim_ascii())
-        .os_path()
-        .ok()?;
+    // Only git's own newline is framing: a directory name may end in a space
+    // or a carriage return.
+    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+    let dir = crate::git::GitName::from_bytes(bytes).os_path().ok()?;
     (!dir.as_os_str().is_empty()).then(|| root.join(dir))
 }
 
@@ -169,5 +170,35 @@ mod tests {
         assert_ne!(key, "caf\u{fffd}");
         assert_eq!(crate::git::display_key(&key), "caf\\xe9");
         assert_eq!(config_get_key(dir.path(), "demo.absent"), None);
+    }
+
+    /// Round eight on issue 79: a folder whose name ends in a carriage return
+    /// is the folder, not its trimmed spelling.
+    #[test]
+    fn the_common_dir_keeps_a_trailing_carriage_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main\r");
+        if std::fs::create_dir(&main).is_err() {
+            return; // this volume refuses the name
+        }
+        crate::git::repo_with_tree(&main, &[(b"a.txt", b"x")]);
+        let run = |args: &[&str]| {
+            let out = crate::git::command()
+                .args(args)
+                .current_dir(&main)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        run(&["worktree", "add", "-q", "../wt", "-b", "other", "main"]);
+        let linked = dir.path().join("wt");
+        let common = common_dir(&linked).expect("a common dir");
+        assert_eq!(
+            common.canonicalize().unwrap(),
+            main.join(".git").canonicalize().unwrap()
+        );
+        assert!(common.to_string_lossy().contains("main\r"));
     }
 }

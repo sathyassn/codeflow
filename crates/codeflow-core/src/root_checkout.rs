@@ -1125,19 +1125,21 @@ pub fn worktree_findings(
 // ---------------------------------------------------------------------------
 
 /// Tracked files with uncommitted changes (staged or not) in the working
-/// tree, relative paths.
-#[must_use]
-pub fn tracked_changes(repo: &git2::Repository) -> Vec<String> {
+/// tree, relative paths as exact names (OS text rule, issue 79: a name that
+/// is not valid UTF-8 is still work to keep, never dropped).
+///
+/// # Errors
+/// Returns git's error when the status cannot be read, so a caller that
+/// decides on it can refuse.
+pub fn tracked_changes(repo: &git2::Repository) -> Result<Vec<GitName>, git2::Error> {
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(false).include_ignored(false);
-    let Ok(statuses) = repo.statuses(Some(&mut opts)) else {
-        return Vec::new();
-    };
-    statuses
+    let statuses = repo.statuses(Some(&mut opts))?;
+    Ok(statuses
         .iter()
         .filter(|s| !s.status().is_empty() && !s.status().contains(git2::Status::IGNORED))
-        .filter_map(|s| s.path().ok().map(str::to_string))
-        .collect()
+        .map(|s| GitName::from_bytes(s.path_bytes()))
+        .collect())
 }
 
 /// Commits on the current branch that its upstream lacks, when it has one.
@@ -1273,7 +1275,8 @@ fn head_finding(
     root_branch: &RootBranch,
     repo_label: &str,
 ) -> Option<Finding> {
-    let changes = tracked_changes(repo);
+    // Advice only: a status that cannot be read adds no change to the report.
+    let changes = tracked_changes(repo).unwrap_or_default();
     match head(repo)? {
         Head::Branch(ref b) if *b == root_branch.name => {
             (policy.branch_is_protected_name(b) && !changes.is_empty()).then(|| Finding {
@@ -1508,14 +1511,25 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
             "make the first commit on the default branch, then rerun codeflow init --workspace".to_string(),
         ));
     }
-    let changes = tracked_changes(&repo);
+    let changes = tracked_changes(&repo).map_err(|error| {
+        stop(
+            format!(
+                "codeflow init --workspace cannot read the status of {repo_label} ({error}), so it cannot tell whether switching to '{target}' keeps uncommitted work"
+            ),
+            "fix the repository state, then rerun codeflow init --workspace".to_string(),
+        )
+    })?;
     if !changes.is_empty() {
         let found = current.map_or_else(|| "its current HEAD".to_string(), |h| h.describe());
         return Err(stop(
             format!(
                 "codeflow init --workspace would switch the root checkout of {repo_label} from {found} to \
                  '{target}', but these tracked files have uncommitted changes: {}",
-                changes.join(", ")
+                changes
+                    .iter()
+                    .map(|name| name.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             "commit or stash them, then rerun codeflow init --workspace".to_string(),
         ));
