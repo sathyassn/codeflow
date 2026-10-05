@@ -28,6 +28,7 @@
 //! it reads the current status at the execution base (D3a).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 
 use git2::{Oid, Repository};
 
@@ -153,15 +154,14 @@ struct Held {
     doubt: Option<String>,
 }
 
-/// One task file as the store read it.
+/// One task file as the store parsed it, shared by every tree and task
+/// that holds it, so a lookup copies a pointer, never the record.
 #[derive(Clone)]
 enum Read {
-    /// It parses as a task record.
-    Parsed(Box<RecordView>),
-    /// It does not parse: its text, to tell whether it may be the task.
-    Broken(String),
-    /// Its object cannot be read.
-    Missing,
+    /// It parses as a task record, with the uid its frontmatter carries.
+    Parsed(Rc<RecordView>, Option<Rc<str>>),
+    /// It does not parse.
+    Broken,
 }
 
 /// One run's reading of record history: trees, task entries and parsed
@@ -170,10 +170,14 @@ pub(super) struct RecordStore<'r> {
     repo: &'r Repository,
     /// Task entries (path, blob) per `project-management` tree.
     entries: HashMap<Oid, Vec<(String, Oid)>>,
-    /// Each task file read, by path and blob.
+    /// Each task file's text, by blob (`None` when it cannot be read).
+    texts: HashMap<Oid, Option<Rc<str>>>,
+    /// Each task file parsed, by path and blob.
     read: HashMap<(String, Oid), Read>,
     /// What each `project-management` tree holds of each task identity.
     held: HashMap<(Oid, String, Option<String>), Held>,
+    /// Per task identity, whether each blob may spell it ([`may_spell`]).
+    spells: HashMap<(String, Option<String>), HashMap<Oid, bool>>,
     /// Why no history read here is complete, when it is not.
     overlay: Option<String>,
     /// The commits a shallow clone's history is cut at.
@@ -205,8 +209,10 @@ impl<'r> RecordStore<'r> {
         Self {
             repo,
             entries: HashMap::new(),
+            texts: HashMap::new(),
             read: HashMap::new(),
             held: HashMap::new(),
+            spells: HashMap::new(),
             overlay,
             boundary,
         }
@@ -243,44 +249,58 @@ impl<'r> RecordStore<'r> {
             self.entries.insert(records, found);
         }
         let entries = self.entries.get(&records).cloned().unwrap_or_default();
+        let identity = (task.id.clone(), task.uid.clone());
+        let mut spells = self.spells.remove(&identity).unwrap_or_default();
         let mut held = Held::default();
         for (path, blob) in entries {
             let own = path
                 .rsplit('/')
                 .next()
                 .is_some_and(|name| name.eq_ignore_ascii_case(&task.own_file));
-            match self.read(&path, blob) {
-                Read::Parsed(record)
-                    if super::acceptance::is_same_task(&record, &task.id, task.uid.as_deref()) =>
+            let Some(text) = self.text(blob) else {
+                // Any task file may be this task under another name.
+                held.doubt.get_or_insert(format!(
+                    "{path} at {commit} cannot be read, so whether it is this task cannot be told"
+                ));
+                continue;
+            };
+            // Only a file that may spell the task's id or uid can parse as
+            // the task, so no other file is parsed for it. Each blob is
+            // searched once per task, however many trees hold it.
+            let spelled = *spells.entry(blob).or_insert_with(|| may_spell(&text, task));
+            if !(own || spelled) {
+                continue;
+            }
+            match self.read(&path, blob, &text) {
+                // The same task by parsed identity (`is_same_task`), read
+                // with the uid parsed once per file.
+                Read::Parsed(record, uid)
+                    if record.id == task.id
+                        || (task.uid.is_some() && uid.as_deref() == task.uid.as_deref()) =>
                 {
-                    let uid = super::acceptance::record_uid(&record.content);
                     if record.id == task.id {
-                        if uid.is_some() && task.uid.is_some() && uid != task.uid {
+                        if uid.is_some()
+                            && task.uid.is_some()
+                            && uid.as_deref() != task.uid.as_deref()
+                        {
                             held.doubt.get_or_insert(format!(
                                 "{path} at {commit} carries the id {} with another uid, so which task it is cannot be told",
                                 task.id
                             ));
                         }
-                        held.uids.extend(uid);
+                        held.uids.extend(uid.as_deref().map(str::to_string));
                     }
-                    held.records.push((blob, *record));
+                    held.records.push((blob, record.as_ref().clone()));
                 }
-                Read::Parsed(_) => {}
-                Read::Broken(content) => {
-                    if own || may_spell(&content, task) {
-                        held.doubt.get_or_insert(format!(
-                            "{path} at {commit} does not parse, so whether it is this task cannot be told"
-                        ));
-                    }
-                }
-                // Any task file may be this task under another name.
-                Read::Missing => {
+                Read::Parsed(..) => {}
+                Read::Broken => {
                     held.doubt.get_or_insert(format!(
-                        "{path} at {commit} cannot be read, so whether it is this task cannot be told"
+                        "{path} at {commit} does not parse, so whether it is this task cannot be told"
                     ));
                 }
             }
         }
+        self.spells.insert(identity, spells);
         if held.records.len() > 1 {
             held.doubt.get_or_insert(format!(
                 "{commit} holds {} records of {}, so which one is the task cannot be told",
@@ -292,21 +312,33 @@ impl<'r> RecordStore<'r> {
         Ok(held)
     }
 
-    /// The task file at `path` with `blob`, read and parsed once per run.
-    fn read(&mut self, path: &str, blob: Oid) -> Read {
+    /// The text of `blob`, read once per run; `None` when the object
+    /// cannot be read.
+    fn text(&mut self, blob: Oid) -> Option<Rc<str>> {
+        if let Some(text) = self.texts.get(&blob) {
+            return text.clone();
+        }
+        let text = self
+            .repo
+            .find_blob(blob)
+            .ok()
+            .map(|object| Rc::from(String::from_utf8_lossy(object.content()).as_ref()));
+        self.texts.insert(blob, text.clone());
+        text
+    }
+
+    /// The task file at `path` with `blob` and `text`, parsed once per run.
+    fn read(&mut self, path: &str, blob: Oid, text: &str) -> Read {
         let key = (path.to_string(), blob);
         if let Some(read) = self.read.get(&key) {
             return read.clone();
         }
-        let read = match self.repo.find_blob(blob) {
-            Err(_) => Read::Missing,
-            Ok(object) => {
-                let content = String::from_utf8_lossy(object.content()).into_owned();
-                match RecordView::parse(RecordKind::Task, path, &content) {
-                    Ok(record) => Read::Parsed(Box::new(record)),
-                    Err(_) => Read::Broken(content),
-                }
+        let read = match RecordView::parse(RecordKind::Task, path, text) {
+            Ok(record) => {
+                let uid = super::acceptance::record_uid(&record.content).map(Rc::from);
+                Read::Parsed(Rc::new(record), uid)
             }
+            Err(_) => Read::Broken,
         };
         self.read.insert(key, read.clone());
         read
