@@ -501,3 +501,38 @@ unqualified until the items listed under "Still to establish" are proven,
 so no Grok seat builds until then. The rule is stated in the transport
 rule's "First-run prompts" (`cf-model-orchestrator/resources/routing/transport.md`,
 ADR-0077).
+
+## Amendment, 2026-10-05: builders run in cf-builder, and shell startup files are guarded
+
+The operator decided on 2026-10-05 (TSK-242, issue 86) to close a hole the
+guards cannot close alone. A function or alias planted in a shell startup
+file, such as `git() { ... }` in `~/.zshrc`, runs under every later command,
+while the guards judge each command by the name it spells.
+
+1. **D1 changes.** A Codex builder seat launches with
+   `--ask-for-approval never -c default_permissions="cf-builder"` and no
+   `--sandbox` flag, from the main checkout root. Full access is retired
+   for builders. The spike of 2026-09-29 ran fetch, worktree add, commit and
+   builds unattended under that profile; a push to a remote outside the
+   workspace root is denied, and a push to a hosted remote is not yet
+   verified, so a builder whose push fails reports it and the caller
+   pushes. The transport rule states the launch.
+2. **Containment comes from the sandboxes.** The action table's
+   `startup_paths` generates Claude's `Edit` denies and sandbox `denyWrite`
+   entries and the read-only entries of the Codex `cf-guard` profile, which
+   `cf-builder` extends. Grok's `workspace` sandbox already leaves the home
+   unwritable; a nested `.envrc` has no Grok rule, since a Grok deny also
+   blocks reads.
+3. **The guards are the backstop, with no relief.** exec-guard and
+   edit-guard refuse every visible write under `security.shell_startup`,
+   which has no policy key and holds at every integrity level: the operator
+   edits their own startup files. git-guard refuses user- and system-scope
+   git keys that run a program. The guards cannot stop a path built at run
+   time, a script written then run, or a compiled program that writes the
+   file; on a seat without a sandbox those stay open.
+4. **No run-time source following.** The guards do not read what a startup
+   file sources. `codeflow doctor --check startup-files` lists the files the
+   home's startup files source from outside the class.
+
+The sibling file classes found in the same sweep are tracked as issues 87
+to 91.

@@ -93,6 +93,12 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 <!-- codeflow-derived policy-reference end -->
 
+## Rules with no key
+
+| Rule | Guard | What it refuses | Relief |
+|---|---|---|---|
+| `security.shell_startup` | exec-guard, edit-guard | A write to a shell startup file, or a write that can place one, in an agent session (issue 86, TSK-242). The class and the forms are in [enforcement planes](architecture/enforcement-planes.md#shell-startup-files) | None. No key relaxes it at any integrity level; the operator edits their own startup files outside the agent session |
+
 ## Git hook stages
 
 `codeflow git-hook` dispatches five hook stages and answers a `capabilities`

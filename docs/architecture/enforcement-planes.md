@@ -127,7 +127,7 @@ Three PreToolUse handlers add fast, pre-git feedback.
 |---|---|---|
 | `git-guard` | git policy | blocks the git rows above, the PR-content checks, structural override-token laundering, discards of local-only work, and changes to the tracking refs and transport settings that decide policy authority |
 | `exec-guard` | the `security` section | destructive commands and privilege escalation block (ADR-0075 D5); outward action families, secret-store reads and interpreter literals refuse at their rule's level |
-| `edit-guard` | the action table's enforcement paths | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths refuse, including patch move sources and destinations |
+| `edit-guard` | the action table's enforcement paths and shell startup files | native file edits (Codex `apply_patch`, Grok `write` and `search_replace`) to enforcement paths or shell startup files refuse, including patch move sources and destinations |
 
 The handlers are wired per harness.
 
@@ -183,6 +183,8 @@ route.
   `security.headless_opt_in` is ignored with a warning and removed by
   `codeflow update`.
 - The `security.dangerous_commands` floor cannot be lowered.
+- `security.shell_startup` has no key and no relief: the operator edits
+  their own shell startup files.
 
 **Hook wrappers.**
 
@@ -280,6 +282,49 @@ merge gate when the remote requires its result.
 
 The end state the planes exist for is a protected branch whose PRs are merged
 by a human on evidenced-green checks.
+
+### shell startup files
+
+A function or alias in a shell startup file runs under every later command,
+while the guards judge each command by the name it spells: `git` can run a
+planted `git()` function the guards never see. So no agent session writes
+one (issue 86, TSK-242).
+
+- **The class.** The action table's `startup_paths`: the bash, zsh, ksh,
+  fish and PowerShell startup files and directories in the home, the
+  readline, tmux, screen, direnv and `~/.ssh/rc` files, the system ones under
+  `/etc`, and `.envrc` in any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME`
+  move the matching entries when they are set.
+- **Containment comes from the sandbox.** The guards are the backstop.
+
+| Harness | Native containment | Guards |
+|---|---|---|
+| Claude Code | `Edit` denies for every entry, and sandbox `denyWrite` entries for the home and `/etc` ones, which also hold Bash writes in the sandbox | exec-guard on Bash |
+| Codex | `cf-guard` and `cf-builder` keep every home and `/etc` entry and the workspace root's `.envrc` read only | exec-guard on Bash, edit-guard on `apply_patch`, `Edit` and `Write` |
+| Grok Build | the `workspace` sandbox leaves the home unwritable | exec-guard on Bash, edit-guard on `write` and `search_replace` |
+
+The guards refuse under `security.shell_startup`, whatever the integrity
+level:
+
+- a redirect, copy, link, move, in-place edit, `tee`, `dd` or interpreter
+  call that names a file of the class, in any spelling the guard expands
+  (`~`, `$HOME`, `${HOME}`, `$ZDOTDIR`, braces, globs, case) and through
+  symbolic links;
+- an archive, sync, download or checkout that writes into the home, `/etc`
+  or a startup directory, where it can place a file it does not name;
+- a path the guard cannot resolve near the class, such as `~/$NAME`;
+- `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
+  `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`.
+
+git-guard refuses a user- or system-scope git key that runs a program, such
+as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
+
+The guards cannot stop a path built at run time, a script written in one
+call and run in another, or a compiled program that writes the file. On a
+seat without a sandbox those stay open. `codeflow doctor --check
+startup-files` reports a project whose settings lack the class, and the
+files the home's startup files source from outside it, which no rule
+protects.
 
 ### how far each plane reaches
 
