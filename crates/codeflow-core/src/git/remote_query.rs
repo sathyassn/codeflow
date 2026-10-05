@@ -221,10 +221,7 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
         configured =
             from_env("GIT_SSH")?.map(|program| format!("'{}'", program.replace('\'', "'\\''")));
     }
-    if configured
-        .as_deref()
-        .is_some_and(|command| command.is_empty())
-    {
+    if configured.as_deref().is_some_and(str::is_empty) {
         return Err(Failure::Other(
             "the configured ssh command is empty, so the remote is not asked".to_string(),
         ));
