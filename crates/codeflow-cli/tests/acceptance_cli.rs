@@ -3908,6 +3908,38 @@ fn a_kept_uid_matches_in_every_yaml_form() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
+/// A uid YAML reads as another type is the same uid in any spelling of
+/// that value: the target's landed TSK-002 with `uid: TRUE`, renumbered
+/// TSK-001 with `uid: true`, keeps its criteria as when both spell it
+/// alike. A file is skipped unread only when its text cannot spell the
+/// task (TSK-234 review round 13).
+#[test]
+fn a_uid_yaml_reads_as_another_type_keeps_its_history() {
+    let mut wrong = Vec::new();
+    for landed in ["TRUE", "true"] {
+        let dir = repo(&[], "");
+        let root = dir.path();
+        let old_path = record_path("TSK-002");
+        write(
+            root,
+            &old_path,
+            &new_standalone(&task("TSK-002", "todo", OWN_JOURNEY, LANDED))
+                .replace(FIXED_UID, landed),
+        );
+        commit(root, "docs: plan the standalone task");
+        git(root, &["switch", "-c", "task/TSK-001-fix"]);
+        std::fs::remove_file(root.join(&old_path)).unwrap();
+        let shape = |record: String| standalone_one(&record).replace(FIXED_UID, "true");
+        let path = record_path("TSK-001");
+        let results = complete_reopen_complete(root, &path, &shape, "main", false);
+        let verb = results[0].clone();
+        if verb.0 == 0 || !verb.1.contains("reopened task keeps its criteria") {
+            wrong.push(format!("{landed} verb: {}", verb.1));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
 /// A task landed on an integration line that `main` predates keeps the
 /// line's criteria however its record is later retargeted (issue #67): kept on the
 /// line, retargeted to `main` from the first commit of its branch, or

@@ -832,13 +832,23 @@ impl<'r> RecordStore<'r> {
     }
 }
 
-/// Whether a task file that does not parse may still name `task`: its
+/// Whether a task file may name `task`, whether it parses or not: its
 /// text holds the task's id or uid, or the text the frontmatter parser
 /// reads as YAML holds a backslash, with which a double-quoted value can
-/// spell either by escapes. YAML has no other way to build a value from
+/// spell either by escapes. YAML has no other way to build a string from
 /// text that does not hold it, so a file with none of these is another
-/// task's (TSK-234 review rounds 6 and 7).
+/// task's (TSK-234 review rounds 6 and 7). That holds for a supported id
+/// and a canonical uid, which are strings; a uid in any other form may be
+/// a boolean or number another spelling also reads as (`TRUE` and `true`),
+/// so every file may name a task that carries one (round 13).
 fn may_spell(content: &str, task: &Identity) -> bool {
+    if task
+        .uid
+        .as_deref()
+        .is_some_and(|uid| !crate::ids::is_uid(uid))
+    {
+        return true;
+    }
     let literal = content.contains(task.id.as_str())
         || task.uid.as_deref().is_some_and(|uid| content.contains(uid));
     literal || crate::validate::frontmatter_scope(content).contains('\\')
