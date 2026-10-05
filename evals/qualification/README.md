@@ -113,9 +113,11 @@ content takes), or any MCP server or tool the fixture did not declare, adds
 `extra_extension_loaded` to the trial's validity flags, so the trial is
 invalid, never a model result. The declaration is the fixture's `.mcp.json`
 as launch read it, recorded in `launch.json` as `declared_mcp_servers`, so an
-edit during the trial cannot authorize a server. A tool a session's
-transcript attributes to a server counts as declared only when that server is
-declared; attribution holds within that one session.
+edit during the trial cannot authorize a server. A server the transcript
+names, and a tool a session's transcript attributes to a server, count as
+declared only when that exact server name is declared: `claude.ai Slack` is
+not `claude_ai_Slack`, though both have one wire form. Attribution holds
+within that one session.
 Without attribution a name `mcp__<server>__<tool>` is ambiguous, since server
 names may hold `__`, so it counts as declared only when every way of splitting
 it names a declared server. `observation.json` lists what was found under `claude_extensions`,

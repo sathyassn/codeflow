@@ -9259,10 +9259,15 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
         self.assertTrue(declared("mcp__foo__bar__read", {"foo", "foo__bar"}))
         self.assertFalse(declared("mcp__foo__", {"foo"}))
         self.assertFalse(declared("mcp__food__read", {"foo"}))
-        # The transcript's own attribution decides, both ways.
-        self.assertTrue(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo__bar"}))
-        self.assertFalse(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo"}))
-        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}, {"foo__bar"}))
+        # The transcript's own attribution decides, both ways, by exact name.
+        self.assertTrue(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo__bar"}, {"foo__bar"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo__bar"}, {"foo"}, {"foo__bar"}))
+        self.assertFalse(declared("mcp__foo__bar__read", {"foo"}, {"foo__bar"}, {"foo"}))
+        # Two names with one wire form are two servers.
+        self.assertFalse(declared("mcp__claude_ai_Slack__read", {"claude_ai_Slack"}, {"claude.ai Slack"},
+                                  {"claude_ai_Slack"}))
+        self.assertTrue(declared("mcp__claude_ai_Slack__read", {"claude_ai_Slack"}, {"claude.ai Slack"},
+                                 {"claude.ai Slack"}))
         self.assertTrue(declared("Bash", set()))
         self.assertEqual("claude_ai_Claude_Docs", runner.mcp_server_key("claude.ai Claude Docs"))
         with tempfile.TemporaryDirectory() as temp:
@@ -9287,6 +9292,31 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             found = runner.claude_loaded_extensions(env, ["foo__bar"])
             self.assertEqual(["session.jsonl", "subject.jsonl"], found["transcripts"])
             self.assertEqual(["mcp__foo__bar__read"], found["loaded"]["tools"])
+
+    def test_servers_are_declared_by_exact_name_never_by_wire_form(self):
+        runner = self.runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {"CLAUDE_CONFIG_DIR": str(root / "claude"), "CLAUDE_CODE_PROJECT_DIR_NAME": "eval-abc"}
+            connector = [
+                {"type": "attachment", "attachment": {"type": "mcp_instructions_delta", "addedNames": ["claude.ai Slack"]}},
+                {"type": "attachment", "attachment": {"type": "prompt_snapshot", "tools": [
+                    {"name": "mcp__claude_ai_Slack__read", "description": "x", "server": "claude.ai Slack"}]}},
+            ]
+            self.write_transcript(env, connector)
+            # The fixture declares a server that only shares the connector's wire form.
+            found = runner.claude_loaded_extensions(env, ["claude_ai_Slack"])["loaded"]
+            self.assertEqual(["claude.ai Slack"], found["mcp_servers"])
+            self.assertEqual(["mcp__claude_ai_Slack__read"], found["tools"])
+            # Declared by its exact name, it is the fixture's own.
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
+                             runner.claude_loaded_extensions(env, ["claude.ai Slack"])["loaded"])
+            own = [{"type": "attachment", "attachment": {"type": "mcp_instructions_delta", "addedNames": ["claude_ai_Slack"]}},
+                   {"type": "attachment", "attachment": {"type": "prompt_snapshot", "tools": [
+                       {"name": "mcp__claude_ai_Slack__read", "description": "x", "server": "claude_ai_Slack"}]}}]
+            self.write_transcript(env, own)
+            self.assertEqual({"skills": [], "agents": [], "tools": [], "mcp_servers": []},
+                             runner.claude_loaded_extensions(env, ["claude_ai_Slack"])["loaded"])
 
     def test_transcript_scan_rejects_special_files_and_swaps_without_blocking(self):
         runner = self.runner()

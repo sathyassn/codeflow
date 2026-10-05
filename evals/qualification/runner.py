@@ -1018,20 +1018,25 @@ def mcp_server_key(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", name)
 
 
-def mcp_tool_declared(name: str, keys: set[str], servers: set[str] | frozenset[str] = frozenset()) -> bool:
+def mcp_tool_declared(name: str, keys: set[str], servers: set[str] | frozenset[str] = frozenset(),
+                      declared: set[str] | frozenset[str] = frozenset()) -> bool:
     """Whether an `mcp__<server>__<tool>` name belongs to a declared server.
-    `servers` holds the servers the transcript itself attributes the tool to;
-    when there are any, each must be declared and own the name. Without
-    attribution the wire name is ambiguous, since server names may hold
-    `__`: it counts as declared only when every way of splitting it names a
-    declared server. Any other reading flags, failing closed."""
+    `keys` are the declared servers in wire form, `declared` their exact
+    names. `servers` holds the servers the transcript itself attributes the
+    tool to; when there are any, each must be declared by its exact name
+    (`claude.ai Slack` is not `claude_ai_Slack`, though both have one wire
+    form) and own the name. Without attribution the wire name is ambiguous,
+    since server names may hold `__`: it counts as declared only when every
+    way of splitting it names a declared server. Any other reading flags,
+    failing closed."""
     if not name.startswith("mcp__"):
         return True
     rest = name[len("mcp__"):]
     if servers:
         for server in servers:
             key = mcp_server_key(server)
-            if key not in keys or not rest.startswith(key + "__") or len(rest) == len(key) + 2:
+            if (server not in declared or key not in keys or not rest.startswith(key + "__")
+                    or len(rest) == len(key) + 2):
                 return False
         return True
     splits = [(rest[:at], rest[at + 2:]) for at in range(len(rest)) if rest.startswith("__", at)]
@@ -1165,7 +1170,8 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
     unreadable transcript or a link on the way is an error, never a clean read."""
     config = Path(environment["CLAUDE_CONFIG_DIR"])
     folder = config / "projects" / environment["CLAUDE_CODE_PROJECT_DIR_NAME"]
-    allowed = {mcp_server_key(name) for name in declared}
+    exact = set(declared)
+    allowed = {mcp_server_key(name) for name in exact}
     found = {"folder": str(folder), "transcripts": [], "skills": [], "agents": [], "mcp_servers": [],
              "tools": [], "declared_mcp_servers": sorted(declared),
              "loaded": {"skills": [], "agents": [], "tools": [], "mcp_servers": []}, "errors": []}
@@ -1244,14 +1250,15 @@ def claude_loaded_extensions(environment: dict[str, str], declared: list[str] | 
                         if isinstance(name, str) and name.startswith("mcp__"):
                             tools.setdefault(name, set())
         seen_tools.update(tools)
-        undeclared_tools.update(name for name, by in tools.items() if not mcp_tool_declared(name, allowed, by))
+        undeclared_tools.update(name for name, by in tools.items() if not mcp_tool_declared(name, allowed, by, exact))
     found["skills"], found["agents"] = sorted(skills), sorted(agents)
     found["mcp_servers"], found["tools"] = sorted(servers), sorted(seen_tools)
     found["loaded"] = {
         "skills": sorted(name for name in skills if ":" in name),
         "agents": sorted(name for name in agents if ":" in name),
         "tools": sorted(undeclared_tools),
-        "mcp_servers": sorted(name for name in servers if mcp_server_key(name) not in allowed),
+        # A server named in the transcript is declared only by its exact name.
+        "mcp_servers": sorted(name for name in servers if name not in exact),
     }
     return found
 
