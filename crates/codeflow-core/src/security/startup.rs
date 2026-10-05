@@ -1529,10 +1529,10 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
     let mut operands = Vec::new();
     let mut target = None;
     let mut recursive = name == "ditto";
-    let mut hard = false;
-    let mut symbolic = false;
-    let mut follow = false;
-    let mut preserve = name == "ditto";
+    let mut flags = LinkFlags {
+        preserve: name == "ditto",
+        ..LinkFlags::default()
+    };
     let mut iter = args.iter();
     let mut options = true;
     while let Some(arg) = iter.next() {
@@ -1574,34 +1574,20 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
                     // BSD `install -l` links instead of copying; any
                     // link flag is judged as a symbolic link.
                     if letter == 'l' {
-                        symbolic = true;
+                        flags.symbolic = true;
                     }
                     break;
                 }
             }
             let short = !a.starts_with("--");
             let has = |set: &[char]| short && letters.contains(set);
+            // GNU programs accept any unambiguous prefix of a long option
+            // (`--sym` for `--symbolic-link`), so a long option that may
+            // name one is read as it (review round five, builder sweep).
+            let long = |full: &str| long_prefix(a, full);
             recursive |=
-                matches!(a, "--recursive" | "--archive" | "--mirror") || has(&['r', 'R', 'a']);
-            // Link modes by program (review round four: `cp -s`,
-            // `install -l s`).
-            match name {
-                "ln" => symbolic |= a == "--symbolic" || has(&['s']),
-                "cp" => {
-                    hard |= a == "--link" || has(&['l']);
-                    symbolic |= a == "--symbolic-link" || has(&['s']);
-                    preserve |= matches!(a, "--no-dereference" | "--archive")
-                        || a.starts_with("--preserve=links")
-                        || has(&['P', 'd', 'a', 'r', 'R']);
-                    follow |= a == "--dereference" || has(&['L', 'H']);
-                }
-                "rsync" => {
-                    preserve |= matches!(a, "--links" | "--archive") || has(&['l', 'a']);
-                    follow |= matches!(a, "--copy-links" | "--copy-unsafe-links") || has(&['L']);
-                }
-                "install" => symbolic |= a.starts_with("--link"),
-                _ => {}
-            }
+                long("recursive") || long("archive") || long("mirror") || has(&['r', 'R', 'a']);
+            flags.read(name, a, letters);
             continue;
         }
         operands.push(arg.clone());
@@ -1615,15 +1601,77 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
         dest,
         sources: operands,
         recursive,
-        mode: if symbolic {
+        mode: if flags.symbolic {
             LinkMode::Symbolic
-        } else if hard || name == "ln" {
+        } else if flags.hard || name == "ln" {
             LinkMode::Hard
         } else {
             LinkMode::Copy
         },
-        keeps_links: preserve && !follow,
+        keeps_links: flags.preserve && !flags.follow,
     })
+}
+
+/// The link options a copier has read so far.
+#[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct LinkFlags {
+    hard: bool,
+    symbolic: bool,
+    follow: bool,
+    preserve: bool,
+}
+
+impl LinkFlags {
+    /// Read one option word, `letters` being a short cluster's option
+    /// letters before any value (review rounds four and five: `cp -s`,
+    /// `install -l s`, `cp --sym`, `cp -LP`).
+    fn read(&mut self, name: &str, a: &str, letters: &str) {
+        let short = !a.starts_with("--");
+        let has = |set: &[char]| short && letters.contains(set);
+        let long = |full: &str| long_prefix(a, full);
+        match name {
+            "ln" => self.symbolic |= long("symbolic") || has(&['s']),
+            "cp" => {
+                self.hard |= long("link") || has(&['l']);
+                self.symbolic |= long("symbolic-link") || has(&['s']);
+                self.preserve |= long("no-dereference")
+                    || long("archive")
+                    || long("preserve")
+                    || has(&['P', 'd', 'a', 'r', 'R']);
+                // The last of `-L`/`-H` and `-P`/`-d`/`-a` wins, as cp
+                // reads them (security review F-6).
+                if a == "--dereference" {
+                    self.follow = true;
+                } else if long("no-dereference") || long("archive") {
+                    self.follow = false;
+                } else if short {
+                    for letter in letters.chars() {
+                        match letter {
+                            'L' | 'H' => self.follow = true,
+                            'P' | 'd' | 'a' => self.follow = false,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "rsync" => {
+                self.preserve |= long("links") || long("archive") || has(&['l', 'a']);
+                self.follow |= matches!(a, "--copy-links" | "--copy-unsafe-links") || has(&['L']);
+            }
+            "install" => self.symbolic |= long("link"),
+            _ => {}
+        }
+    }
+}
+
+/// Whether `arg` is a long option that may name `full`: `--full` or any
+/// prefix of it GNU would accept, with or without `=value`. Only following
+/// options are matched exactly, so a prefix never relaxes the judgment.
+fn long_prefix(arg: &str, full: &str) -> bool {
+    arg.strip_prefix("--")
+        .map(|name| name.split('=').next().unwrap_or(name))
+        .is_some_and(|name| !name.is_empty() && full.starts_with(name))
 }
 
 /// The directories a symbolic link's text is read from: the command's own,
@@ -1656,19 +1704,41 @@ fn source_link_violation(
     line: &Line<'_>,
     dirs: &[PathBuf],
     link_dirs: &[PathBuf],
+    landing: &[PathBuf],
 ) -> Option<Violation> {
     let is_link =
         |p: &PathBuf| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
-    if call.keeps_links
-        && dirs
-            .iter()
-            .filter_map(|d| line.expand(source, d))
-            .any(|p| is_link(&p))
-    {
+    let links: Vec<PathBuf> = dirs
+        .iter()
+        .filter_map(|d| line.expand(source, d))
+        .filter(is_link)
+        .collect();
+    if (call.keeps_links || name == "mv") && !links.is_empty() {
         if let Judged::Class(label) = line.judge(source, dirs) {
             return Some(finding(format!(
                 "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
             )));
+        }
+        // The link's text is read again where the copy lands, so a
+        // relative one can reach a startup file from there (review round
+        // five: `cp -P relative-link out/copy`).
+        for text in links.iter().filter_map(|p| std::fs::read_link(p).ok()) {
+            let text = text.to_string_lossy().into_owned();
+            match line.judge(&text, landing) {
+                Judged::Class(label) => {
+                    return Some(finding(format!(
+                        "`{name}` copies the link `{source}`, whose text reaches the shell startup file `{label}` where it lands"
+                    )))
+                }
+                Judged::Unresolved(w) => {
+                    if let Some(why) = line.unresolved_near_class(&w, landing) {
+                        return Some(finding(format!(
+                            "`{name}` copies the link `{source}` to `{w}`, which the guard cannot resolve, and {why}"
+                        )));
+                    }
+                }
+                Judged::Placement(_) | Judged::Ordinary => {}
+            }
         }
     }
     if name != "mv" && call.mode == LinkMode::Copy {
@@ -1723,13 +1793,15 @@ fn copy_judgment(
         }
         Judged::Placement(_) | Judged::Ordinary => {}
     }
+    let landing = link_text_dirs(dest, sources.len(), line, dirs);
     let link_dirs = if call.mode == LinkMode::Symbolic {
-        link_text_dirs(dest, sources.len(), line, dirs)
+        landing.clone()
     } else {
         dirs.to_vec()
     };
     for source in sources {
-        if let Some(v) = source_link_violation(name, call, source, line, dirs, &link_dirs) {
+        if let Some(v) = source_link_violation(name, call, source, line, dirs, &link_dirs, &landing)
+        {
             return Some(v);
         }
         let existing_dir = dirs

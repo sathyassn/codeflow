@@ -588,45 +588,6 @@ fn review_round_three_forms_refuse() {
             wrong.push(format!("refused: {command}: {}", found[0].message));
         }
     }
-    // Review round four: link modes of the copiers, and a source that is a
-    // link copied as the link.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("rclink")).unwrap();
-    std::fs::write(f.project.join("notes.txt"), "x\n").unwrap();
-    let mut refuse = vec![
-        "cp -s ~/.zshrc envlink; echo copied >> envlink",
-        "cp -s sub/.envrc envlink",
-        "cp --symbolic-link ~/.zshrc rc",
-        "cp -as ~/.zshrc rc",
-        "cp -l ~/.bashrc rc",
-        "install -l s ~/.zshrc rc5; echo installed >> rc5",
-        "install -ls ~/.zshrc rc5",
-    ];
-    if cfg!(unix) {
-        refuse.extend([
-            "cp -P rclink out/copy",
-            "cp -a rclink out/copy",
-            "rsync -l rclink out/copy",
-        ]);
-    }
-    for command in refuse {
-        if !refused(&f.judge(command)) {
-            wrong.push(format!("allowed: {command}"));
-        }
-    }
-    for command in [
-        "cp ~/.zshrc backup",
-        "cp -a ~/.bashrc backup",
-        "cp rclink out/copy",
-        "cp -L -r rclink out/copy",
-        "cp -s notes.txt out/note-link",
-        "install -m 644 notes.txt out/",
-    ] {
-        let found = f.judge(command);
-        if refused(&found) {
-            wrong.push(format!("refused: {command}: {}", found[0].message));
-        }
-    }
     // A relative `ZDOTDIR` protects the zsh file names in every directory.
     let env = StartupEnv {
         zdotdir: Some(PathBuf::from("zdir")),
@@ -640,6 +601,75 @@ fn review_round_three_forms_refuse() {
     }
     if refused(&f.judge_in("echo x > zdir/notes", &f.project, &env)) {
         wrong.push("refused with ZDOTDIR=zdir: echo x > zdir/notes".to_string());
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Review rounds four and five: the link modes of every copier, long
+/// option prefixes, dereference order, and a source that is a link copied
+/// as the link, judged where it lands.
+#[test]
+fn review_round_four_link_modes_refuse() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.project.join("out")).unwrap();
+    let mut wrong = Vec::new();
+    // Review round four: link modes of the copiers, and a source that is a
+    // link copied as the link.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("rclink")).unwrap();
+    // A dangling relative link whose text reaches the profile from `out/`
+    // (review round five).
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("../../../.zshrc", f.project.join("relative-link")).unwrap();
+    std::fs::write(f.project.join("notes.txt"), "x\n").unwrap();
+    let mut refuse = vec![
+        "cp -s ~/.zshrc envlink; echo copied >> envlink",
+        "cp -s sub/.envrc envlink",
+        "cp --symbolic-link ~/.zshrc rc",
+        "cp -as ~/.zshrc rc",
+        "cp -l ~/.bashrc rc",
+        "install -l s ~/.zshrc rc5; echo installed >> rc5",
+        "install -ls ~/.zshrc rc5",
+        // Long option prefixes GNU accepts (builder sweep, round five).
+        "cp --sym ~/.zshrc rc",
+        "cp --li ~/.bashrc rc",
+    ];
+    if cfg!(unix) {
+        refuse.extend([
+            "cp -P rclink out/copy",
+            "cp -a rclink out/copy",
+            "rsync -l rclink out/copy",
+            "cp --no-d rclink out/copy",
+            "cp --preserve=mode,links rclink out/copy",
+            "rsync --li rclink out/copy",
+            "cp -LP rclink out/copy",
+            "cp -L -P rclink out/copy; echo x >> out/copy",
+            "cp -P relative-link out/copy; echo x >> out/copy",
+            "mv relative-link out/copy",
+            "cp --sym ~/.zshrc abbrev; echo x >> abbrev",
+            "cp -L -a rclink out/copy",
+        ]);
+    }
+    for command in refuse {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "cp ~/.zshrc backup",
+        "cp -a ~/.bashrc backup",
+        "cp rclink out/copy",
+        "cp -L -r rclink out/copy",
+        "cp -P -L rclink out/copy",
+        "cp -s notes.txt out/note-link",
+        "install -m 644 notes.txt out/",
+        "cp --preserve=mode notes.txt out/",
+        "cp --remove-destination notes.txt out/",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
