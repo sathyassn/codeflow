@@ -331,8 +331,8 @@ level:
   `--pre` program, and `sed` unless its options change no file and its
   script is only addressed print commands (GNU sed's `e` and `w` run a
   command or write a file);
-- a copy into a target directory spelled `-t DIR`, `-tDIR` or
-  `--target-directory`, and a symbolic link whose text, read from the
+- a copy into a target directory spelled `-t DIR`, `-tDIR`,
+  `--target-directory` or any prefix of it GNU accepts, and a symbolic link whose text, read from the
   link's own directory, reaches a startup file.
 
 git-guard refuses a user- or system-scope git key that runs a program, such
@@ -345,8 +345,9 @@ What stays open, by harness and platform:
   that writes the file; only a sandbox holds those, so on a seat without
   one they stay open. An interpreter call whose code names a startup file
   is refused even when it only reads; read with `cat` or `grep` instead.
-  A tree copied with its links kept is not walked, so a link to a startup
-  file already inside it is copied unseen. A home whose startup files are
+  A tree copied or moved with its links kept is walked up to 4096
+  entries; in a larger one, a link to a startup file already inside it is
+  copied unseen. A home whose startup files are
   themselves links, as dotfile managers make them, sees `cp -a ~/.zshrc
   backup` refused; `cp ~/.zshrc backup` follows the link and passes.
 - **Claude Code.** The generated denies name the default locations. A
