@@ -392,6 +392,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "When you shape a body of work, land a batch or handle a change midway, read",
         "only when shaping a body of work, landing a batch or handling a change midway",
     ),
+    // TSK-240: issue handling is read when a reported defect is fixed,
+    // never on every task.
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/issue-handling.md",
+        "a reported one first through",
+        "only when a reported defect is fixed",
+    ),
     conditional(
         "cf-method/SKILL.md",
         "cf-method/references/skill-authoring.md",
