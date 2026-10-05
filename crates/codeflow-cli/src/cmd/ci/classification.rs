@@ -710,11 +710,23 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
         .filter(|field| !field.is_empty());
     let mut changes = Vec::new();
     while let Some(status) = fields.next() {
-        let status = String::from_utf8_lossy(status).to_string();
+        // OS text rule (issue 79): paths are matched against policy globs and
+        // prefixes, which need text, and a lossy spelling can match a pattern
+        // the real bytes do not, which would drop a required check. A status
+        // or path that is not valid UTF-8 refuses the range, naming the path.
+        let status = std::str::from_utf8(status)
+            .map_err(|_| "git diff printed a status that is not valid UTF-8".to_string())?
+            .to_string();
         let path = fields
             .next()
             .ok_or_else(|| format!("git diff output ends after status {status}"))?;
-        changes.push((status, String::from_utf8_lossy(path).to_string()));
+        let path = std::str::from_utf8(path).map_err(|_| {
+            format!(
+                "a changed path is not valid UTF-8 ({}), so the range cannot be classified",
+                codeflow_core::git::GitName::from_bytes(path).display()
+            )
+        })?;
+        changes.push((status, path.to_string()));
     }
     Ok(changes)
 }
@@ -722,6 +734,16 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 79: a changed path that is not valid UTF-8 refuses the range and
+    /// names the path; it is never matched as a lossy spelling of another.
+    #[test]
+    fn a_changed_path_that_is_not_utf8_refuses_the_range() {
+        let ok = parse_name_status(b"M\0docs/a.md\0").unwrap();
+        assert_eq!(ok, [("M".to_string(), "docs/a.md".to_string())]);
+        let error = parse_name_status(b"M\0docs/caf\xe9.md\0").unwrap_err();
+        assert!(error.contains(r"caf\xe9.md"), "{error}");
+    }
 
     fn input<'a>(body: &'a str, branch: &'a str, files: &'a [String]) -> Input<'a> {
         Input {

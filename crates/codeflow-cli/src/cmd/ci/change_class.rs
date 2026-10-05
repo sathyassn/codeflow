@@ -93,8 +93,14 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
             return None;
         }
         let path = fields.next().filter(|path| !path.is_empty())?;
+        // OS text rule (issue 79): the path is matched against policy globs
+        // and prefixes, which need text, and a lossy spelling can match a
+        // pattern the real bytes do not (`docs/caf[!x].md`), which would
+        // lighten the checks. A path that is not valid UTF-8 makes the
+        // inventory unknown, which reads as code, the conservative direction.
+        let path = std::str::from_utf8(path).ok()?;
         entries.push(RangeEntry {
-            path: String::from_utf8_lossy(path).into_owned(),
+            path: path.to_string(),
             old_mode: old_mode.to_string(),
             new_mode: new_mode.to_string(),
         });
@@ -184,6 +190,16 @@ mod tests {
             old_mode: old_mode.to_string(),
             new_mode: new_mode.to_string(),
         }
+    }
+
+    /// Issue 79: a path that is not valid UTF-8 makes the inventory unknown (so
+    /// the change reads as code), and is never matched as its lossy spelling.
+    #[test]
+    fn a_raw_path_that_is_not_utf8_makes_the_inventory_unknown() {
+        let valid = b":100644 100644 aaaa bbbb M\0docs/a.md\0";
+        assert_eq!(parse_raw(valid).map(|entries| entries.len()), Some(1));
+        let odd = b":100644 100644 aaaa bbbb M\0docs/caf\xe9.md\0";
+        assert!(parse_raw(odd).is_none());
     }
 
     fn class(paths: &[&str], project: &ProjectPaths) -> ChangeClass {
