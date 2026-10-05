@@ -539,11 +539,16 @@ checkout. Watch roots overlapping these folders are refused.
   Each delivery let through is logged with its time and pane, and `finish`
   checks it against the time the watcher recorded that peer ready.
   Other Herdr calls pass through.
-- `claude`, `codex`, `grok`: version, help and sign-in status calls and
-  `mcp list` (optionally `--json`) pass through to the real harness in the
-  trial's environment, so the answer is what the trial's seats would see; each
-  is logged as an information call and flags nothing. Claude's listing
-  health-checks the servers already approved for the trial. Leading `-c`
+- `claude`, `codex`, `grok`: version, help and sign-in status calls pass
+  through to the real harness in the trial's environment, so the answer is
+  what the trial's seats would see; each is logged as an information call
+  and flags nothing. `mcp list` (optionally `--json`) is answered the same
+  way only when the fixture's `.mcp.json` declares no MCP server and reads
+  cleanly, since a listing health-checks each server and so starts it. With
+  a declared server, or a declaration that cannot be read, the listing is
+  refused, nothing runs and the trial is flagged `peer_information_refused`.
+  `launch` reads the declaration once and records it as
+  `declared_mcp_servers`. Leading `-c`
   pairs are read as configuration for Codex only; for Claude `-c` continues a
   session, so such a call is a launch. Every other `mcp` subcommand,
   including `add`, `remove` and `doctor`, is a launch. The runner's own seat start passes through once, in the subject's

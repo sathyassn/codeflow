@@ -4885,6 +4885,90 @@ print(json.dumps(seen, sort_keys=True))
         finally:
             eval_kit.set_graded_suite(None)
 
+    def test_grade_files_are_sealed_never_overwritten_and_restated_beside(self) -> None:
+        folder = Path(self.temp.name) / "grading"
+        (folder / "drafts").mkdir(parents=True)
+        (folder / "grades").mkdir()
+        ledger = folder / "grade-ledger.json"
+        draft = folder / "drafts/06.json"
+        draft.write_bytes(b'{"verdict": "pass", "other_violations": ["not material"]}\n')
+        judge = ("model: fable", "calibrated on the blind sheet")
+        sealed = eval_kit.record_grade(ledger, "c#trial1:overall", draft, folder / "grades/06.json", *judge)
+        original = folder / "grades/06.json"
+        self.assertEqual(draft.read_bytes(), original.read_bytes())
+        self.assertEqual(0o444, stat.S_IMODE(original.stat().st_mode))
+        self.assertEqual(("grade", "pass", eval_kit.raw_file_digest(original)),
+                         (sealed["kind"], sealed["verdict"], sealed["digest"]))
+        # Never written over: not the same file, not a second grade for the assertion.
+        for dest, assertion in [(original, "other#trial1:overall"), (folder / "grades/06b.json", "c#trial1:overall")]:
+            with self.assertRaises(eval_kit.EvalError):
+                eval_kit.record_grade(ledger, assertion, draft, dest, *judge)
+        self.assertFalse((folder / "grades/06b.json").exists())
+        (folder / "drafts/bad.json").write_text('{"verdict": "maybe"}')
+        with self.assertRaises(eval_kit.EvalError):
+            eval_kit.record_grade(ledger, "d#trial1:overall", folder / "drafts/bad.json", folder / "grades/bad.json", *judge)
+        self.assertFalse((folder / "grades/bad.json").exists())
+
+        restated_draft = folder / "drafts/06-r1.json"
+        restated_draft.write_bytes(b'{"verdict": "pass", "other_violations": [], "notes": ["not material"]}\n')
+        restated = folder / "grades/06-r1.json"
+        with self.assertRaises(eval_kit.EvalError):  # what moved and why are required
+            eval_kit.record_restatement(ledger, "c#trial1:overall", restated_draft, restated, *judge, [], "why")
+        entry = eval_kit.record_restatement(ledger, "c#trial1:overall", restated_draft, restated, *judge,
+                                            ["other_violations[0] to notes"], "the packet lists material breaches only")
+        self.assertEqual(sealed["digest"], entry["prior_digest"])
+        self.assertEqual(draft.read_bytes(), original.read_bytes())
+
+        trial = {"evidence": [{"kind": "file", "ref": str(original), "digest": sealed["digest"]},
+                              {"kind": "file", "ref": str(restated), "digest": entry["digest"]}],
+                 "grade_record": {"ledger": str(ledger), "assertion": "c#trial1:overall"}, "grader_verdict": "pass"}
+        self.assertEqual([], eval_kit.grade_record_errors(trial, "t"))
+        # Validation reads both files: citing only the restatement is refused.
+        only_restated = {**trial, "evidence": trial["evidence"][1:]}
+        self.assertTrue(any("must cite the grade file" in error and str(original) in error
+                            for error in eval_kit.grade_record_errors(only_restated, "t")))
+        self.assertTrue(eval_kit.grade_record_errors({**trial, "grader_verdict": "fail"}, "t"))
+        # An original written over in place is caught, and blocks a further restatement.
+        original.chmod(0o644)
+        original.write_bytes(b'{"verdict": "pass", "other_violations": []}\n')
+        self.assertTrue(any("no longer has its recorded digest" in error for error in eval_kit.grade_record_errors(trial, "t")))
+        with self.assertRaises(eval_kit.EvalError):
+            eval_kit.record_restatement(ledger, "c#trial1:overall", restated_draft, folder / "grades/x.json", *judge,
+                                        ["x"], "y")
+        original.write_bytes(draft.read_bytes())
+        self.assertEqual([], eval_kit.grade_record_errors(trial, "t"))
+        # A ledger entry changed after signing is refused.
+        document = json.loads(ledger.read_text())
+        document["entries"][1]["reason"] = "another reason"
+        ledger.write_text(json.dumps(document))
+        self.assertTrue(any("not signed" in error for error in eval_kit.grade_record_errors(trial, "t")))
+        document["entries"][1]["reason"] = "the packet lists material breaches only"
+        ledger.write_text(json.dumps(document))
+        self.assertEqual([], eval_kit.grade_record_errors(trial, "t"))
+        # A grade written over before sealing is recorded as lost, with no digest.
+        lost_draft = folder / "drafts/16.json"
+        lost_draft.write_text('{"verdict": "fail"}')
+        with self.assertRaises(eval_kit.EvalError):  # the chain for c already has a grade
+            eval_kit.record_restatement(ledger, "c#trial1:overall", lost_draft, folder / "grades/c2.json", *judge,
+                                        ["x"], "y", original_lost="overwritten")
+        lost = eval_kit.record_restatement(ledger, "e#trial1:overall", lost_draft, folder / "grades/16-r1.json", *judge,
+                                           ["notes"], "material only", original_lost="written over in place on 2026-10-04")
+        self.assertIsNone(lost["prior_digest"])
+        lost_trial = {"evidence": [{"kind": "file", "ref": lost["file"], "digest": lost["digest"]}],
+                      "grade_record": {"ledger": str(ledger), "assertion": "e#trial1:overall"}}
+        self.assertEqual([], eval_kit.grade_record_errors(lost_trial, "t"))
+        # validate-result runs the same check on each trial.
+        result = valid_result("canary")
+        result["trials"][0]["grade_record"] = only_restated["grade_record"]
+        self.assertTrue(any("grade_record" in error or "must cite the grade file" in error
+                            for error in eval_kit.validate_result(result)))
+        done = subprocess.run([sys.executable, str(MODULE_PATH), "record-grade", "--ledger", str(ledger),
+                               "--assertion", "f#trial1:overall", "--draft", str(draft), "--dest", str(original),
+                               "--judge", judge[0], "--judge-config", judge[1]],
+                              capture_output=True, text=True, env=dict(os.environ))
+        self.assertNotEqual(0, done.returncode)
+        self.assertEqual(draft.read_bytes(), original.read_bytes())
+
     def test_a_judgement_counts_only_when_signed_under_the_evaluator_key(self) -> None:
         self.assertIsNone(eval_kit.evaluator_key())
         key = eval_kit.evaluator_key(create=True)
@@ -7598,6 +7682,51 @@ class ProcessRepairTests(unittest.TestCase):
                     self.assertEqual(count, len(self.native_calls(calls)))
                     flags, _ = runner.peer_findings(run, {"watcher": watcher, "errors": [], **record})
                     self.assertEqual(["peer_launch_refused"], flags)
+
+    def test_mcp_listing_is_answered_only_when_the_fixture_declares_no_server(self):
+        watcher = {"stopped_at": 2.0, "stop_reason": "finish", "last_poll": 1.5, "max_gap": 0.5}
+        for declaration, answered in [(None, True), ({"mcpServers": {}}, True),
+                                      ({"mcpServers": {"fixture-db": {"command": "db-server"}}}, False),
+                                      ("not json", False)]:
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as temp, \
+                    patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):
+                root = Path(temp).resolve()
+                if declaration is not None:
+                    (root / "subjects/trial/repository").mkdir(parents=True)
+                    (root / "subjects/trial/repository/.mcp.json").write_text(
+                        declaration if isinstance(declaration, str) else json.dumps(declaration))
+                runner, run, repository, environment, calls = self.peer_trial(root)
+                peers = run["peers"]
+                runner.write_peer_context(peers, subject={"pane": "subject-pane", "ready": True}, decision_seconds=0.3)
+                bin_dir, launches = Path(peers["bin"]), Path(peers["launches"])
+                env = {**environment, "HERDR_PANE_ID": "subject-pane"}
+                count = len(self.native_calls(calls))
+                for harness, args in [("claude", ["mcp", "list"]), ("codex", ["mcp", "list", "--json"]),
+                                      ("codex", ["-c", "x=1", "mcp", "list"]), ("grok", ["mcp", "list"])]:
+                    done = subprocess.run([str(bin_dir / harness), *args], cwd=repository, env=env,
+                                          capture_output=True, text=True, timeout=20)
+                    if answered:
+                        self.assertEqual(0, done.returncode, done.stderr)
+                        self.assertEqual(args, self.native_calls(calls)[-1]["argv"][1:])
+                    else:
+                        self.assertEqual(2, done.returncode)
+                        self.assertIn("declares MCP servers", done.stderr)
+                        self.assertEqual(count, len(self.native_calls(calls)))
+                # Version and help stay answered either way.
+                done = subprocess.run([str(bin_dir / "claude"), "--version"], cwd=repository, env=env,
+                                      capture_output=True, text=True, timeout=20)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual([], list(launches.glob("*.request.json")))
+                flags, _ = runner.peer_findings(run, {"watcher": watcher, "requests": [], "peers": {}, "errors": []})
+                self.assertEqual([] if answered else ["peer_information_refused"], flags)
+                self.assertEqual("answered" if answered else "refused", peers["context"]["mcp_listing"])
+                # A context that never said, an older launcher's, refuses too.
+                if answered:
+                    del peers["context"]["mcp_listing"]
+                    runner.write_peer_context(peers)
+                    done = subprocess.run([str(bin_dir / "claude"), "mcp", "list"], cwd=repository, env=env,
+                                          capture_output=True, text=True, timeout=20)
+                    self.assertEqual(2, done.returncode)
 
     def test_herdr_launcher_carries_the_trial_environment_and_workspace(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(Path, "home", return_value=Path(temp).resolve() / "operator"):

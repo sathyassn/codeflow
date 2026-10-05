@@ -36,10 +36,11 @@ HERE = Path(__file__).parent
 ROLE = Path(__file__).name
 INFO_FLAGS = {"--version", "-V", "--help", "-h"}
 STATUS = {"codex": ["login", "status"], "claude": ["auth", "status"]}
-# Read-only subcommands answered as they are: listing MCP servers reads the
-# configuration and starts no session. `add`, `remove` and every other
+# MCP listing, answered only when the fixture declares no MCP server: the
+# listing health-checks each configured server, which starts it, so with a
+# declared server it is refused and flagged. `add`, `remove` and every other
 # subcommand still go to the watcher as launches.
-READ_ONLY = (["mcp", "list"], ["mcp", "list", "--json"])
+LISTING = (["mcp", "list"], ["mcp", "list", "--json"])
 # Herdr commands that open a pane or a workspace.
 CREATES = {("tab", "create"), ("pane", "split")}
 OTHER_WORKSPACE = {("workspace", "create"), ("worktree", "create"), ("worktree", "open")}
@@ -170,28 +171,35 @@ def herdr(context: dict, args: list[str]) -> None:
     os.execv(real, [real, *args])
 
 
-def informational(harness: str, args: list[str]) -> bool:
-    """Version, help, sign-in status and MCP listing calls start no session
-    and change no configuration; they run as the evaluator's real harness,
-    so the answer is what the trial's seats would see. Claude's listing
-    health-checks the servers already approved for the trial."""
+def informational(harness: str, args: list[str]) -> str | None:
+    """`info` for version, help and sign-in status calls, which start no
+    session and change no configuration; `listing` for an MCP listing; None
+    for anything else. Both run as the evaluator's real harness, so the
+    answer is what the trial's seats would see."""
     if INFO_FLAGS & set(args) or args == ["help"]:
-        return True
+        return "info"
     rest = list(args)
     # Only Codex's `-c` is a configuration override; Claude's `-c` continues
     # a session, so a leading `-c` there is a launch.
     while harness == "codex" and rest[:1] == ["-c"] and len(rest) >= 2:
         rest = rest[2:]
-    if rest in READ_ONLY:
-        return True
+    if rest in LISTING:
+        return "listing"
     status = STATUS.get(harness)
-    return status is not None and rest[:2] == status and len(rest) <= 3
+    return "info" if status is not None and rest[:2] == status and len(rest) <= 3 else None
 
 
 def seat(context: dict, harness: str, args: list[str]) -> None:
     real = context["harnesses"][harness]
     pane = os.environ.get("HERDR_PANE_ID", "")
-    if informational(harness, args):
+    kind = informational(harness, args)
+    if kind == "listing" and context.get("mcp_listing") != "answered":
+        # The fixture declares an MCP server, or its declaration could not be
+        # read: a listing would start it. The runner flags this refusal.
+        log(context, "info-refused", {"harness": harness, "args": args, "pane": pane,
+                                      "declared": context.get("mcp_declared")})
+        refuse("MCP listing: this fixture declares MCP servers and a listing starts them; nothing was run")
+    if kind:
         log(context, "info", {"harness": harness, "args": args, "pane": pane})
         os.execv(real, [real, *args])
     subject = context.get("subject") or {}

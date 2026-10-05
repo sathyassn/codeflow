@@ -629,6 +629,22 @@ not gradable, never passes it.
   judgements are signed the same way. This is the trust boundary: whoever
   holds the evaluator key is trusted, and the kit detects a judgement
   written or changed by anyone without it, no more.
+- A judge's grade file is sealed, never written in place. The judge writes
+  a draft; `record-grade --ledger <grade-ledger.json> --assertion
+  <case>#trial<n>:overall --draft <draft> --dest <new file> --judge <id>
+  --judge-config <text>` copies it to a new read-only file the kit creates
+  and will not replace, and appends a ledger entry, signed under the
+  evaluator key, naming the file, its digest and verdict. A correction is a
+  new file beside the original: `record-restatement` takes the same options
+  plus `--moved` (repeatable) and `--reason`, checks that every file of the
+  chain still has its recorded digest, and signs an entry naming the prior
+  file's digest. `--original-lost <how>` records a first grade that was
+  written over before it was sealed, with no digest to name. A result trial
+  that names its chain with `grade_record: {ledger, assertion}` is valid
+  only while every file in the chain has its recorded digest, each
+  restatement names the file before it, the trial cites every file of the
+  chain as evidence, and its `grader_verdict` is the latest verdict;
+  `validate-result` and `score` check this.
 - A judgement counts only from a calibrated judge. The graded suite keeps
   labelled judge controls in a judge-controls.json file (texts with the
   verdict a qualified judge must record, including reversals paraphrased in

@@ -100,6 +100,7 @@ KNOWN_VALIDITY_FLAGS = {
     "peer_delivery_refused",
     "peer_launcher_changed",
     "peer_watch_incomplete",
+    "peer_information_refused",
     "extra_extension_loaded",
     "ambiguous_task",
     "baseline_contamination",
@@ -4864,6 +4865,179 @@ def record_judgement(path: Path, entry: dict) -> dict:
     return signed
 
 
+# A judge's grade files are sealed by the kit, never written in place. The
+# judge writes a draft; `record-grade` copies it to a new file the kit creates
+# and will not replace, and appends a signed ledger entry naming the file and
+# its digest. A correction is a new file too: `record-restatement` names the
+# prior file's digest, what moved and why. A trial that names its ledger entry
+# (`grade_record`) is valid only while every file of its chain still has its
+# recorded digest and the trial cites each of them as evidence.
+GRADE_LEDGER_SIGNATURE = "codeflow-eval-grade-ledger-v1"
+GRADE_ENTRY_KINDS = {"grade", "restatement"}
+
+
+def grade_ledger_signature(key: bytes, entry: dict) -> str:
+    body = {name: value for name, value in entry.items() if name != "signature"}
+    message = json.dumps([GRADE_LEDGER_SIGNATURE, body], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def read_grade_ledger(path: Path) -> list[dict]:
+    """The ledger's entries, each verified under the evaluator key."""
+
+    document = load_json(path)
+    if not isinstance(document, dict) or document.get("schema_version") != 1 or not isinstance(document.get("entries"), list):
+        raise EvalError(f"{path}: a grade ledger is {{schema_version: 1, entries: [...]}}")
+    key = evaluator_key()
+    for index, entry in enumerate(document["entries"]):
+        label = f"{path}: entries[{index}]"
+        if not isinstance(entry, dict) or entry.get("kind") not in GRADE_ENTRY_KINDS:
+            raise EvalError(f"{label} is not a grade or restatement entry")
+        signature = entry.get("signature")
+        if key is None or not isinstance(signature, str) or not hmac.compare_digest(
+            signature, grade_ledger_signature(key, entry)
+        ):
+            raise EvalError(f"{label} is not signed under the evaluator key, or changed after it was")
+    return document["entries"]
+
+
+def create_new_file(path: Path, data: bytes) -> None:
+    """Create `path` holding `data`, read-only. An existing file, or a link,
+    is never replaced: a grade is corrected by a restatement, not in place."""
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(path, flags, 0o444)
+    except FileExistsError as error:
+        raise EvalError(f"{path} already exists; a grade file is never overwritten, record a restatement instead") from error
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(descriptor, view):]
+    except BaseException:
+        os.close(descriptor)
+        path.unlink()
+        raise
+    os.close(descriptor)
+
+
+def grade_chain(entries: list[dict], assertion: str) -> list[dict]:
+    return [entry for entry in entries if entry.get("assertion") == assertion]
+
+
+def append_grade_entry(ledger: Path, assertion: str, draft: Path, dest: Path, fields: dict) -> dict:
+    """Seal `draft` at the new file `dest` and append its signed entry."""
+
+    if ledger.is_symlink() or dest.is_symlink():
+        raise EvalError("the grade ledger and grade files must not be links")
+    entries = read_grade_ledger(ledger) if ledger.exists() else []
+    data = draft.read_bytes()
+    try:
+        grade = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise EvalError(f"{draft} is not a JSON grade: {error}") from error
+    if not isinstance(grade, dict) or grade.get("verdict") not in {"pass", "fail"}:
+        raise EvalError(f"{draft} must be a JSON object with verdict pass or fail")
+    dest = dest.resolve(strict=False)
+    if any(entry.get("file") == str(dest) for entry in entries):
+        raise EvalError(f"{dest} is already in the grade ledger; a grade file is never overwritten")
+    create_new_file(dest, data)
+    entry = {"assertion": assertion, "file": str(dest), "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+             "verdict": grade["verdict"], **fields}
+    key = evaluator_key(create=True)
+    assert key is not None
+    entry["signature"] = grade_ledger_signature(key, entry)
+    staged = ledger.with_name(ledger.name + ".staged")
+    try:
+        write_json(staged, {"schema_version": 1, "entries": [*entries, entry]})
+        read_grade_ledger(staged)
+        os.replace(staged, ledger)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        dest.chmod(0o644)
+        dest.unlink()
+        raise
+    return entry
+
+
+def judge_fields(judge: str, judge_config: str) -> dict:
+    if not judge.strip() or not judge_config.strip():
+        raise EvalError("a grade names its judge and the judge's configuration")
+    return {"judge": judge, "judge_config": judge_config}
+
+
+def record_grade(ledger: Path, assertion: str, draft: Path, dest: Path, judge: str, judge_config: str) -> dict:
+    if grade_chain(read_grade_ledger(ledger) if ledger.exists() else [], assertion):
+        raise EvalError(f"{assertion} already has a recorded grade; record a restatement instead")
+    return append_grade_entry(ledger, assertion, draft, dest, {"kind": "grade", **judge_fields(judge, judge_config)})
+
+
+def record_restatement(ledger: Path, assertion: str, draft: Path, dest: Path, judge: str, judge_config: str,
+                       moved: list[str], reason: str, original_lost: str | None = None) -> dict:
+    """A correction of the latest grade for `assertion`, naming its digest.
+    With `original_lost`, the first grade was written over before the kit
+    sealed it: the entry says so, with no digest to name."""
+
+    if not [item for item in moved if item.strip()] or not reason.strip():
+        raise EvalError("a restatement says what moved and why")
+    chain = grade_chain(read_grade_ledger(ledger) if ledger.exists() else [], assertion)
+    if original_lost is not None:
+        if chain:
+            raise EvalError(f"{assertion} has a recorded grade; restate it, not a lost original")
+        if not original_lost.strip():
+            raise EvalError("a lost original says how it was lost")
+        prior = {"prior_digest": None, "original_lost": original_lost}
+    else:
+        if not chain:
+            raise EvalError(f"{assertion} has no recorded grade to restate")
+        # Every file of the chain must still be as sealed, the original first.
+        for entry in chain:
+            path = Path(entry.get("file") or "")
+            if entry.get("file") and (path.is_symlink() or not path.is_file() or raw_file_digest(path) != entry["digest"]):
+                raise EvalError(f"{path} no longer has its recorded digest; it was changed after it was sealed")
+        prior = {"prior_digest": chain[-1]["digest"]}
+    return append_grade_entry(ledger, assertion, draft, dest, {
+        "kind": "restatement", **judge_fields(judge, judge_config), **prior,
+        "moved": [item for item in moved if item.strip()], "reason": reason})
+
+
+def grade_record_errors(trial: dict, label: str) -> list[str]:
+    """A trial's sealed grade chain: every file still has its recorded
+    digest, each restatement names the file before it, the trial cites every
+    file as evidence, and its grader verdict is the latest one."""
+
+    record = trial.get("grade_record")
+    if record is None:
+        return []
+    if not isinstance(record, dict) or not all(isinstance(record.get(name), str) and record[name] for name in ("ledger", "assertion")):
+        return [f"{label}.grade_record must name its ledger and assertion"]
+    try:
+        chain = grade_chain(read_grade_ledger(Path(record["ledger"])), record["assertion"])
+    except EvalError as error:
+        return [f"{label}.grade_record: {error}"]
+    if not chain:
+        return [f"{label}.grade_record: the ledger has no grade for {record['assertion']}"]
+    errors = []
+    first = chain[0]
+    if first.get("kind") != "grade" and not (first.get("kind") == "restatement" and first.get("original_lost")):
+        errors.append(f"{label}.grade_record: the chain does not start with a sealed grade or a recorded loss")
+    for before, after in zip(chain, chain[1:]):
+        if after.get("kind") != "restatement" or after.get("prior_digest") != before.get("digest"):
+            errors.append(f"{label}.grade_record: {after.get('file')} does not restate the file before it")
+    # Evidence may cite a file by any spelling of its path; the ledger holds it resolved.
+    cited = {(str(Path(item["ref"]).resolve(strict=False)), item.get("digest"))
+             for item in trial.get("evidence") or [] if isinstance(item, dict) and isinstance(item.get("ref"), str)}
+    for entry in chain:
+        path = Path(entry.get("file") or "")
+        if path.is_symlink() or not path.is_file() or raw_file_digest(path) != entry.get("digest"):
+            errors.append(f"{label}.grade_record: {path} no longer has its recorded digest")
+        if (entry.get("file"), entry.get("digest")) not in cited:
+            errors.append(f"{label}.evidence must cite the grade file {entry.get('file')} at its recorded digest")
+    if "grader_verdict" in trial and trial["grader_verdict"] != chain[-1].get("verdict"):
+        errors.append(f"{label}.grader_verdict is not the latest recorded grade's verdict")
+    return errors
+
+
 def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]], str]:
     """Recorded judgements for assertions whose meaning no deterministic check
     settles: one verdict and its judge per assertion and excerpt digest. A
@@ -6955,6 +7129,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
             errors.extend(evidence_errors(trial.get("evidence"), f"{label}.evidence"))
             if not isinstance(trial.get("trace_ref"), str) or not trial["trace_ref"]:
                 errors.append(f"{label}.trace_ref is required for a started session")
+        errors.extend(grade_record_errors(trial, label))
         if outcome == "error" and (
             not isinstance(trial.get("error_message"), str)
             or not trial["error_message"].strip()
@@ -7861,6 +8036,17 @@ def parser() -> argparse.ArgumentParser:
     judge_cmd.add_argument("--trial", required=True, type=int)
     judge_cmd.add_argument("--events", type=Path)
 
+    for name, help_text in (("record-grade", "seal a judge's draft grade as a new file and sign its ledger entry"),
+                            ("record-restatement", "seal a corrected grade beside the prior one, naming its digest")):
+        grade_cmd = sub.add_parser(name, help=help_text)
+        for option in ("ledger", "draft", "dest"):
+            grade_cmd.add_argument(f"--{option}", required=True, type=Path)
+        for option in ("assertion", "judge", "judge-config"):
+            grade_cmd.add_argument(f"--{option}", required=True)
+        if name == "record-restatement":
+            grade_cmd.add_argument("--moved", action="append", required=True)
+            grade_cmd.add_argument("--reason", required=True)
+            grade_cmd.add_argument("--original-lost")
     record_judgement_cmd = sub.add_parser(
         "record-judgement", help="append one judgement, signed under the evaluator key, as it is collected"
     )
@@ -7883,7 +8069,8 @@ def parser() -> argparse.ArgumentParser:
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
     cleanup_cmd.add_argument("--confirm", required=True)
     for name, command in sub.choices.items():
-        if name not in {"grade", "judge-sheet", "judge-check", "record-judgement", "cleanup", "holdout-check"}:
+        if name not in {"grade", "judge-sheet", "judge-check", "record-judgement", "record-grade",
+                        "record-restatement", "cleanup", "holdout-check"}:
             # A run root records its graded suite; the grader reloads it.
             command.add_argument("--graded-suite", type=Path)
     return cli
@@ -8021,6 +8208,16 @@ def main() -> int:
             output = qualified_binding_output(args.output)
             write_qualified_binding(output, record)
             print(f"qualified binding written: {output}")
+            return 0
+        if args.command == "record-grade":
+            entry = record_grade(args.ledger, args.assertion, args.draft, args.dest, args.judge, args.judge_config)
+            print(f"grade sealed: {entry['assertion']} {entry['file']} {entry['digest']} {entry['verdict']}")
+            return 0
+        if args.command == "record-restatement":
+            entry = record_restatement(args.ledger, args.assertion, args.draft, args.dest, args.judge,
+                                       args.judge_config, args.moved, args.reason, args.original_lost)
+            print(f"restatement sealed: {entry['assertion']} {entry['file']} {entry['digest']} "
+                  f"(prior {entry['prior_digest'] or 'lost'})")
             return 0
         if args.command == "record-judgement":
             entry = record_judgement(args.judgements, {

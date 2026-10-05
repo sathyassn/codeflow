@@ -266,10 +266,17 @@ erratum below, never an edit of the section.
   and pins Codex 0.160.0's idle and pending screens in its frame tests.
   It runs one trial at a time, holding a lock on the Codex and Grok
   evaluator homes from launch to finish, answers a subject's `mcp list`
-  as an information call, and waits up to 10 seconds when Herdr still
-  reports a seat blocked after its accepted trust dialog. Codex delivery
-  reads the screen again while Codex 0.160.0's welcome animation covers the
-  input box, and still sends only on an exact match.
+  as an information call only when the fixture declares no MCP server
+  (otherwise it refuses and flags `peer_information_refused`), and waits up
+  to 10 seconds when Herdr still reports a seat blocked after its accepted
+  trust dialog. Codex delivery reads the screen again while Codex
+  0.160.0's welcome animation covers the input box, and still sends only on
+  an exact match. The kit seals a judge's grade files: `record-grade`
+  copies a draft to a new read-only file it will not replace and signs a
+  ledger entry with its digest, `record-restatement` keeps a correction
+  beside the original and names the original's digest, and
+  `validate-result` checks a trial's sealed chain, so a grade written over
+  in place no longer passes unnoticed.
 
 <!-- codeflow:release-impact patch -->
 - **The full gate runs inside CodeFlow's own Claude sandbox.** The full

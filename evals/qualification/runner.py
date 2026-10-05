@@ -1501,7 +1501,7 @@ PEER_FLAGS = {
     "startup_refused": "peer_startup_refused", "pending": "peer_not_ready",
     "plugin_drift": "peer_plugin_drift", "delivered_early": "peer_delivered_before_ready",
     "delivery_refused": "peer_delivery_refused", "launcher_changed": "peer_launcher_changed",
-    "watch_incomplete": "peer_watch_incomplete",
+    "watch_incomplete": "peer_watch_incomplete", "info_refused": "peer_information_refused",
 }
 LAUNCH_FLAGS = {"unrecorded", "unverified", "startup_refused", "plugin_drift", "pending"}
 
@@ -1527,8 +1527,10 @@ def write_peer_context(peers: dict, **changes) -> None:
     peers["context_sha256"] = digest_file(path)
 
 
-def prepare_peers(repository: Path, environment: dict[str, str], workspace: str, option: str) -> dict:
-    """Write the trial's peer launchers and put them first on the trial PATH."""
+def prepare_peers(repository: Path, environment: dict[str, str], workspace: str, option: str,
+                  declaration: dict | None = None) -> dict:
+    """Write the trial's peer launchers and put them first on the trial PATH.
+    `declaration` is the fixture's MCP declaration as launch read it."""
     shims, launches_root = peer_folders(repository)
     for path in (shims, launches_root):
         kit.refuse_symlink_components(path, repository.parent)
@@ -1549,9 +1551,15 @@ def prepare_peers(repository: Path, environment: dict[str, str], workspace: str,
         target.write_text(source, encoding="utf-8")
         target.chmod(0o555)
         digests[name] = digest_file(target)
+    # A peer's MCP listing is answered only when the fixture declares no MCP
+    # server and its declaration reads cleanly.
+    if declaration is None:
+        declaration = declared_mcp_servers(repository)
+    listing = "answered" if not declaration["servers"] and not declaration["error"] else "refused"
     peers = {"bin": str(shims), "launches": str(launches), "executables": executables,
              "shim_sha256": digests, "interpreters": launcher_interpreters(), "context": {
                  "schema_version": 1, "workspace": workspace, "option": option,
+                 "mcp_declared": declaration, "mcp_listing": listing,
                  "herdr": executables["herdr"], "launches": str(launches),
                  "decision_seconds": 20, "ready_seconds": 30,
                  "harnesses": {name: executables[name] for name in PEER_HARNESSES if executables[name]},
@@ -2054,6 +2062,8 @@ def peer_findings(run: dict, record: dict | None, watched: bool = True) -> tuple
         flags.add(PEER_FLAGS["refused"])
     if "herdr-delivery-refused" in kinds:
         flags.add(PEER_FLAGS["delivery_refused"])
+    if "info-refused" in kinds:
+        flags.add(PEER_FLAGS["info_refused"])
     record = record or {"requests": [], "peers": {}, "errors": []}
     summary.update(watcher=record.get("watcher"), errors=record.get("errors", []))
     if watched:
@@ -2157,7 +2167,10 @@ def launch(args) -> None:
         write(args.output / "launch.json", {"harness": args.harness, "status": "preparing", "hook_trust": hook_trust,
                                            "evaluator_locks": locks})
         # After the native status checks, which must not meet the launchers.
-        peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
+        # Read once, before any session: the record and the peer launchers'
+        # MCP listing rule use the same declaration.
+        declaration = declared_mcp_servers(repository)
+        peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust, declaration)
     except BaseException as exc:
         # Every refusal or error before the seat is recorded; no seat started,
         # so any lock taken here is freed at once, before anything is written.
@@ -2173,7 +2186,7 @@ def launch(args) -> None:
            "hook_trust": hook_trust, "codex_remote_plugins": remote_plugins,
            "claude_account_content": account_content,
            "evaluator_locks": locks,
-           "declared_mcp_servers": declared_mcp_servers(repository),
+           "declared_mcp_servers": declaration,
            "config_preflight": config_preflight,
            "environment": environment, "declared_directories": watched,
            "observation": observation,
