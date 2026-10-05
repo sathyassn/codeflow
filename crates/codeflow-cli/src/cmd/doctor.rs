@@ -19,8 +19,17 @@ pub struct DoctorArgs {
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
 pub fn run(args: &DoctorArgs) -> i32 {
     let home = registry::codeflow_home();
+    // OS text rule (issue 79): doctor takes the project folder as text, so one
+    // that is not valid UTF-8 is refused, not read as a lossy lookalike.
+    let root = super::repo_root();
+    let Some(project_dir) = root.to_str() else {
+        eprintln!(
+            "codeflow doctor: the project folder is not valid UTF-8, so it cannot be checked"
+        );
+        return 1;
+    };
     let opts = Options {
-        project_dir: super::repo_root().to_string_lossy().into_owned(),
+        project_dir: project_dir.to_string(),
         qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
         codeflow_home: home,
         // The grok guard canary judges the exec-guard in this process; it

@@ -147,13 +147,20 @@ fn remote_update(root: &Path, args: &[String]) -> Option<String> {
     }
 }
 
+/// What a config value that is not valid UTF-8 reads as. It holds a NUL, so
+/// it is no remote name and no boolean.
+const UNREADABLE_VALUE: &str = "\0not-valid-utf8";
+
 /// The `key`, `value` pairs of `git config --null --list`.
 ///
 /// OS text rule (issue 79, `docs/architecture.md`): the listing holds every
 /// value in the user's effective git configuration, such as a name or an
 /// alias in another encoding, and this check reads only `remotes.*` and
-/// `remote.<name>.skip*` keys and boolean values. A value is decoded lossily,
-/// so one that is not valid UTF-8 cannot refuse the command. A key is
+/// `remote.<name>.skip*` keys and boolean values. A value that is not valid
+/// UTF-8 reads as [`UNREADABLE_VALUE`], never as a lossy spelling: it equals
+/// no boolean, and as a `remotes.*` group member it names no remote, so a
+/// fetch of it is refused as not configured, while an unrelated key's value
+/// cannot refuse the command. A key is
 /// identity: it names a remote, so a key that is not valid UTF-8 is dropped
 /// and never decoded, because its lossy spelling could equal the key of a
 /// different, valid remote and replace that remote's setting. Such a remote
@@ -168,7 +175,9 @@ fn config_entries(listing: &[u8]) -> Vec<(String, String)> {
                 None => (entry, b"true".as_slice()),
             };
             let key = String::from_utf8(key.to_vec()).ok()?;
-            Some((key, String::from_utf8_lossy(value).into_owned()))
+            let value = std::str::from_utf8(value)
+                .map_or_else(|_| UNREADABLE_VALUE.to_string(), str::to_string);
+            Some((key, value))
         })
         .collect()
 }
@@ -335,7 +344,16 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     }) else {
         return Some("fetch source is not a configured remote or its URL".into());
     };
-    let name = remote.name().ok()??;
+    // OS text rule (issue 79): the remote is named in git config keys and
+    // arguments below, which need text. A name that is not valid UTF-8
+    // refuses instead of passing the fetch unchecked.
+    let remote_name = crate::git::GitName::from_bytes(remote.name_bytes()?);
+    let Ok(name) = remote_name.rule_text() else {
+        return Some(format!(
+            "the fetch remote's name is not valid UTF-8 ({}); the operator renames it",
+            remote_name.display()
+        ));
+    };
     // Remote::url already expands insteadOf. Config retains the literal URL.
     let raw = match repo.config().and_then(|config| config.get_string(&format!("remote.{name}.url"))) {
         Ok(raw) => raw,
@@ -347,7 +365,11 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         .args(["remote", "get-url", name])
         .output()
         .ok()?;
-    if !effective.status.success() || String::from_utf8_lossy(&effective.stdout).trim() != raw {
+    // OS text rule (issue 79): a URL that is not valid UTF-8 differs from the
+    // configured text, so it is a refusal.
+    if !effective.status.success()
+        || std::str::from_utf8(&effective.stdout).map_or(true, |text| text.trim() != raw)
+    {
         return Some(format!("effective URL for {name} differs from remote.{name}.url; the operator inspects git config --show-origin --get-regexp 'url.*|include.*'"));
     }
     if requested.is_some_and(|source| !names.contains(&source) && source != raw) {
@@ -452,5 +474,21 @@ mod tests {
         assert!(reason.contains("not valid UTF-8"), "{reason}");
         let refusal = fetch(dir.path(), &[], false).expect("a fetch is refused");
         assert!(refusal.contains("not valid UTF-8"), "{refusal}");
+    }
+
+    /// Issue 79: a config value that is not valid UTF-8 reads as one marker
+    /// that is no remote name and no boolean, never as its lossy spelling.
+    #[test]
+    fn a_config_value_that_is_not_utf8_names_no_remote() {
+        let entries = config_entries(b"remotes.group\ncaf\xe9\0remote.a.skipDefaultUpdate\0");
+        assert_eq!(
+            entries[0],
+            ("remotes.group".to_string(), UNREADABLE_VALUE.to_string())
+        );
+        assert_eq!(
+            entries[1],
+            ("remote.a.skipDefaultUpdate".to_string(), "true".to_string())
+        );
+        assert!(UNREADABLE_VALUE.contains('\0'));
     }
 }

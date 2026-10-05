@@ -47,13 +47,19 @@ pub fn without_verbatim(path: PathBuf) -> PathBuf {
 /// `path` as text with `/` separators: how a repository-relative path is
 /// shown and matched. A backslash is a separator only on Windows; elsewhere
 /// it is part of a file name and stays.
+///
+/// OS text rule (issue 79): the text is a key, never a lossy spelling. A
+/// path that is not valid UTF-8 keeps its exact bytes in the key
+/// ([`crate::git::GitName::storage_key`]), so two different paths never
+/// share one and valid text is unchanged. Show a key to a person with
+/// [`crate::git::display_key`].
 #[must_use]
 pub fn slashed(path: &Path) -> String {
-    let text = path.to_string_lossy();
+    let key = crate::git::GitName::from_os_str(path.as_os_str()).storage_key();
     if cfg!(windows) {
-        text.replace('\\', "/")
+        key.replace('\\', "/")
     } else {
-        text.into_owned()
+        key
     }
 }
 

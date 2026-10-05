@@ -351,12 +351,10 @@ fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .split_terminator('\0')
-                .map(str::to_string)
-                .collect()
-        })
+        // OS text rule (issue 79): a value with an invalid byte is unreadable
+        // as text and reads as unset, never as a lossy spelling.
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|text| text.split_terminator('\0').map(str::to_string).collect())
         .unwrap_or_default()
 }
 
@@ -372,7 +370,13 @@ fn merge_in_progress(root: &Path) -> bool {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        // OS text rule (issue 79): the folder is joined to a path, so its
+        // exact bytes are used and one the platform cannot hold is not read.
+        .and_then(|o| {
+            codeflow_core::git::GitName::from_bytes(o.stdout.trim_ascii_end())
+                .os_path()
+                .ok()
+        });
     match git_dir {
         Some(dir) => root.join(dir).join("MERGE_HEAD").exists(),
         None => false,
@@ -386,15 +390,16 @@ fn staged_files(root: &Path) -> Vec<String> {
     codeflow_core::git::command()
         .arg("-C")
         .arg(root)
-        .args(["diff", "--cached", "--name-only"])
+        .args(["diff", "--cached", "--name-only", "-z"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
+            // Each path is kept as its storage key (OS text rule, issue 79).
+            o.stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| codeflow_core::git::GitName::from_bytes(path).storage_key())
                 .collect()
         })
         .unwrap_or_default()
@@ -489,5 +494,93 @@ mod tests {
             read_hook_input(&b"0 1 refs/heads/cafe\n"[..]).unwrap(),
             "0 1 refs/heads/cafe\n"
         );
+    }
+
+    /// Run git in `dir`, with the host's configuration out of the way.
+    #[cfg(unix)]
+    fn run_git(dir: &std::path::Path, args: &[&std::ffi::OsStr], input: &[u8]) -> String {
+        let mut command = codeflow_core::git::command();
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com");
+        let out = codeflow_core::git::output_with_input(&mut command, input).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Stage `paths` (exact bytes, no file on disk) in the index of `dir`,
+    /// which `git init` made.
+    #[cfg(unix)]
+    fn stage_paths(dir: &std::path::Path, paths: &[&[u8]]) {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        let blob = run_git(
+            dir,
+            &[
+                OsStr::new("hash-object"),
+                OsStr::new("-w"),
+                OsStr::new("--stdin"),
+            ],
+            b"x",
+        );
+        for path in paths {
+            let cacheinfo = format!("100644,{blob},");
+            let mut arg = cacheinfo.into_bytes();
+            arg.extend_from_slice(path);
+            run_git(
+                dir,
+                &[
+                    OsStr::new("update-index"),
+                    OsStr::new("--add"),
+                    OsStr::new("--cacheinfo"),
+                    OsStr::from_bytes(&arg),
+                ],
+                b"",
+            );
+        }
+    }
+
+    /// A repository with `files` committed.
+    #[cfg(unix)]
+    fn repo_with_commit(dir: &std::path::Path, files: &[&[u8]]) -> String {
+        use std::ffi::OsStr;
+        run_git(dir, &[OsStr::new("init"), OsStr::new("--quiet")], b"");
+        stage_paths(dir, files);
+        run_git(
+            dir,
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--quiet"),
+                OsStr::new("-m"),
+                OsStr::new("files"),
+            ],
+            b"",
+        );
+        run_git(dir, &[OsStr::new("rev-parse"), OsStr::new("HEAD")], b"")
+    }
+
+    /// Issue 79: a staged path that is not valid UTF-8 keeps its exact bytes
+    /// in its key, so it never reads as a lossy lookalike of another path.
+    #[cfg(unix)]
+    #[test]
+    fn staged_paths_that_differ_in_an_invalid_byte_stay_two() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), &[b"a"]);
+        stage_paths(dir.path(), &[b"caf\xe9", "caf\u{fffd}".as_bytes()]);
+        let files = staged_files(dir.path());
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.contains(&"caf\u{fffd}".to_string()));
+        assert!(files.contains(&codeflow_core::git::GitName::from_bytes(b"caf\xe9").storage_key()));
     }
 }

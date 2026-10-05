@@ -791,7 +791,7 @@ fn load_under(base: &Path, dir: &Path, files: &mut SkillFiles) {
             if let (Ok(text), Ok(relative)) =
                 (std::fs::read_to_string(&path), path.strip_prefix(base))
             {
-                let key = relative.to_string_lossy().replace('\\', "/");
+                let key = crate::portable_path::slashed(relative);
                 files.insert(key, text);
             }
         }

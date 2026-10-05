@@ -169,7 +169,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>, depth: usize) {
             collect_files(root, &path, out, depth + 1);
         } else if kind.is_file() {
             if let Ok(relative) = path.strip_prefix(root) {
-                out.push(relative.to_string_lossy().replace('\\', "/"));
+                out.push(crate::portable_path::slashed(relative));
             }
         }
     }

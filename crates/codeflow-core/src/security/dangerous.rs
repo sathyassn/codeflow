@@ -466,7 +466,9 @@ fn temp_place(op: &str, tmpdir: Option<&Path>) -> TempPlace {
     };
     let tmpdir = tmpdir
         .and_then(|dir| std::fs::canonicalize(dir).ok())
-        .map(|dir| dir.to_string_lossy().into_owned())
+        // A temp folder that is not valid UTF-8 cannot be compared as text,
+        // so it is not a root (OS text rule, issue 79).
+        .and_then(|dir| dir.to_str().map(str::to_string))
         .filter(|dir| temp_root_depth(dir).is_some());
     // `/tmp/*` is judged as `/tmp/`, so a glob over a whole root is the root.
     match temp_root_depth(&canonical) {
@@ -537,7 +539,9 @@ fn canonical_operand(path: &str) -> Option<String> {
                 if rest.contains(&"..") {
                     return None;
                 }
-                let mut canonical = base.to_string_lossy().into_owned();
+                // A real path that is not valid UTF-8 cannot be judged as text
+                // (OS text rule, issue 79), so it is not established.
+                let mut canonical = base.to_str()?.to_string();
                 for part in rest {
                     if !canonical.ends_with('/') {
                         canonical.push('/');

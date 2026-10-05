@@ -288,6 +288,27 @@ pub fn remote_names(repo: &git2::Repository) -> Result<Vec<GitName>, git2::Error
     Ok(names_of(&repo.remotes()?))
 }
 
+/// The path of every file a diff touches (the old and the new path of each
+/// delta, one when they are the same), as exact bytes.
+#[must_use]
+pub fn diff_paths(diff: &git2::Diff<'_>) -> Vec<GitName> {
+    let mut paths = Vec::new();
+    for delta in diff.deltas() {
+        let old = delta.old_file().path_bytes();
+        let new = delta.new_file().path_bytes();
+        for path in old.into_iter().chain(new.filter(|new| Some(*new) != old)) {
+            paths.push(GitName::from_bytes(path));
+        }
+    }
+    paths
+}
+
+/// The display form of a [`GitName::storage_key`], for a message.
+#[must_use]
+pub fn display_key(key: &str) -> String {
+    GitName::from_storage_key(key).display().to_string()
+}
+
 /// What a tree walk does after an entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Walk {

@@ -715,9 +715,20 @@ fn check_ignore(root: &Path, prefix: &[&str], dirs: &[String]) -> Option<Vec<Opt
         if record.len() < 4 {
             continue;
         }
-        let source = String::from_utf8_lossy(record[0]).to_string();
-        let pattern = String::from_utf8_lossy(record[2]);
-        let path = String::from_utf8_lossy(record[3]).to_string();
+        // OS text rule (issue 79): the paths asked about are valid text, so
+        // an answer for a path that is not valid UTF-8 is not one of them and
+        // is dropped, never read as a lookalike. A source that is not valid
+        // text cannot be classified, so that directory reads as not ignored,
+        // which only adds a warning.
+        let (Ok(source), Ok(pattern), Ok(path)) = (
+            std::str::from_utf8(record[0]),
+            std::str::from_utf8(record[2]),
+            std::str::from_utf8(record[3]),
+        ) else {
+            continue;
+        };
+        let source = source.to_string();
+        let path = path.to_string();
         // A negated pattern (`!x`) matched but un-ignores the path.
         let ignored = !source.is_empty() && !pattern.starts_with('!');
         by_path.insert(path, ignored.then_some(source));
@@ -782,7 +793,7 @@ fn is_own_worktree(marker: &Path, common_dir: &Path) -> bool {
 /// The paths `.gitmodules` registers as submodules. Read from the file
 /// itself: libgit2's submodule list also includes index gitlinks that
 /// `.gitmodules` does not register.
-fn submodule_paths(repo: &git2::Repository) -> BTreeSet<String> {
+fn submodule_paths(repo: &git2::Repository) -> BTreeSet<GitName> {
     let Some(file) = repo.workdir().map(|w| w.join(".gitmodules")) else {
         return BTreeSet::new();
     };
@@ -797,23 +808,34 @@ fn submodule_paths(repo: &git2::Repository) -> BTreeSet<String> {
     };
     let mut paths = BTreeSet::new();
     while let Some(Ok(entry)) = entries.next() {
-        if let Ok(value) = entry.value() {
-            paths.insert(value.trim_end_matches('/').replace('\\', "/"));
+        // OS text rule (issue 79): a registered path is kept as its exact
+        // bytes, so it is compared with an index path byte for byte.
+        {
+            let mut value = entry.value_bytes();
+            while let Some(trimmed) = value.strip_suffix(b"/") {
+                value = trimmed;
+            }
+            let value: Vec<u8> = value
+                .iter()
+                .map(|byte| if *byte == b'\\' { b'/' } else { *byte })
+                .collect();
+            paths.insert(GitName::from_vec(value));
         }
     }
     paths
 }
 
 /// Gitlinks in the index that `.gitmodules` does not register.
-fn stray_gitlinks(repo: &git2::Repository, submodules: &BTreeSet<String>) -> Vec<String> {
+fn stray_gitlinks(repo: &git2::Repository, submodules: &BTreeSet<GitName>) -> Vec<String> {
     let Ok(index) = repo.index() else {
         return Vec::new();
     };
     index
         .iter()
         .filter(|e| e.mode == 0o160_000)
-        .map(|e| String::from_utf8_lossy(&e.path).to_string())
+        .map(|e| GitName::from_bytes(&e.path))
         .filter(|p| !submodules.contains(p))
+        .map(|p| p.display().to_string())
         .collect()
 }
 
@@ -840,7 +862,12 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
             let mut names: Vec<String> = entries
                 .filter_map(Result::ok)
                 .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-                .map(|e| e.file_name().to_string_lossy().to_string())
+                // OS text rule (issue 79): a folder whose name is not valid
+                // UTF-8 cannot be named in a path of text, and a lossy
+                // spelling would read another folder, so it is not walked.
+                // This only reports nested repositories (advice), so one under
+                // such a name is not reported.
+                .filter_map(|e| e.file_name().into_string().ok())
                 .collect();
             names.sort();
             for name in names {
@@ -852,7 +879,7 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
                 } else {
                     format!("{dir}/{name}")
                 };
-                if !submodules.contains(&rel) {
+                if !submodules.contains(&GitName::from_text(&rel)) {
                     candidates.push(rel);
                 }
             }
@@ -1061,12 +1088,19 @@ pub fn worktree_findings(
             continue;
         }
         if let Ok(rel) = path.strip_prefix(&root) {
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            let ignored = ignore_sources(&root, std::slice::from_ref(&rel))
-                .into_iter()
-                .next()
-                .flatten()
-                .is_some();
+            // OS text rule (issue 79): a folder name that is not valid UTF-8
+            // cannot be asked about, so no rule is known to cover it and the
+            // warning stays (it is shown with escapes).
+            let rel_name = GitName::from_os_str(rel.as_os_str());
+            let ignored = rel_name.rule_text().is_ok_and(|text| {
+                let rel = text.replace('\\', "/");
+                ignore_sources(&root, std::slice::from_ref(&rel))
+                    .into_iter()
+                    .next()
+                    .flatten()
+                    .is_some()
+            });
+            let rel = rel_name.display().to_string().replace('\\', "/");
             if !ignored {
                 out.push(Finding {
                     severity: Severity::Warn,

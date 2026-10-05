@@ -146,7 +146,7 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         for path in files {
             report.checked_records += 1;
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
-            let display = relative.to_string_lossy().replace('\\', "/");
+            let display = crate::git::display_key(&crate::portable_path::slashed(relative));
             if let Ok(content) = std::fs::read(&path) {
                 if let Ok((data, _)) = parse_frontmatter(&content) {
                     if let Some(identity) = supported_identity(&data, valid_identity) {
@@ -499,9 +499,11 @@ pub(crate) fn canonical_identity(
             message: "must be the lower-case UUIDv4 `new` wrote; a uid is never edited".into(),
         });
     }
+    // OS text rule (issue 79): compared with an ASCII id, so the display form
+    // (an escape for an invalid byte) never equals it either.
     let base = path
         .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
+        .map(|s| crate::git::GitName::from_os_str(s).display().to_string())
         .unwrap_or_default();
     if !canonical.is_empty() && base != canonical {
         errors.push(ValidationError {
@@ -509,7 +511,7 @@ pub(crate) fn canonical_identity(
             message: format!(
                 "filename \"{}\" does not match stable id \"{canonical}\"",
                 path.file_name()
-                    .map(|s| s.to_string_lossy().to_string())
+                    .map(|s| crate::git::GitName::from_os_str(s).display().to_string())
                     .unwrap_or_default()
             ),
         });

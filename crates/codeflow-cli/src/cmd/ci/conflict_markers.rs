@@ -92,8 +92,10 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
     let diff = super::git_stdout(
         root,
         &[
+            // Paths are printed quoted, so the header parse reads each one's
+            // exact bytes (OS text rule, issue 79).
             "-c",
-            "core.quotepath=off",
+            "core.quotepath=on",
             "diff-tree",
             "-r",
             "-p",
@@ -139,7 +141,7 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
 /// read from `diff-tree --raw -z`: a `:old new old-id new-id status` record,
 /// then the path.
 fn gitlinks(root: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, String> {
-    let raw = super::git_stdout(
+    let raw = super::git_bytes(
         root,
         &[
             "diff-tree",
@@ -153,16 +155,19 @@ fn gitlinks(root: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, Strin
         ],
     )?;
     let mut out = BTreeSet::new();
-    let mut fields = raw.split('\0');
+    let mut fields = raw.split(|byte| *byte == 0);
     while let Some(header) = fields.next() {
-        let Some(header) = header.strip_prefix(':') else {
+        let Some(header) = header.strip_prefix(b":") else {
             continue;
         };
         let Some(path) = fields.next() else {
             break;
         };
+        // The header is git's ASCII; the path is kept as its storage key, as
+        // the diff parse keys it (OS text rule, issue 79).
+        let header = std::str::from_utf8(header).unwrap_or("");
         if header.split(' ').nth(1) == Some("160000") {
-            out.insert(path.to_string());
+            out.insert(codeflow_core::git::GitName::from_bytes(path).storage_key());
         }
     }
     Ok(out)

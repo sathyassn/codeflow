@@ -3183,3 +3183,19 @@ fn a_revision_graph_is_read_beside_a_directory_that_is_not_utf8() {
     assert!(graph.get("TSK-003", RecordKind::Task).is_some());
     assert!(graph.get("TSK-004", RecordKind::Task).is_none());
 }
+
+/// Issue 79: the paths a range changes keep two names that differ only in an
+/// invalid byte apart, and valid text is unchanged.
+#[test]
+fn changed_paths_keep_a_lookalike_name_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    let second = crate::git::add_commit(
+        &repo,
+        &[(b"caf\xe9", b"1"), ("caf\u{fffd}".as_bytes(), b"2")],
+    );
+    let paths = changed_paths(&repo, &first.to_string(), Some(&second.to_string())).unwrap();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains(&"caf\u{fffd}".to_string()));
+    assert!(paths.contains(&GitName::from_bytes(b"caf\xe9").storage_key()));
+}

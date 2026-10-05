@@ -200,7 +200,12 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnw
         event_type: "session_end".to_string(),
         timestamp: summary.timestamp.clone(),
         session_id: session_id.clone(),
-        worktree: Some(info.root.to_string_lossy().to_string()),
+        // Shown in the ledger (OS text rule, issue 79).
+        worktree: Some(
+            crate::git::GitName::from_os_str(info.root.as_os_str())
+                .display()
+                .to_string(),
+        ),
         data,
     };
 

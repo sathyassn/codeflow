@@ -62,7 +62,11 @@ pub fn gather_answers(root: &Path) -> std::io::Result<InitAnswers> {
 fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result<InitAnswers> {
     let name = root.file_name().map_or_else(
         || "project".to_string(),
-        |n| n.to_string_lossy().to_string(),
+        |n| {
+            codeflow_core::git::GitName::from_os_str(n)
+                .display()
+                .to_string()
+        },
     );
 
     let one_liner = ask(input, "Product one-liner (what is this project?)", &name)?;

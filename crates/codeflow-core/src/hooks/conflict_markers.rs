@@ -244,9 +244,18 @@ pub fn marker_sizes(
         }
         AttrSource::Revision(revision) => format!("--source={revision}"),
     };
+    // OS text rule (issue 79): a path is a storage key (valid text as it is,
+    // else its exact bytes in hex), so git is asked about the real bytes and
+    // the answer is keyed the same way.
     let input: Vec<u8> = paths
         .iter()
-        .flat_map(|path| path.bytes().chain(std::iter::once(0)))
+        .flat_map(|path| {
+            crate::git::GitName::from_storage_key(path)
+                .bytes()
+                .to_vec()
+                .into_iter()
+                .chain(std::iter::once(0))
+        })
         .collect();
     // A git that refuses its arguments exits before it reads the paths, so
     // the write may fail with a broken pipe, which the helper leaves to the
@@ -268,11 +277,16 @@ pub fn marker_sizes(
         );
     }
     // `-z` output is path, attribute, value, each ended by a NUL.
-    let text = String::from_utf8_lossy(&out.stdout);
-    let fields: Vec<&str> = text.split('\0').collect();
+    let fields: Vec<&[u8]> = out.stdout.split(|byte| *byte == 0).collect();
     Ok(fields
         .chunks_exact(3)
-        .map(|record| (record[0].to_string(), size_from(record[2])))
+        .map(|record| {
+            (
+                crate::git::GitName::from_bytes(record[0]).storage_key(),
+                // The value is a number or a word git prints in ASCII.
+                size_from(std::str::from_utf8(record[2]).unwrap_or("")),
+            )
+        })
         .collect())
 }
 
@@ -295,7 +309,8 @@ pub fn check(
                 RULE,
                 level,
                 format!(
-                    "{path}:{} adds an unresolved {} conflict marker ({})",
+                    "{}:{} adds an unresolved {} conflict marker ({})",
+                    crate::git::display_key(path),
                     marker.line,
                     marker.kind.name(),
                     marker.kind.fill().to_string().repeat(size)
@@ -350,8 +365,8 @@ pub fn staged(repo: &git2::Repository, level: PolicyLevel) -> Vec<Violation> {
         None,
         Some(&mut |delta, _hunk, line| {
             if line.origin() == '+' && delta.new_file().mode() != git2::FileMode::Commit {
-                if let Some(path) = delta.new_file().path() {
-                    let path = path.to_string_lossy().into_owned();
+                if let Some(path) = delta.new_file().path_bytes() {
+                    let path = crate::git::GitName::from_bytes(path).storage_key();
                     let number = line
                         .new_lineno()
                         .and_then(|n| usize::try_from(n).ok())
@@ -676,5 +691,27 @@ mod tests {
         assert!(marker_sizes(root, AttrSource::Revision("HEAD"), &[])
             .unwrap()
             .is_empty());
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    /// Issue 79: a path is a storage key, shown to a person by its exact
+    /// escaped name, and asked of git by its exact bytes.
+    #[test]
+    fn a_path_that_is_not_utf8_is_shown_by_its_exact_name() {
+        let key = crate::git::GitName::from_bytes(b"caf\xe9.md").storage_key();
+        let mut files = AddedLines::new();
+        files.insert(key, vec![(1, "<<<<<<< ours".to_string())]);
+        let out = check(PolicyLevel::Block, &files, &BTreeMap::new());
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].message.contains(r"caf\xe9.md:1"),
+            "{}",
+            out[0].message
+        );
+        assert!(!out[0].message.contains('\0'), "{}", out[0].message);
     }
 }

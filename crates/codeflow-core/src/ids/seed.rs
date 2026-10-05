@@ -362,7 +362,7 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
             let Ok(relative) = path.strip_prefix(root) else {
                 continue;
             };
-            let relative = relative.to_string_lossy().replace('\\', "/");
+            let relative = crate::portable_path::slashed(relative);
             if let Some(id) = record_id_from_path(&relative) {
                 out.entry(id).or_default().push(path);
             }

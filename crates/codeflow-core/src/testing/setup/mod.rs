@@ -250,10 +250,9 @@ pub fn get_template_list(template_dir: &Path) -> Result<Vec<(String, String)>, S
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "json") {
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
+            // Shown to a person (OS text rule, issue 79).
+            let name = crate::git::GitName::from_os_str(path.file_name().unwrap_or_default())
+                .display()
                 .to_string();
             let description = read_template_description(&path);
             entries.push((name, description));

@@ -358,7 +358,7 @@ fn project_name(root: &Path) -> String {
         .file_name()
         .map_or_else(
             || "project".to_string(),
-            |n| n.to_string_lossy().to_string(),
+            |n| crate::git::GitName::from_os_str(n).display().to_string(),
         )
 }
 

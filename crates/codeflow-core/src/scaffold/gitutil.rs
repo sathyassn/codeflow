@@ -55,8 +55,12 @@ pub fn common_dir(root: &Path) -> Option<std::path::PathBuf> {
     if !out.status.success() {
         return None;
     }
-    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!dir.is_empty()).then(|| root.join(dir))
+    // OS text rule (issue 79): the folder is joined to a path, so its exact
+    // bytes are used, never a lossy spelling.
+    let dir = crate::git::GitName::from_bytes(out.stdout.trim_ascii())
+        .os_path()
+        .ok()?;
+    (!dir.as_os_str().is_empty()).then(|| root.join(dir))
 }
 
 pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {
@@ -67,7 +71,9 @@ pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {
 pub fn config_get(root: &Path, key: &str) -> Option<String> {
     git(root, &["config", "--get", key]).ok().and_then(|o| {
         if o.status.success() {
-            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // A config value that is not valid UTF-8 is not read (OS text
+            // rule, issue 79).
+            let v = std::str::from_utf8(&o.stdout).ok()?.trim().to_string();
             (!v.is_empty()).then_some(v)
         } else {
             None
@@ -133,5 +139,28 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue 79: a config value that is not valid UTF-8 is not read as its
+    /// lossy spelling.
+    #[test]
+    fn a_config_value_that_is_not_utf8_is_not_read() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[demo]\n\tword = caf\xe9\n\tplain = ok\n")
+            .unwrap();
+        assert_eq!(config_get(dir.path(), "demo.plain").as_deref(), Some("ok"));
+        assert_eq!(config_get(dir.path(), "demo.word"), None);
     }
 }

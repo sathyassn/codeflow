@@ -1357,16 +1357,17 @@ fn evaluate_added_lines(git: &GitPolicy, lines: &[AddedLine]) -> Vec<Violation> 
         .filter(|added| standards::in_policy_character_tree(&added.path))
         .filter_map(|added| {
             let (_, c) = standards::find_policy_character(&added.text)?;
+            // The path is a storage key; a person sees its exact escaped name.
+            let shown = codeflow_core::git::display_key(&added.path);
             Some(Violation::new(
                 "git.policy_characters",
                 git.policy_characters,
                 format!(
-                    "{}:{} adds an {}",
-                    added.path,
+                    "{shown}:{} adds an {}",
                     added.line,
                     standards::policy_character_name(c)
                 ),
-                codeflow_core::remedy::FILE_POLICY_CHARACTER.with(&[("path", &added.path)]),
+                codeflow_core::remedy::FILE_POLICY_CHARACTER.with(&[("path", &shown)]),
             ))
         })
         .collect()
@@ -1709,7 +1710,8 @@ fn origin_url(root: &Path) -> Option<String> {
         .args(["remote", "get-url", "origin"])
         .output()
         .ok()?;
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // A URL that is not valid UTF-8 is not read (OS text rule, issue 79).
+    let url = std::str::from_utf8(&out.stdout).ok()?.trim().to_string();
     (out.status.success() && !url.is_empty()).then_some(url)
 }
 
@@ -1848,8 +1850,11 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
     let merge_base = git_stdout(root, &["merge-base", base, head])?;
     let merge_base = merge_base.trim();
     let mut args = vec![
+        // OS text rule (issue 79): paths are printed quoted with octal escapes,
+        // so the header parse reads each path's exact bytes (`unquote_git_path`)
+        // and a decode of the whole diff as text never changes a path.
         "-c",
-        "core.quotepath=off",
+        "core.quotepath=on",
         "diff-tree",
         "-r",
         "-p",
@@ -1982,6 +1987,11 @@ fn parse_batch(stdout: &[u8], queried: &[&str]) -> Result<BTreeMap<String, Vec<u
 
 /// Run `git -C root <args>` and return its stdout, or its stderr as the error.
 fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&git_bytes(root, args)?).into_owned())
+}
+
+/// [`git_stdout`] as the exact bytes, for output that holds paths.
+fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -1991,7 +2001,7 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout)
 }
 
 /// Parse a zero-context unified diff into the lines it adds, with each line's
@@ -2098,7 +2108,10 @@ fn unquote_git_path(raw: &str) -> Option<String> {
             _ => return None,
         });
     }
-    Some(String::from_utf8_lossy(&out).into_owned())
+    // OS text rule (issue 79): the path is kept as its storage key, so a path
+    // that is not valid UTF-8 stays its own path and never reads as a lossy
+    // lookalike; valid text is unchanged.
+    Some(codeflow_core::git::GitName::from_bytes(&out).storage_key())
 }
 
 /// Parse `-a[,b] +c[,d] @@ ...` into (old count, new start, new count).
@@ -2137,19 +2150,22 @@ fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
     else {
         return files;
     };
-    let text = String::from_utf8_lossy(&out);
-    let mut fields = text.split('\0');
-    let mut commit: Option<&str> = None;
+    // Fields are git's ASCII (ids, modes) or a path. A path is kept as its
+    // storage key (OS text rule, issue 79), never as a lossy spelling.
+    let mut fields = out.split(|byte| *byte == 0);
+    let mut commit: Option<String> = None;
     while let Some(field) = fields.next() {
-        if field.starts_with(':') {
-            if let (Some(path), Some(sha)) = (fields.next(), commit) {
+        if field.starts_with(b":") {
+            if let (Some(path), Some(sha)) = (fields.next(), commit.as_ref()) {
                 files
-                    .entry(sha.to_string())
+                    .entry(sha.clone())
                     .or_default()
-                    .push(path.to_string());
+                    .push(codeflow_core::git::GitName::from_bytes(path).storage_key());
             }
-        } else if !field.trim().is_empty() {
-            commit = Some(field.trim());
+        } else if let Ok(text) = std::str::from_utf8(field) {
+            if !text.trim().is_empty() {
+                commit = Some(text.trim().to_string());
+            }
         }
     }
     files
@@ -3375,5 +3391,110 @@ mod tests {
             report(&[block_violation()], &["branch-naming"], &["commit"]),
             1
         );
+    }
+
+    /// Run git in `dir`, with the host's configuration out of the way.
+    #[cfg(unix)]
+    fn run_git(dir: &std::path::Path, args: &[&std::ffi::OsStr], input: &[u8]) -> String {
+        let mut command = codeflow_core::git::command();
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com");
+        let out = codeflow_core::git::output_with_input(&mut command, input).unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Stage `paths` (exact bytes, no file on disk) in the index of `dir`,
+    /// which `git init` made.
+    #[cfg(unix)]
+    fn stage_paths(dir: &std::path::Path, paths: &[&[u8]]) {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt as _;
+        let blob = run_git(
+            dir,
+            &[
+                OsStr::new("hash-object"),
+                OsStr::new("-w"),
+                OsStr::new("--stdin"),
+            ],
+            b"x",
+        );
+        for path in paths {
+            let cacheinfo = format!("100644,{blob},");
+            let mut arg = cacheinfo.into_bytes();
+            arg.extend_from_slice(path);
+            run_git(
+                dir,
+                &[
+                    OsStr::new("update-index"),
+                    OsStr::new("--add"),
+                    OsStr::new("--cacheinfo"),
+                    OsStr::from_bytes(&arg),
+                ],
+                b"",
+            );
+        }
+    }
+
+    /// A repository with `files` committed.
+    #[cfg(unix)]
+    fn repo_with_commit(dir: &std::path::Path, files: &[&[u8]]) -> String {
+        use std::ffi::OsStr;
+        run_git(dir, &[OsStr::new("init"), OsStr::new("--quiet")], b"");
+        stage_paths(dir, files);
+        run_git(
+            dir,
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--quiet"),
+                OsStr::new("-m"),
+                OsStr::new("files"),
+            ],
+            b"",
+        );
+        run_git(dir, &[OsStr::new("rev-parse"), OsStr::new("HEAD")], b"")
+    }
+
+    /// Issue 79: the files a commit touches keep a path that is not valid
+    /// UTF-8 as its own key, never as a lossy lookalike.
+    #[cfg(unix)]
+    #[test]
+    fn commit_files_keep_a_path_that_is_not_utf8_apart() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), &[b"a"]);
+        stage_paths(dir.path(), &[b"caf\xe9", "caf\u{fffd}".as_bytes()]);
+        run_git(
+            dir.path(),
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--quiet"),
+                OsStr::new("-m"),
+                OsStr::new("more"),
+            ],
+            b"",
+        );
+        let sha = run_git(
+            dir.path(),
+            &[OsStr::new("rev-parse"), OsStr::new("HEAD")],
+            b"",
+        );
+        let files = commit_files(dir.path(), &[sha.as_str()]);
+        let listed = &files[&sha];
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(listed.contains(&"caf\u{fffd}".to_string()));
+        assert!(listed.contains(&codeflow_core::git::GitName::from_bytes(b"caf\xe9").storage_key()));
     }
 }

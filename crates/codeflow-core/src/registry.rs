@@ -158,9 +158,11 @@ pub struct ProjectInfo {
 /// (`standard`), and `unknown`.
 #[must_use]
 pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
+    // A label for a person (OS text rule, issue 79): the exact name, with
+    // an invalid byte shown as an escape.
     let dir_name = repo_root.file_name().map_or_else(
         || "unnamed".to_string(),
-        |n| n.to_string_lossy().into_owned(),
+        |n| crate::git::GitName::from_os_str(n).display().to_string(),
     );
 
     let table: Option<toml::Table> =
@@ -212,8 +214,14 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     let canonical = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
     let info = read_project_info(&canonical);
+    // OS text rule (issue 79): the path is the row's identity, and a lossy
+    // spelling would let two repositories share one row. A path that is not
+    // valid UTF-8 is not recorded (a registry write is best effort).
+    let Some(path) = canonical.to_str() else {
+        return Ok(false);
+    };
     let entry = RegistryEntry {
-        path: canonical.to_string_lossy().into_owned(),
+        path: path.to_string(),
         name: info.name,
         tier: info.tier,
         scaffold_version: info.scaffold_version,
@@ -742,5 +750,22 @@ mod tests {
         fs::write(user_config_path(home.path()), "not = [valid").unwrap();
         let err = UserConfig::load(home.path()).unwrap_err();
         assert!(err.contains("config.toml parse"), "got: {err}");
+    }
+
+    /// Issue 79: a repository whose path is not valid UTF-8 is not recorded
+    /// under a lossy spelling that another repository could share.
+    #[cfg(unix)]
+    #[test]
+    fn a_repository_path_that_is_not_utf8_is_not_recorded() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let home = tempfile::tempdir().unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let repo = parent.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+        if std::fs::create_dir(&repo).is_err() {
+            return; // this file system refuses the name
+        }
+        init_repo(&repo, Some("odd"));
+        assert_eq!(touch_registry(home.path(), &repo), Ok(false));
+        assert!(list_repos(home.path()).unwrap().is_empty());
     }
 }

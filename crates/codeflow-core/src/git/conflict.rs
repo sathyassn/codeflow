@@ -161,7 +161,7 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
 
     // Rebase failed — collect conflict info from status and abort.
     let status_output = crate::git::command()
-        .args(["diff", "--name-only", "--diff-filter=U"])
+        .args(["diff", "--name-only", "-z", "--diff-filter=U"])
         .current_dir(repo_path)
         .output()
         .ok();
@@ -169,10 +169,12 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
     let conflicting_files = status_output
         .as_ref()
         .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(String::from)
+            // The list is shown to a person, so each exact path goes through
+            // its display form (OS text rule, issue 79).
+            o.stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| crate::git::GitName::from_bytes(path).display().to_string())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -229,7 +231,7 @@ fn identity_args_for(has_identity: bool) -> Vec<String> {
 
 /// Collect file paths from merge conflicts in the index.
 fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
-    let mut paths = Vec::new();
+    let mut names: Vec<crate::git::GitName> = Vec::new();
     if let Ok(conflicts) = index.conflicts() {
         for conflict in conflicts.flatten() {
             // A conflict entry has ancestor, our, and their sides.
@@ -239,16 +241,21 @@ fn collect_conflict_paths(index: &git2::Index) -> Vec<String> {
                 .as_ref()
                 .or(conflict.their.as_ref())
                 .or(conflict.ancestor.as_ref())
-                .map(|entry| String::from_utf8_lossy(&entry.path).to_string());
+                .map(|entry| crate::git::GitName::from_bytes(&entry.path));
 
             if let Some(p) = path {
-                if !paths.contains(&p) {
-                    paths.push(p);
+                if !names.contains(&p) {
+                    names.push(p);
                 }
             }
         }
     }
-    paths
+    // Shown to a person (OS text rule, issue 79): each exact path by its
+    // display form.
+    names
+        .iter()
+        .map(|name| name.display().to_string())
+        .collect()
 }
 
 #[cfg(test)]

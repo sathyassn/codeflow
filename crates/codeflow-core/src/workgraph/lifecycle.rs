@@ -161,11 +161,8 @@ impl Graph {
                 let Ok(content) = std::fs::read_to_string(&path) else {
                     continue;
                 };
-                let relative = path
-                    .strip_prefix(repo_root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
+                let relative =
+                    crate::portable_path::slashed(path.strip_prefix(repo_root).unwrap_or(&path));
                 graph.insert(kind, &relative, &content);
             }
         }
@@ -1439,7 +1436,11 @@ fn context_problems(
         if !product.is_empty() {
             problems.push(format!(
                 "a spec becomes {to} only in a planning-only change (project-management/ and docs/plan/); this change also touches {}",
-                product.join(", ")
+                product
+                    .iter()
+                    .map(|path| crate::git::display_key(path))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -2030,11 +2031,12 @@ pub fn changed_paths(
         repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options))
     }
     .map_err(|error| format!("cannot diff from {base}: {}", error.message()))?;
-    let mut paths: Vec<String> = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+    // OS text rule (issue 79): a path is kept as its storage key, so a path
+    // that is not valid UTF-8 stays its own path (valid text is unchanged and
+    // no valid path equals a key with an invalid byte), never a lossy lookalike.
+    let mut paths: Vec<String> = crate::git::diff_paths(&diff)
+        .iter()
+        .map(GitName::storage_key)
         .collect();
     paths.sort();
     paths.dedup();

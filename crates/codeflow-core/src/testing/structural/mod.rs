@@ -303,7 +303,17 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
         // the current working directory. To keep results stable across CWDs,
         // we temporarily set CWD to project_dir via `chdir` — no, that's
         // racy. Instead, prefix the pattern with project_dir.
-        let absolute = project_dir.join(pattern).to_string_lossy().to_string();
+        // OS text rule (issue 79): the glob crate takes text, so a project
+        // folder that is not valid UTF-8 is an error, not a lossy lookalike.
+        let joined = project_dir.join(pattern);
+        let absolute = joined
+            .to_str()
+            .ok_or_else(|| {
+                TestingError::Io(std::io::Error::other(
+                    "the project folder is not valid UTF-8, so structural globs cannot run",
+                ))
+            })?
+            .to_string();
         let glob_iter =
             glob::glob_with(&absolute, options).map_err(|e| TestingError::ConfigInvalid {
                 path: PathBuf::from("structural.source_glob/test_glob"),
@@ -321,7 +331,7 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
                 continue;
             }
             if let Ok(rel) = path.strip_prefix(project_dir) {
-                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let rel_str = crate::portable_path::slashed(rel);
                 collected.push(rel_str);
             }
         }

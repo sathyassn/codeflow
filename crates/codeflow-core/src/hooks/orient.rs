@@ -100,7 +100,7 @@ fn enabled(project_toml: Option<&toml::Value>) -> bool {
 fn project_name(root: &Path) -> String {
     root.file_name().map_or_else(
         || "project".to_string(),
-        |n| n.to_string_lossy().to_string(),
+        |n| crate::git::GitName::from_os_str(n).display().to_string(),
     )
 }
 
@@ -272,7 +272,9 @@ fn recent_adrs(root: &Path, n: usize) -> Vec<String> {
     };
     let mut names: Vec<String> = entries
         .filter_map(std::result::Result::ok)
-        .map(|e| e.file_name().to_string_lossy().to_string())
+        // A title is read by joining the name back, so a name that is not
+        // valid UTF-8 is left out (OS text rule, issue 79).
+        .filter_map(|e| e.file_name().into_string().ok())
         .filter(|n| {
             std::path::Path::new(n)
                 .extension()

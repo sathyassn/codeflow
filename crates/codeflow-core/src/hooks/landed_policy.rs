@@ -123,18 +123,20 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
 
 fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool), String> {
     let head = format!("refs/remotes/{remote}/HEAD");
-    let recovery = |error| {
+    let recovery = |error: String| {
         format!("cannot read policy source {head}: {error}; run git fetch {remote}; the operator can repair the default with git remote set-head {remote} --auto")
     };
     match repo.find_reference(&head) {
         Ok(reference) => {
             // An existing HEAD names authority even if its target needs fetching.
-            let reference = reference.resolve().map_err(recovery)?;
+            let reference = reference.resolve().map_err(|e| recovery(e.to_string()))?;
             // OS text rule (issue 79, `docs/architecture.md`): kept strict. The
             // name picks which tracking branch supplies policy, an authority
             // decision, so a name that is not valid UTF-8 stops with the
             // recovery text and is never replaced by a lossy spelling.
-            Ok((vec![reference.name().map_err(recovery)?.to_owned()], false))
+            let name = crate::git::name::reference_name(&reference);
+            let text = name.rule_text().map_err(|e| recovery(e.to_string()))?;
+            Ok((vec![text.to_owned()], false))
         }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             // Never let a local policy choose which tracking branch is trusted.
@@ -147,7 +149,7 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
                 match repo.find_reference(name) {
                     Ok(_) => sources.push(name.clone()),
                     Err(error) if error.code() == git2::ErrorCode::NotFound => {}
-                    Err(error) => return Err(recovery(error)),
+                    Err(error) => return Err(recovery(error.to_string())),
                 }
             }
             if sources.is_empty() {
@@ -155,7 +157,7 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
             }
             Ok((sources, true))
         }
-        Err(error) => Err(recovery(error)),
+        Err(error) => Err(recovery(error.to_string())),
     }
 }
 
@@ -256,7 +258,12 @@ fn declared_target(
         .map_err(|e| e.to_string())?
         .flatten()
     {
-        let Ok(name) = reference.name() else { continue };
+        // A record's `integration_target` is valid text, so a ref name that is
+        // not valid UTF-8 can never be the branch a record declares.
+        let reference_name = crate::git::name::reference_name(&reference);
+        let Ok(name) = reference_name.rule_text() else {
+            continue;
+        };
         let Ok(tree) = reference.peel_to_tree() else {
             continue;
         };

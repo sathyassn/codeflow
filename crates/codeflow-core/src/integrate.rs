@@ -153,7 +153,7 @@ impl std::fmt::Display for IntegrateOutcome {
 /// checkout, so integrate refuses before it changes anything.
 fn checked_out_branch(repo: &git2::Repository, target: &str) -> Result<String, IntegrateError> {
     match repo.head() {
-        Ok(head) => match head.shorthand() {
+        Ok(head) => match crate::git::name::reference_shorthand(&head).rule_text() {
             Ok(name) => Ok(name.to_string()),
             Err(_) => Err(IntegrateError::Preflight(
                 "the checked-out branch name is not valid UTF-8, so integrate could not \

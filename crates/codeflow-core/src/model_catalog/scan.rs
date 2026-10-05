@@ -136,7 +136,7 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
                 continue;
             }
             let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
-            let normalized = relative.to_string_lossy().replace('\\', "/");
+            let normalized = crate::portable_path::slashed(relative);
             if catalog_or_fixture(&normalized)
                 || if retired {
                     historical(&normalized)

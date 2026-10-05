@@ -777,7 +777,11 @@ fn remove_abandoned_transaction_debris(
         .map_err(|e| ScaffoldError::io(root.join(".codeflow"), e))?;
     let mut debris_seen = 0;
     for entry in entries {
-        let name = entry.to_string_lossy();
+        // Transaction debris is named by this tool in ASCII, so a name that
+        // is not valid UTF-8 is not debris (OS text rule, issue 79).
+        let Some(name) = entry.to_str() else {
+            continue;
+        };
         let is_stage = name.starts_with(TRANSACTION_STAGE_PREFIX);
         let cleanup_id = name.strip_prefix(TRANSACTION_CLEANUP_PREFIX);
         if !is_stage && cleanup_id.is_none() {
@@ -1857,7 +1861,7 @@ fn rollback_mutations(
 }
 
 fn path_text(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    crate::portable_path::slashed(path)
 }
 
 fn roots_equal(left: &str, right: &str) -> bool {

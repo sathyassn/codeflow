@@ -216,12 +216,19 @@ fn status_only(repo: &Repository, merge: &Commit<'_>) -> bool {
         let Some(delta) = diff.get_delta(index) else {
             return false;
         };
-        let Some(path) = delta.new_file().path().or_else(|| delta.old_file().path()) else {
+        let Some(path) = delta
+            .new_file()
+            .path_bytes()
+            .or_else(|| delta.old_file().path_bytes())
+        else {
             return false;
         };
-        let path = path.to_string_lossy();
-        let is_record =
-            RECORD_DIRS.iter().any(|dir| path.starts_with(dir)) && path.ends_with(".md");
+        // Bytes, not text (OS text rule, issue 79): only ASCII prefixes and
+        // the suffix are tested.
+        let is_record = RECORD_DIRS
+            .iter()
+            .any(|dir| path.starts_with(dir.as_bytes()))
+            && path.ends_with(b".md");
         // A record added or removed is planning, not a status move.
         if !is_record || delta.old_file().id().is_zero() || delta.new_file().id().is_zero() {
             return false;

@@ -13,7 +13,9 @@ pub mod name;
 pub mod remote_query;
 pub(crate) mod stdin;
 
-pub use name::{walk_tree, DisplayName, GitName, NotRepresentable, NotUtf8, Walk};
+pub use name::{
+    diff_paths, display_key, walk_tree, DisplayName, GitName, NotRepresentable, NotUtf8, Walk,
+};
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
 /// whose command started git, instead of the `codeflow` first on PATH
@@ -56,11 +58,15 @@ pub fn process(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
 }
 
 fn runs_git(program: &std::ffi::OsStr) -> bool {
-    let name = program.to_string_lossy();
-    let name = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    name.split('.')
+    // Bytes, not text (OS text rule, issue 79): only the ASCII stem is tested.
+    let bytes = program.as_encoded_bytes();
+    let name = bytes
+        .rsplit(|byte| matches!(byte, b'/' | b'\\'))
         .next()
-        .is_some_and(|stem| stem.eq_ignore_ascii_case("git"))
+        .unwrap_or_default();
+    name.split(|byte| *byte == b'.')
+        .next()
+        .is_some_and(|stem| stem.eq_ignore_ascii_case(b"git"))
 }
 
 /// A linked worktree as git lists it.
@@ -176,14 +182,35 @@ pub(crate) fn repo_with_tree(
     files: &[(&[u8], &[u8])],
 ) -> (git2::Repository, git2::Oid) {
     let repo = git2::Repository::init(dir).unwrap();
+    let commit = add_commit(&repo, files);
+    (repo, commit)
+}
+
+/// A commit on `main` on top of `HEAD` (if any) that adds or changes `files`
+/// through the index, as [`repo_with_tree`] does.
+#[cfg(test)]
+pub(crate) fn add_commit(repo: &git2::Repository, files: &[(&[u8], &[u8])]) -> git2::Oid {
+    let modes: Vec<(&[u8], &[u8], u32)> = files
+        .iter()
+        .map(|(path, content)| (*path, *content, 0o100_644))
+        .collect();
+    add_commit_modes(repo, &modes)
+}
+
+/// [`add_commit`] with each entry's file mode (`0o120_000` is a symlink).
+#[cfg(test)]
+pub(crate) fn add_commit_modes(
+    repo: &git2::Repository,
+    files: &[(&[u8], &[u8], u32)],
+) -> git2::Oid {
     let mut index = repo.index().unwrap();
-    for (path, content) in files {
+    for (path, content, mode) in files {
         let entry = git2::IndexEntry {
             ctime: git2::IndexTime::new(0, 0),
             mtime: git2::IndexTime::new(0, 0),
             dev: 0,
             ino: 0,
-            mode: 0o100_644,
+            mode: *mode,
             uid: 0,
             gid: 0,
             file_size: 0,
@@ -196,11 +223,23 @@ pub(crate) fn repo_with_tree(
     }
     let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
     let who = git2::Signature::now("Test", "test@example.com").unwrap();
+    let parent = repo
+        .find_reference("refs/heads/main")
+        .ok()
+        .and_then(|reference| reference.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
     let commit = repo
-        .commit(Some("refs/heads/main"), &who, &who, "files", &tree, &[])
+        .commit(
+            Some("refs/heads/main"),
+            &who,
+            &who,
+            "files",
+            &tree,
+            &parents,
+        )
         .unwrap();
     drop(tree);
-    (repo, commit)
+    commit
 }
 
 #[cfg(test)]

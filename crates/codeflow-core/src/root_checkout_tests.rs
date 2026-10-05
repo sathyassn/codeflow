@@ -1931,3 +1931,54 @@ fn a_default_branch_that_is_not_utf8_stops_the_workspace_branch_step() {
         error.0.message
     );
 }
+
+/// Issue 79: a registered submodule path and an index gitlink are compared as
+/// exact bytes, so a gitlink `sub` plus an invalid byte is not the registered
+/// `sub` plus U+FFFD, and is reported by its escaped name.
+#[test]
+fn a_gitlink_is_compared_with_the_registered_paths_by_exact_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(dir.path()).unwrap();
+    let mut index = repo.index().unwrap();
+    for path in [&b"sub\xe9"[..], "sub\u{fffd}".as_bytes()] {
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o160_000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap(),
+            flags: 0,
+            flags_extended: 0,
+            path: path.to_vec(),
+        };
+        index.add(&entry).unwrap();
+    }
+    let registered: BTreeSet<GitName> = [GitName::from_text("sub\u{fffd}")].into();
+    assert_eq!(stray_gitlinks(&repo, &registered), [r"sub\xe9"]);
+}
+
+/// A folder whose name is not valid UTF-8 is not walked as its lossy
+/// spelling, and a nested repository beside it is still found.
+#[cfg(unix)]
+#[test]
+fn a_folder_that_is_not_utf8_does_not_hide_or_rename_a_nested_repository() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    let odd = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    if std::fs::create_dir(&odd).is_err() {
+        return; // this file system refuses the name
+    }
+    std::fs::create_dir_all(odd.join("inner").join(".git")).unwrap();
+    std::fs::create_dir_all(root.join("plain").join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    let found: Vec<String> = nested_repositories(&repo)
+        .into_iter()
+        .map(|n| n.path)
+        .collect();
+    assert_eq!(found, ["plain"]);
+}

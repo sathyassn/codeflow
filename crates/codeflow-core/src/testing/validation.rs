@@ -100,7 +100,7 @@ pub fn parse_target_coverage(
     }) {
         for cov in &mut coverages {
             if let Ok(relative) = std::path::Path::new(&cov.path).strip_prefix(cwd_dir) {
-                cov.path = relative.to_string_lossy().to_string();
+                cov.path = crate::git::GitName::from_os_str(relative.as_os_str()).storage_key();
             }
         }
     }
@@ -395,7 +395,7 @@ fn build_target_ledger_summary(
 #[must_use]
 pub fn detect_changed_files(project_dir: &Path, base_ref: &str) -> Vec<String> {
     let output = crate::git::command()
-        .args(["diff", "--name-only", base_ref])
+        .args(["diff", "--name-only", "-z", base_ref])
         .current_dir(project_dir)
         .output();
 
@@ -407,10 +407,17 @@ pub fn detect_changed_files(project_dir: &Path, base_ref: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(String::from)
+    name_only_paths(&output.stdout)
+}
+
+/// The paths of `git diff --name-only -z` output. OS text rule (issue 79):
+/// each is its storage key, so a path that is not valid UTF-8 stays its own
+/// path and is never a lossy lookalike.
+fn name_only_paths(stdout: &[u8]) -> Vec<String> {
+    stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| crate::git::GitName::from_bytes(path).storage_key())
         .collect()
 }
 
@@ -983,5 +990,15 @@ mod tests {
             "ledger summary must include exactly the in-scope modified file; got: {modified:?}"
         );
         assert_eq!(modified[0]["file"], "cli/src/cmd/test.rs");
+    }
+
+    /// Issue 79: a changed path that is not valid UTF-8 keeps its exact bytes
+    /// in its key, so it is never a lossy lookalike of another path.
+    #[test]
+    fn a_changed_path_that_is_not_utf8_keeps_its_own_key() {
+        let files = name_only_paths(b"caf\xe9\0caf\xef\xbf\xbd\0\0");
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.contains(&"caf\u{fffd}".to_string()));
+        assert!(files.contains(&crate::git::GitName::from_bytes(b"caf\xe9").storage_key()));
     }
 }

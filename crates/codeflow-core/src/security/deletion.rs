@@ -4604,8 +4604,10 @@ impl Reader<'_> {
             if !(rest.is_empty() || rest.starts_with('/')) {
                 return None;
             }
+            // OS text rule (issue 79): the reader works on path text, so a
+            // home folder that is not valid UTF-8 cannot be placed (unproven).
             let home = std::env::var_os("HOME")?;
-            Some(PathBuf::from(format!("{}{rest}", home.to_string_lossy())))
+            Some(PathBuf::from(format!("{}{rest}", home.to_str()?)))
         } else if path.starts_with('/') {
             Some(PathBuf::from(path))
         } else {
@@ -4639,7 +4641,8 @@ impl Reader<'_> {
         let Some(absolute) = self.absolute(path) else {
             return Some(Vec::new());
         };
-        let absolute = absolute.to_string_lossy().into_owned();
+        // A base that is not valid UTF-8 cannot be read as text: unproven.
+        let absolute = absolute.to_str()?.to_string();
         // `*/` names directories through links, so only a bare final `*`
         // is kept.
         let keep_last = !absolute.ends_with('/');
@@ -4687,7 +4690,21 @@ impl Reader<'_> {
                             if last && entry.file_type().is_ok_and(|t| t.is_symlink()) {
                                 continue;
                             }
-                            names.insert(entry.file_name().to_string_lossy().into_owned());
+                            // OS text rule (issue 79): a name that is not valid
+                            // UTF-8 cannot be placed as text. When the glob
+                            // could match it, the deletion is unproven; else
+                            // it is not an operand.
+                            let name = entry.file_name();
+                            match name.to_str() {
+                                Some(text) => {
+                                    names.insert(text.to_string());
+                                }
+                                None => {
+                                    if glob_match(part, &name.to_string_lossy()) {
+                                        return None;
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(_) if !Path::new(listed).is_dir() => {}
@@ -7029,14 +7046,16 @@ fn from_home(rest: &str) -> String {
 /// The real path of `path`'s longest existing prefix, with the rest
 /// appended; macOS's data-volume prefix is read as the path it serves.
 fn real_prefix(path: &Path) -> Option<String> {
-    let parts: Vec<String> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(p) => Some(p.to_string_lossy().into_owned()),
-            std::path::Component::ParentDir => Some("..".to_string()),
-            _ => None,
-        })
-        .collect();
+    // OS text rule (issue 79): a component that is not valid UTF-8 cannot be
+    // placed as text, so the path is unplaced (unproven), never a lossy lookalike.
+    let mut parts: Vec<String> = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(p) => parts.push(p.to_str()?.to_string()),
+            std::path::Component::ParentDir => parts.push("..".to_string()),
+            _ => {}
+        }
+    }
     let globbed = parts
         .iter()
         .position(|p| p.contains(['*', '?', '[']))
@@ -7047,7 +7066,7 @@ fn real_prefix(path: &Path) -> Option<String> {
             continue;
         }
         let real = std::fs::canonicalize(&prefix).ok()?;
-        let mut joined = real.to_string_lossy().into_owned();
+        let mut joined = real.to_str()?.to_string();
         for part in &parts[existing..] {
             if !joined.ends_with('/') {
                 joined.push('/');
@@ -8235,5 +8254,17 @@ mod tests {
                 verdict.reason
             );
         }
+    }
+
+    /// Issue 79: a path with a component that is not valid UTF-8 cannot be
+    /// placed as text, so the reader does not place it (the deletion stays
+    /// unproven) instead of reading a lossy lookalike.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_with_a_component_that_is_not_utf8_is_not_placed() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let odd = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9/x"));
+        assert!(super::real_prefix(odd).is_none());
+        assert!(super::real_prefix(std::path::Path::new("/tmp/cafe/x")).is_some());
     }
 }

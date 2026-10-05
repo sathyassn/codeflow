@@ -131,13 +131,10 @@ fn parsed(root: &Path) -> Vec<(String, Value)> {
             let text = std::fs::read_to_string(&path).ok()?;
             let value: Value = serde_json::from_str(&text).ok()?;
             let hooks = value.get("hooks")?.clone();
-            let shown = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .components()
-                .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
+            // Shown to a person (OS text rule, issue 79).
+            let shown = crate::git::display_key(&crate::portable_path::slashed(
+                path.strip_prefix(root).unwrap_or(&path),
+            ));
             Some((shown, hooks))
         })
         .collect()

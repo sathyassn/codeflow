@@ -70,9 +70,15 @@ fn should_skip_initial_stack_adr(
         {
             continue;
         }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("ADR-") && name.ends_with(".md") {
+        // ADR files are named by this tool in ASCII (OS text rule, issue 79).
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with("ADR-")
+            && std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|extension| extension == "md")
+        {
             return Ok(true);
         }
     }

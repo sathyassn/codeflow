@@ -187,9 +187,11 @@ impl Options {
         if let Some(f) = self.look_path {
             f(name)
         } else {
-            which::which(name)
-                .map(|p| p.to_string_lossy().to_string())
-                .map_err(|e| e.to_string())
+            which::which(name).map_err(|e| e.to_string()).and_then(|p| {
+                p.to_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "the program's path is not valid UTF-8".to_string())
+            })
         }
     }
 
@@ -597,7 +599,9 @@ fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
         .flatten()
         .flatten()
         .filter(|entry| entry.path().is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        // The shims are named by this tool in ASCII, so a name that is not
+        // valid UTF-8 is not one (OS text rule, issue 79).
+        .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
     names.sort();
     names
@@ -1954,10 +1958,10 @@ fn walk_json_files_inner(
         if path.is_dir() {
             walk_json_files_inner(root, &path, invalid)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
-            let rel = path.strip_prefix(root).map_or_else(
-                |_| path.to_string_lossy().to_string(),
-                |p| p.to_string_lossy().to_string(),
-            );
+            // Shown to a person (OS text rule, issue 79).
+            let rel = crate::git::display_key(&crate::portable_path::slashed(
+                path.strip_prefix(root).unwrap_or(&path),
+            ));
             match std::fs::read(&path) {
                 Ok(data) => {
                     if serde_json::from_slice::<serde_json::Value>(&data).is_err() {
@@ -2320,11 +2324,17 @@ fn check_delegate_roundtrip(opts: &Options) -> CheckResult {
         let _ = std::fs::remove_dir_all(&root);
         return fail(format!("cannot create round-trip prompt: {error}"));
     }
+    // OS text rule (issue 79): the paths are handed to a command as text, so
+    // a temporary folder that is not valid UTF-8 fails the check, not lossily.
+    let (Some(state), Some(prompt)) = (state.to_str(), prompt.to_str()) else {
+        let _ = std::fs::remove_dir_all(&root);
+        return fail("the temporary folder is not valid UTF-8".to_string());
+    };
     let context = DelegateDoctorContext {
         opts,
         binary: &codeflow_bin,
-        state: state.to_string_lossy().into_owned(),
-        prompt: prompt.to_string_lossy().into_owned(),
+        state: state.to_string(),
+        prompt: prompt.to_string(),
     };
     let result = context.run();
     let _ = std::fs::remove_dir_all(&root);
@@ -3183,8 +3193,9 @@ fn instruction_chains(
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .map(|entry| entry.file_name())
         .filter(|name| {
-            let name = name.to_string_lossy();
-            !name.starts_with('.') && !matches!(name.as_ref(), "target" | "node_modules")
+            // Bytes, not text (OS text rule, issue 79): only ASCII is tested.
+            let name = name.as_encoded_bytes();
+            !name.starts_with(b".") && !matches!(name, b"target" | b"node_modules")
         })
         .collect();
     children.sort();

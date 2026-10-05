@@ -378,16 +378,20 @@ pub fn pull_request_merge(repo_root: &Path, base: &str, head: &str) -> Result<Oi
     let error = |error: git2::Error| error.message().to_string();
     let mut index = repo.merge_commits(&ours, &theirs, None).map_err(error)?;
     if index.has_conflicts() {
-        let paths: BTreeSet<String> = index
+        let paths: BTreeSet<crate::git::GitName> = index
             .conflicts()
             .map_err(error)?
             .filter_map(Result::ok)
             .filter_map(|conflict| conflict.our.or(conflict.their))
-            .map(|entry| String::from_utf8_lossy(&entry.path).into_owned())
+            .map(|entry| crate::git::GitName::from_bytes(&entry.path))
             .collect();
         return Err(format!(
             "the merge this pull request would create conflicts in {}; bring the target into the branch first",
-            paths.into_iter().collect::<Vec<_>>().join(", ")
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     let tree = index.write_tree_to(&repo).map_err(error)?;
@@ -2127,7 +2131,7 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
         if replaces {
             return Ok(Some(format!(
                 "the replace ref {} (`git replace -d` removes it)",
-                String::from_utf8_lossy(name)
+                crate::git::GitName::from_bytes(name).display()
             )));
         }
     }

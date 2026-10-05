@@ -128,9 +128,13 @@ pub fn read_branch_name(
     }
     cmd.args(["check-ref-format", "--branch", name]);
     match cmd.output() {
-        Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout)
-            .trim_end_matches(['\n', '\r'])
-            .to_string()),
+        // OS text rule (issue 79): the name is judged against protected
+        // branch globs. One that is not valid UTF-8 reads as the sentinel
+        // every branch rule treats as protected, as the hook plane does.
+        Ok(out) if out.status.success() => Ok(std::str::from_utf8(&out.stdout).map_or_else(
+            |_| crate::hooks::policy::NON_UTF8_BRANCH.to_string(),
+            |text| text.trim_end_matches(['\n', '\r']).to_string(),
+        )),
         Ok(out) => Err(format!(
             "`git check-ref-format --branch` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
@@ -161,11 +165,13 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
     }
     cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
     match cmd.output() {
-        Ok(out) if out.status.success() => AliasAnswer::Expansion(
-            String::from_utf8_lossy(&out.stdout)
-                .trim_end_matches(['\n', '\r'])
-                .to_string(),
-        ),
+        // OS text rule (issue 79): the expansion is judged as command words,
+        // so one that is not valid UTF-8 is unreadable, which the guard
+        // treats as uncertainty and stops, never as a lossy spelling.
+        Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
+            Ok(text) => AliasAnswer::Expansion(text.trim_end_matches(['\n', '\r']).to_string()),
+            Err(_) => AliasAnswer::Unreadable("the alias is not valid UTF-8".to_string()),
+        },
         Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
         Ok(out) => AliasAnswer::Unreadable(format!(
             "`git config` failed: {}",

@@ -914,7 +914,10 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
         // OS text rule (issue 79): the name is only compared with a declared
         // target, which is valid text in a record, so a name that is not valid
         // UTF-8 can never be that target and is skipped.
-        let Ok(name) = reference.name() else { continue };
+        let reference_name = crate::git::name::reference_name(&reference);
+        let Ok(name) = reference_name.rule_text() else {
+            continue;
+        };
         if name.ends_with("/HEAD") {
             continue;
         }

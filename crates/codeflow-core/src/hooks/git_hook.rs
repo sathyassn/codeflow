@@ -181,10 +181,13 @@ fn scan_staged(
         if delta.status() == git2::Delta::Deleted {
             continue;
         }
-        let Some(path) = delta.new_file().path() else {
+        let Some(path) = delta.new_file().path_bytes() else {
             continue;
         };
-        let path_str = path.to_string_lossy();
+        // OS text rule (issue 79): `is_env_file` tests ASCII names on the final
+        // component only, and the escaped display form of a path ends the same
+        // way the bytes do, so it answers as the bytes would.
+        let path_str = crate::git::GitName::from_bytes(path).display().to_string();
         if scan::is_env_file(&path_str) {
             report.violations.push(Violation::new(
                 "git.secret_scan",
@@ -210,8 +213,8 @@ fn scan_staged(
                     hits.push(scan::SecretHit {
                         file: delta
                             .new_file()
-                            .path()
-                            .map(|p| p.to_string_lossy().to_string())
+                            .path_bytes()
+                            .map(|p| crate::git::GitName::from_bytes(p).display().to_string())
                             .unwrap_or_default(),
                         line: line.new_lineno().unwrap_or(0),
                         pattern,
@@ -604,7 +607,10 @@ pub fn commit_msg_with_files(
         report.violations.push(Violation::new(
             WATCHED_PATH_RULE,
             PolicyLevel::Warn,
-            format!("commit touches a declared contract surface ({path})"),
+            format!(
+                "commit touches a declared contract surface ({})",
+                crate::git::display_key(path)
+            ),
             crate::remedy::BREAKING_WATCH_PATH.remedy(),
         ));
     }

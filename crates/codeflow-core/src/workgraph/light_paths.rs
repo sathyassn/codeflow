@@ -244,7 +244,8 @@ pub fn next_adr_id(repo_root: &Path) -> String {
         .flatten()
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
+            // ADR files are named by this tool in ASCII (OS text rule, issue 79).
+            let name = entry.file_name().into_string().ok()?;
             name.strip_prefix("ADR-")?.get(..4)?.parse::<u32>().ok()
         })
         .max()

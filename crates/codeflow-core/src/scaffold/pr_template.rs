@@ -53,7 +53,9 @@ fn candidates(root: &Path) -> Vec<String> {
         let mut names: Vec<String> = entries
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .map(|e| e.file_name().to_string_lossy().to_string())
+            // A template is found by an ASCII name, so a name that is not
+            // valid UTF-8 is not one (OS text rule, issue 79).
+            .filter_map(|e| e.file_name().into_string().ok())
             .filter(|n| n.eq_ignore_ascii_case("pull_request_template.md"))
             .collect();
         names.sort();
@@ -67,7 +69,9 @@ fn candidates(root: &Path) -> Vec<String> {
     }
     if let Ok(entries) = std::fs::read_dir(root.join(".github")) {
         for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
             if !name.eq_ignore_ascii_case("pull_request_template")
                 || !entry.file_type().is_ok_and(|t| t.is_dir())
             {
@@ -77,7 +81,7 @@ fn candidates(root: &Path) -> Vec<String> {
                 .into_iter()
                 .flatten()
                 .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter_map(|e| e.file_name().into_string().ok())
                 .filter(|n| n.to_ascii_lowercase().ends_with(".md"))
                 .collect();
             files.sort();

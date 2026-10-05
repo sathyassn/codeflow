@@ -143,9 +143,11 @@ pub fn runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
             gitdir = repo_root.join(gitdir);
         }
         // Worktree gitdir: <common>/.git/worktrees/<name> → use <common>/.git
-        let components: Vec<String> = gitdir
+        // OS text rule (issue 79): the components stay exact, so a path that
+        // is not valid UTF-8 is not rewritten into another one.
+        let components: Vec<std::ffi::OsString> = gitdir
             .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .map(|c| c.as_os_str().to_os_string())
             .collect();
         if let Some(pos) = components.iter().rposition(|c| c == "worktrees") {
             let common: PathBuf = components[..pos].iter().collect();
@@ -180,7 +182,7 @@ fn jsonl_files_in(dir: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.is_file()
                 && p.file_name()
-                    .is_some_and(|n| crate::ledger::is_jsonl_file(&n.to_string_lossy()))
+                    .is_some_and(|n| n.to_str().is_some_and(crate::ledger::is_jsonl_file))
         })
         .collect();
     files.sort();
@@ -469,7 +471,8 @@ fn index_file(conn: &Connection, repo_key: &str, src: &SourceFile) -> Result<(),
     } else {
         let stem = Path::new(&src.display)
             .file_stem()
-            .map_or_else(|| src.display.clone(), |s| s.to_string_lossy().into_owned());
+            .and_then(std::ffi::OsStr::to_str)
+            .map_or_else(|| src.display.clone(), str::to_string);
         let title = markdown_title(&content, &stem);
         insert.execute((repo_key, src.kind, &src.rel, &title, &content))?;
     }

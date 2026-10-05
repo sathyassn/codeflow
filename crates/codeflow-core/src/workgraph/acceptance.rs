@@ -137,7 +137,10 @@ pub enum Landing<'a> {
     Commit(Oid),
     /// The working tree over `head`; `changed` lists staged, unstaged and
     /// untracked paths, the record's own included.
-    Worktree { head: Oid, changed: &'a [String] },
+    Worktree {
+        head: Oid,
+        changed: &'a [crate::git::GitName],
+    },
 }
 
 impl Landing<'_> {
@@ -275,10 +278,9 @@ pub fn bind_completion(
 /// declared target) are not a match.
 fn head_is_declared_target(repo: &Repository, task: &RecordView) -> bool {
     repo.head().ok().is_some_and(|head| {
-        matches!(
-            (head.shorthand().ok(), task.integration_target.as_deref()),
-            (Some(here), Some(declared)) if here == declared
-        )
+        task.integration_target.as_deref().is_some_and(|declared| {
+            crate::git::name::reference_shorthand(&head).bytes() == declared.as_bytes()
+        })
     })
 }
 
@@ -617,7 +619,7 @@ fn previous_completion(
 /// # Errors
 ///
 /// Returns the git error when the working tree's state cannot be read.
-pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
+pub fn worktree_changes(repo: &Repository) -> Result<Vec<crate::git::GitName>, git2::Error> {
     let mut options = git2::StatusOptions::new();
     options
         .include_untracked(true)
@@ -626,7 +628,7 @@ pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
     Ok(repo
         .statuses(Some(&mut options))?
         .iter()
-        .map(|entry| String::from_utf8_lossy(entry.path_bytes()).replace('\\', "/"))
+        .map(|entry| crate::git::GitName::from_bytes(entry.path_bytes()))
         .collect())
 }
 
@@ -685,10 +687,10 @@ fn reviewed_span_problem(
     stacking: Stacking<'_>,
 ) -> Option<String> {
     if let Landing::Worktree { changed, .. } = landing {
-        let outside: Vec<&str> = changed
+        let outside: Vec<String> = changed
             .iter()
-            .map(String::as_str)
-            .filter(|path| *path != task.path)
+            .filter(|path| path.bytes() != task.path.as_bytes())
+            .map(|path| path.display().to_string())
             .collect();
         if !outside.is_empty() {
             return Some(format!(
@@ -909,8 +911,13 @@ fn task_landing(
             Some(head),
             changed
                 .iter()
-                .find(|path| **path != task.path && !is_planning_path(path))
-                .cloned(),
+                .find(|path| {
+                    path.bytes() != task.path.as_bytes()
+                        && path
+                            .rule_text()
+                            .map_or(true, |text| !is_planning_path(text))
+                })
+                .map(|path| path.display().to_string()),
         ),
         Landing::Commit(at) => {
             let Ok(commit) = repo.find_commit(at) else {
@@ -1020,12 +1027,10 @@ fn later_change(
     let Ok(diff) = repo.diff_tree_to_tree(Some(&before), Some(&after), None) else {
         return Some("the diff cannot be read".to_string());
     };
-    let other: Vec<String> = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|changed| changed.to_string_lossy().replace('\\', "/"))
-        .filter(|changed| changed.as_str() != path)
+    let other: Vec<String> = crate::git::diff_paths(&diff)
+        .iter()
+        .filter(|changed| changed.bytes() != path.as_bytes())
+        .map(|changed| changed.display().to_string())
         .collect();
     if let Some(changed) = other.first() {
         return Some(format!("{changed} changed"));
@@ -1488,10 +1493,10 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
                 "origin/HEAD names a default branch whose name is not valid UTF-8".to_string(),
             );
         }
-        Ok(head) => head.symbolic_target().ok().flatten().and_then(|target| {
+        Ok(head) => crate::git::name::symbolic_target(&head).and_then(|target| {
             target
-                .strip_prefix("refs/remotes/origin/")
-                .map(str::to_string)
+                .strip_prefix(b"refs/remotes/origin/")
+                .and_then(|name| name.rule_text().ok().map(str::to_string))
         }),
         Err(_) => None,
     };
@@ -1569,7 +1574,11 @@ fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Vec<(String, 
     }
     if let Some(epics) = subtree(records, "epics") {
         for epic in &epics {
-            let Ok(name) = epic.name() else { continue };
+            // A record folder is valid text; a name that is not UTF-8 is not one.
+            let epic_name = crate::git::GitName::from_bytes(epic.name_bytes());
+            let Ok(name) = epic_name.rule_text() else {
+                continue;
+            };
             let Some(epic_tree) = subtree(&epics, name) else {
                 continue;
             };
@@ -1581,7 +1590,10 @@ fn task_entries_in(repo: &Repository, records: &git2::Tree<'_>) -> Vec<(String, 
     let mut entries = Vec::new();
     for (directory, tasks) in directories {
         for entry in &tasks {
-            let Ok(name) = entry.name() else { continue };
+            let entry_name = crate::git::GitName::from_bytes(entry.name_bytes());
+            let Ok(name) = entry_name.rule_text() else {
+                continue;
+            };
             let path = format!("{directory}/{name}");
             if super::work_start::record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
                 entries.push((path, entry.id()));
@@ -1781,12 +1793,15 @@ pub(super) fn non_planning_change(
     let after = tree(commit)?;
     let before = parent.map(tree).transpose()?;
     let diff = repo.diff_tree_to_tree(before.as_ref(), Some(&after), None)?;
-    let outside = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .find(|path| !is_planning_path(path));
+    // OS text rule (issue 79): a planning path is valid text, so a path that
+    // is not valid UTF-8 is outside the planning records.
+    let outside = crate::git::diff_paths(&diff)
+        .into_iter()
+        .find(|path| {
+            path.rule_text()
+                .map_or(true, |text| !is_planning_path(text))
+        })
+        .map(|path| path.display().to_string());
     Ok(outside)
 }
 
@@ -2628,5 +2643,48 @@ mod tests {
         std::fs::write(origin.join("HEAD"), b"ref: refs/remotes/origin/caf\xe9\n").unwrap();
         let error = default_target_name(&repo).err().unwrap();
         assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Issue 79: a path that is not valid UTF-8 under `project-management/`
+    /// is no planning record, and was read as one through its lossy spelling.
+    #[test]
+    fn a_changed_path_that_is_not_utf8_is_outside_the_planning_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b"project-management/tasks/TSK-001.md", b"x")],
+        );
+        let second =
+            crate::git::add_commit(&repo, &[(b"project-management/tasks/TSK-002\xff.md", b"y")]);
+        let outside = non_planning_change(&repo, Some(first), second).unwrap();
+        assert_eq!(
+            outside.as_deref(),
+            Some(r"project-management/tasks/TSK-002\xff.md")
+        );
+        let third =
+            crate::git::add_commit(&repo, &[(b"project-management/tasks/TSK-003.md", b"z")]);
+        assert_eq!(
+            non_planning_change(&repo, Some(second), third).unwrap(),
+            None
+        );
+    }
+
+    /// A completion's changes outside its record are named by their exact
+    /// path: `caf` plus an invalid byte and `caf` plus U+FFFD are two paths.
+    #[test]
+    fn two_changed_paths_that_differ_in_an_invalid_byte_stay_two() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let second = crate::git::add_commit(
+            &repo,
+            &[(b"caf\xe9", b"1"), ("caf\u{fffd}".as_bytes(), b"2")],
+        );
+        let tree = |oid| repo.find_commit(oid).unwrap().tree().unwrap();
+        let diff = repo
+            .diff_tree_to_tree(Some(&tree(first)), Some(&tree(second)), None)
+            .unwrap();
+        let paths = crate::git::diff_paths(&diff);
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
     }
 }

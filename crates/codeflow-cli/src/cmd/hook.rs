@@ -535,7 +535,10 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let base = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // OS text rule (issue 79): the base branch is judged against protected
+    // globs, so a name that is not valid UTF-8 is not read as a lossy
+    // lookalike (gh prints JSON text, which is always UTF-8).
+    let base = String::from_utf8(out.stdout).ok()?.trim().to_string();
     (!base.is_empty()).then_some(base)
 }
 

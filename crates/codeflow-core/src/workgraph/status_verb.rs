@@ -469,11 +469,12 @@ pub fn replace_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Resu
     if Sha256::digest(&current).as_slice() != expected {
         return Err(VerbError::Concurrent(path.to_path_buf()));
     }
-    let name = path.file_name().map_or_else(
-        || "record".into(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    // The temporary name keeps the file name's exact bytes (OS text rule,
+    // issue 79), so it sits beside the record and never names another file.
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name().unwrap_or_else(|| "record".as_ref()));
+    name.push(format!(".{}.tmp", std::process::id()));
+    let temporary = path.with_file_name(name);
     let written = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

@@ -107,7 +107,7 @@ fn secret_path(word: &str, home: Option<&Path>) -> bool {
     actions::table().sandbox_read_denies.iter().any(|pattern| {
         let expanded = pattern
             .strip_prefix("~/")
-            .and_then(|p| home.map(|home| home.join(p).to_string_lossy().into_owned()));
+            .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
         let matches = [Some(pattern.as_str()), expanded.as_deref()]
             .into_iter()
             .flatten()
@@ -128,7 +128,7 @@ fn secret_path(word: &str, home: Option<&Path>) -> bool {
                 };
                 let expanded = pattern
                     .strip_prefix("~/")
-                    .and_then(|p| home.map(|home| home.join(p).to_string_lossy().into_owned()));
+                    .and_then(|p| home.and_then(|home| home.join(p).to_str().map(str::to_string)));
                 matches_extended_glob(word, pattern)
                     || expanded.is_some_and(|p| matches_extended_glob(word, &p))
             })

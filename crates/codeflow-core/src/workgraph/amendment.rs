@@ -118,7 +118,7 @@ pub fn findings(
                 .map(|path| if *path == "AGENTS.md" {
                     "AGENTS.md (outside its managed block)".to_string()
                 } else {
-                    (*path).to_string()
+                    crate::git::display_key(path)
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -401,7 +401,7 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
             let Some(name) = file.path_bytes() else {
                 continue;
             };
-            let shown = String::from_utf8_lossy(name).into_owned();
+            let shown = crate::git::GitName::from_bytes(name).display().to_string();
             if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
                 let message = format!(
                     "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
@@ -433,15 +433,14 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
         return unreadable();
     };
     let mut found = None;
-    let walked = tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-        match special(entry.filemode()) {
-            Some(kind) => {
-                let name = String::from_utf8_lossy(entry.name_bytes());
-                found = Some((kind, format!("{dir}{name}")));
-                git2::TreeWalkResult::Abort
-            }
-            None => git2::TreeWalkResult::Ok,
+    let walked = crate::git::walk_tree(repo, &tree, &mut |path, entry| match special(
+        entry.filemode(),
+    ) {
+        Some(kind) => {
+            found = Some((kind, path.display().to_string()));
+            crate::git::Walk::Stop
         }
+        None => crate::git::Walk::Continue,
     });
     match (found, walked) {
         (Some(found), _) => Some(found),
@@ -524,13 +523,15 @@ pub(super) fn landing_problem(
     };
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = repo.diff_tree_to_tree(Some(&tree(parent)?), Some(&tree(landing)?), None)?;
-    let paths: Vec<String> = diff
-        .deltas()
-        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
-        .flatten()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
+    let names: BTreeSet<crate::git::GitName> = crate::git::diff_paths(&diff).into_iter().collect();
+    // A planning amendment carries plainly named files only, and a name that
+    // is not valid UTF-8 is not one (see `entry_problem`).
+    if let Some(odd) = names.iter().find(|name| name.rule_text().is_err()) {
+        return Ok(Some(odd.display().to_string()));
+    }
+    let paths: Vec<String> = names
+        .iter()
+        .filter_map(|name| name.rule_text().ok().map(str::to_string))
         .collect();
     if range_problem(repo, parent, landing, &paths).is_none() {
         return Ok(None);
@@ -550,4 +551,39 @@ pub(super) fn landing_problem(
         .find(|path| single(path).is_some())
         .or_else(|| paths.first())
         .cloned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue 79: a landing that changes a path that is not valid UTF-8 is not
+    /// a plain planning amendment, and the path is named by its exact bytes.
+    #[test]
+    fn a_landing_that_changes_a_path_that_is_not_utf8_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b"project-management/tasks/TSK-001.md", b"x")],
+        );
+        let second =
+            crate::git::add_commit(&repo, &[(b"project-management/tasks/TSK-002\xff.md", b"y")]);
+        let problem = landing_problem(&repo, Some(first), second).unwrap();
+        assert_eq!(
+            problem.as_deref(),
+            Some(r"project-management/tasks/TSK-002\xff.md")
+        );
+    }
+
+    /// A symbolic link below a directory whose name is not valid UTF-8 is
+    /// found: git2's own walk stopped at the directory.
+    #[test]
+    fn a_symlink_below_a_directory_that_is_not_utf8_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        let second =
+            crate::git::add_commit_modes(&repo, &[(b"dir\xff/link", b"target", 0o120_000)]);
+        let found = first_special(&repo, second).expect("the link is found");
+        assert_eq!(found.1, r"dir\xff/link");
+    }
 }

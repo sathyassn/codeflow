@@ -426,7 +426,7 @@ pub fn validate_portal_with(
             return report;
         }
     };
-    let requested = normalized_portal_root.to_string_lossy().replace('\\', "/");
+    let requested = crate::portable_path::slashed(&normalized_portal_root);
     if !paths_equal(&adoption.root, &requested) {
         report.issues.push(format!(
             "requested portal root {requested:?} does not match adopted root {:?}",
@@ -537,10 +537,8 @@ pub fn validate_portal_with(
         return report;
     }
     let repository = repo_root.to_path_buf();
-    let config_source_path = normalized_portal_root
-        .join("portal.config.json")
-        .to_string_lossy()
-        .replace('\\', "/");
+    let config_source_path =
+        crate::portable_path::slashed(&normalized_portal_root.join("portal.config.json"));
     let authoritative_config = match git_batch_blobs(
         &repository,
         &evidence.repository.commit,
@@ -1039,10 +1037,8 @@ pub fn validate_portal_with(
     }
     // The inline scripts the runtime emits, as committed at the evidenced
     // commit, with the pre-paint script for the configured theme.
-    let runtime_scripts_path = normalized_portal_root
-        .join(figures::RUNTIME_SCRIPTS_FILE)
-        .to_string_lossy()
-        .replace('\\', "/");
+    let runtime_scripts_path =
+        crate::portable_path::slashed(&normalized_portal_root.join(figures::RUNTIME_SCRIPTS_FILE));
     let runtime_scripts = git_batch_blobs(
         &repository,
         &evidence.repository.commit,
@@ -3359,7 +3355,9 @@ fn safe_join(
     label: &str,
     report: &mut PortalValidationReport,
 ) -> Option<PathBuf> {
-    let text = relative.to_string_lossy();
+    // OS text rule (issue 79): a portal path is portable text, so one that is
+    // not valid UTF-8 is not safe, and is shown with an escape.
+    let text = relative.to_str().unwrap_or("\\");
     if relative.as_os_str().is_empty()
         || relative.is_absolute()
         || text.contains('\\')
@@ -3374,7 +3372,7 @@ fn safe_join(
     {
         report.issues.push(format!(
             "{label} is not a safe relative path: {}",
-            relative.display()
+            crate::git::GitName::from_os_str(relative.as_os_str()).display()
         ));
         return None;
     }
@@ -3742,7 +3740,11 @@ fn read_bounded_text(path: &Path, maximum_bytes: u64) -> std::io::Result<String>
 }
 
 fn normalized_relative(path: &Path) -> Option<PathBuf> {
-    if path.as_os_str().is_empty() || path.is_absolute() || path.to_string_lossy().contains('\\') {
+    // A portal path is portable text; one that is not valid UTF-8 is not.
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path.to_str().is_none_or(|text| text.contains('\\'))
+    {
         return None;
     }
     let mut normalized = PathBuf::new();
@@ -3753,7 +3755,7 @@ fn normalized_relative(path: &Path) -> Option<PathBuf> {
             _ => return None,
         }
     }
-    let text = normalized.to_string_lossy().replace('\\', "/");
+    let text = crate::portable_path::slashed(&normalized);
     (!normalized.as_os_str().is_empty() && text.split('/').all(portable_segment))
         .then_some(normalized)
 }
@@ -6109,6 +6111,25 @@ mod tests {
         assert_eq!(
             portable_relative_path(Path::new("docs/cafe.md")).as_deref(),
             Some("docs/cafe.md")
+        );
+    }
+
+    /// Issue 79: a portal path is portable text, so one that is not valid
+    /// UTF-8 is not safe, and is never read as its lossy spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_portal_path_that_is_not_utf8_is_not_a_relative_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let odd = Path::new(std::ffi::OsStr::from_bytes(b"docs/caf\xe9"));
+        assert!(normalized_relative(odd).is_none());
+        assert!(normalized_relative(Path::new("docs/cafe")).is_some());
+        let mut report = PortalValidationReport::default();
+        let root = Path::new("/nonexistent-root");
+        assert!(safe_join(root, odd, "the portal", &mut report).is_none());
+        assert!(
+            report.issues[0].contains(r"docs/caf\xe9"),
+            "{:?}",
+            report.issues
         );
     }
 }

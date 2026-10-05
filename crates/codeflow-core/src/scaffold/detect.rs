@@ -146,7 +146,8 @@ pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
         .ok()?
         .flatten()
         .filter(|entry| entry.path().is_file() && is_executable(&entry.path()))
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        // Hook names are ASCII; a name that is not valid UTF-8 is none of them.
+        .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| GIT_HOOK_NAMES.contains(&name.as_str()))
         .collect();
     if names.is_empty() {

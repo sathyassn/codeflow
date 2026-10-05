@@ -274,7 +274,7 @@ fn update_context(
         .file_name()
         .map_or_else(
             || "project".to_string(),
-            |n| n.to_string_lossy().to_string(),
+            |n| crate::git::GitName::from_os_str(n).display().to_string(),
         );
     build_context(
         &project,

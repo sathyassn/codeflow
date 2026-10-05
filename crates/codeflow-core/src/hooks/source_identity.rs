@@ -45,14 +45,27 @@ pub fn input_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
 pub fn input_digest(root: &Path) -> std::io::Result<String> {
     let mut digest = Sha256::new();
     for path in input_files(root)? {
-        let relative = path
+        // OS text rule (issue 79): the path is hashed as its exact bytes, so
+        // two paths that differ in an invalid byte give different digests.
+        // (This file is also compiled by the CLI build script on its own, so
+        // it uses nothing else from the crate.)
+        let relative: Vec<u8> = path
             .strip_prefix(root)
             .map_err(std::io::Error::other)?
-            .to_string_lossy()
-            .replace('\\', "/");
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .map(|byte| {
+                if cfg!(windows) && *byte == b'\\' {
+                    b'/'
+                } else {
+                    *byte
+                }
+            })
+            .collect();
         let bytes = std::fs::read(&path)?;
         digest.update((relative.len() as u64).to_be_bytes());
-        digest.update(relative.as_bytes());
+        digest.update(&relative);
         digest.update((bytes.len() as u64).to_be_bytes());
         digest.update(bytes);
     }

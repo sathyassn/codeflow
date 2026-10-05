@@ -4110,11 +4110,12 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
         .parent()
         .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
     ensure_safe_dir(parent)?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        Uuid::new_v4()
-    ));
+    // The temporary name keeps the file name's exact bytes (OS text rule,
+    // issue 79), so it sits beside the file and never names another one.
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(path.file_name().unwrap_or_default());
+    temporary_name.push(format!(".{}.tmp", Uuid::new_v4()));
+    let temporary = parent.join(temporary_name);
     let result = (|| {
         let mut file = open_private_create_new(&temporary)?;
         serde_json::to_writer_pretty(&mut file, value)?;

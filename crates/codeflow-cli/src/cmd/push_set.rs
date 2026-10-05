@@ -1476,6 +1476,11 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
 
 /// Git for the hook's own queries: never fetches a missing object, even in
 /// a partial clone.
+///
+/// OS text rule (issue 79): the answer is read as text (shas, config values,
+/// URLs, ref and submodule names the callers compare), so an answer that is
+/// not valid UTF-8 reads as no answer, which every caller treats as unknown,
+/// never as a lossy spelling.
 fn git(root: &Path, args: &[&str]) -> Option<String> {
     codeflow_core::git::command()
         .arg("-C")
@@ -1485,7 +1490,7 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
 }
 
 /// [`git`] with `input` on stdin.
@@ -1501,7 +1506,8 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
     .ok()?;
     out.status
         .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+        .then(|| String::from_utf8(out.stdout).ok())
+        .flatten()
 }
 
 fn rev_parse(root: &Path, rev: &str) -> Option<String> {
@@ -1530,4 +1536,35 @@ fn tracked_tree_clean(root: &Path) -> bool {
 
 fn short(sha: &str) -> &str {
     sha.get(..9).unwrap_or(sha)
+}
+
+#[cfg(test)]
+mod name_text_tests {
+    use super::*;
+
+    /// Issue 79: a git answer that is not valid UTF-8 reads as no answer,
+    /// which every caller treats as unknown, never as a lossy spelling.
+    #[test]
+    fn a_git_answer_that_is_not_utf8_is_no_answer() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let init = codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[demo]\n\tword = caf\xe9\n\tplain = ok\n")
+            .unwrap();
+        assert_eq!(
+            git(dir.path(), &["config", "--get", "demo.plain"]).as_deref(),
+            Some("ok\n")
+        );
+        assert_eq!(git(dir.path(), &["config", "--get", "demo.word"]), None);
+    }
 }
