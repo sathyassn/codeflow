@@ -5093,3 +5093,77 @@ fn a_cancelled_change_to_a_name_in_other_bytes_still_refuses() {
         );
     }
 }
+
+/// TSK-234 review round 11: with two merge bases, the net change can name
+/// a path no commit in the walked range touched. Commits X and Y add a
+/// product file and a note; the target and the task each merge X and Y
+/// cleanly. The net change still lists the product file, so `src/q.rs`
+/// needs a journey, and a name that is not UTF-8 refuses instead of being
+/// decoded out of the product pattern `src/*[!\u{fffd}].rs`.
+#[cfg(unix)]
+#[test]
+fn a_net_change_name_in_other_bytes_refuses_with_two_merge_bases() {
+    use std::process::Command;
+    for (path, needle) in [
+        (b"src/q.rs".as_slice(), "work.journey"),
+        (b"src/\xff.rs".as_slice(), "not UTF-8"),
+    ] {
+        let dir = repo(&[("TSK-001", NO_JOURNEY)], "");
+        let root = dir.path();
+        write(
+            root,
+            ".codeflow/policy.json",
+            "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/*[!\u{fffd}].rs\"]}}",
+        );
+        let start = commit(root, "docs: name the product paths");
+        let commit_tree = |tree: &str, parents: &[&str], message: &str, date: &str| {
+            let mut args = vec!["commit-tree", tree];
+            for parent in parents {
+                args.extend(["-p", parent]);
+            }
+            args.extend(["-m", message]);
+            let out = Command::new("git")
+                .args(&args)
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        let raw = stage_raw(root, path, b"pub fn raw() {}\n");
+        let x_tree = git_out(root, &["write-tree"]);
+        let x = commit_tree(&x_tree, &[&start], "feat: raw code", "2000000010 +0000");
+        let out = Command::new("git")
+            .args(["update-index", "--force-remove"])
+            .arg(&raw)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        write(root, "docs/note.md", "the other side\n");
+        git(root, &["add", "docs/note.md"]);
+        let y_tree = git_out(root, &["write-tree"]);
+        let y = commit_tree(&y_tree, &[&start], "docs: a note", "2000000020 +0000");
+        stage_raw(root, path, b"pub fn raw() {}\n");
+        let both = git_out(root, &["write-tree"]);
+        let target = commit_tree(&both, &[&x, &y], "chore: target merge", "2000000030 +0000");
+        let own = commit_tree(&both, &[&y, &x], "chore: own merge", "2000000040 +0000");
+        git(root, &["update-ref", "refs/heads/main", &target]);
+        git(root, &["update-ref", &format!("refs/heads/{BRANCH}"), &own]);
+        git(
+            root,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{BRANCH}")],
+        );
+        assert_blocks(
+            &ci(root, BRANCH, "TSK-001"),
+            "a net change name with two merge bases",
+            &[needle],
+        );
+    }
+}

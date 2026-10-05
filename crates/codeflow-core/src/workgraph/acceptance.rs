@@ -1836,7 +1836,11 @@ pub(super) fn non_planning_change(
 /// A name the range changes, as text path rules match: the name itself,
 /// which must be UTF-8. Any rendering of other bytes can change whether a
 /// pattern matches it, so such a name refuses (TSK-234 review round 10).
-fn rule_name(raw: &[u8]) -> Result<String, String> {
+///
+/// # Errors
+///
+/// Returns the refusal for a name that is not UTF-8.
+pub fn rule_name(raw: &[u8]) -> Result<String, String> {
     std::str::from_utf8(raw).map(str::to_string).map_err(|_| {
         format!(
             "the range changes `{}`, whose name is not UTF-8, so path rules cannot match it; rename it",

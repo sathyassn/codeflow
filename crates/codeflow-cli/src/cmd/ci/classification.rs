@@ -406,7 +406,11 @@ fn journey_paths(
     hide.extend(stack);
     let mut files = codeflow_core::workgraph::acceptance::owned_paths(root, head, &hide)?;
     if stack.is_none() {
-        for (_, path) in range_changes(root, base, head)? {
+        // The net change can name a path the walked range never touched
+        // (a merge base shared by two lines), so its names are checked raw
+        // too, as `owned_paths` checks its own.
+        for (_, raw) in parse_name_status_raw(&name_status(root, base, head)?)? {
+            let path = codeflow_core::workgraph::acceptance::rule_name(&raw)?;
             if !files.contains(&path) {
                 files.push(path);
             }
@@ -815,6 +819,12 @@ pub(super) fn range_changes(
     base: &str,
     head: &str,
 ) -> Result<Vec<(String, String)>, String> {
+    parse_name_status(&name_status(root, base, head)?)
+}
+
+/// The raw `git diff -z --name-status` output for the net change from
+/// `base` to `head`.
+fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -833,10 +843,18 @@ pub(super) fn range_changes(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_name_status(&out.stdout)
+    Ok(out.stdout)
 }
 
 fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
+    Ok(parse_name_status_raw(stdout)?
+        .into_iter()
+        .map(|(status, path)| (status, String::from_utf8_lossy(&path).to_string()))
+        .collect())
+}
+
+/// Each change as its status and the raw name git printed.
+fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut fields = stdout
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -846,7 +864,7 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
         let path = fields
             .next()
             .ok_or_else(|| format!("git diff output ends after status {status}"))?;
-        changes.push((status, String::from_utf8_lossy(path).to_string()));
+        changes.push((status, path.to_vec()));
     }
     Ok(changes)
 }
