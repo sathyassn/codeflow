@@ -267,7 +267,9 @@ erratum below, never an edit of the section.
   `block`, `warn` or `off` fails the job instead of warning. `codeflow ci`
   names a change that lowers or removes either key. osv-scanner now runs
   with `--no-ignore`, so a `.gitignore` the change edits cannot hide a
-  lockfile. The project setup hook cannot skip the test gate by accident: a
+  lockfile, and its verdict comes from its exit status, so a file path in
+  its output cannot turn an advisory into a pass and a lockfile it cannot
+  read is a scan error. The project setup hook cannot skip the test gate by accident: a
   `codeflow` function, a `PATH` entry, `set +e` or an `exit` in it leaves
   the gate running or fails the run. The hook still runs with the gate's
   authority, like the CI file a change can edit, so `codeflow ci` names a

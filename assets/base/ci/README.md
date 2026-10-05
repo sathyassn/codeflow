@@ -247,8 +247,10 @@ its reviewer sees it. The job fails when the policy file is missing at that
 commit, when either key is missing or unreadable, or when a value is not
 `block`, `warn` or `off`. The `osv-scanner.toml` suppressions come from the
 trusted commit too, and osv-scanner runs with `--no-ignore`, so a
-`.gitignore` the change edits cannot hide a lockfile. A new suppression
-takes effect once its own pull request lands. In `block` mode, an advisory
+`.gitignore` the change edits cannot hide a lockfile. The verdict comes
+from osv-scanner's exit status, so a file path in its output cannot turn
+an advisory into a pass, and a lockfile it cannot read is a scan error. A
+new suppression takes effect once its own pull request lands. In `block` mode, an advisory
 that already blocks every pull request is cleared by fixing the dependency,
 or by an administrator merging the suppression's pull request over the
 failing check, which branch protection records; review alone does not turn

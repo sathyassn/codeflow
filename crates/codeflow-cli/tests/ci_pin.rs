@@ -888,12 +888,14 @@ fn audit_repo(
 /// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
 /// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
 /// beside the lockfile and, as osv-scanner does, skips a lockfile the
-/// `.gitignore` names unless it runs with `--no-ignore`.
-fn run_audit_step(repo: &Path, trusted: &str) -> Output {
+/// `.gitignore` names unless it runs with `--no-ignore`. `fake` sets
+/// `OSV_FAKE` (`empty` or `broken`, both exit 128) and `OSV_FAKE_SOURCE`
+/// (the path the advisory names) for the fake scanner.
+fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
     let script = run_blocks(CI, "dependency audit").remove(0);
     let bin = repo.parent().unwrap().join("audit-bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho 'GHSA-test advisory'; exit 1\n";
+    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
         scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
@@ -918,6 +920,7 @@ fn run_audit_step(repo: &Path, trusted: &str) -> Output {
         )
         .env("TRUSTED_SHA", trusted)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .envs(fake.iter().copied())
         .output()
         .unwrap()
 }
@@ -934,12 +937,12 @@ fn levels(security_review: &str, dep_audit: &str) -> String {
 /// base whose policy cannot be read fails the job instead of warning.
 #[test]
 fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit() {
-    let run = |base: Option<&str>, head: &str, suppression: &str| {
+    let run_with = |base: Option<&str>, head: &str, suppression: &str, fake: &[(&str, &str)]| {
         let dir = tempfile::tempdir().unwrap();
         let work = dir.path().join("repo");
         std::fs::create_dir_all(&work).unwrap();
         let trusted = audit_repo(&work, base, head, suppression);
-        let out = run_audit_step(&work, &trusted);
+        let out = run_audit_step(&work, &trusted, fake);
         let text = format!(
             "{}{}",
             String::from_utf8_lossy(&out.stdout),
@@ -947,6 +950,8 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
         );
         (out.status.success(), text)
     };
+    let run =
+        |base: Option<&str>, head: &str, suppression: &str| run_with(base, head, suppression, &[]);
     let block = levels("warn", "block");
 
     // The head turns both keys off: the base's block still fails the job.
@@ -996,6 +1001,29 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
         text.contains("suppressions from trusted commit: osv-scanner.toml"),
         "{text}"
     );
+
+    // The verdict follows the scanner's exit status: an advisory whose path
+    // reads like the no-lockfile message still fails under block, a scan
+    // that finds no package sources passes, and one that could not read a
+    // lockfile is a scan error.
+    let (ok, text) = run_with(
+        Some(&block),
+        &block,
+        "",
+        &[("OSV_FAKE_SOURCE", "no lockfiles/Cargo.lock")],
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("GHSA-test advisory in no lockfiles/"),
+        "{text}"
+    );
+    assert!(!text.contains("nothing to audit"), "{text}");
+    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "empty")]);
+    assert!(ok, "{text}");
+    assert!(text.contains("nothing to audit"), "{text}");
+    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "broken")]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("exit 128"), "{text}");
 }
 
 /// sathyassn/codeflow#48: the full-history secret scan runs on a schedule

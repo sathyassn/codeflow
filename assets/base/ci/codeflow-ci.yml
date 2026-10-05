@@ -902,9 +902,13 @@ jobs:
           set -e
           printf '%s\n' "$out"
 
+          # The verdict comes from osv-scanner's exit status (0 no advisories,
+          # 1 advisories, 127 error, 128 no package sources), never from its
+          # output, which repeats file paths the change chooses. A 128 that
+          # also reports a file it could not extract is a scan error.
           if [ "$rc" -eq 0 ]; then
             echo "No known advisories."
-          elif printf '%s' "$out" | grep -qiE 'no package sources found|no packages found|no lockfiles'; then
+          elif [ "$rc" -eq 128 ] && ! printf '%s' "$out" | grep -qi 'error during extraction'; then
             echo "No scannable manifests found — nothing to audit."
           elif [ "$level" = "block" ]; then
             echo "::error::dependency advisories found (or scan error, exit ${rc}) and policy git.security_review=${sr} / git.dep_audit=${da} (either is block) — failing. Triage, or record a justified suppression in an osv-scanner.toml beside the lockfile."
