@@ -322,8 +322,11 @@ level:
   `--no-rcs` and carries no `+` option, `-o` or other long option;
 - a link of a file of the class, made under any name and by any program
   (`ln`, `cp -s`, `cp -l`, BSD `install -l`), since a later write through
-  the link reaches the file, and a copy that keeps a source link to one
-  (`cp -P`, `cp -a`, `rsync -l`);
+  the link reaches the file, and a copy or move that keeps a source link
+  to one, or whose text reaches one from where the copy lands (`cp -P`,
+  `cp -a`, `rsync -l`, `mv`); long options are read with the prefixes GNU
+  accepts (`cp --sym`), and `-L`, `-H` and `-P` in the order cp reads
+  them;
 - `rg` without `--no-config`, since its configuration file can name a
   `--pre` program, and `sed` unless its options change no file and its
   script is only addressed print commands (GNU sed's `e` and `w` run a
