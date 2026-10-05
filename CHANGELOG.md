@@ -254,35 +254,29 @@ erratum below, never an edit of the section.
 
 <!-- codeflow:release-impact patch -->
 - **Text from the operating system or git that is not valid UTF-8 no
-  longer stops `present`, `codeflow test` or the discard guard.** A project
-  with a file name that is not UTF-8 could not run `codeflow test`, because
-  the gate's snapshot of tracked files refused the name. `present show` and
+  longer stops `present`, `codeflow test` or the discard guard, and no
+  guard reads such a name as a different one.** A project with a file name
+  that is not UTF-8 could not run `codeflow test`, because the gate's
+  snapshot of tracked files refused the name. `present show` and
   `present close` refused to read the identity of the recorded browser
-  process on macOS, Linux and Windows when its command line held such
-  bytes; the identity is now judged from the exact bytes of its two
-  identity arguments on Linux and macOS, and on Windows from text decoded
-  lossily, refused when the profile path holds U+FFFD too. The discard
-  guard failed with uncertainty on a dirty or untracked name or a ref name
-  that is not UTF-8, and `git remote update` was refused for any such
-  value in the effective git configuration; both now read the text
-  lossily, and a name that cannot be read still refuses where skipping it
-  would pass an unchecked change (a remote name, a worktree name, the
-  policy source). A config key that is not UTF-8 is never read as another
-  remote's key. A checked-out branch whose name is not UTF-8 stays
-  protected instead of reading as detached, and a branch, task branch or
-  linked worktree with such a name is listed instead of dropped or read as
-  another branch: each invalid byte is spelled `\xNN`, so two different
-  names never read as one. `codeflow integrate` refuses to start from such
-  a branch, since it could not restore it, and refreshes another worktree
-  at its exact path, read from git's files so a newline in a folder name
-  cannot name another checkout. The release check keys changed paths by
-  their exact bytes, the remote query keeps advertised branch names apart
-  and refuses an SSH command that is not UTF-8 instead of running a
-  lookalike, and an upstream remote that cannot be read is an error, not
-  a skipped refresh. The gate's snapshot hashes a symlink target and the
-  repository's own folder by their exact bytes. One rule for this text is
-  in `docs/architecture.md`, and each site that stays strict says why next
-  to the code.
+  process when its command line held such bytes, the discard guard failed
+  with uncertainty on such a name, and `git remote update` was refused for
+  such a value in the effective git configuration. Names from git and the
+  operating system are now read as exact bytes through one layer
+  (`GitName`): a name is compared, keyed and matched as bytes, shown with
+  an escape for each invalid byte, and refused where a rule needs text, so
+  a lossy spelling can no longer equal a different name. A checked-out
+  branch with such a name stays protected instead of reading as detached,
+  a task branch, linked worktree, remote or tracking ref with such a name
+  is kept or refused instead of dropped, and tree walks (task records,
+  landed policy, the release check) go through a directory with such a
+  name instead of stopping. `codeflow integrate` refuses to start from a
+  branch it could not restore. The release check, the CI path inventory,
+  the changed-path parsers, the conflict-marker check and the claim
+  refresh read paths and remote names exactly. One rule is in
+  `docs/architecture.md`, a source scan fails on a new lossy decode that
+  is not listed with its reason, and each site that stays strict says why
+  next to the code.
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any
