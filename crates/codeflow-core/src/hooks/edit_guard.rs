@@ -245,7 +245,7 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
     };
     let mut seen = BTreeSet::new();
     let mut violations = Vec::new();
-    let startup = crate::security::startup::StartupEnv::with_home(ctx.home);
+    let startup = crate::security::startup::StartupEnv::with_home_at(ctx.home, cwd);
     for path in &request.paths {
         let absolute = absolute_target(path, cwd, ctx.home);
         // Shell startup files refuse whatever the integrity level (TSK-242).

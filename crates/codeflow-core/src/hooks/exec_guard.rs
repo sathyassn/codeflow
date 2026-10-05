@@ -78,7 +78,7 @@ pub fn evaluate_at(
         violations.extend(crate::security::startup::evaluate(
             command,
             cwd,
-            &crate::security::startup::StartupEnv::from_process(),
+            &crate::security::startup::StartupEnv::from_process_at(cwd),
         ));
     }
     if levels.privilege_escalation.is_active() {

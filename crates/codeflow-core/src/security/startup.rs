@@ -68,6 +68,13 @@ impl StartupEnv {
     /// round three).
     #[must_use]
     pub fn from_process() -> Self {
+        Self::from_process_at(&std::env::current_dir().unwrap_or_default())
+    }
+
+    /// The same, with a relative `XDG_CONFIG_HOME` read from `base`, the
+    /// directory the command runs in (security review F-5).
+    #[must_use]
+    pub fn from_process_at(base: &Path) -> Self {
         let var = |name: &str| {
             std::env::var_os(name)
                 .filter(|v| !v.is_empty())
@@ -77,22 +84,25 @@ impl StartupEnv {
         Self {
             home: absolute("HOME").or_else(|| absolute("USERPROFILE")),
             zdotdir: var("ZDOTDIR"),
-            xdg_config: var("XDG_CONFIG_HOME").map(|x| {
-                if x.is_absolute() {
-                    x
-                } else {
-                    std::env::current_dir().map_or(x.clone(), |cwd| cwd.join(&x))
-                }
-            }),
+            xdg_config: var("XDG_CONFIG_HOME").map(
+                |x| {
+                    if x.is_absolute() {
+                        x
+                    } else {
+                        base.join(&x)
+                    }
+                },
+            ),
         }
     }
 
-    /// The same locations with another home.
+    /// The same locations with another home, a relative `XDG_CONFIG_HOME`
+    /// read from `base`.
     #[must_use]
-    pub fn with_home(home: &Path) -> Self {
+    pub fn with_home_at(home: &Path, base: &Path) -> Self {
         Self {
             home: Some(home.to_path_buf()),
-            ..Self::from_process()
+            ..Self::from_process_at(base)
         }
     }
 }
@@ -1495,7 +1505,19 @@ struct CopyCall {
     dest: String,
     sources: Vec<String>,
     recursive: bool,
-    hard_link: bool,
+    /// What the call makes of each source.
+    mode: LinkMode,
+    /// A source that is itself a symbolic link is copied as that link.
+    keeps_links: bool,
+}
+
+/// Whether a copier copies its sources or links to them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LinkMode {
+    Copy,
+    Hard,
+    /// A symbolic link, whose text is read from where it lands.
+    Symbolic,
 }
 
 /// The operands of a copy, link or move, or `None` for another program or
@@ -1507,7 +1529,10 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
     let mut operands = Vec::new();
     let mut target = None;
     let mut recursive = name == "ditto";
-    let mut hard_link = name == "ln";
+    let mut hard = false;
+    let mut symbolic = false;
+    let mut follow = false;
+    let mut preserve = name == "ditto";
     let mut iter = args.iter();
     let mut options = true;
     while let Some(arg) = iter.next() {
@@ -1533,7 +1558,7 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
                     let value = a[1 + at + letter.len_utf8()..].to_string();
                     let takes = letter == 'S'
                         || letter == 't'
-                        || (name == "install" && matches!(letter, 'm' | 'o' | 'g'));
+                        || (name == "install" && matches!(letter, 'm' | 'o' | 'g' | 'l'));
                     if !takes {
                         continue;
                     }
@@ -1546,17 +1571,36 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
                     if letter == 't' {
                         target = value;
                     }
+                    // BSD `install -l` links instead of copying; any
+                    // link flag is judged as a symbolic link.
+                    if letter == 'l' {
+                        symbolic = true;
+                    }
                     break;
                 }
             }
             let short = !a.starts_with("--");
-            recursive |= matches!(a, "--recursive" | "--archive" | "--mirror")
-                || (short && letters.contains(['r', 'R', 'a']));
-            if name == "ln" && (a == "--symbolic" || (short && letters.contains('s'))) {
-                hard_link = false;
-            }
-            if name == "cp" && (a == "--link" || (short && letters.contains('l'))) {
-                hard_link = true;
+            let has = |set: &[char]| short && letters.contains(set);
+            recursive |=
+                matches!(a, "--recursive" | "--archive" | "--mirror") || has(&['r', 'R', 'a']);
+            // Link modes by program (review round four: `cp -s`,
+            // `install -l s`).
+            match name {
+                "ln" => symbolic |= a == "--symbolic" || has(&['s']),
+                "cp" => {
+                    hard |= a == "--link" || has(&['l']);
+                    symbolic |= a == "--symbolic-link" || has(&['s']);
+                    preserve |= matches!(a, "--no-dereference" | "--archive")
+                        || a.starts_with("--preserve=links")
+                        || has(&['P', 'd', 'a', 'r', 'R']);
+                    follow |= a == "--dereference" || has(&['L', 'H']);
+                }
+                "rsync" => {
+                    preserve |= matches!(a, "--links" | "--archive") || has(&['l', 'a']);
+                    follow |= matches!(a, "--copy-links" | "--copy-unsafe-links") || has(&['L']);
+                }
+                "install" => symbolic |= a.starts_with("--link"),
+                _ => {}
             }
             continue;
         }
@@ -1571,7 +1615,14 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
         dest,
         sources: operands,
         recursive,
-        hard_link,
+        mode: if symbolic {
+            LinkMode::Symbolic
+        } else if hard || name == "ln" {
+            LinkMode::Hard
+        } else {
+            LinkMode::Copy
+        },
+        keeps_links: preserve && !follow,
     })
 }
 
@@ -1595,6 +1646,47 @@ fn link_text_dirs(dest: &str, sources: usize, line: &Line<'_>, dirs: &[PathBuf])
     out
 }
 
+/// A source a copy, link or move gives a second name: a startup file moved
+/// or linked by any program, or a link to one copied as the link (review
+/// round four: `cp -s`, `install -l s`, `cp -P`).
+fn source_link_violation(
+    name: &str,
+    call: &CopyCall,
+    source: &str,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+    link_dirs: &[PathBuf],
+) -> Option<Violation> {
+    let is_link =
+        |p: &PathBuf| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    if call.keeps_links
+        && dirs
+            .iter()
+            .filter_map(|d| line.expand(source, d))
+            .any(|p| is_link(&p))
+    {
+        if let Judged::Class(label) = line.judge(source, dirs) {
+            return Some(finding(format!(
+                "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
+            )));
+        }
+    }
+    if name != "mv" && call.mode == LinkMode::Copy {
+        return None;
+    }
+    match line.judge(source, link_dirs) {
+        Judged::Class(label) => Some(finding(format!(
+            "`{name}` moves or links the shell startup file `{label}`, so a later write through the new name edits it"
+        ))),
+        Judged::Unresolved(w) => line.unresolved_near_class(&w, link_dirs).map(|why| {
+            finding(format!(
+                "`{name}` moves or links `{w}`, which the guard cannot resolve, and {why}"
+            ))
+        }),
+        Judged::Placement(_) | Judged::Ordinary => None,
+    }
+}
+
 /// A copy, link or move judged as a whole: the destination and each
 /// source's landing place are judged; a moved or hard-linked startup file
 /// refuses (a later write through the new name edits it); a tree copied or
@@ -1611,9 +1703,9 @@ fn copy_judgment(
         dest,
         sources,
         recursive,
-        hard_link,
+        ..
     } = call;
-    let (dest, recursive, hard_link) = (dest.as_str(), *recursive, *hard_link);
+    let (dest, recursive) = (dest.as_str(), *recursive);
     let moves = name == "mv";
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
@@ -1631,28 +1723,14 @@ fn copy_judgment(
         }
         Judged::Placement(_) | Judged::Ordinary => {}
     }
-    let link_dirs = if name == "ln" && !hard_link {
+    let link_dirs = if call.mode == LinkMode::Symbolic {
         link_text_dirs(dest, sources.len(), line, dirs)
     } else {
         dirs.to_vec()
     };
     for source in sources {
-        if moves || hard_link || name == "ln" {
-            match line.judge(source, &link_dirs) {
-                Judged::Class(label) => {
-                    return Some(finding(format!(
-                        "`{name}` moves or links the shell startup file `{label}`, so a later write through the new name edits it"
-                    )))
-                }
-                Judged::Unresolved(w) => {
-                    if let Some(why) = line.unresolved_near_class(&w, &link_dirs) {
-                        return Some(finding(format!(
-                            "`{name}` moves or links `{w}`, which the guard cannot resolve, and {why}"
-                        )));
-                    }
-                }
-                Judged::Placement(_) | Judged::Ordinary => {}
-            }
+        if let Some(v) = source_link_violation(name, call, source, line, dirs, &link_dirs) {
+            return Some(v);
         }
         let existing_dir = dirs
             .iter()
