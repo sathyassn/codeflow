@@ -52,7 +52,10 @@ pub fn durable_root(root: &Path, home: &Path) -> PathBuf {
         .and_then(|r| r.commondir().canonicalize().ok())
         .unwrap_or_else(|| root.to_path_buf());
     home.join(super::gate_guard::HOME_EVIDENCE_DIR)
-        .join(&digest(identity.to_string_lossy().as_bytes())[..16])
+        // OS text rule (issue 79): the repository's own folder names its
+        // evidence, so it is hashed by its exact bytes. A lossy spelling would
+        // let two folders share one evidence directory and one green base.
+        .join(&digest(identity.as_os_str().as_encoded_bytes())[..16])
 }
 
 pub fn revision(root: &Path) -> Option<String> {
@@ -94,17 +97,11 @@ fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
     (key, path)
 }
 
-/// The bytes of a link target, exact where the platform allows it.
+/// The bytes of a link target, exact on every platform (`as_encoded_bytes`
+/// keeps a Windows target's unpaired surrogates, which a lossy spelling would
+/// merge).
 fn link_target_bytes(target: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-        target.as_os_str().as_bytes().to_vec()
-    }
-    #[cfg(not(unix))]
-    {
-        target.to_string_lossy().into_owned().into_bytes()
-    }
+    target.as_os_str().as_encoded_bytes().to_vec()
 }
 
 /// Snapshot the bytes and modes of every tracked path, including dirty edits.
@@ -588,6 +585,23 @@ mod tests {
     /// Review finding: two link targets that differ only in invalid bytes must
     /// hash differently, so a producer that retargets a tracked link is a
     /// generation change. Runs where the file system accepts such a target.
+    /// Review finding on issue 79: the evidence directory was named by a lossy
+    /// spelling of the folder, so `caf` plus an invalid byte and `caf` plus a
+    /// real U+FFFD shared one directory and one green base.
+    #[cfg(unix)]
+    #[test]
+    fn two_folders_that_differ_only_in_an_invalid_byte_keep_their_own_evidence() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let home = Path::new("/home/example");
+        let invalid = Path::new(std::ffi::OsStr::from_bytes(b"/no/such/caf\xff"));
+        let replacement = Path::new("/no/such/caf\u{fffd}");
+        assert_ne!(
+            durable_root(invalid, home),
+            durable_root(replacement, home),
+            "one evidence directory for two folders"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_link_target_that_is_not_utf8_is_hashed_exactly() {
