@@ -204,7 +204,10 @@ fn tier_refusal(root: &Path) -> Option<String> {
     }
     match durable_work_tracking_enabled(root) {
         Ok(true) => None,
-        Ok(false) => Some(refusal("full")),
+        Ok(false) => Some(
+            "durable work tracking is off for this project, so no feedback id can be issued; nothing was written"
+                .to_string(),
+        ),
         Err(error) => Some(codeflow_core::workgraph::work_start::tracking_state_message(error)),
     }
 }
@@ -215,8 +218,8 @@ fn template(root: &Path) -> Option<String> {
     let embedded = EmbeddedAssets
         .read("base/pm/feedback.md.tmpl")
         .and_then(|bytes| String::from_utf8(bytes).ok())?;
-    match std::fs::read_to_string(root.join(feedback::PROJECT_TEMPLATE)) {
-        Ok(own) => match feedback::check_template(&own) {
+    match feedback::read_project_template(root) {
+        Ok(Some(own)) => match feedback::check_template(&own) {
             Ok(()) => Some(own),
             Err(reason) => {
                 eprintln!(
@@ -226,7 +229,11 @@ fn template(root: &Path) -> Option<String> {
                 Some(embedded)
             }
         },
-        Err(_) => Some(embedded),
+        Ok(None) => Some(embedded),
+        Err(reason) => {
+            eprintln!("warning: {reason}; the shipped template is used");
+            Some(embedded)
+        }
     }
 }
 
@@ -269,28 +276,17 @@ fn new(root: &Path, topic: &str, source: &str, summary: &str) -> i32 {
     let Some(mut issuer) = Issuer::new(root, Kind::Fb, summary, request) else {
         return 1;
     };
-    let result = if issuer.registry {
-        feedback::create_with(
-            root,
-            &template,
-            topic,
-            source,
-            summary,
-            &topics,
-            &mut |target| issuer.allocate(target),
-        )
-    } else {
-        let next = feedback::next_visible_id(root);
-        feedback::create_with(
-            root,
-            &template,
-            topic,
-            source,
-            summary,
-            &topics,
-            &mut |_| Ok((next.clone(), codeflow_core::ids::new_uid())),
-        )
-    };
+    // `tier_refusal` passed, so durable tracking is on and the registry
+    // issues the id.
+    let result = feedback::create_with(
+        root,
+        &template,
+        topic,
+        source,
+        summary,
+        &topics,
+        &mut |target| issuer.allocate(target),
+    );
     let Some(record) = issuer.settle(result) else {
         return 1;
     };
@@ -320,6 +316,23 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
         }
         if !loaded.unreadable.is_empty() {
             eprintln!("error: fix the unreadable items before writing the index");
+            return 1;
+        }
+        // The index is rendered from item frontmatter, so it is written
+        // only from items that pass the lint: a canonical id that matches
+        // its file and a listed topic, nothing that could inject Markdown.
+        let errors = feedback::lint(root).errors;
+        if !errors.is_empty() {
+            for finding in &errors {
+                eprintln!(
+                    "error: {}:{}: {}",
+                    finding.path, finding.line, finding.message
+                );
+            }
+            eprintln!(
+                "error: {} not written; fix the items `codeflow validate --docs` names first",
+                feedback::INDEX_PATH
+            );
             return 1;
         }
         let index = feedback::render_index(&loaded.items, &topics);

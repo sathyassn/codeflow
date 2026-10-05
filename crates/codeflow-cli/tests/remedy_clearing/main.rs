@@ -93,6 +93,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
     ("DOCS_ADRS_UNCHECKED", Runs),
+    ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
@@ -1395,6 +1396,41 @@ fn clears_docs_adrs_unchecked() {
         |printed| {
             let step = printed_command(printed, "DOCS_ADRS_UNCHECKED", None);
             run_printed(&root, &step, &[], &["a decision"]);
+        },
+    );
+}
+
+#[test]
+fn clears_feedback_index_stale() {
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let quote = |id: &str| {
+        let rel = format!("project-management/feedback/{id}.md");
+        let text = read(&root, &rel).replacen("## Verbatim\n", "## Verbatim\n\n> words\n", 1);
+        write(&root, &rel, &text);
+    };
+    codeflow(
+        &root,
+        &[
+            "feedback", "new", "--topic", "process", "--source", "chat", "first",
+        ],
+    );
+    quote("FB-001");
+    codeflow(&root, &["feedback", "list", "--write"]);
+    codeflow(
+        &root,
+        &[
+            "feedback", "new", "--topic", "process", "--source", "chat", "second",
+        ],
+    );
+    quote("FB-002");
+    prove(
+        "FEEDBACK_INDEX_STALE",
+        "INDEX.md does not match the feedback items",
+        || validate(&root),
+        |printed| {
+            let step = printed_command(printed, "FEEDBACK_INDEX_STALE", None);
+            run_printed(&root, &step, &[], &[]);
         },
     );
 }

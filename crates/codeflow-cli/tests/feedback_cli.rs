@@ -636,6 +636,7 @@ fn feedback_files_are_never_written_or_resolved_through_a_symbolic_link() {
     let (dir, root, _bare) = project("full");
     std::fs::write(root.join("AGENTS.md"), "rules\n").unwrap();
     new_item(&root, "process", "first");
+    quote(&root, "FB-001", "first words");
     let index = root.join("project-management/feedback/INDEX.md");
     symlink("../../AGENTS.md", &index).unwrap();
     let out = refused(
@@ -682,4 +683,65 @@ fn feedback_files_are_never_written_or_resolved_through_a_symbolic_link() {
     );
     assert!(out.contains("symbolic link"), "{out}");
     assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+/// The index is written only from items that pass the lint: an id that is
+/// not its file's name, or a topic that is not listed (here one that spans
+/// lines), refuses `--write` and leaves no index behind.
+#[test]
+fn the_index_is_written_only_from_items_that_pass_the_lint() {
+    let (_dir, root, _bare) = project("full");
+    new_item(&root, "process", "first");
+    quote(&root, "FB-001", "first words");
+    let path = item_path(&root, "FB-001");
+    let clean = std::fs::read_to_string(&path).unwrap();
+    let index = root.join("project-management/feedback/INDEX.md");
+    for injected in [
+        clean.replacen("id: FB-001", "id: \"x](https://example.invalid)\"", 1),
+        clean.replacen(
+            "topic: \"process\"",
+            "topic: \"process\\n\\n## injected\"",
+            1,
+        ),
+    ] {
+        std::fs::write(&path, &injected).unwrap();
+        let out = refused(
+            &codeflow(&root, &["feedback", "list", "--write"]),
+            "list --write over a failing item",
+        );
+        assert!(out.contains("INDEX.md not written"), "{out}");
+        assert!(!index.exists(), "no index after a refusal");
+    }
+    std::fs::write(&path, &clean).unwrap();
+    ok(
+        &codeflow(&root, &["feedback", "list", "--write"]),
+        "list --write",
+    );
+    assert!(std::fs::read_to_string(&index)
+        .unwrap()
+        .contains("| [FB-001](FB-001.md) |"));
+}
+
+/// The project template is read through no symbolic link and only up to
+/// its size limit; otherwise the shipped template is used, with a warning.
+#[cfg(unix)]
+#[test]
+fn an_unsafe_project_template_falls_back_to_the_shipped_one() {
+    use std::os::unix::fs::symlink;
+    let (_dir, root, _bare) = project("full");
+    let templates = root.join("project-management/templates");
+    std::fs::create_dir_all(&templates).unwrap();
+    let template = templates.join("feedback.md");
+    symlink("/dev/zero", &template).unwrap();
+    let out = new_item(&root, "process", "linked template");
+    assert!(
+        out.contains("symbolic link") && out.contains("the shipped template is used"),
+        "{out}"
+    );
+    std::fs::remove_file(&template).unwrap();
+    std::fs::write(&template, "x".repeat(70 * 1024)).unwrap();
+    let out = new_item(&root, "process", "large template");
+    assert!(out.contains("over the 65536-byte limit"), "{out}");
+    let record = std::fs::read_to_string(item_path(&root, "FB-002")).unwrap();
+    assert!(record.contains("## Verbatim"), "{record}");
 }

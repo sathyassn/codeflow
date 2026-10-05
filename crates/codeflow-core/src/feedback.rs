@@ -574,19 +574,36 @@ pub fn create_with(
     Ok(NewRecord { id, uid, path })
 }
 
-/// The next id from the visible checkout, for a project without the
-/// registry.
-#[must_use]
-pub fn next_visible_id(root: &Path) -> String {
-    let next = item_files(root)
-        .iter()
-        .filter_map(|path| path.file_stem()?.to_str().and_then(RegId::parse))
-        .filter(|id| id.kind() == Kind::Fb)
-        .filter_map(|id| id.seq())
-        .max()
-        .unwrap_or(0)
-        + 1;
-    RegId::canonical(Kind::Fb, next).to_string()
+/// The largest project template [`read_project_template`] reads.
+pub const TEMPLATE_MAX_BYTES: u64 = 64 * 1024;
+
+/// The project's own feedback template ([`PROJECT_TEMPLATE`]): `Ok(None)`
+/// when it is absent; refused when a part of its path is a symbolic link,
+/// when it is not a regular file, or when it is larger than
+/// [`TEMPLATE_MAX_BYTES`].
+///
+/// # Errors
+///
+/// Why the file is not read.
+pub fn read_project_template(root: &Path) -> Result<Option<String>, String> {
+    let path = contained_path(root, PROJECT_TEMPLATE)?;
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{PROJECT_TEMPLATE}: {error}")),
+    };
+    if !meta.is_file() {
+        return Err(format!("{PROJECT_TEMPLATE} is not a regular file"));
+    }
+    if meta.len() > TEMPLATE_MAX_BYTES {
+        return Err(format!(
+            "{PROJECT_TEMPLATE} is {} bytes, over the {TEMPLATE_MAX_BYTES}-byte limit",
+            meta.len()
+        ));
+    }
+    std::fs::read_to_string(&path)
+        .map(Some)
+        .map_err(|error| format!("{PROJECT_TEMPLATE}: {error}"))
 }
 
 /// What `feedback status` was asked to do.
@@ -1097,6 +1114,11 @@ pub fn render_index(items: &[Item], topics: &[String]) -> String {
             "\n## {topic}\n\n| Id | Date | Status | Summary | Placed in | Closure |\n|---|---|---|---|---|---|\n"
         );
         for item in members {
+            // The link names the file, never a frontmatter value.
+            let id = Path::new(&item.path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
                 "| [{id}]({id}.md) | {} | {} | {} | {} | {} |",
@@ -1105,7 +1127,6 @@ pub fn render_index(items: &[Item], topics: &[String]) -> String {
                 cell(&item.title),
                 cell(&item.placed_in.join(", ")),
                 cell(&item.closure),
-                id = item.id,
             );
         }
     }

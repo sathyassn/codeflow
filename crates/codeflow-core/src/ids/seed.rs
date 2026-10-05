@@ -607,16 +607,106 @@ fn renumber_files(
             )));
         }
     }
-    let mut rewritten = Vec::with_capacity(planned.len());
-    for change in planned {
-        std::fs::write(&change.path, &change.after)?;
-        rewritten.push(change.path);
+    // Each file is replaced whole (a temporary file renamed over it), so a
+    // failure never leaves a half-written file, and the refusal names what
+    // landed and what did not, so recovery is exact.
+    let new_rel = record.rel.replacen(
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+        new_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default(),
+        1,
+    );
+    let mut steps: Vec<(String, &Path, &str)> = planned
+        .iter()
+        .map(|change| {
+            (
+                change.rel.clone(),
+                change.path.as_path(),
+                change.after.as_str(),
+            )
+        })
+        .collect();
+    steps.push((new_rel.clone(), new_path.as_path(), record.after.as_str()));
+    let mut landed: Vec<String> = Vec::with_capacity(steps.len());
+    for (index, (step_rel, target, text)) in steps.iter().enumerate() {
+        if let Err(error) = replace_whole(target, text) {
+            let pending: Vec<&str> = steps[index..].iter().map(|(r, _, _)| r.as_str()).collect();
+            return Err(partial_renumbering(
+                from,
+                to,
+                rel,
+                &format!("writing {step_rel}: {error}"),
+                &landed,
+                &pending,
+            ));
+        }
+        landed.push(step_rel.clone());
     }
-    std::fs::write(&new_path, &record.after)?;
     if new_path != path {
-        std::fs::remove_file(path)?;
+        if let Err(error) = std::fs::remove_file(path) {
+            return Err(partial_renumbering(
+                from,
+                to,
+                rel,
+                &format!("removing {rel}: {error}"),
+                &landed,
+                &[rel],
+            ));
+        }
     }
+    let rewritten = planned.into_iter().map(|change| change.path).collect();
     Ok((new_path, rewritten))
+}
+
+/// Replace `path` with `text` whole: a new temporary file beside it, then a
+/// rename over it, so a reader or a failure never sees half a file.
+fn replace_whole(path: &Path, text: &str) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("record");
+    let temporary = path.with_file_name(format!(".{name}.{}.renumber.tmp", std::process::id()));
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// The refusal for a renumbering that stopped part way: what failed, which
+/// files hold the new id already and which do not.
+fn partial_renumbering(
+    from: &RegId,
+    to: &RegId,
+    rel: &str,
+    failure: &str,
+    landed: &[String],
+    pending: &[&str],
+) -> IdsError {
+    let list = |items: Vec<&str>| {
+        if items.is_empty() {
+            "none".to_string()
+        } else {
+            items.join(", ")
+        }
+    };
+    IdsError::Invalid(format!(
+        "renumbering {from} to {to} stopped {failure}; already written with {to}: {}; not written: {}; the record was {rel}. Finish by hand or restore the written files from git",
+        list(landed.iter().map(String::as_str).collect()),
+        list(pending.to_vec()),
+    ))
 }
 
 fn add_former_id(text: &str, from: &RegId) -> String {
@@ -843,7 +933,7 @@ mod tests {
         assert!(!records.contains_key(&RegId::parse("TSK-009").unwrap()));
 
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = crate::git::command()
                 .args(args)
                 .current_dir(root)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -922,14 +1012,14 @@ mod tests {
         let link = "---\nid: TSK-001\n---\nsee FB-001\n";
         std::fs::write(feedback.join("FB-001.md"), record).unwrap();
         std::fs::write(tasks.join("TSK-001.md"), link).unwrap();
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(["init", "-q"])
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output()
             .unwrap();
         assert!(out.status.success());
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(["add", "-A"])
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -960,6 +1050,82 @@ mod tests {
             link
         );
         assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "outside\n");
+    }
+
+    /// A write that fails part way leaves every file whole and names which
+    /// files hold the new id and which do not.
+    #[cfg(unix)]
+    #[test]
+    fn a_renumbering_that_stops_part_way_says_what_landed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let feedback = root.join("project-management/feedback");
+        let tasks = root.join("project-management/tasks");
+        let docs = root.join("docs");
+        for folder in [&feedback, &tasks, &docs] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let record = "---\nid: FB-001\nuid: u\n---\n\n# FB-001: x\n";
+        let task = "---\nid: TSK-001\n---\nsee FB-001\n";
+        std::fs::write(feedback.join("FB-001.md"), record).unwrap();
+        std::fs::write(tasks.join("TSK-001.md"), task).unwrap();
+        std::fs::write(docs.join("guide.md"), "see FB-001\n").unwrap();
+        for args in [&["init", "-q"][..], &["add", "-A"][..]] {
+            let out = crate::git::command()
+                .args(args)
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        }
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if std::fs::write(tasks.join("probe"), "x").is_ok() {
+            // Permissions do not bind here (a privileged user): nothing to show.
+            std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let error = renumber_files(
+            root,
+            &Git::new(root),
+            &feedback.join("FB-001.md"),
+            "project-management/feedback/FB-001.md",
+            &RegId::parse("FB-001").unwrap(),
+            &RegId::parse("FB-002").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            error.contains("already written with FB-002: docs/guide.md;"),
+            "{error}"
+        );
+        assert!(
+            error.contains(
+                "not written: project-management/tasks/TSK-001.md, project-management/feedback/FB-002.md;"
+            ),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(docs.join("guide.md")).unwrap(),
+            "see FB-002\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tasks.join("TSK-001.md")).unwrap(),
+            task
+        );
+        assert_eq!(
+            std::fs::read_to_string(feedback.join("FB-001.md")).unwrap(),
+            record
+        );
+        assert!(!feedback.join("FB-002.md").exists());
+        let leftovers: Vec<_> = std::fs::read_dir(&tasks)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 
     #[test]
