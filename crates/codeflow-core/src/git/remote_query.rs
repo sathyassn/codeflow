@@ -195,19 +195,23 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
             None => Ok(None),
         }
     };
-    let mut configured = from_env("GIT_SSH_COMMAND")?.filter(|command| !command.trim().is_empty());
+    // Only an empty value reads as unset: whitespace, a carriage return
+    // included, is part of the command git would run.
+    let mut configured = from_env("GIT_SSH_COMMAND")?.filter(|command| !command.is_empty());
     if configured.is_none() {
         let out = crate::git::command()
             .arg("-C")
             .arg(root)
-            .args(["config", "--get", "core.sshCommand"])
+            .args(["config", "--null", "--get", "core.sshCommand"])
             .output()
             .ok()
             .filter(|out| out.status.success());
         if let Some(out) = out {
-            let value = std::str::from_utf8(&out.stdout)
+            // `--null` frames the value with a NUL, so a value that ends in a
+            // carriage return keeps it.
+            let framed = out.stdout.strip_suffix(&[0]).unwrap_or(&out.stdout);
+            let value = std::str::from_utf8(framed)
                 .map_err(|_| not_utf8("core.sshCommand"))?
-                .trim()
                 .to_string();
             configured = Some(value).filter(|command| !command.is_empty());
         }
@@ -280,5 +284,22 @@ mod tests {
             matches!(error, Failure::Other(ref why) if why.contains("not valid UTF-8")),
             "refused"
         );
+    }
+
+    /// Round twelve on issue 79: a configured command that ends in a carriage
+    /// return runs that program, not its sibling without it.
+    #[test]
+    fn a_configured_ssh_command_keeps_a_trailing_carriage_return() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand = \"ssh-wrapper\r\"\n");
+        std::fs::write(&config, text).unwrap();
+        let command = batch_ssh_command(dir.path()).ok().unwrap();
+        assert_eq!(command, "ssh-wrapper\r -o BatchMode=yes");
     }
 }

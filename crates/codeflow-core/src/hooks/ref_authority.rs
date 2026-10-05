@@ -368,7 +368,8 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     // OS text rule (issue 79): a URL that is not valid UTF-8 differs from the
     // configured text, so it is a refusal.
     if !effective.status.success()
-        || std::str::from_utf8(&effective.stdout).map_or(true, |text| text.trim() != raw)
+        || std::str::from_utf8(&effective.stdout)
+            .map_or(true, |text| text.strip_suffix('\n').unwrap_or(text) != raw)
     {
         return Some(format!("effective URL for {name} differs from remote.{name}.url; the operator inspects git config --show-origin --get-regexp 'url.*|include.*'"));
     }
@@ -417,6 +418,18 @@ mod tests {
             .unwrap();
         config.write_all(extra).unwrap();
         dir
+    }
+
+    /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage
+    /// return gives a different URL, so the fetch is refused and not matched
+    /// to the configured one by trimming.
+    #[test]
+    fn a_rewritten_url_that_differs_by_a_carriage_return_is_refused() {
+        let dir = repository_with_config(
+            b"[url \"https://example.invalid/origin.git\r\"]\n\tinsteadOf = https://example.invalid/origin.git\n",
+        );
+        let why = fetch(dir.path(), &[], false).expect("a refusal");
+        assert!(why.contains("effective URL for origin differs"), "{why}");
     }
 
     /// Issue 79: one value in the user's git configuration that is not valid
