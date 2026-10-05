@@ -769,7 +769,7 @@ erratum below, never an edit of the section.
   through globs, extglob, zsh qualifiers and namerefs without its name
   appearing as a word, so every 3.0.0 rule is unchanged and still decides
   every line. Relief comes from a separate strict tokenizer that certifies a
-  line only when all of it is `echo`, `printf` (a `%s` and `%%` format),
+  line only when all of it is `echo`, `printf` (a format of `%s`, `%%`, `\n`, `\t` and `\\` only),
   `grep` and `cat` with plain, single-quoted or double-quoted words (no
   backslash, `$` or backtick), the separators `;`, `&&`, `||`, `|` and
   newline, redirects to a document file (`.md`, `.markdown`, `.txt`, `.rst`,

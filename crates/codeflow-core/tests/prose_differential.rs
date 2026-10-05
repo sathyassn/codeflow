@@ -70,6 +70,7 @@ const PREFIX_WORDS: &[&str] = &[
     "doas-x",
 ];
 const SEEDS: &[&str] = &[
+    "printf 'a\\tb\\n%s %s%%\\\\' marker x",
     "echo hi",
     "echo 'a; sudo id && su - | doas sh'",
     "echo \"(...; supersedes A3's ...)\"",

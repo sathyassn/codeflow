@@ -190,13 +190,21 @@ impl Sandbox {
     }
 
     /// Run `line` in `shell`; the stub calls it made.
-    fn run(&self, shell: &Shell, line: &str) -> Vec<Vec<String>> {
+    /// The stub calls the line made, and the value of the variable `marker` after
+    /// it (`unchanged` unless the line assigned it).
+    fn run(&self, shell: &Shell, line: &str) -> (Vec<Vec<String>>, String) {
         self.reset();
+        let _ = fs::remove_file(self.root.path().join("tmp").join("marker.out"));
         let script = self.root.path().join("script.sh");
         let tmp = self.root.path().join("tmp");
         fs::write(
             &script,
-            format!("{}TMPPREFIX={}/zsh\n{line}\n", shell.prelude, tmp.display()),
+            format!(
+                "{}TMPPREFIX={}/zsh\nmarker=unchanged\n{line}\nbuiltin printf '%s' \"$marker\" > {}/marker.out\n",
+                shell.prelude,
+                tmp.display(),
+                tmp.display()
+            ),
         )
         .unwrap();
         let path = format!("{}:/usr/bin:/bin", self.root.path().join("bin").display());
@@ -229,7 +237,7 @@ impl Sandbox {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
-        fs::read_dir(self.root.path().join("logs"))
+        let calls = fs::read_dir(self.root.path().join("logs"))
             .unwrap()
             .map(|entry| {
                 let record = fs::read(entry.unwrap().path()).unwrap();
@@ -238,7 +246,10 @@ impl Sandbox {
                     .map(|word| String::from_utf8_lossy(word).into_owned())
                     .collect::<Vec<_>>()
             })
-            .collect()
+            .collect();
+        let marker =
+            fs::read_to_string(tmp.join("marker.out")).unwrap_or_else(|_| "unchanged".into());
+        (calls, marker)
     }
 }
 
@@ -260,6 +271,7 @@ const SEEDS: &[&str] = &[
     "echo a\necho b",
     "cat a.md b.md > c.md",
     "echo a 2> err.log",
+    "printf 'a\\tb\\n%s %s%%\\\\' marker x",
 ];
 
 /// Characters inserted or substituted at every position: the shell's own
@@ -343,7 +355,13 @@ fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> 
             .map(|name| name.to_string_lossy().into_owned())
     }));
     for shell in shells {
-        let calls = sandbox.run(shell, line);
+        let (calls, marker) = sandbox.run(shell, line);
+        if marker != "unchanged" {
+            return Err(format!(
+                "{}: certified line changed a shell variable to {marker:?}: {line:?}",
+                shell.program
+            ));
+        }
         if !calls.is_empty() {
             return Err(format!(
                 "{}: certified line ran {calls:?}: {line:?}",

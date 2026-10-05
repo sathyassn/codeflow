@@ -102,7 +102,8 @@ launch. A line is exempt from those checks only when a separate strict
 tokenizer (`security/prose.rs`) certifies all of it:
 
 - every command is `echo`, `printf`, `grep` or `cat`, written bare and
-  case-exact; a `printf` format holds only `%s` and `%%`;
+  case-exact; a `printf` format holds only `%s`, `%%` and the escapes `\n`, `\t` and
+  `\\`;
 - every argument is a plain word, a single-quoted string, or a double-quoted
   string with no backslash, `$` or backtick (inside quotes any other text is
   data, so a launcher word there is fine; outside quotes `$`, a backtick, `#`,

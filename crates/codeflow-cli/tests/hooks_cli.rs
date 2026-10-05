@@ -2049,6 +2049,19 @@ fn exec_guard_keeps_the_3_0_0_floor_on_every_line_it_cannot_certify() {
             "printf '%n' 'a[$(true; sudo id)]'",
             "security.privilege_escalation",
         ),
+        // zsh decodes a numeric escape in the format before it reads conversions.
+        (
+            "printf '\\u0025n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\x25n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\045n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
         (
             "printf -v x '%s' 'a; sudo id'",
             "security.privilege_escalation",

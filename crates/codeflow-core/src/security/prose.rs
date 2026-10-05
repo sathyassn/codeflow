@@ -38,10 +38,11 @@
 //!
 //! `echo`, `grep` and `cat` execute nothing from their arguments. `printf`
 //! does when its format has a conversion other than `%s` or `%%` (`%n` and the
-//! numeric conversions assign and evaluate arithmetic in zsh) or when it is
-//! given an option (`-v` assigns a variable), so its format must be the first
-//! word, not start with `-`, and hold only `%s` and `%%`. `rg` is not on the
-//! list: a config file or `--pre` can make it run a program.
+//! numeric conversions assign and evaluate arithmetic in zsh), when an escape
+//! other than `\n`, `\t` and `\\` can spell one (zsh decodes `\u0025`), or when
+//! it is given an option (`-v` assigns a variable), so its format must be the
+//! first word, not start with `-`, and hold only `%s`, `%%` and those escapes.
+//! `rg` is not on the list: a config file or `--pre` can make it run a program.
 //!
 //! A certified line may write a document file (`.md`, `.markdown`, `.txt`,
 //! `.rst` or `.log`) so an agent can write prose to a file and pass it by
@@ -413,12 +414,16 @@ fn document_file(target: &str) -> bool {
     })
 }
 
-/// A `printf` format that holds only `%s` and `%%` conversions.
+/// A `printf` format that holds only `%s` and `%%` conversions and only the
+/// escapes `\n`, `\t` and `\\`. zsh decodes `\u0025` and every other numeric
+/// escape before it reads conversions, so such an escape can spell `%n`.
 fn string_format(format: &str) -> bool {
     let mut chars = format.chars();
     while let Some(c) = chars.next() {
-        if c == '%' && !matches!(chars.next(), Some('s' | '%')) {
-            return false;
+        match c {
+            '%' if !matches!(chars.next(), Some('s' | '%')) => return false,
+            '\\' if !matches!(chars.next(), Some('n' | 't' | '\\')) => return false,
+            _ => {}
         }
     }
     true
@@ -625,6 +630,13 @@ mod tests {
             "printf '%n' 'a[$(id)]'",
             "printf '%s %q' a b",
             "printf '%(%Y)T' -1",
+            "printf '\\u0025n' marker",
+            "printf '\\x25n' marker",
+            "printf '\\045n' marker",
+            "printf '\\0451' marker",
+            "printf '\\U00000025n' marker",
+            "printf '\\e' marker",
+            "printf 'a\\' marker",
             "printf '%' a",
             "printf -- '%s' a",
             "printf '%s' a > s.sh",
@@ -650,6 +662,7 @@ mod tests {
             "echo \"a; sudo id && su - | doas sh # ~ * ? ! ( ) { } [ ]\"",
             "printf '%s' '$(rm -rf /)'",
             "printf '%s\\n%%' 'a' b",
+            "printf 'a\\tb\\\\c\\n' x",
             "printf 'plain text' > notes/summary.md",
             "echo a >> log.txt 2> err.log",
             "grep -n 'LD_PRELOAD=x' f",
