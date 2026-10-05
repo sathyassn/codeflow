@@ -184,36 +184,111 @@ fn missing_rules(root: &Path) -> Vec<String> {
                         "{codex_file} sets `sandbox_mode`, which shadows the profile"
                     ));
                 }
-                let fs = value
+                // The selected profile, and the builder profile that builder
+                // seats select at launch (review round two).
+                // Another selection is already a finding above.
+                let mut profiles = match selected {
+                    Some(name @ ("cf-guard" | "cf-builder")) => vec![name],
+                    _ => vec!["cf-guard"],
+                };
+                let has_builder = value
                     .get("permissions")
-                    .and_then(|p| p.get("cf-guard"))
-                    .and_then(|p| p.get("filesystem"));
-                let lost = table
-                    .home
-                    .iter()
-                    .map(|e| format!("~/{}", e.trim_end_matches('/')))
-                    .chain(
-                        table
-                            .absolute
-                            .iter()
-                            .map(|e| e.trim_end_matches('/').to_string()),
-                    )
-                    .filter(|path| {
-                        fs.and_then(|fs| fs.get(path))
-                            .and_then(toml::Value::as_str)
-                            != Some("read")
-                    })
-                    .count();
-                if lost > 0 {
-                    missing.push(format!(
-                        "{codex_file}'s cf-guard profile leaves {lost} shell startup paths writable"
-                    ));
+                    .and_then(|p| p.get("cf-builder"))
+                    .is_some();
+                if has_builder && !profiles.contains(&"cf-builder") {
+                    profiles.push("cf-builder");
+                }
+                for profile in profiles {
+                    missing.extend(codex_profile_gaps(&value, profile));
                 }
             }
             Err(_) => missing.push(format!("{codex_file} does not parse")),
         },
     }
     missing
+}
+
+/// The class paths the selected Codex profile leaves writable, read
+/// through its `extends` chain with the nearest profile's entry winning,
+/// and any `write` grant in that chain on a path above a class entry, which
+/// may reopen it (review round two).
+fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
+    let table = &actions::table().startup_paths;
+    let profiles = value.get("permissions");
+    let mut chain = Vec::new();
+    let mut name = selected.to_string();
+    while !name.starts_with(':') && !chain.contains(&name) && chain.len() < 8 {
+        let Some(profile) = profiles.and_then(|p| p.get(&name)) else {
+            break;
+        };
+        chain.push(name.clone());
+        match profile.get("extends").and_then(toml::Value::as_str) {
+            Some(parent) => name = parent.to_string(),
+            None => break,
+        }
+    }
+    let filesystem = |profile: &str| {
+        profiles
+            .and_then(|p| p.get(profile))
+            .and_then(|p| p.get("filesystem"))
+    };
+    let entry = |path: &str| {
+        chain
+            .iter()
+            .find_map(|profile| filesystem(profile).and_then(|fs| fs.get(path)))
+            .and_then(toml::Value::as_str)
+    };
+    let paths: Vec<String> = table
+        .home
+        .iter()
+        .map(|e| format!("~/{}", e.trim_end_matches('/')))
+        .chain(
+            table
+                .absolute
+                .iter()
+                .map(|e| e.trim_end_matches('/').to_string()),
+        )
+        .collect();
+    let mut gaps = Vec::new();
+    let open = paths
+        .iter()
+        .filter(|path| !matches!(entry(path), Some("read" | "deny" | "none")))
+        .count();
+    if open > 0 {
+        gaps.push(format!(
+            ".codex/config.toml's `{selected}` profile leaves {open} shell startup paths writable"
+        ));
+    }
+    let roots = chain.iter().find_map(|profile| {
+        filesystem(profile)
+            .and_then(|fs| fs.get(":workspace_roots"))
+            .and_then(|r| r.get(".envrc"))
+    });
+    if roots.and_then(toml::Value::as_str) != Some("read") {
+        gaps.push(format!(
+            ".codex/config.toml's `{selected}` profile leaves the workspace root's `.envrc` writable"
+        ));
+    }
+    for profile in &chain {
+        let Some(fs) = filesystem(profile).and_then(toml::Value::as_table) else {
+            continue;
+        };
+        for (path, mode) in fs {
+            if mode.as_str() != Some("write") {
+                continue;
+            }
+            let above = path.trim_end_matches('/');
+            if paths
+                .iter()
+                .any(|class| class.starts_with(&format!("{above}/")) || class == above)
+            {
+                gaps.push(format!(
+                    "the `{profile}` profile grants write on `{path}`, above or on shell startup paths"
+                ));
+            }
+        }
+    }
+    gaps
 }
 
 /// `ZDOTDIR` or `XDG_CONFIG_HOME` set away from the defaults the generated
@@ -334,8 +409,9 @@ mod tests {
         std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         let missing = missing_rules(root);
-        // Edit denies, denyWrite, no profile selected, cf-guard entries.
-        assert_eq!(missing.len(), 4, "{missing:?}");
+        // Edit denies, denyWrite, no profile selected, cf-guard
+        // entries, the workspace root `.envrc`.
+        assert_eq!(missing.len(), 5, "{missing:?}");
         let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
         std::fs::copy(
             shipped.join("settings/default.json"),
@@ -368,6 +444,25 @@ mod tests {
             )
             .unwrap();
             assert_eq!(missing_rules(root).len(), 1, "{to}");
+        }
+        // A builder override that reopens a startup file, and a write grant
+        // above one, are reported even with cf-guard selected, since builder
+        // seats select cf-builder at launch (review round two).
+        let anchor = "[permissions.cf-builder.filesystem.\":workspace_roots\"]";
+        assert!(shipped_text.contains(anchor));
+        for (grant, expect) in [
+            ("\"~/.zshrc\" = \"write\"", "`cf-builder` profile leaves 1"),
+            ("\"~/.config\" = \"write\"", "grants write on `~/.config`"),
+            ("\"~\" = \"write\"", "grants write on `~`"),
+        ] {
+            let reopened = shipped_text.replacen(
+                anchor,
+                &format!("[permissions.cf-builder.filesystem]\n{grant}\n\n{anchor}"),
+                1,
+            );
+            std::fs::write(root.join(".codex/config.toml"), reopened).unwrap();
+            let gaps = missing_rules(root);
+            assert!(gaps.iter().any(|g| g.contains(expect)), "{grant}: {gaps:?}");
         }
     }
 
