@@ -130,3 +130,13 @@ task's record at HEAD when the record arrives in the task's own PR, and CI
 admits that record at completion through the structural core of readiness
 without the start gate. Updated in the PR that accepts this record
 (TSK-184).
+
+## Note (2026-10-03)
+
+ADR-0078 refines the batched epic amendment and the "Every change names a
+task" clause. One planning amendment may name several epics on its one
+`Task:` line (`Task: EPC-001, EPC-002`) and may carry docs and the project
+section of `AGENTS.md`, with the managed block byte-identical to the
+target's. CI reports each change per named epic and refuses a change to an
+epic the line does not name. The amendment lands once on `main`, and an
+integration line takes it by merging `main`. This decision stays accepted.

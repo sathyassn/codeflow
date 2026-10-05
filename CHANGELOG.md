@@ -22,6 +22,37 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **One planning amendment can span several epics.** A planning pull
+  request names every epic it changes on its one `Task:` line, such as
+  `Task: EPC-002, EPC-003`, so one reviewed plan change lands as one pull
+  request instead of one per epic (ADR-0078). It may also carry files under
+  `docs/` outside the adopter-facing paths and the project section of
+  `AGENTS.md`, as long as the managed block stays byte-identical to the
+  target's; a byte inside that block is refused by name, and product code,
+  `CLAUDE.md`, harness settings, skills, policy, hooks and CI still keep a
+  range out of the planning class, as do a hidden path, an instruction
+  file, a symbolic link or a submodule entry in any folder, judged
+  against the target's policy; docs and `AGENTS.md` ride only in a
+  repository with no symbolic link or submodule. A release brings such an amendment's
+  criteria change as a planning landing. `codeflow ci` prints the class as a
+  planning-only amendment of the named epics and adds a
+  `work.planning_amendment` note per change, grouped by epic: each task's
+  criteria delta, records added or removed, status changes, the doc and
+  instruction files touched, and a task record that changed on its
+  integration line since the line last merged the target. A change to a
+  record of an epic the line does not name is refused, a criteria change
+  to a complete task is flagged, and a standalone task or a spec is
+  listed. A task pull request still changes only its own
+  criteria, and the frozen message now names the planning amendment as the
+  route for another task's criteria. There is no policy key.
+  Migration: CodeFlow 3.0.0 reads `Task: EPC-001, EPC-002` as a malformed
+  `Task:` line and refuses the pull request, so run 3.1.0 locally and in
+  the CI that judges a multi-epic amendment; a single `Task: EPC-NNN` works
+  on both. A planning pull request that names one epic but changes another
+  epic's records, such as a breakdown that creates two epics, now fails
+  until its `Task:` line names both.
+
+<!-- codeflow:release-impact minor -->
 - **Pull request Summaries open with a prose lead, then bullets.**
   `codeflow ci` now checks the shape of a pull request body's Summary under
   a new policy key, `git.pr_summary`, which blocks by default: one prose
@@ -130,6 +161,30 @@ erratum below, never an edit of the section.
   record. It errs toward silence: anything that plausibly names a path,
   Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
   `project-management/templates/` carries the new section.
+
+<!-- codeflow:release-impact minor -->
+- **Reported defects are fixed by cause and class, with a written critical
+  path.** A new `cf-method` reference, `issue-handling.md`, takes a reported
+  defect from intake to closure: reproduce it and judge its severity, name
+  the cause and the defect class, search the tree for every site of the
+  class, group issues that share a cause into one unit with a design first
+  for guards, parsers, policy, acceptance rules, hooks and CI, fix the whole
+  class with a durable check where one can be written, and close the issue
+  with the sites fixed and deferred and the release. A review round that
+  finds a new instance of the same class stops the rounds and sends the
+  unit back to design. A critical defect (live in a release or blocking
+  current work, and blocking adopters, weakening a security boundary,
+  losing data or hanging a gate) gets interim guidance the same day, a
+  prioritized fix when that guidance does not clear the block, a recorded
+  release decision and a notice to affected adopters; moving another
+  epic's planned work for it is the operator's call. The lifecycle reference's repair bullet points a
+  reported defect at it, and `cf-reviewer` checks that the fix covers the
+  class and that the sweep is recorded. It adds no check, pull request,
+  approval or review round. Standard and full tiers receive it with
+  `codeflow update`; nothing else needs to change. For CodeFlow itself,
+  `docs/releasing.md` "Critical issues" states the routes and why releases
+  stay on `main` with no maintenance branch, and the bug report template
+  asks for a severity.
 
 ### Changed
 

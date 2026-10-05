@@ -9,6 +9,7 @@
 
 pub mod acceptance;
 pub mod allocate;
+pub mod amendment;
 pub mod classify;
 pub mod deps;
 mod format_id;
