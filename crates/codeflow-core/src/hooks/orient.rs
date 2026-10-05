@@ -191,7 +191,12 @@ fn work_line(root: &Path) -> Option<String> {
     if !pm.join("epics").is_dir() && !pm.join("tasks").is_dir() {
         return None;
     }
-    let store = MarkdownStore::new(&pm).ok()?;
+    // A store refused for a linked folder says so instead of dropping the
+    // work line (issue 94).
+    let store = match MarkdownStore::new(&pm) {
+        Ok(store) => store,
+        Err(error) => return Some(format!("work: records unreadable: {error}")),
+    };
     let epics = store.list_epics(EpicFilter::default()).ok()?;
     let tasks = store.list_tasks(TaskFilter::default()).ok()?;
     let active_epics = epics
@@ -478,6 +483,24 @@ mod tests {
         .unwrap();
         let digest = generate(dir.path());
         assert!(digest.contains("the discipline layer"));
+    }
+
+    /// Issue 94: a linked `project-management` gets no folders created
+    /// where it points, and the digest says why the work line is missing.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_project_management_is_named_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("epics")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("project-management")).unwrap();
+        let line = work_line(dir.path()).unwrap();
+        assert!(
+            line.starts_with("work: records unreadable:")
+                && line.contains("project-management is a symbolic link"),
+            "{line}"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
     }
 
     #[test]

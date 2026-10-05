@@ -155,9 +155,14 @@ pub fn create_follow_up_with(
             title,
         )?,
     };
-    let text = fs::read_to_string(&record.path)?;
+    // The new record is read and rewritten through the same contained walk
+    // that created it (issue 94).
+    let tree = crate::contained::Tree::open(repo_root)?;
+    let relative = crate::contained::relative_to(repo_root, &record.path)?;
+    let text = String::from_utf8(tree.read(&relative, u64::MAX)?)
+        .map_err(|error| StoreError::Invalid(format!("{relative}: {error}")))?;
     let Some(at) = text.find("\ncreated:") else {
-        let _ = fs::remove_file(&record.path);
+        let _ = tree.remove(&relative);
         return Err(StoreError::Invalid(
             "task template has no `created:` line to anchor follow_up_of".to_string(),
         ));
@@ -167,8 +172,8 @@ pub fn create_follow_up_with(
         &text[..at],
         &text[at..]
     );
-    if let Err(error) = crate::file_lock::atomic_write(&record.path, updated.as_bytes()) {
-        let _ = fs::remove_file(&record.path);
+    if let Err(error) = tree.write(&relative, updated.as_bytes()) {
+        let _ = tree.remove(&relative);
         return Err(error.into());
     }
     Ok(record)
@@ -308,14 +313,14 @@ pub fn create_adr_with(
         StoreError::Invalid("the ADR template has no `id:` frontmatter line".to_string())
     })?;
     check_adr(&content, &id, title)?;
-    let dir = repo_root.join("docs/decisions");
-    fs::create_dir_all(&dir)?;
-    let path: PathBuf = dir.join(format!("{id}-{}.md", slug(title)));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    std::io::Write::write_all(&mut file, content.as_bytes())?;
+    let file = format!("{id}-{}.md", slug(title));
+    // Exclusive, with its folders, never through a link (issue 94).
+    crate::contained::create_new(
+        repo_root,
+        &format!("docs/decisions/{file}"),
+        content.as_bytes(),
+    )?;
+    let path: PathBuf = repo_root.join("docs/decisions").join(file);
     Ok(NewRecord { id, uid, path })
 }
 
@@ -406,6 +411,79 @@ mod tests {
         assert!(text.contains("\nstatus: proposed "), "{text}");
         assert!(text.contains("# ADR-0008: Adopt a registry"), "{text}");
         assert!(record.path.ends_with("ADR-0008-adopt-a-registry.md"));
+    }
+
+    /// Issue 94: an ADR is never written through a link at `docs` or
+    /// `docs/decisions`.
+    #[cfg(unix)]
+    #[test]
+    fn adr_creation_refuses_a_link_above_the_record() {
+        let template = "---\nid: ADR-NNNN\ntitle: <short decision title>\ndate: YYYY-MM-DD\nstatus: accepted\n---\n\n# ADR-NNNN: <short decision title>\n";
+        for linked in ["docs", "docs/decisions"] {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            fs::create_dir_all(outside.path().join("decisions")).unwrap();
+            if linked == "docs/decisions" {
+                fs::create_dir(dir.path().join("docs")).unwrap();
+            }
+            std::os::unix::fs::symlink(outside.path(), dir.path().join(linked)).unwrap();
+            let error = create_adr(dir.path(), template, "Adopt a registry").unwrap_err();
+            assert!(
+                error.to_string().contains("symbolic link"),
+                "{linked}: {error}"
+            );
+            let left = fs::read_dir(outside.path()).unwrap().count()
+                + fs::read_dir(outside.path().join("decisions"))
+                    .unwrap()
+                    .count();
+            assert_eq!(left, 1, "{linked}: nothing written outside");
+        }
+    }
+
+    /// The follow-up's second write never goes through the old temporary
+    /// name beside the new record.
+    #[cfg(unix)]
+    #[test]
+    fn follow_up_never_writes_through_a_planted_temporary_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            assert!(crate::git::command()
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "fixture"]);
+        let tasks = root.join("project-management/tasks");
+        fs::create_dir_all(&tasks).unwrap();
+        fs::write(
+            tasks.join("TSK-001.md"),
+            "---\nid: TSK-001\nepic_id: null\nintegration_target: main\n---\n",
+        )
+        .unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("sentinel"), "outside").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("sentinel"), tasks.join("TSK-002.tmp"))
+            .unwrap();
+        let template = "---\nid: TSK-{{NNN}}\nepic_id: {{EPIC_ID}}\nstandalone_reason: {{STANDALONE_REASON}}\ntitle: {{TITLE_YAML}}\nintegration_target: {{TARGET_BRANCH}}\ncreated: {{DATE}}\n---\n";
+        let record = create_follow_up(root, template, "TSK-001", "Tidy").unwrap();
+        assert_eq!(record.id, "TSK-002");
+        assert_eq!(
+            fs::read_to_string(outside.path().join("sentinel")).unwrap(),
+            "outside"
+        );
+        let text = fs::read_to_string(&record.path).unwrap();
+        assert!(text.contains("\nfollow_up_of: TSK-001"), "{text}");
+        assert!(fs::symlink_metadata(&record.path)
+            .unwrap()
+            .file_type()
+            .is_file());
     }
 
     #[test]

@@ -277,6 +277,23 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Record commands no longer write through a symbolic link above the
+  record** (issue 94). A branch that committed `project-management`, a
+  kind folder, `docs` or `docs/decisions` as a link made `epic new`,
+  `task new`, `spec new`, `adr new`, `task status` and their siblings
+  write, create folders or delete files where the link pointed. Every
+  record write, delete and folder creation under `project-management/`
+  and `docs/` now opens each path component from the repository root
+  without following a link, junction or other reparse point, and refuses
+  with the linked component named; this covers the status verbs,
+  follow-ups, `ids backfill` and `ids retarget`, and the folders that
+  `codeflow status` and the orient digest create, which now say why the
+  work summary is missing. A link at the old `<record>.tmp` name is no
+  longer written through. A replaced record keeps its Unix permission
+  bits, and `ids retarget` no longer replaces an existing file at the new
+  number. Migration: none; a project with no such link sees no change.
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any

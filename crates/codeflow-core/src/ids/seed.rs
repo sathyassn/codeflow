@@ -355,8 +355,15 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            // Never follow a link into or out of the record roots (issue 94).
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
                 stack.push(path);
+                continue;
+            }
+            if !kind.is_file() {
                 continue;
             }
             let Ok(relative) = path.strip_prefix(root) else {
@@ -418,9 +425,14 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
     let ledger = Ledger::read(&git, &registry)?;
     let mut report = BackfillReport::default();
     let mut intros = inventory::Introductions::default();
+    // Records are read and written beneath the root without following a
+    // link (issue 94).
+    let tree = crate::contained::Tree::open(root)?;
     for (id, paths) in worktree_records(root) {
         for path in paths {
-            let text = std::fs::read_to_string(&path)?;
+            let relative = crate::contained::relative_to(root, &path)?;
+            let text = String::from_utf8(tree.read(&relative, u64::MAX)?)
+                .map_err(|error| IdsError::Invalid(format!("{relative}: {error}")))?;
             if frontmatter_value(&text, "uid").is_some() {
                 continue;
             }
@@ -443,7 +455,7 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
                 ));
                 continue;
             };
-            crate::file_lock::atomic_write(&path, updated.as_bytes())?;
+            tree.write(&relative, updated.as_bytes())?;
             report.written.push(id.clone());
         }
     }
@@ -531,12 +543,20 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .unwrap_or_default()
         .replacen(&from.to_string(), &to.to_string(), 1);
     let new_path = path.with_file_name(file);
-    let content = std::fs::read_to_string(path)?;
+    // Read, write and delete beneath the root without following a link
+    // (issue 94); a renumbered record never replaces an existing file.
+    let tree = crate::contained::Tree::open(root)?;
+    let old = crate::contained::relative_to(root, path)?;
+    let new = crate::contained::relative_to(root, &new_path)?;
+    let content = String::from_utf8(tree.read(&old, u64::MAX)?)
+        .map_err(|error| IdsError::Invalid(format!("{old}: {error}")))?;
     let content = replace_id(&content, from, &to).unwrap_or(content);
     let content = add_former_id(&content, from);
-    std::fs::write(&new_path, content)?;
-    if new_path != *path {
-        std::fs::remove_file(path)?;
+    if new == old {
+        tree.write(&new, content.as_bytes())?;
+    } else {
+        tree.create_new(&new, content.as_bytes())?;
+        tree.remove(&old)?;
     }
     Ok(Retarget {
         from: from.clone(),
@@ -601,14 +621,21 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
     let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
+    // A tracked link, or a file under one, is skipped like an unreadable
+    // file: it is read and written only beneath the root (issue 94).
+    let tree = crate::contained::Tree::open(git.root())?;
     let mut changed = Vec::new();
     for file in files {
         let path = git.root().join(&file);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Some(text) = tree
+            .read(&file, u64::MAX)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+        else {
             continue;
         };
         if let Some(updated) = replace_id(&text, from, to) {
-            std::fs::write(&path, updated)?;
+            tree.write(&file, updated.as_bytes())?;
             changed.push(path);
         }
     }

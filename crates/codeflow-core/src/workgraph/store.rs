@@ -127,17 +127,35 @@ pub struct MarkdownStore {
 
 impl MarkdownStore {
     /// Create a store rooted at `root`, creating `epics/`, `specs/`, and `tasks/`
-    /// subdirectories if missing.
+    /// subdirectories if missing. The folders are created beneath the
+    /// repository root without following a link (issue 94): a linked
+    /// `project-management` or kind folder refuses the store.
     ///
     /// # Errors
     ///
-    /// Returns `StoreError::Io` if the directories cannot be created.
+    /// Returns `StoreError::Io` if the directories cannot be created or a
+    /// component is a link.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let root = root.into();
-        fs::create_dir_all(root.join("epics"))?;
-        fs::create_dir_all(root.join("specs"))?;
-        fs::create_dir_all(root.join("tasks"))?;
+        let base = crate::workgraph::allocate::repository_root(&root);
+        if base == root.as_path() && !base.exists() {
+            fs::create_dir_all(base)?;
+        }
+        let tree = crate::contained::Tree::open(base)?;
+        for kind in ["epics", "specs", "tasks"] {
+            tree.create_dir_all(&crate::contained::relative_to(base, &root.join(kind))?)?;
+        }
         Ok(Self { root })
+    }
+
+    /// The repository root this store's writes are contained beneath, and
+    /// `path` relative to it.
+    fn contained(&self, path: &Path) -> Result<(crate::contained::Tree, String), StoreError> {
+        let base = crate::workgraph::allocate::repository_root(&self.root);
+        Ok((
+            crate::contained::Tree::open(base)?,
+            crate::contained::relative_to(base, path)?,
+        ))
     }
 
     /// The store root directory.
@@ -154,7 +172,12 @@ impl MarkdownStore {
         self.root.join("tasks")
     }
 
+    /// Write a record, replacing any file there, through
+    /// [`crate::contained`]: never through a link (issue 94), atomically,
+    /// keeping its Unix permission bits. Creation and update share this
+    /// writer; the store's create does not promise exclusivity.
     fn write_record<T: serde::Serialize>(
+        &self,
         path: &Path,
         record: &T,
         body: &str,
@@ -164,13 +187,15 @@ impl MarkdownStore {
             message: e.to_string(),
         })?;
         let content = format!("---\n{yaml}---\n{body}");
-        fs::write(path, content)?;
+        let (tree, relative) = self.contained(path)?;
+        tree.write(&relative, content.as_bytes())?;
         Ok(())
     }
 
     /// Persist a canonical record with one on-disk identity. The typed models
     /// retain `format_id` only to read historical dual-identity records.
     fn write_canonical_record<T: serde::Serialize>(
+        &self,
         path: &Path,
         record: &T,
         canonical_id: &str,
@@ -189,7 +214,7 @@ impl MarkdownStore {
             serde_yaml::Value::String("id".to_string()),
             serde_yaml::Value::String(canonical_id.to_string()),
         );
-        Self::write_record(path, &value, body)
+        self.write_record(path, &value, body)
     }
 
     /// Update only the named frontmatter fields, preserving every other key.
@@ -199,11 +224,14 @@ impl MarkdownStore {
     /// model would silently discard those fields, so partial record updates
     /// operate on the generic YAML mapping instead.
     fn update_record_fields(
+        &self,
         path: &Path,
         body: &str,
         fields: impl IntoIterator<Item = (&'static str, serde_yaml::Value)>,
     ) -> Result<(), StoreError> {
-        let content = fs::read_to_string(path)?;
+        let (tree, relative) = self.contained(path)?;
+        let content = String::from_utf8(tree.read(&relative, u64::MAX)?)
+            .map_err(|error| StoreError::Invalid(format!("{relative}: {error}")))?;
         let (yaml, _) = split_frontmatter(&content).ok_or_else(|| StoreError::Yaml {
             path: path.display().to_string(),
             message: "missing frontmatter delimiters".to_string(),
@@ -216,7 +244,7 @@ impl MarkdownStore {
         for (field, value) in fields {
             frontmatter.insert(serde_yaml::Value::String(field.to_string()), value);
         }
-        Self::write_record(path, &frontmatter, body)
+        self.write_record(path, &frontmatter, body)
     }
 
     fn yaml_value<T: serde::Serialize>(
@@ -312,7 +340,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
 impl RecordStore for MarkdownStore {
     fn create_epic(&self, epic: &Epic) -> Result<(), StoreError> {
         let path = self.epics_dir().join(format!("{}.md", epic.format_id));
-        Self::write_canonical_record(&path, epic, &epic.format_id, "")
+        self.write_canonical_record(&path, epic, &epic.format_id, "")
     }
 
     fn get_epic(&self, id: &str) -> Result<Option<Epic>, StoreError> {
@@ -345,7 +373,7 @@ impl RecordStore for MarkdownStore {
             fields.push(("pr_number", Self::yaml_value(&path, pr_number)?));
         }
         fields.push(("updated_at", Self::yaml_value(&path, super::now_rfc3339())?));
-        Self::update_record_fields(&path, &body, fields)
+        self.update_record_fields(&path, &body, fields)
     }
 
     fn list_epics(&self, filter: EpicFilter) -> Result<Vec<Epic>, StoreError> {
@@ -377,7 +405,7 @@ impl RecordStore for MarkdownStore {
             }
         }
         let path = self.tasks_dir().join(format!("{}.md", task.format_id));
-        Self::write_canonical_record(&path, task, &task.format_id, "")
+        self.write_canonical_record(&path, task, &task.format_id, "")
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, StoreError> {
@@ -413,7 +441,7 @@ impl RecordStore for MarkdownStore {
             fields.push(("completed_at", Self::yaml_value(&path, completed_at)?));
         }
         fields.push(("updated_at", Self::yaml_value(&path, super::now_rfc3339())?));
-        Self::update_record_fields(&path, &body, fields)
+        self.update_record_fields(&path, &body, fields)
     }
 
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StoreError> {
@@ -823,6 +851,42 @@ created: 2026-06-11
         assert_eq!(in_progress[0].id, "TSK-002-001");
     }
 
+    /// Issue 94: a linked `project-management` or kind folder refuses the
+    /// store, and its writes never land where a link points.
+    #[cfg(unix)]
+    #[test]
+    fn markdown_store_refuses_a_linked_project_management() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let pm = dir.path().join("project-management");
+        std::os::unix::fs::symlink(outside.path(), &pm).unwrap();
+        let error = MarkdownStore::new(&pm).err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("project-management is a symbolic link"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "no folder outside"
+        );
+
+        fs::remove_file(&pm).unwrap();
+        let store = MarkdownStore::new(&pm).unwrap();
+        fs::remove_dir(pm.join("epics")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), pm.join("epics")).unwrap();
+        assert!(store
+            .create_epic(&make_epic("epic-01a", "EPC-001"))
+            .is_err());
+        assert_eq!(
+            fs::read_dir(outside.path()).unwrap().count(),
+            0,
+            "no record outside"
+        );
+    }
+
     #[test]
     fn test_scan_finds_nested_epic_layout() {
         // Dogfood layout: epics/EPC-001/EPC-001.md (dir per epic so tasks/ and
@@ -831,12 +895,13 @@ created: 2026-06-11
         let store = MarkdownStore::new(dir.path()).unwrap();
         let nested_dir = store.root().join("epics/EPC-001");
         fs::create_dir_all(&nested_dir).unwrap();
-        MarkdownStore::write_record(
-            &nested_dir.join("EPC-001.md"),
-            &make_epic("epic-01a", "EPC-001"),
-            "## body kept\n",
-        )
-        .unwrap();
+        store
+            .write_record(
+                &nested_dir.join("EPC-001.md"),
+                &make_epic("epic-01a", "EPC-001"),
+                "## body kept\n",
+            )
+            .unwrap();
         // Sibling files inside the epic dir must NOT be treated as epics.
         fs::write(nested_dir.join("spec.md"), "---\nid: x\n---\n").unwrap();
         fs::create_dir_all(nested_dir.join("tasks")).unwrap();
@@ -859,12 +924,13 @@ created: 2026-06-11
             .unwrap(); // flat
         let nested_dir = store.root().join("epics/EPC-002");
         fs::create_dir_all(&nested_dir).unwrap();
-        MarkdownStore::write_record(
-            &nested_dir.join("EPC-002.md"),
-            &make_epic("epic-01b", "EPC-002"),
-            "",
-        )
-        .unwrap();
+        store
+            .write_record(
+                &nested_dir.join("EPC-002.md"),
+                &make_epic("epic-01b", "EPC-002"),
+                "",
+            )
+            .unwrap();
 
         let epics = store.list_epics(EpicFilter::default()).unwrap();
         assert_eq!(epics.len(), 2, "both layouts must coexist");
@@ -878,12 +944,13 @@ created: 2026-06-11
         let store = MarkdownStore::new(dir.path()).unwrap();
         let nested = store.root().join("epics/EPC-001/tasks/TSK-001-001.md");
         fs::create_dir_all(nested.parent().unwrap()).unwrap();
-        MarkdownStore::write_record(
-            &nested,
-            &make_task("task-01a", "TSK-001-001", "EPC-001"),
-            "## keep\n",
-        )
-        .unwrap();
+        store
+            .write_record(
+                &nested,
+                &make_task("task-01a", "TSK-001-001", "EPC-001"),
+                "## keep\n",
+            )
+            .unwrap();
 
         assert_eq!(store.list_tasks(TaskFilter::default()).unwrap().len(), 1);
         store
@@ -910,7 +977,8 @@ created: 2026-06-11
         let store = MarkdownStore::new(dir.path()).unwrap();
         let nested = store.root().join("epics/EPC-001/EPC-001.md");
         fs::create_dir_all(nested.parent().unwrap()).unwrap();
-        MarkdownStore::write_record(&nested, &make_epic("epic-01a", "EPC-001"), "## keep\n")
+        store
+            .write_record(&nested, &make_epic("epic-01a", "EPC-001"), "## keep\n")
             .unwrap();
 
         store
