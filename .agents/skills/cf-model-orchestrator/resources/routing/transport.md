@@ -54,12 +54,17 @@ work. This table is the one home of these flags:
 | Seat | Production and building | Consult and review |
 |---|---|---|
 | Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |
-| Codex | `--ask-for-approval never --sandbox danger-full-access` | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
+| Codex | `--ask-for-approval never -c default_permissions="cf-builder"`, no `--sandbox` flag, launched from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |
 | Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |
 
-The Codex builder posture is ADR-0075 D1: it moves to the `cf-builder`
-profile only after that decision's spike passes, and this row is the one
-line that changes then. The Grok builder posture is ADR-0075 D3:
+The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05: a
+builder runs in the project's `cf-builder` profile, a sandbox that cannot
+write shell startup files or the enforcement files, never under full
+access. It launches from the main checkout root and works in its task
+worktree, since a seat launched inside a linked worktree cannot write its
+Git metadata. A push to a remote outside the workspace root is denied
+there; a push to a hosted remote is not yet verified, so a builder whose
+push fails reports it and the caller pushes. The Grok builder posture is ADR-0075 D3:
 `--always-approve --sandbox cf-guard-worktree`, launched in its own task
 worktree after a separate step saves folder trust for that exact directory,
 with readiness judged by the hooks that load. ADR-0075 still lists as

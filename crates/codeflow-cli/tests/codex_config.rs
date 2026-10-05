@@ -160,8 +160,9 @@ fn cf_guard_workspace_denies_keep_directory_deletes() {
 }
 
 /// TSK-190 AC-2: the launch text follows ADR-0075 D1 and D2. A builder runs
-/// full access until a `cf-builder` spike passes; a reviewer runs `never`
-/// with no `--sandbox` flag, so the project's `cf-guard` profile applies.
+/// the `cf-builder` profile (D1 as amended on 2026-10-05, TSK-242); a
+/// reviewer runs `never` with no `--sandbox` flag, so the project's
+/// `cf-guard` profile applies.
 /// TSK-213 (ADR-0077): the flags have one home, the transport rule's posture
 /// table, which cf-herdr and the orchestrator cite.
 #[test]
@@ -177,8 +178,8 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
         let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
         let required: &[&str] = if relative == transport {
             &[
-                "`--ask-for-approval never --sandbox danger-full-access`",
-                "The Codex builder posture is ADR-0075 D1",
+                "`--ask-for-approval never -c default_permissions=\"cf-builder\"`, no `--sandbox` flag",
+                "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
                 "`--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies",
             ]
         } else {
@@ -190,11 +191,66 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
                 "{relative} lost launch text: {required}"
             );
         }
-        for retired in ["--sandbox workspace-write", "--ask-for-approval on-request"] {
+        for retired in [
+            "--sandbox workspace-write",
+            "--ask-for-approval on-request",
+            "danger-full-access",
+        ] {
             assert!(
                 !normalized.contains(retired),
                 "{relative} still names the retired reviewer launch {retired}"
             );
+        }
+    }
+}
+
+/// TSK-242: every shell startup path in the action table is read only in
+/// `cf-guard`, which `cf-builder` extends without reopening any of them,
+/// and the workspace root's `.envrc` is read only.
+#[test]
+fn cf_guard_and_cf_builder_keep_shell_startup_files_read_only() {
+    let cfg = shipped_config();
+    let fs = cf_guard(&cfg, "filesystem");
+    let table = &codeflow_core::security::actions::table().startup_paths;
+    let expected: Vec<String> = table
+        .home
+        .iter()
+        .map(|e| format!("~/{}", e.trim_end_matches('/')))
+        .chain(
+            table
+                .absolute
+                .iter()
+                .map(|e| e.trim_end_matches('/').to_string()),
+        )
+        .collect();
+    for path in &expected {
+        assert_eq!(
+            fs.get(path).and_then(toml::Value::as_str),
+            Some("read"),
+            "cf-guard leaves {path} writable"
+        );
+    }
+    let roots = fs[":workspace_roots"].as_table().unwrap();
+    for name in &table.anywhere {
+        assert_eq!(
+            roots.get(name).and_then(toml::Value::as_str),
+            Some("read"),
+            "{name}"
+        );
+    }
+    let builder = cfg["permissions"]["cf-builder"].as_table().unwrap();
+    assert_eq!(builder["extends"].as_str(), Some("cf-guard"));
+    let builder_fs = builder["filesystem"].as_table().unwrap();
+    for (key, value) in builder_fs {
+        if let Some(table) = value.as_table() {
+            for (path, mode) in table {
+                assert!(
+                    mode.as_str() != Some("write") || !expected.contains(path),
+                    "cf-builder reopens {key}.{path}"
+                );
+            }
+        } else {
+            assert!(!expected.contains(key), "cf-builder sets {key}");
         }
     }
 }

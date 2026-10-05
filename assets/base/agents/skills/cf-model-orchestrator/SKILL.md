@@ -279,7 +279,8 @@ binding, permission or selector changed since it ran.
      one classified unsandboxed retry; arbitrary unsandboxed commands remain
      out of bounds.
    - Codex: a reviewer or consult runs under the project's `cf-guard`
-     profile, a builder under full access until ADR-0075 D1's spike passes.
+     profile, a builder under its `cf-builder` profile (ADR-0075 D1, as
+     amended on 2026-10-05).
      For every seat, public network and live search are enabled.
      Auto-review is not human authorization; catastrophic work still stops for
      the operator.
