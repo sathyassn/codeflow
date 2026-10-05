@@ -287,8 +287,9 @@ by a human on evidenced-green checks.
 
 A function or alias in a shell startup file runs under every later command,
 while the guards judge each command by the name it spells: `git` can run a
-planted `git()` function the guards never see. So no agent session writes
-one (issue 86, TSK-242).
+planted `git()` function the guards never see. So an agent session may not
+write one: the sandboxes deny the writes where they run, and the guards
+refuse the forms they can read (issue 86, TSK-242).
 
 - **The class.** The action table's `startup_paths`: the bash, zsh, ksh,
   fish and PowerShell startup files and directories in the home, the
@@ -314,7 +315,13 @@ level:
   or a startup directory, where it can place a file it does not name;
 - a path the guard cannot resolve near the class, such as `~/$NAME`;
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
-  `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`.
+  `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
+  zsh launch counts as reading them unless it turns them off with `-f` or
+  `--no-rcs` and carries no `+` option, `-o` or other long option;
+- a link of a file of the class, made under any name, since a later write
+  through the link reaches the file;
+- `rg` without `--no-config`, since its configuration file can name a
+  `--pre` program, and `sed` with a `w` command or a script file.
 
 git-guard refuses a user- or system-scope git key that runs a program, such
 as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
@@ -334,17 +341,22 @@ What stays open, by harness and platform:
 - **Codex.** The profile keeps the home and `/etc` entries and the
   workspace root's `.envrc` read only. A nested `.envrc`, including one in
   a linked worktree or a temporary directory, is writable to the profile
-  (probed on Codex 0.160.0) and left to the guards. A `--sandbox` flag or
-  the operator's own profile override replaces these entries.
+  (probed on Codex 0.160.0) and left to the guards. Like Claude's denies,
+  the entries name the default locations, so a `ZDOTDIR` or
+  `XDG_CONFIG_HOME` moved elsewhere is writable to the profile. A
+  `--sandbox` flag or the operator's own profile override replaces these
+  entries.
 - **Grok Build.** Its `workspace` sandbox leaves the home unwritable (not
-  probed in this task). `.envrc` in the workspace has no Grok rule, since a
+  probed in this task), which covers a moved `ZDOTDIR` or
+  `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
   Grok deny also blocks reads; the guards refuse it.
 - **Windows.** A PowerShell profile under a redirected `Documents` folder,
   such as one in OneDrive, is outside the class.
 - **Sourced files.** The guards do not follow what a startup file sources.
 
 `codeflow doctor --check startup-files` reports a project whose settings
-lack the class or select another Codex profile, a moved `ZDOTDIR` or
+lack the class, select another Codex profile, or let the selected profile
+or `cf-builder` write a class path or a directory above one, a moved `ZDOTDIR` or
 `XDG_CONFIG_HOME`, and the files the home's startup files source from
 outside the class.
 
