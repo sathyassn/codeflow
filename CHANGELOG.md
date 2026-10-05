@@ -243,7 +243,12 @@ erratum below, never an edit of the section.
   another branch: each invalid byte is spelled `\xNN`, so two different
   names never read as one. `codeflow integrate` refuses to start from such
   a branch, since it could not restore it, and refreshes another worktree
-  at its exact path. The gate's snapshot hashes a symlink target and the
+  at its exact path, read from git's files so a newline in a folder name
+  cannot name another checkout. The release check keys changed paths by
+  their exact bytes, the remote query keeps advertised branch names apart
+  and refuses an SSH command that is not UTF-8 instead of running a
+  lookalike, and an upstream remote that cannot be read is an error, not
+  a skipped refresh. The gate's snapshot hashes a symlink target and the
   repository's own folder by their exact bytes. One rule for this text is
   in `docs/architecture.md`, and each site that stays strict says why next
   to the code.

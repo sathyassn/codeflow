@@ -185,7 +185,12 @@ bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
   a backslash in a reference name, so no valid name spells an escape and two
   different names never read as one, as a lossy decode would make them. A
   branch that is not valid UTF-8 is never read as detached or dropped from a
-  list that guards or cleanup depend on. Where two OS values are compared with
+  list that guards or cleanup depend on, except where leaving one out only
+  keeps it, as `codeflow status` cleanup advice does. A path compared with
+  another path is keyed by `git::path_key` (lossy text, a NUL and hex for an
+  invalid name). A branch name that reaches a glob or a config key spelled
+  with escapes is refused there, because the escapes are not the characters
+  the pattern or key would see. Where two OS values are compared with
   each other, or one picks the object acted on (a checkout restored after a
   failed landing, a path handed to `reset --hard`), the bytes decide or the
   read refuses.
