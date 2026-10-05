@@ -9469,6 +9469,25 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             with self.subTest(other=other[-200:]):
                 self.assertNotEqual("", runner.codex_composer(other, **expect))
 
+    def test_codex_0_160_0_welcome_animation_is_read_as_blank(self):
+        runner = self.runner()
+        path = Path("/private/tmp/codeflow-eval-x/run-subjects/abc/repository")
+        animated = (self.FRAMES / "codex-0.160.0-idle-animated.txt").read_text().replace("{path}", str(path))
+        expect = {"model": "gpt-6-astra", "effort": "high", "repository": path}
+        # Trial 13t2 of 2026-10-04: particles on the rows around the composer
+        # and on the composer row itself, after its placeholder.
+        composer = next(line for line in animated.splitlines() if line.startswith("› "))
+        self.assertRegex(composer, "^› Ask Codex to do anything +[\u2800-\u28ff]")
+        self.assertEqual("", runner.codex_composer(animated, **expect))
+        prompt = "Quick question from the operator: which branch does the customer search work land on?"
+        pending = animated.replace("› Ask Codex to do anything", "› " + prompt)
+        self.assertTrue(runner.codex_holds(runner.codex_composer(pending, **expect), prompt))
+        # Anything other than particles still counts as text in the composer.
+        for other in [animated.replace("› Ask Codex to do anything", "› leftover draft"),
+                      animated.replace("Ask Codex to do anything   ", "Ask Codex to do anything x ")]:
+            with self.subTest(other=next(line for line in other.splitlines() if line.startswith("› "))[:60]):
+                self.assertNotEqual("", runner.codex_composer(other, **expect))
+
     @unittest.skipUnless(sys.platform == "darwin", "libproc is macOS only")
     def test_working_directory_comes_from_libproc_without_lsof(self):
         runner = self.runner()

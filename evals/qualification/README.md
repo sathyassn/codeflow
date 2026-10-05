@@ -408,7 +408,11 @@ before pasting, then sends one Enter only when the composer holds this
 prompt, as text or as `[Pasted Content N chars]` with this prompt's length.
 The footer under pending input is not checked: Codex 0.160.0 shows only the
 warning count there. Codex 0.160.0's idle and pending frames, captured in
-TSK-194's dry trial of 2026-10-04, are kept under `frames/` and tested. The
+TSK-194's dry trial of 2026-10-04, are kept under `frames/` and tested. Its
+welcome screen animates braille particles across the blank rows, the input
+row included; the runner reads braille pattern characters (U+2800 to U+28FF)
+in the frame as blanks, so particles never count as typed text, and any other
+character still does. The animated idle frame from trial 13t2 is pinned too. The
 ready, before-paste and pending frame digests and times are recorded in
 `verified_frames` in `launch.json`, with the screens in the evidence folder.
 There is no second Enter. Grok keeps the managed helper's one-Enter refusal

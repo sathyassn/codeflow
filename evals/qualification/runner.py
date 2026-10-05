@@ -391,6 +391,10 @@ def codex_expectation(native: list[str], repository: Path) -> dict:
     return {"model": model, "effort": effort, "repository": repository}
 
 
+# Unicode braille patterns, the characters of Codex's logo and welcome animation.
+CODEX_PARTICLES = re.compile("[\u2800-\u28ff]")
+
+
 def codex_status(line: str, model: str, effort: str | None, repository: Path) -> bool:
     parts = line[2:].split(" · ") if line.startswith("  ") else []
     if len(parts) < 2 or parts[1] != str(repository):
@@ -411,7 +415,10 @@ def codex_composer(screen: str, model: str, effort: str | None, repository: Path
     status line was not captured, so it is not pinned and may be absent; a
     bottom-pane dialog replaces the composer, which is checked in full.
     """
-    lines = [line.rstrip() for line in screen.splitlines()]
+    # Codex 0.160.0's welcome screen animates braille particles across the
+    # blank rows, the composer row included (trial 13t2, 2026-10-04). They are
+    # drawn, never typed: the frame is read with them as blanks.
+    lines = [CODEX_PARTICLES.sub(" ", line).rstrip() for line in screen.splitlines()]
     while lines and not lines[-1]:
         lines.pop()
     if len(lines) >= 3 and codex_status(lines[-1], model, effort, repository):
