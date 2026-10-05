@@ -1347,6 +1347,10 @@ fn verify_owned_child(root: &Path, path: &Path) -> Result<()> {
 }
 
 fn file_url(path: &Path) -> Result<String> {
+    // OS text rule (issue 79), kept strict: the path is the review page the
+    // browser is told to open, written into a URL as text. A lossy spelling
+    // would open another page, so a path that is not valid UTF-8 is refused
+    // with the path named.
     let value = path
         .to_str()
         .ok_or_else(|| PresentError::UnsafePath(path.to_path_buf()))?;
@@ -1538,6 +1542,14 @@ mod tests {
             recover_incomplete_launch(&store, session_id, &profile),
             Err(PresentError::ServiceUnavailable(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_url_refuses_a_path_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/review\xff.html"));
+        assert!(matches!(file_url(path), Err(PresentError::UnsafePath(_))));
     }
 
     #[test]
