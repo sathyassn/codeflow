@@ -48,7 +48,7 @@
 #     --log-opts "$BITBUCKET_PR_DESTINATION_COMMIT..HEAD"   # secret scan of the
 #     pull request's own commits; a scheduled pipeline drops --log-opts to
 #     scan the full history, as the GitHub workflow does weekly
-#   osv-scanner scan -r .                                           # dep audit
+#   osv-scanner scan -r --no-ignore .                               # dep audit
 
 image: debian:stable-slim
 
@@ -243,10 +243,10 @@ pipelines:
               # so the toolchain it installs and the variables it exports reach the gate
               # and a failing command fails the run. The project owns the file; `codeflow
               # update` never writes it.
-              # The hook runs with the gate's authority, so it cannot move what the
-              # gate calls or where: the binary and the folder are fixed read-only
-              # first, set -eu holds again once the hook returns, and a run the
-              # hook ends (an `exit` in it) fails before the gate.
+              # The hook runs with the gate's authority, like this file, so it is
+              # reviewed as this file is. These lines keep it from skipping the gate
+              # by accident: the binary and folder are fixed read-only first, set -eu
+              # holds again once it returns, and a run it ends (an `exit`) fails.
               codeflow_bin=$(command -v codeflow)
               codeflow_root=$(pwd)
               readonly codeflow_bin codeflow_root

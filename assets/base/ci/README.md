@@ -218,16 +218,20 @@ managed and the gate runs once, on the project's toolchain:
   or `GITHUB_ENV`. A `cd` in it does not move the gate.
 - A failing command fails the job before the gate runs, and so does an
   `exit` in it, even `exit 0`, since the gate never ran.
-- It cannot move what the gate calls: the gate runs the `codeflow` binary
+- It cannot skip the gate by accident: the gate runs the `codeflow` binary
   found before the hook, from the folder the hook started in, and `set -eu`
   holds again once the hook returns, so a `codeflow` function, a `PATH`
-  entry or `set +e` in it does not skip the gate.
-- It is the change's own file, as the test targets are, and has the gate's
-  authority over what the tests see. It runs in the gates job, never in the
-  secret-scan job, the security review or the enforcing policy job, and in
-  the shared run only after the lowered-pin refusal and the target's
-  `codeflow ci`, which it cannot undo. Every enforcement level and exemption
-  those jobs use comes from the trusted commit, out of its reach.
+  entry or `set +e` in it leaves the gate running.
+- It is not a security boundary. It shares the gate's shell and runs with
+  the gate's authority, as the CI file does, which a change can also edit,
+  so a hook written to defeat the gate can. Review it as you would the CI
+  file: `codeflow ci` in the enforcing policy job names a change that adds,
+  edits or removes it, and you can protect `.codeflow/` and the CI file with
+  required review. It runs in the gates job, never in the secret-scan job,
+  the security review or the enforcing policy job, and in the shared run
+  only after the lowered-pin refusal and the target's `codeflow ci`, which
+  it cannot undo. Every enforcement level and exemption those jobs use comes
+  from the trusted commit, out of its reach.
 - The project owns it. `codeflow update` never writes, merges or removes
   it, and `codeflow doctor --check ci-perimeter` says whether it exists,
   whether the CI file sources it, and its first command; doctor does not
@@ -242,11 +246,21 @@ it, and `codeflow ci` names a change that lowers or removes either key so
 its reviewer sees it. The job fails when the policy file is missing at that
 commit, when either key is missing or unreadable, or when a value is not
 `block`, `warn` or `off`. The `osv-scanner.toml` suppressions come from the
-trusted commit too, so a new suppression takes effect once its own pull
-request lands; in `block` mode, an advisory that already blocks every pull
-request is cleared by fixing the dependency or by landing the suppression
-through your review. Since 3.1.0 a policy without both keys fails this job;
-`codeflow update` adds them with their defaults.
+trusted commit too, and osv-scanner runs with `--no-ignore`, so a
+`.gitignore` the change edits cannot hide a lockfile. A new suppression
+takes effect once its own pull request lands. In `block` mode, an advisory
+that already blocks every pull request is cleared by fixing the dependency,
+or by an administrator merging the suppression's pull request over the
+failing check, which branch protection records; review alone does not turn
+a required check green.
+
+Since 3.1.0 a policy without both keys fails this job. Because the job reads
+the keys from the base, land them first under your current workflow
+(`codeflow update` adds them with their defaults, or add them by hand),
+then land the 3.1.0 workflow; keys added alongside it are not on the base
+yet. A first CodeFlow adoption has no policy on its base, so its security
+review fails until the policy lands; merge that pull request over the
+failing check, or land the policy alone first.
 
 ## Two planes, deliberately
 
@@ -345,4 +359,5 @@ as extra steps when your stack warrants:
 
   With a `.gitleaks.toml` already, add only the `[[allowlists]]` block to
   that file; leave its `[extend]` section as it is.
-- **osv-scanner** — dependency/supply-chain audit: `osv-scanner scan -r .`
+- **osv-scanner** — dependency/supply-chain audit: `osv-scanner scan -r --no-ignore .`
+  (`--no-ignore`, so a `.gitignore` the change edits cannot hide a lockfile)

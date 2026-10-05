@@ -265,12 +265,21 @@ erratum below, never an edit of the section.
   trusted commit: the pull request's base, or the pushed commit on a push.
   A missing policy file, a missing or unreadable key, or a value other than
   `block`, `warn` or `off` fails the job instead of warning. `codeflow ci`
-  names a change that lowers or removes either key. The project setup hook
-  can no longer skip the test gate: the gate runs the `codeflow` found
-  before the hook, `set -eu` holds again after it, and an `exit` in it fails
-  the run. To adopt, run `codeflow update`, which also adds either key if
-  your policy lacks it; a new suppression now takes effect once its own pull
-  request lands.
+  names a change that lowers or removes either key. osv-scanner now runs
+  with `--no-ignore`, so a `.gitignore` the change edits cannot hide a
+  lockfile. The project setup hook cannot skip the test gate by accident: a
+  `codeflow` function, a `PATH` entry, `set +e` or an `exit` in it leaves
+  the gate running or fails the run. The hook still runs with the gate's
+  authority, like the CI file a change can edit, so `codeflow ci` names a
+  change that adds, edits or removes it for its reviewer. To adopt: if your
+  policy lacks either key, land the keys first under your current workflow
+  (`codeflow update` adds them), then the 3.1.0 workflow, since the job
+  reads the keys from the base. A first CodeFlow adoption has no policy on
+  its base, so its security review fails until the policy lands. In
+  `block` mode, a new suppression takes effect once it lands, so an
+  advisory that blocks every pull request is cleared by fixing the
+  dependency, or by an administrator merging the suppression over the
+  failing check.
 
 <!-- codeflow:release-impact patch -->
 - **A secret scan finding on one branch no longer fails every pull
@@ -285,8 +294,9 @@ erratum below, never an edit of the section.
   Each run prints which history it read, and exemptions are still read only
   from the trusted commit.
   This changes what a pull request's scan means: a finding already on
-  another branch no longer fails it, and only the weekly scan reports it.
-  That schedule runs only once the workflow is on the default branch. To
+  another branch no longer fails it, and only a full-history scan (weekly,
+  manual or fallback) reports it.
+  The weekly schedule runs only once the workflow is on the default branch. To
   adopt, run `codeflow update`, review the workflow it merges with your
   edits, land it on the default branch, and check that the scheduled run
   appears there.

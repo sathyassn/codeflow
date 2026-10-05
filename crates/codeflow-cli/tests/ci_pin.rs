@@ -876,6 +876,9 @@ fn audit_repo(
     if suppression == "head" {
         std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
     }
+    if suppression == "gitignore" {
+        std::fs::write(work.join(".gitignore"), "Cargo.lock\n").unwrap();
+    }
     git(work, &["add", "-A"]);
     git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
     base
@@ -884,12 +887,13 @@ fn audit_repo(
 /// Run the security-review job's dependency audit step in `repo` with
 /// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
 /// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
-/// beside the lockfile.
+/// beside the lockfile and, as osv-scanner does, skips a lockfile the
+/// `.gitignore` names unless it runs with `--no-ignore`.
 fn run_audit_step(repo: &Path, trusted: &str) -> Output {
     let script = run_blocks(CI, "dependency audit").remove(0);
     let bin = repo.parent().unwrap().join("audit-bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let scanner = "#!/bin/sh\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho 'GHSA-test advisory'; exit 1\n";
+    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho 'GHSA-test advisory'; exit 1\n";
     let curl = format!(
         "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
         scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
@@ -957,6 +961,11 @@ fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit
 
     // The head adds its own suppression: the base's (none) applies.
     let (ok, text) = run(Some(&block), &block, "head");
+    assert!(!ok, "{text}");
+    assert!(text.contains("GHSA-test"), "{text}");
+
+    // The head hides its lockfile behind a `.gitignore`: it is still read.
+    let (ok, text) = run(Some(&block), &block, "gitignore");
     assert!(!ok, "{text}");
     assert!(text.contains("GHSA-test"), "{text}");
 

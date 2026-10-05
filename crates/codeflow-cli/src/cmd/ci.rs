@@ -292,6 +292,9 @@ pub fn run(args: &CiArgs) -> i32 {
         return 2;
     };
     note_lowered_security_levels(&root, &judging.raw, &head);
+    if let Some(authority) = authority.as_ref() {
+        note_changed_setup_hook(&root, authority.sha(), &head);
+    }
     let configured = &judging.policy.git;
     let mut tagged: Vec<TaggedViolation> = Vec::new();
     let adoption = adopter::resolve(
@@ -1187,10 +1190,12 @@ fn note_lowered_security_levels(
     let Ok(Some(base)) = judging else {
         return;
     };
-    let Ok(Some(text)) = codeflow_core::hooks::landed_policy::policy_text_at(root, head) else {
-        return;
+    // A head without the policy file removes every key it held.
+    let head_raw = match codeflow_core::hooks::landed_policy::policy_text_at(root, head) {
+        Ok(Some(text)) => serde_json::from_str::<serde_json::Value>(&text).ok(),
+        Ok(None) => None,
+        Err(_) => return,
     };
-    let head_raw = serde_json::from_str::<serde_json::Value>(&text).ok();
     for key in ["security_review", "dep_audit"] {
         let pointer = format!("/git/{key}");
         let Some(was) = base.pointer(&pointer).and_then(serde_json::Value::as_str) else {
@@ -1210,6 +1215,36 @@ fn note_lowered_security_levels(
             Some(_) => {}
         }
     }
+}
+
+/// The blob id of `path` at `rev`, or `None` when the commit lacks it.
+fn blob_at(root: &Path, rev: &str, path: &str) -> Option<String> {
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{rev}:{path}"))
+        .output()
+        .ok()?;
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !id.is_empty()).then_some(id)
+}
+
+/// sathyassn/codeflow#81: name a change that adds, edits or removes the
+/// project setup hook. The hook runs in the gates job with the gate's
+/// authority, as the CI file does, so its reviewer is the boundary.
+fn note_changed_setup_hook(root: &Path, base: &str, head: &str) {
+    const HOOK: &str = ".codeflow/ci-setup.sh";
+    let (was, now) = (blob_at(root, base, HOOK), blob_at(root, head, HOOK));
+    let verb = match (&was, &now) {
+        (None, Some(_)) => "adds",
+        (Some(_), None) => "removes",
+        (Some(a), Some(b)) if a != b => "edits",
+        _ => return,
+    };
+    println!(
+        "codeflow ci: note: this change {verb} {HOOK}, which runs in the gates job before `codeflow test` with the gate's authority; review it as you would the CI file"
+    );
 }
 
 /// Report the ruleset actually enforced: the loader falls back to the

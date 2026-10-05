@@ -164,10 +164,10 @@ jobs:
       - name: codeflow test
         run: |
           set -eu
-          # The hook runs with the gate's authority, so it cannot move what the
-          # gate calls or where: the binary and the folder are fixed read-only
-          # first, set -eu holds again once the hook returns, and a run the
-          # hook ends (an `exit` in it) fails before the gate.
+          # The hook runs with the gate's authority, like this file, so it is
+          # reviewed as this file is. These lines keep it from skipping the gate
+          # by accident: the binary and folder are fixed read-only first, set -eu
+          # holds again once it returns, and a run it ends (an `exit`) fails.
           codeflow_bin=$(command -v codeflow)
           codeflow_root=$(pwd)
           readonly codeflow_bin codeflow_root
@@ -822,7 +822,8 @@ jobs:
       # block an unrelated PR. Suppressions also come from the trusted commit:
       # the step replaces every osv-scanner.toml in the checkout with the
       # trusted commit's copies, so a new suppression takes effect once its
-      # own pull request lands.
+      # own pull request lands. osv-scanner runs with --no-ignore, so a
+      # .gitignore the change edits cannot hide a lockfile from the audit.
       - name: dependency audit (osv-scanner)
         env:
           TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -897,7 +898,7 @@ jobs:
           chmod +x osv-scanner
 
           set +e
-          out=$(./osv-scanner scan -r . 2>&1); rc=$?
+          out=$(./osv-scanner scan -r --no-ignore . 2>&1); rc=$?
           set -e
           printf '%s\n' "$out"
 
