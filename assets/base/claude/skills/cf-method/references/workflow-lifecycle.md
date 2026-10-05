@@ -116,7 +116,8 @@ evidence returns to its owning stage for repair and proportional re-verification
 
 - unclear or materially changed intent/plan -> `cf-plan` and a new approved
   version;
-- implementation defect -> responsible primary and executor via `cf-develop`;
+- implementation defect -> responsible primary and executor via `cf-develop`,
+  a reported one first through `issue-handling.md`;
 - review concern -> the affected producer, then independent re-review;
 - documentation or PR evidence gap -> `cf-ship` or the standalone docs owner;
 - deterministic gate failure -> fix or honor the gate, never bypass it;

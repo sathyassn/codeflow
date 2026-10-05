@@ -162,6 +162,30 @@ erratum below, never an edit of the section.
   Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
   `project-management/templates/` carries the new section.
 
+<!-- codeflow:release-impact minor -->
+- **Reported defects are fixed by cause and class, with a written critical
+  path.** A new `cf-method` reference, `issue-handling.md`, takes a reported
+  defect from intake to closure: reproduce it and judge its severity, name
+  the cause and the defect class, search the tree for every site of the
+  class, group issues that share a cause into one unit with a design first
+  for guards, parsers, policy, acceptance rules, hooks and CI, fix the whole
+  class with a durable check where one can be written, and close the issue
+  with the sites fixed and deferred and the release. A review round that
+  finds a new instance of the same class stops the rounds and sends the
+  unit back to design. A critical defect (live in a release or blocking
+  current work, and blocking adopters, weakening a security boundary,
+  losing data or hanging a gate) gets interim guidance the same day, a
+  prioritized fix when that guidance does not clear the block, a recorded
+  release decision and a notice to affected adopters; moving another
+  epic's planned work for it is the operator's call. The lifecycle reference's repair bullet points a
+  reported defect at it, and `cf-reviewer` checks that the fix covers the
+  class and that the sweep is recorded. It adds no check, pull request,
+  approval or review round. Standard and full tiers receive it with
+  `codeflow update`; nothing else needs to change. For CodeFlow itself,
+  `docs/releasing.md` "Critical issues" states the routes and why releases
+  stay on `main` with no maintenance branch, and the bug report template
+  asks for a severity.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -251,6 +275,22 @@ erratum below, never an edit of the section.
   enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow init` no longer hangs on a full pipe.** In a repository with
+  enough folders, `codeflow init` could block forever: it wrote all of the
+  folder names to `git check-ignore -v -n --stdin -z` before reading any
+  answer, while git wrote an answer per name, so once the output pipe
+  filled each side waited for the other. The input is now written from
+  its own thread while the output is read, through one module that is the
+  only place codeflow pipes a child's stdin: the nested-repository scan,
+  the `codeflow doctor` probes that pass input, the `gh` calls that pass a
+  request body, the ID registry, the pre-push and CI git reads, the
+  conflict-marker attribute check and the portal's git reads. Output of
+  any size completes, and a child that stops reading early is judged by
+  its exit status. A test that parses the Rust sources fails when new code names a child's
+  stdin outside that module; code inside macro invocations and raw file
+  descriptors are not covered.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A

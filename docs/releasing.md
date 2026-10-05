@@ -528,6 +528,31 @@ A draft is not public and has no tag yet, so it can be deleted:
 - A public version is spent forever. No tag or version is repurposed.
 - Material work and withdrawals stay blocked while an attempt is unresolved.
 
+### Critical issues
+
+CodeFlow's routes for a critical defect:
+
+| Step | CodeFlow's route | Who decides |
+|---|---|---|
+| Process | The issue-handling reference, `.agents/skills/cf-method/references/issue-handling.md`, defines a critical defect and the order of responses; the operator set the routes below on 2026-10-04 | the operator |
+| Marking | The `critical` label at intake, naming the criterion that holds; the bug report template asks the reporter for the same criteria | the primary |
+| Interim guidance | A workaround that is true now, tested before it is posted, in the issue the same day and in the release plan when adopters are affected; it needs no release and changes no guard | the primary |
+| Prioritized fix | The fix moves ahead of planned work in its own epic | the primary; the operator when it moves another epic's planned work or work the operator ordered |
+| Release | Only from the current tip of `main`, so every pending change rides with the fix; the fix lands first and `main` stays green and releasable. Issue 48 (the 3.0.0 managed secret scan covers every branch, so one branch's finding turns an adopter's pull requests red) is fixed in 3.1.0 this way, not in a 3.0.1 patch | the operator dispatches |
+| Adopters told | The issue comment, the `CHANGELOG.md` entry with its `Migration` line and the release notes; a security defect goes through [private vulnerability reporting](SECURITY.md), never a public issue | the primary writes, the operator publishes |
+
+#### Why there is no maintenance branch
+
+| A maintenance branch, such as `release/3.0` for a 3.0.1 patch, would change | Where | What it needs |
+|---|---|---|
+| Publication guard: the dispatch must run on `main` | `.github/workflows/release-plan-authority.yml:41`; `scripts/release.py:1839` | accept a second ref |
+| Publication guard: the source must be the current `main` tip | `.github/workflows/release-plan-authority.yml:43`; `scripts/release.py:1822` | accept a source that is not `main` |
+| Publication guard: the source must be a PR merged into `main` | `scripts/release.py:1860` | accept a merge into the branch |
+| One pending section, bumped once from the published baseline | `scripts/release.py:817`, `scripts/release.py:830` | a second live `CHANGELOG.md` section and target |
+| Branch protection | repository settings | rules for the new branch |
+| A fix that applies to both lines | each such pull request | landed twice, once per line |
+| Loosening a publication guard | the rows above | a security-relevant operator decision, taken with this cost stated, never a step taken under pressure |
+
 ### Re-verification before tagging
 
 Before tagging, re-verify these claims against the currently installed harness
