@@ -10,11 +10,13 @@ pub enum Kind {
     Spc,
     Tsk,
     Adr,
+    /// An operator feedback item (`FB-NNN`).
+    Fb,
 }
 
 impl Kind {
     /// Every kind, in registry order.
-    pub const ALL: [Kind; 4] = [Kind::Epc, Kind::Spc, Kind::Tsk, Kind::Adr];
+    pub const ALL: [Kind; 5] = [Kind::Epc, Kind::Spc, Kind::Tsk, Kind::Adr, Kind::Fb];
 
     /// The id prefix and registry directory name.
     #[must_use]
@@ -24,6 +26,7 @@ impl Kind {
             Kind::Spc => "SPC",
             Kind::Tsk => "TSK",
             Kind::Adr => "ADR",
+            Kind::Fb => "FB",
         }
     }
 
@@ -136,7 +139,8 @@ impl fmt::Display for RegId {
 }
 
 /// The record id a tracked path holds, for the record layouts `CodeFlow`
-/// reads: flat tasks, specs and epics, the nested epic layout, and ADRs.
+/// reads: flat tasks, specs and epics, the nested epic layout, ADRs and
+/// operator feedback items.
 #[must_use]
 pub fn record_id_from_path(path: &str) -> Option<RegId> {
     if let Some(name) = path.strip_prefix("docs/decisions/") {
@@ -159,6 +163,7 @@ pub fn record_id_from_path(path: &str) -> Option<RegId> {
         ["specs", file] => (file.strip_suffix(".md")?, Kind::Spc),
         ["epics", file] => (file.strip_suffix(".md")?, Kind::Epc),
         ["epics", epic, file] if file.strip_suffix(".md") == Some(epic) => (*epic, Kind::Epc),
+        ["feedback", file] => (file.strip_suffix(".md")?, Kind::Fb),
         _ => return None,
     };
     RegId::parse(stem).filter(|id| id.kind() == expected)
@@ -398,6 +403,12 @@ mod tests {
         assert!(RegId::parse("TSK-1").is_none());
         assert!(RegId::parse("ADR-072").is_none());
         assert!(RegId::parse("FOO-100").is_none());
+        let feedback = RegId::parse("FB-007").unwrap();
+        assert_eq!(feedback.kind(), Kind::Fb);
+        assert_eq!(feedback.registry_path(), "ids/FB/007.toml");
+        assert_eq!(RegId::canonical(Kind::Fb, 7), feedback);
+        assert!(RegId::parse("FB-7").is_none());
+        assert!(RegId::parse("FB-001-002").is_none());
         assert_eq!(RegId::canonical(Kind::Adr, 73).to_string(), "ADR-0073");
         assert_eq!(
             RegId::from_registry_path("ids/TSK/002-001.toml"),
@@ -434,6 +445,12 @@ mod tests {
             id("docs/decisions/ADR-0072-shared-id-registry.md").as_deref(),
             Some("ADR-0072")
         );
+        assert_eq!(
+            id("project-management/feedback/FB-012.md").as_deref(),
+            Some("FB-012")
+        );
+        assert_eq!(id("project-management/feedback/INDEX.md"), None);
+        assert_eq!(id("project-management/feedback/TSK-012.md"), None);
         assert_eq!(id("project-management/tasks/SPC-001.md"), None);
         assert_eq!(id("project-management/templates/task.md"), None);
         assert_eq!(id("docs/decisions/README.md"), None);
