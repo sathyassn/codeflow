@@ -4700,7 +4700,16 @@ impl Reader<'_> {
                                     names.insert(text.to_string());
                                 }
                                 None => {
-                                    if glob_match(part, &name.to_string_lossy()) {
+                                    // A `?` or a `[..]` consumes one byte of
+                                    // a name in the C locale, where the lossy
+                                    // spelling holds one character for a
+                                    // run of bytes, so the lossy match
+                                    // cannot rule such a name out. With only
+                                    // literals and `*`, it answers as the
+                                    // exact bytes would.
+                                    if part.contains(['?', '[', '\\'])
+                                        || glob_match(part, &name.to_string_lossy())
+                                    {
                                         return None;
                                     }
                                 }
@@ -7559,6 +7568,30 @@ mod tests {
         let inner = project.path().join("build");
         let found = composed_deletion_in("rm -rf ../root-link/*", Some(&inner));
         assert_eq!(found.map(|f| f.target), Some("/"));
+    }
+
+    /// Issue 79: in the C locale `?` matches one byte, so `??` matches the
+    /// name `e2 82`, which reads as one replacement character as text. Such a
+    /// name is never left out of the glob silently: the deletion is unproven.
+    #[cfg(unix)]
+    #[test]
+    fn a_glob_that_may_match_a_name_that_is_not_utf8_is_unproven() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let project = tempfile::tempdir().unwrap();
+        let odd = project
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"\xe2\x82"));
+        if std::fs::write(&odd, b"x").is_err() {
+            return; // this volume refuses names that are not UTF-8
+        }
+        let found = composed_deletion_in("rm -rf ??", Some(project.path()));
+        assert!(found.is_some_and(|found| found.unproven.is_some()));
+        // A literal pattern no such name can match stays proven.
+        std::fs::write(project.path().join("cafe"), b"x").unwrap();
+        assert_eq!(
+            composed_deletion_in("rm -rf cafe*", Some(project.path())),
+            None
+        );
     }
 
     /// A refusal that rests on one of several feasible values says so

@@ -310,12 +310,32 @@ fn display_encoded_path(encoded: &str) -> String {
 
 #[cfg(not(unix))]
 fn display_encoded_path(encoded: &str) -> String {
-    encoded.replace("%25", "%")
+    // The `%00` tail of a name that is not text carries its exact bytes; it
+    // is not shown.
+    let shown = encoded
+        .split_once("%00")
+        .map_or(encoded, |(shown, _)| shown);
+    shown.replace("%25", "%")
 }
 
+/// A path as a key. Valid text is itself with `%` as `%25`. A path that is not
+/// valid text (an unpaired surrogate on Windows) is its lossy text, `%00` and
+/// the hex of its exact encoding. Valid text never holds `%00` once its `%`
+/// is escaped, so the real U+FFFD and an unpaired surrogate never share a key
+/// (OS text rule, issue 79).
 #[cfg(not(unix))]
 fn encode_path(path: &Path) -> String {
-    path.to_string_lossy().replace('%', "%25")
+    match path.to_str() {
+        Some(text) => text.replace('%', "%25"),
+        None => {
+            let mut encoded = path.to_string_lossy().replace('%', "%25");
+            encoded.push_str("%00");
+            for byte in path.as_os_str().as_encoded_bytes() {
+                let _ = write!(encoded, "{byte:02x}");
+            }
+            encoded
+        }
+    }
 }
 
 fn source_file(root: &Path, abs: PathBuf, kind: &'static str) -> SourceFile {

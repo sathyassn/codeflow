@@ -3441,14 +3441,22 @@ fn find_name_matches(filter: Option<&[(String, bool)]>, path: &Path) -> bool {
     if path.file_name().is_some_and(|n| n == "*") {
         return true;
     }
-    let name = path
-        .file_name()
-        .map_or_else(|| path.to_string_lossy(), |n| n.to_string_lossy());
+    // OS text rule (issue 79): a candidate is a name read from disk, which
+    // need not be valid UTF-8. A single-character wildcard consumes one byte
+    // in the C locale but one replacement character in the lossy spelling, so
+    // the lossy answer cannot rule such a name out: it stays a candidate
+    // (protection kept) unless the pattern is literals and `*` only.
+    let lossy = path.file_name().map(std::ffi::OsStr::to_string_lossy);
+    let invalid = path.file_name().is_some_and(|name| name.to_str().is_none());
+    let name = lossy.unwrap_or_else(|| path.to_string_lossy());
     filter.iter().all(|(pattern, insensitive)| {
         let options = glob::MatchOptions {
             case_sensitive: !insensitive,
             ..glob::MatchOptions::new()
         };
+        if invalid && pattern.contains(['?', '[', '\\']) {
+            return true;
+        }
         shell_pattern(pattern).matches_with(&name, options)
     })
 }
@@ -3704,7 +3712,7 @@ fn find_action_violation(
                         let (shown, dir) = match (in_dir, candidate.parent(), candidate.file_name())
                         {
                             (true, Some(parent), Some(name)) => (
-                                format!("./{}", name.to_string_lossy()),
+                                format!("./{}", crate::portable_path::slashed(Path::new(name))),
                                 parent.to_path_buf(),
                             ),
                             _ => (crate::portable_path::slashed(candidate), cwd.to_path_buf()),
@@ -8527,6 +8535,22 @@ mod registry_guard_tests {
 mod tests {
     use super::super::policy::PolicyLevel;
     use super::*;
+
+    /// Issue 79: `-name '??'` may match a name of two bytes that is not valid
+    /// UTF-8 (one replacement character as text), so the candidate stays; a
+    /// literal pattern is judged as before.
+    #[cfg(unix)]
+    #[test]
+    fn a_find_name_filter_keeps_a_candidate_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let odd = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/repo/.git/\xe2\x82"));
+        let wildcard = vec![("??".to_string(), false)];
+        assert!(find_name_matches(Some(&wildcard), &odd));
+        let literal = vec![("config".to_string(), false)];
+        assert!(!find_name_matches(Some(&literal), &odd));
+        let star = vec![("*".to_string(), false)];
+        assert!(find_name_matches(Some(&star), &odd));
+    }
 
     fn ctx<'a>(policy: &'a GitPolicy, branch: &'a str) -> GuardContext<'a> {
         GuardContext {

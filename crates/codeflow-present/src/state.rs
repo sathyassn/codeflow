@@ -3566,7 +3566,7 @@ fn canonical_path_identity(path: &Path) -> Vec<u8> {
     #[cfg(not(any(unix, windows)))]
     {
         let mut identity = b"fallback\0".to_vec();
-        identity.extend_from_slice(path.as_os_str().to_string_lossy().as_bytes());
+        identity.extend_from_slice(path.as_os_str().as_encoded_bytes());
         identity
     }
 }

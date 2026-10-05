@@ -77,16 +77,14 @@ pub fn revision(root: &Path) -> Option<String> {
 /// hex of the bytes: a path never holds a NUL, so no valid name can equal that
 /// key, and two different invalid names differ in their hex, so one name never
 /// hides a change of another in the snapshot.
-fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
-    let key = crate::git::GitName::from_bytes(raw).storage_key();
-    #[cfg(unix)]
-    let path = {
-        use std::os::unix::ffi::OsStrExt;
-        root.join(std::ffi::OsStr::from_bytes(raw))
-    };
-    #[cfg(not(unix))]
-    let path = root.join(String::from_utf8_lossy(raw).as_ref());
-    (key, path)
+fn tracked_entry(root: &Path, raw: &[u8]) -> (String, Option<PathBuf>) {
+    let name = crate::git::GitName::from_bytes(raw);
+    // Exact bytes where the platform holds them. Where it cannot (a name that
+    // is not UTF-8 on native Windows) no file of that name can exist, so
+    // there is no path and the key alone stands for the entry, never a
+    // lossy lookalike of another name.
+    let path = name.os_path().ok().map(|relative| root.join(relative));
+    (name.storage_key(), path)
 }
 
 /// The bytes of a link target, exact on every platform (`as_encoded_bytes`
@@ -108,6 +106,13 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
         .iter()
     {
         let (name, path) = tracked_entry(root, &entry.path);
+        let Some(path) = path else {
+            result.insert(
+                name,
+                digest(&[entry.mode.to_le_bytes().as_slice(), b"<unrepresentable>"].concat()),
+            );
+            continue;
+        };
         let bytes = if path.is_symlink() {
             // The exact target bytes: a lossy spelling would give two
             // different targets one hash and hide a change of the link.

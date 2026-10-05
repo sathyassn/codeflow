@@ -2234,10 +2234,28 @@ impl ReviewRepositories {
     /// Refuses missing or ambiguous hosted repository identity.
     pub fn repository(&self, branch: &str) -> Result<String, String> {
         let repo = &self.repo;
-        let config = repo.config().map_err(|error| error.to_string())?;
+        // `get_bytes` reads a snapshot, not the live configuration.
+        let config = repo
+            .config()
+            .and_then(|mut config| config.snapshot())
+            .map_err(|error| error.to_string())?;
         let mut names = std::collections::BTreeSet::new();
-        if let Ok(name) = config.get_string(&format!("branch.{branch}.remote")) {
-            names.insert(name);
+        // OS text rule (issue 79): an unset setting is absent, but a value
+        // that is not valid UTF-8 names a remote this check cannot look up,
+        // so it is a refusal, never a fall back to `origin`.
+        match config.get_bytes(&format!("branch.{branch}.remote")) {
+            Ok(bytes) => {
+                let name = GitName::from_bytes(bytes);
+                let text = name.rule_text().map_err(|error| {
+                    format!(
+                        "cannot verify review for this pin: the configured remote is not valid UTF-8 ({})",
+                        error.display()
+                    )
+                })?;
+                names.insert(text.to_string());
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(error.to_string()),
         }
         let suffix = format!("/{branch}");
         for candidate in self.remote_branches.as_ref().map_err(Clone::clone)? {
@@ -3306,6 +3324,28 @@ permission_preset = "strict"
     fn a_remote_that_is_not_utf8_has_no_hosted_repository_to_guess() {
         let dir = tempfile::tempdir().unwrap();
         crate::git::repo_with_refs(dir.path(), &[b"refs/remotes/caf\xe9/task/TSK-001-x"]);
+        let repositories = ReviewRepositories::open(dir.path()).unwrap();
+        let error = repositories.repository("task/TSK-001-x").unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Round six on issue 79: a `branch.<name>.remote` that is not valid UTF-8
+    /// is a refusal, never a fall back to `origin` (another repository).
+    #[test]
+    fn a_configured_remote_that_is_not_utf8_is_refused_not_replaced_by_origin() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_refs(dir.path(), &[b"refs/heads/task/TSK-001-x"]);
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(
+                b"[remote \"origin\"]\n\turl = https://github.com/wrong/owner.git\n\
+                  [branch \"task/TSK-001-x\"]\n\tremote = caf\xff\n",
+            )
+            .unwrap();
         let repositories = ReviewRepositories::open(dir.path()).unwrap();
         let error = repositories.repository("task/TSK-001-x").unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");

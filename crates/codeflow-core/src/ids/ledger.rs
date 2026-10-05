@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::entry::{Entry, Kind, RegId};
-use super::git::{z_fields, Git};
+use super::git::{z_records, Git};
 use super::IdsError;
 
 /// The first addition of one registry path.
@@ -382,7 +382,7 @@ pub fn short(sha: &str) -> &str {
 /// NUL-delimited raw records. A merge lists its changes against its first
 /// parent, so a file only the merge tree introduces is still seen.
 fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
-    let log = git.run(&[
+    let log = git.run_bytes(&[
         "log",
         "--reverse",
         "--topo-order",
@@ -396,8 +396,8 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         tip,
     ])?;
     let mut commits = Vec::new();
-    for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut fields = z_fields(record);
+    for record in z_records(&log) {
+        let mut fields = record.iter().map(String::as_str);
         let header = fields.next().unwrap_or_default();
         let mut parts = header.split('\x1f');
         let sha = parts.next().unwrap_or_default().trim().to_string();

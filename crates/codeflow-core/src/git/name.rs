@@ -303,6 +303,15 @@ pub fn diff_paths(diff: &git2::Diff<'_>) -> Vec<GitName> {
     paths
 }
 
+/// Whether a [`GitName::storage_key`] stands for a name that is valid text.
+/// A real name never holds NUL, so the key of a name that is not text is the
+/// only kind that does. A rule that admits a path by what it says (a planning
+/// record, a document) asks this first, so such a name is outside every rule.
+#[must_use]
+pub fn key_is_text(key: &str) -> bool {
+    !key.contains('\0')
+}
+
 /// The display form of a [`GitName::storage_key`], for a message.
 #[must_use]
 pub fn display_key(key: &str) -> String {

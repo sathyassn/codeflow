@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
-use super::git::{z_fields, Git};
+use super::git::{z_fields, z_records, Git};
 use super::{IdsError, REGISTRY_BRANCH};
 
 /// One copy of a record in one tree.
@@ -135,9 +135,12 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
                 "--",
             ];
             args.extend_from_slice(&RECORD_ROOTS);
-            git.run(&args)?
+            git.run_bytes(&args)?
         };
-        max = max.max(max_seq_in(z_fields(&listing), kind));
+        max = max.max(max_seq_in(
+            z_fields(&listing).iter().map(String::as_str),
+            kind,
+        ));
     }
     Ok(max)
 }
@@ -203,10 +206,10 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
         "--",
     ];
     args.extend_from_slice(&RECORD_ROOTS);
-    let log = git.run(&args)?;
+    let log = git.run_bytes(&args)?;
     let mut out: AddLog = BTreeMap::new();
-    for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut fields = z_fields(record);
+    for record in z_records(&log) {
+        let mut fields = record.iter().map(String::as_str);
         let sha = fields.next().unwrap_or_default().trim().to_string();
         for change in raw_fields(fields) {
             if change.status != 'A' {
@@ -430,7 +433,7 @@ fn lifetime_start(
 ///
 /// Returns an error when git fails.
 pub(crate) fn added_records(git: &Git, commit: &str) -> Result<Vec<(String, String)>, IdsError> {
-    let changes = git.run(&[
+    let changes = git.run_bytes(&[
         "diff-tree",
         "-r",
         "--root",
@@ -556,8 +559,8 @@ pub(crate) struct RawChange {
 }
 
 /// Parse `diff-tree --raw -z` output: a `:meta` field, then its path.
-pub(crate) fn raw_changes(output: &str) -> Vec<RawChange> {
-    raw_fields(z_fields(output))
+pub(crate) fn raw_changes(output: &[u8]) -> Vec<RawChange> {
+    raw_fields(z_fields(output).iter().map(String::as_str))
 }
 
 /// Parse raw diff fields. A combined entry (`--cc`, a merge) starts with
@@ -797,7 +800,7 @@ mod tests {
              ::000000 100644 100644 {z} ccc ddd AM\0tasks/TSK-003.md\0\
              ::100644 100644 000000 eee fff {z} DD\0tasks/TSK-004.md\0"
         );
-        let changes: Vec<(char, String, String)> = raw_changes(&output)
+        let changes: Vec<(char, String, String)> = raw_changes(output.as_bytes())
             .into_iter()
             .map(|change| (change.status, change.blob, change.path))
             .collect();

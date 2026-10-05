@@ -23,7 +23,8 @@ pub fn detect_stack(root: &Path) -> &'static str {
 pub enum HookManager {
     Husky,
     Lefthook,
-    /// `core.hooksPath` already points somewhere that is not ours.
+    /// `core.hooksPath` already points somewhere that is not ours (a storage
+    /// key; show it through `Display`).
     HooksPath(String),
 }
 
@@ -32,7 +33,9 @@ impl std::fmt::Display for HookManager {
         match self {
             Self::Husky => f.write_str("husky"),
             Self::Lefthook => f.write_str("lefthook"),
-            Self::HooksPath(path) => write!(f, "core.hooksPath={path}"),
+            Self::HooksPath(path) => {
+                write!(f, "core.hooksPath={}", crate::git::display_key(path))
+            }
         }
     }
 }
@@ -40,10 +43,12 @@ impl std::fmt::Display for HookManager {
 /// Path codeflow wires hooks into via `core.hooksPath`.
 pub const CODEFLOW_HOOKS_PATH: &str = ".codeflow/git-hooks";
 
-/// Raw `core.hooksPath` as git stores it (relative or absolute). `None` if unset.
+/// Raw `core.hooksPath` as git stores it (relative or absolute) as a storage
+/// key: a value that is not valid UTF-8 is kept, as a key that never equals
+/// [`CODEFLOW_HOOKS_PATH`] (OS text rule, issue 79). `None` if unset.
 #[must_use]
 pub fn configured_hooks_path(root: &Path) -> Option<String> {
-    gitutil::config_get(root, "core.hooksPath")
+    gitutil::config_get_key(root, "core.hooksPath")
 }
 
 /// Detects an existing hook manager that owns this repo's hooks.
@@ -62,7 +67,7 @@ pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {
             return Some(HookManager::Lefthook);
         }
     }
-    if let Some(path) = gitutil::config_get(root, "core.hooksPath") {
+    if let Some(path) = configured_hooks_path(root) {
         if path != CODEFLOW_HOOKS_PATH {
             return Some(HookManager::HooksPath(path));
         }
@@ -289,6 +294,26 @@ mod tests {
         assert!(git_dir_hooks(&main).is_some());
         git(&main, &["config", "core.hooksPath", ".husky"]);
         assert_eq!(git_dir_hooks(&main), None);
+    }
+
+    /// Issue 79: a `core.hooksPath` that is not valid UTF-8 is an existing
+    /// hook setup, so detection reports it and init does not overwrite it.
+    #[test]
+    fn a_hooks_path_that_is_not_utf8_is_an_existing_manager() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(tmp.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[core]\n\thooksPath = hooks-\xff\n")
+            .unwrap();
+        let found = detect_hook_manager(tmp.path()).expect("a manager");
+        assert!(matches!(found, HookManager::HooksPath(_)), "{found:?}");
+        assert_eq!(found.to_string(), "core.hooksPath=hooks-\\xff");
+        assert_eq!(git_dir_hooks(tmp.path()), None);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::entry::{frontmatter_value, new_uid, record_id_from_path, Entry, RegId, RECORD_ROOTS};
-use super::git::{z_fields, Git};
+use super::git::Git;
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::issue::{self, Fetched, Pushed, Request};
 use super::ledger::{short, Ledger};
@@ -600,10 +600,19 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
-    let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
+    // OS text rule (issue 79): the name is a file system location, so its
+    // exact bytes are used. A name this system cannot represent is left out
+    // (it is rewritten by no one, never by a lookalike).
+    let files: BTreeSet<crate::git::GitName> =
+        crate::git::name::parse_nul_list(&git.run_bytes(&args)?)
+            .into_iter()
+            .collect();
     let mut changed = Vec::new();
     for file in files {
-        let path = git.root().join(&file);
+        let Ok(relative) = file.os_path() else {
+            continue;
+        };
+        let path = git.root().join(relative);
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };

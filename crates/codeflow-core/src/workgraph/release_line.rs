@@ -1220,7 +1220,10 @@ fn judge(
                     format!("{at}: import with {count} resolved path(s), judged as direct work")
                 }
             });
-            if let Some(first) = resolutions.first() {
+            if let Some(first) = resolutions
+                .first()
+                .map(|path| crate::git::display_key(path))
+            {
                 let more = match resolutions.len() {
                     1 => String::new(),
                     count => format!(" and {} other path(s)", count - 1),
@@ -1464,7 +1467,11 @@ fn judge(
         }
         // A direct change of planning records alone needs no owner; anything
         // else is release-integration work.
-        if let Some(path) = changed.keys().find(|path| !is_planning_path(path)) {
+        if let Some(path) = changed
+            .keys()
+            .find(|path| !is_planning_path(path))
+            .map(|path| crate::git::display_key(path))
+        {
             let what = match unqualified {
                 Some(parent) => format!(
                     "merge {at} is no import (its parent {} is on no verified epic line's or the default target's first-parent chain) and brings {path}",

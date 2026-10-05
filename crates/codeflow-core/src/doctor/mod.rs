@@ -532,6 +532,7 @@ fn hooks_wiring(root: &Path) -> Wiring {
             return Wiring::Read;
         }
         if std::path::Path::new(&configured).is_absolute() {
+            let configured = crate::git::display_key(&configured);
             return Wiring::Broken(Finding::new(
                 format!(
                     "core.hooksPath is absolute ({configured}); the project-relative `{CODEFLOW_HOOKS_PATH}` lets each worktree use its own shims"

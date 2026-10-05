@@ -191,6 +191,18 @@ The rule:
   directory entry tested against a UUID or a nonce-suffixed temporary name is
   not one of ours when it is not valid UTF-8, because every generated name is
   ASCII, so the scan moves on.
+- **A glob on a name read from disk matches bytes.** In the C locale `?` and
+  `[..]` consume one byte, but the lossy spelling holds one character for a
+  run of bytes, so it cannot rule such a name out. The deletion guard treats a
+  glob with `?`, `[` or `\` that meets a name that is not UTF-8 as unproven,
+  and `find -name` keeps such a name as a candidate. A pattern of literals and
+  `*` is answered by the lossy spelling as the bytes would answer it. These are
+  the two listed matcher exceptions in the scan.
+- **Plumbing answers keep names exact.** The id registry's git runner reads text
+  answers strictly and name lists as bytes: a name that is not UTF-8 becomes its
+  storage key, which no record or registry path equals, and a file it must
+  rewrite is addressed by its exact bytes. Where a platform cannot hold a name
+  (native Windows), the key alone stands for the entry.
 - **Tree walks read names as bytes.** git2's `Tree::walk` stops with an error
   at a directory whose name is not UTF-8; `git::walk_tree` reads the entries
   as bytes. A record path is valid text, so a path that is not UTF-8 is not a

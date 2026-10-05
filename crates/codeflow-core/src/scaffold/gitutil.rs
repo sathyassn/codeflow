@@ -81,6 +81,20 @@ pub fn config_get(root: &Path, key: &str) -> Option<String> {
     })
 }
 
+/// `git config --get <key>` as a storage key (OS text rule, issue 79): a
+/// value that is not valid UTF-8 keeps its exact bytes in the key, so it is
+/// never read as unset and never equals a text value. Use it where an
+/// existing setting decides what the scaffold may overwrite.
+pub fn config_get_key(root: &Path, key: &str) -> Option<String> {
+    let out = git(root, &["config", "--get", key]).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    (!bytes.is_empty()).then(|| crate::git::GitName::from_bytes(bytes).storage_key())
+}
+
 pub fn config_set(root: &Path, key: &str, value: &str) -> Result<(), ScaffoldError> {
     git_ok(root, &["config", key, value])
 }
@@ -162,5 +176,29 @@ mod tests {
             .unwrap();
         assert_eq!(config_get(dir.path(), "demo.plain").as_deref(), Some("ok"));
         assert_eq!(config_get(dir.path(), "demo.word"), None);
+    }
+
+    /// A hooks path that is not valid UTF-8 is kept as a key, never read as
+    /// unset, so init does not overwrite it.
+    #[test]
+    fn a_config_key_keeps_a_value_that_is_not_utf8() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[demo]\n\tword = caf\xe9\n\tplain = ok\n")
+            .unwrap();
+        assert_eq!(
+            config_get_key(dir.path(), "demo.plain").as_deref(),
+            Some("ok")
+        );
+        let key = config_get_key(dir.path(), "demo.word").unwrap();
+        assert_ne!(key, "caf\u{fffd}");
+        assert_eq!(crate::git::display_key(&key), "caf\\xe9");
+        assert_eq!(config_get_key(dir.path(), "demo.absent"), None);
     }
 }

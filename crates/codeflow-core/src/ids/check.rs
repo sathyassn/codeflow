@@ -244,11 +244,12 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
         "--",
     ];
     args.extend_from_slice(&RECORD_ROOTS);
-    let diff = git.run(&args)?;
+    let diff = git.run_bytes(&args)?;
     let mut added_paths: Vec<(RegId, String)> = Vec::new();
     let mut removed: HashMap<RegId, String> = HashMap::new();
     let mut modified: Vec<(RegId, String)> = Vec::new();
-    let mut fields = z_fields(&diff);
+    let fields = z_fields(&diff);
+    let mut fields = fields.iter().map(String::as_str);
     while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
         let Some(id) = record_id_from_path(path) else {
             continue;

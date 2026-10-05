@@ -77,6 +77,18 @@ impl Git {
         checked(args, &output)
     }
 
+    /// Run git and return stdout as exact bytes, failing on a nonzero exit.
+    /// Use it where the answer holds names (OS text rule, issue 79), then
+    /// read it with [`z_fields`] or [`z_records`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the command and git's stderr.
+    pub fn run_bytes(&self, args: &[&str]) -> Result<Vec<u8>, IdsError> {
+        let output = self.output(args)?;
+        checked_bytes(args, output)
+    }
+
     /// Run git with extra environment, failing on a nonzero exit.
     ///
     /// # Errors
@@ -225,8 +237,9 @@ impl Git {
     ) -> Result<Vec<(String, String, String)>, IdsError> {
         let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", rev, "--"];
         args.extend_from_slice(paths);
-        let listing = self.run(&args)?;
+        let listing = self.run_bytes(&args)?;
         Ok(z_fields(&listing)
+            .iter()
             .filter_map(|line| {
                 let (meta, path) = line.split_once('\t')?;
                 let mut parts = meta.split_whitespace();
@@ -329,9 +342,30 @@ impl Drop for TempIndex {
     }
 }
 
+/// Text answers (shas, refs, config, counts) are read strictly: an answer
+/// that is not valid UTF-8 is an error, never a substituted spelling (OS
+/// text rule, issue 79). Answers that hold names come through
+/// [`Git::run_bytes`].
 fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        String::from_utf8(output.stdout.clone()).map_err(|_| {
+            IdsError::Git(format!(
+                "git {}: the answer is not valid UTF-8",
+                args.join(" ")
+            ))
+        })
+    } else {
+        Err(IdsError::Git(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+fn checked_bytes(args: &[&str], output: Output) -> Result<Vec<u8>, IdsError> {
+    if output.status.success() {
+        Ok(output.stdout)
     } else {
         Err(IdsError::Git(format!(
             "git {}: {}",
@@ -342,11 +376,86 @@ fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
 }
 
 /// The fields of NUL-delimited (`-z`) git output. Paths arrive verbatim, so
-/// a name git would quote (non-ASCII, a quote, a tab) is never altered.
-/// Leading newlines that `log -z` puts between a header and its first path
-/// are dropped, and so is the empty tail.
-pub fn z_fields(text: &str) -> impl Iterator<Item = &str> {
-    text.split('\0')
-        .map(|field| field.trim_start_matches('\n'))
+/// a name git would quote (non-ASCII, a quote, a tab) is never altered. A
+/// name that is not valid UTF-8 reads as its storage key (OS text rule,
+/// issue 79): it keeps its exact bytes, differs from every text name, and no
+/// record or registry path matches it. Leading newlines that `log -z` puts
+/// between a header and its first path are dropped, and so is the empty
+/// tail.
+#[must_use]
+pub fn z_fields(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .map(|field| {
+            let start = field
+                .iter()
+                .position(|byte| *byte != b'\n')
+                .unwrap_or(field.len());
+            &field[start..]
+        })
         .filter(|field| !field.is_empty())
+        .map(|field| crate::git::GitName::from_bytes(field).storage_key())
+        .collect()
+}
+
+/// The records of `log --format=%x1e...` output, each as its [`z_fields`].
+#[must_use]
+pub fn z_records(bytes: &[u8]) -> Vec<Vec<String>> {
+    bytes
+        .split(|byte| *byte == 0x1e)
+        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
+        .map(z_fields)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue 79: a name that is not valid UTF-8 keeps its exact bytes and
+    /// differs from the lookalike with a replacement character.
+    #[test]
+    fn a_name_that_is_not_utf8_is_kept_apart_from_its_lookalike() {
+        let fields = z_fields(b"docs/caf\xe9.md\0docs/caf\xef\xbf\xbd.md\0\n:meta\0");
+        assert_eq!(fields.len(), 3);
+        assert_ne!(fields[0], fields[1]);
+        assert_eq!(fields[1], "docs/caf\u{fffd}.md");
+        assert_eq!(crate::git::display_key(&fields[0]), "docs/caf\\xe9.md");
+        assert_eq!(fields[2], ":meta");
+        assert_eq!(z_records(b"\x1eabc\0x\0\x1e  \x1edef\0").len(), 2);
+    }
+
+    #[test]
+    fn a_tree_listing_names_a_path_that_is_not_utf8_by_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"docs/caf\xe9.md", b"one"),
+                (b"docs/caf\xef\xbf\xbd.md", b"two"),
+            ],
+        );
+        let tree = Git::new(dir.path()).tree("main", &[]).unwrap();
+        assert_eq!(tree.len(), 2);
+        let mut paths: Vec<&str> = tree.iter().map(|(_, _, path)| path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(paths[0], "docs/caf\u{fffd}.md");
+        assert_ne!(paths[0], paths[1]);
+        assert!(
+            paths[1].contains('\0'),
+            "the key of a name that is not text"
+        );
+    }
+
+    #[test]
+    fn a_text_answer_that_is_not_utf8_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::git::repo_with_tree(dir.path(), &[(b"a.txt", b"x")]);
+        let git = Git::new(dir.path());
+        // A blob read as text is not a name answer: the strict run refuses it.
+        let blob = git.tree("main", &[]).unwrap()[0].1.clone();
+        let written = git.write_blob(b"caf\xe9").unwrap();
+        assert!(git.run(&["cat-file", "blob", &written]).is_err());
+        assert!(git.run(&["cat-file", "blob", &blob]).is_ok());
+    }
 }

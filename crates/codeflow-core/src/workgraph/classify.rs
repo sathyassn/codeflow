@@ -187,10 +187,14 @@ impl PathSets {
 
 /// Whether `path` is a planning path: a record under `project-management/`
 /// (not the record templates, which are schema) or a plan under `docs/plan/`.
+/// A storage key of a name that is not text is never one (OS text rule,
+/// issue 79).
 #[must_use]
 pub fn is_planning_path(path: &str) -> bool {
-    (path.starts_with("project-management/") && !path.starts_with("project-management/templates/"))
-        || path.starts_with("docs/plan/")
+    crate::git::key_is_text(path)
+        && ((path.starts_with("project-management/")
+            && !path.starts_with("project-management/templates/"))
+            || path.starts_with("docs/plan/"))
 }
 
 /// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
@@ -226,6 +230,10 @@ const INSTRUCTION_STEMS: &[&str] = &["agents.", "claude.", "gemini."];
 pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPath> {
     if path == "AGENTS.md" {
         return Some(AmendmentPath::Instructions);
+    }
+    // A name that is not text is outside every planning class (issue 79).
+    if !crate::git::key_is_text(path) {
+        return None;
     }
     let parts: Vec<&str> = path.split('/').collect();
     let hidden = parts
@@ -504,6 +512,26 @@ mod tests {
         assert!(!is_planning_path("project-management/templates/task.md"));
         assert!(!is_planning_path("docs/guide.md"));
         assert!(!is_planning_path("src/lib.rs"));
+    }
+
+    /// Issue 79: the storage key of a name that is not text is no planning
+    /// record and no amendment document, whatever its prefix says.
+    #[test]
+    fn a_name_that_is_not_text_is_outside_the_planning_class() {
+        let project = ProjectPaths {
+            product: vec![],
+            watched: vec![],
+        };
+        let record = crate::git::GitName::from_bytes(b"project-management/tasks/TSK-002\xff.md")
+            .storage_key();
+        let doc = crate::git::GitName::from_bytes(b"docs/caf\xe9.md").storage_key();
+        assert!(!is_planning_path(&record));
+        assert_eq!(amendment_path(&record, &project), None);
+        assert_eq!(amendment_path(&doc, &project), None);
+        assert_eq!(
+            amendment_path("docs/cafe.md", &project),
+            Some(AmendmentPath::Doc)
+        );
     }
 
     /// TSK-229 AC-2, AC-4: a planning amendment carries records, plans,

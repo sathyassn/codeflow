@@ -712,3 +712,51 @@ fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
     let error = checkout_scope(dir.path(), None).unwrap_err();
     assert!(error.contains("not valid UTF-8"), "{error}");
 }
+
+/// Round six on issue 79: a path under `project-management/` whose name is not
+/// valid UTF-8 is no planning record, so a direct commit adding one is release
+/// integration work that needs an owner, and the message shows the name as
+/// escapes, never as the key with its NUL.
+#[cfg(unix)]
+#[test]
+fn a_direct_commit_of_a_record_name_that_is_not_utf8_is_not_planning_only() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let fx = Fx::new();
+    fx.release_importing(LINE_A);
+    let published = fx.git(&["rev-parse", &format!("origin/{RELEASE}")]);
+    assert_eq!(published.len(), 40);
+    let blob = fx.git(&["hash-object", "-w", "src/lib.rs"]);
+    let name = std::ffi::OsStr::from_bytes(b"project-management/tasks/TSK-002\xff.md");
+    let spec = std::ffi::OsString::from(format!("100644,{blob},"));
+    let mut cacheinfo = spec;
+    cacheinfo.push(name);
+    let out = crate::git::command()
+        .current_dir(&fx.root)
+        .args(["update-index", "--add", "--cacheinfo"])
+        .arg(&cacheinfo)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    fx.git(&["commit", "-q", "-m", "chore: add a record"]);
+    let judged = fx.judged(&[]).unwrap();
+    assert!(
+        judged
+            .path
+            .iter()
+            .all(|line| !line.contains("planning records only")),
+        "{:?}",
+        judged.path
+    );
+    assert!(
+        judged
+            .findings
+            .iter()
+            .any(|finding| finding.message.contains("TSK-002\\xff.md")),
+        "{:?}",
+        judged.findings
+    );
+    assert!(judged
+        .findings
+        .iter()
+        .all(|finding| !finding.message.contains('\0')));
+}

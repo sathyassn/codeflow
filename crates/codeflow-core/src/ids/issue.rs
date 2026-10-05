@@ -282,7 +282,10 @@ fn fresh_repository(git: &Git) -> Result<(), IdsError> {
             "--",
         ];
         args.extend_from_slice(&super::entry::RECORD_ROOTS);
-        if z_fields(&git.run(&args)?).any(|path| super::record_id_from_path(path).is_some()) {
+        if z_fields(&git.run_bytes(&args)?)
+            .iter()
+            .any(|path| super::record_id_from_path(path).is_some())
+        {
             return Err(IdsError::NotSeeded);
         }
     }
@@ -608,7 +611,7 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
     let commits = git.run(&args)?;
     let mut entries = Vec::new();
     for commit in commits.lines() {
-        let changes = git.run(&[
+        let changes = git.run_bytes(&[
             "diff-tree",
             "-r",
             "--root",

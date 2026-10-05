@@ -273,7 +273,12 @@ erratum below, never an edit of the section.
   name instead of stopping. `codeflow integrate` refuses to start from a
   branch it could not restore. The release check, the CI path inventory,
   the changed-path parsers, the conflict-marker check and the claim
-  refresh read paths and remote names exactly. One rule is in
+  refresh read paths and remote names exactly. A hosting remote or hooks
+  path in the configuration that is not UTF-8 is refused or kept, never read
+  as unset, so `codeflow init` does not overwrite an existing hooks path and
+  a review lookup does not fall back to another remote. The deletion guard
+  and `find -name` keep a name that a `?` or `[..]` pattern may match, and
+  the id registry reads name lists as bytes. One rule is in
   `docs/architecture.md`, a source scan fails on a new lossy decode that
   is not listed with its reason, and each site that stays strict says why
   next to the code.
