@@ -249,7 +249,17 @@ fn only_certified_lines_change_and_they_only_lose_the_three_raw_findings() {
         "corpus has {} lines",
         cases.len()
     );
-    let workers = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+    let workers = std::env::var("CODEFLOW_ORACLE_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| {
+            // Two cores stay free for the machine, as in the shell oracle.
+            std::thread::available_parallelism()
+                .map_or(2, std::num::NonZero::get)
+                .saturating_sub(2)
+                .clamp(1, 8)
+        });
     let (certified, changed) = std::thread::scope(|scope| {
         let handles: Vec<_> = cases
             .chunks(cases.len().div_ceil(workers))

@@ -170,16 +170,34 @@ impl Sandbox {
     }
 
     /// A clean working directory holding a plain file named after every stub.
+    /// A run leaves the decoys alone, so this removes what a run added and
+    /// rewrites only a decoy that is missing or changed, which costs far fewer
+    /// file operations than rebuilding the directory.
     fn reset(&self) {
         let work = self.work();
-        let _ = fs::remove_dir_all(&work);
-        fs::create_dir(&work).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        for entry in fs::read_dir(&work).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !STUBS.contains(&name.as_str()) {
+                let path = entry.path();
+                if fs::remove_file(&path).is_err() {
+                    let _ = fs::remove_dir_all(&path);
+                }
+            }
+        }
         for name in STUBS {
-            fs::write(work.join(name), "decoy").unwrap();
+            let path = work.join(name);
+            if fs::read(&path).ok().as_deref() != Some(b"decoy".as_slice()) {
+                let _ = fs::remove_dir_all(&path);
+                let _ = fs::remove_file(&path);
+                fs::write(&path, "decoy").unwrap();
+            }
         }
         let logs = self.root.path().join("logs");
-        let _ = fs::remove_dir_all(&logs);
-        fs::create_dir(&logs).unwrap();
+        for entry in fs::read_dir(&logs).unwrap() {
+            let _ = fs::remove_file(entry.unwrap().path());
+        }
     }
 
     fn files(&self) -> BTreeSet<String> {
@@ -230,9 +248,7 @@ impl Sandbox {
             if std::time::Instant::now() > deadline {
                 timed_out = true;
                 TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-                let _ = Command::new("kill")
-                    .args(["-KILL", &format!("-{}", child.id())])
-                    .status();
+                kill_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 break;
@@ -257,6 +273,24 @@ impl Sandbox {
         };
         (calls, marker)
     }
+}
+
+/// Kill every process in the group `pgid`. The `--` matters: without it
+/// procps `kill` on Linux signals only the group leader, and a pipeline's other
+/// members (a `grep -r /`, for one) keep running after the run is abandoned.
+fn kill_group(pgid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .status();
+}
+
+/// Whether any process is left in the group `pgid`.
+fn group_alive(pgid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", &format!("-{pgid}")])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 const SEEDS: &[&str] = &[
@@ -407,6 +441,23 @@ fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// Worker threads for the run. Every run starts a shell and its stub calls, so
+/// the workers keep two cores free for the machine itself: a hosted runner
+/// that had every core busy for the whole exhaustive run lost contact with its
+/// service. `CODEFLOW_ORACLE_WORKERS` sets the count instead.
+fn workers() -> usize {
+    std::env::var("CODEFLOW_ORACLE_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map_or(2, std::num::NonZero::get)
+                .saturating_sub(2)
+                .clamp(1, 8)
+        })
+}
+
 #[test]
 fn certified_lines_run_only_the_four_programs_in_bash_and_zsh() {
     let shells = shells();
@@ -431,9 +482,7 @@ fn certified_lines_run_only_the_four_programs_in_bash_and_zsh() {
         "the oracle exercised only {} certified lines",
         lines.len()
     );
-    let workers = std::thread::available_parallelism()
-        .map_or(4, std::num::NonZero::get)
-        .min(8);
+    let workers = workers();
     let failures: Vec<String> = std::thread::scope(|scope| {
         let handles: Vec<_> = lines
             .chunks(lines.len().div_ceil(workers))
@@ -473,6 +522,34 @@ fn certified_lines_run_only_the_four_programs_in_bash_and_zsh() {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
+    );
+}
+
+/// A run that hits the deadline must not leave its pipeline running: an
+/// abandoned `grep -r /` that kept scanning starved a hosted runner of CPU.
+#[test]
+fn a_run_stopped_at_the_deadline_leaves_no_process_behind() {
+    let mut child = Command::new("sh")
+        .args(["-c", "sleep 60 | cat; true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // Let the shell start both members of the pipeline.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+    let pgid = child.id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while group_alive(pgid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        !group_alive(pgid),
+        "processes of the stopped run are still running"
     );
 }
 

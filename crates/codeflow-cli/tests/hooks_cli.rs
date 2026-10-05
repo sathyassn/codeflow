@@ -1916,18 +1916,29 @@ fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
         "cat <<'EOF'\n$(sudo id)\n`su -`\ntrue; sudo id\nEOF\n",
     ];
     for tool in ["Bash", "run_terminal_command"] {
+        // `run_terminal_command` runs in the user's own shell, so it is
+        // certified only on a Unix host; on Windows the 3.0.0 floor applies.
+        let certified = tool == "Bash" || cfg!(unix);
         for command in allowed {
             let out = exec_guard_tool(dir.path(), tool, command);
-            assert_eq!(
-                out.status.code(),
-                Some(0),
-                "{tool}: should allow: {command}"
-            );
-            assert!(
-                out.stderr.is_empty(),
-                "{tool}: {command}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
+            if certified {
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tool}: should allow: {command}"
+                );
+                assert!(
+                    out.stderr.is_empty(),
+                    "{tool}: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            } else {
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tool}: keeps the 3.0.0 floor off Unix: {command}"
+                );
+            }
         }
     }
     // PowerShell reads `1,2` and `@name` differently, so nothing is certified.
