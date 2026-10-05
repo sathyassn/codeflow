@@ -1355,3 +1355,83 @@ fn the_journey_rule_matches_the_name_git_records() {
         text(&out)
     );
 }
+
+/// TSK-234 review round 10: no rendering of a name that is not UTF-8 keeps
+/// what a glob matches (`src/*[!0-9].rs` matches a lossy `src/\u{fffd}.rs`
+/// but not an escaped `src/\377.rs`), so a stacked successor that adds
+/// `src/<FF>.rs` is refused for the name instead of passing the journey
+/// rule.
+#[cfg(unix)]
+#[test]
+fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::{Command, Stdio};
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let pattern = "src/*[!0-9].rs";
+    write(
+        root,
+        ".codeflow/policy.json",
+        &serde_json::json!({"schema_version": 1, "git": {"product_paths": [pattern]}}).to_string(),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[TSK-001]").replace(" (journey)", ""),
+    );
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: plan a successor without a journey"],
+    );
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", child]);
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hash.stdin
+        .take()
+        .unwrap()
+        .write_all(b"pub fn own_change() {}\n")
+        .unwrap();
+    let blob = String::from_utf8(hash.wait_with_output().unwrap().stdout).unwrap();
+    let raw = std::ffi::OsString::from_vec(b"src/\xff.rs".to_vec());
+    let out = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(&raw)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    git(root, &["commit", "-qm", "feat: its own product change"]);
+    let out = push_check(root, child, "HEAD", bin.path());
+    let shown = text(&out);
+    assert!(!out.status.success(), "the name passed:\n{shown}");
+    assert!(shown.contains("not UTF-8"), "{shown}");
+}

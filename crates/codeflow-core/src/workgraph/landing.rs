@@ -596,7 +596,9 @@ impl<'r> RecordStore<'r> {
                 let merge = self.repo.find_commit(commit).map_err(unreadable)?;
                 from_parent = match super::acceptance::read_merge(self.repo, &merge) {
                     super::acceptance::MergeReading::Clean => true,
-                    super::acceptance::MergeReading::Changed(paths) => !paths.contains(&path),
+                    super::acceptance::MergeReading::Changed(paths) => {
+                        !paths.iter().any(|name| name.as_slice() == path.as_bytes())
+                    }
                     super::acceptance::MergeReading::Unknown(_) => false,
                 };
             }

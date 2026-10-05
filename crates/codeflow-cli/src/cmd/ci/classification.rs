@@ -436,7 +436,7 @@ fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
         tagged,
         RULE,
         format!("cannot list the paths the range changes: {error}"),
-        "pass --base and --head so CI can read the range; redo an octopus merge as two-parent merges",
+        "pass --base and --head so CI can read the range; redo an octopus merge as two-parent merges; rename a file whose name is not UTF-8",
     );
 }
 

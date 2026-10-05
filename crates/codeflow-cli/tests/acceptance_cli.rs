@@ -5053,3 +5053,43 @@ fn a_plain_file_under_epics_named_in_other_bytes_is_not_a_directory() {
         "a plain file under epics named in other bytes",
     );
 }
+
+/// TSK-234 review round 10: a product change that cancels out before the
+/// head is still the range's own work. With the product pattern
+/// `src/*[!0-9].rs`, adding and removing `src/q.rs` needs a journey; a name
+/// that is not UTF-8 cannot be matched by any rendering, so CI refuses it
+/// instead of reading it as outside the product paths.
+#[cfg(unix)]
+#[test]
+fn a_cancelled_change_to_a_name_in_other_bytes_still_refuses() {
+    use std::process::Command;
+    for (path, needle) in [
+        (b"src/q.rs".as_slice(), "work.journey"),
+        (b"src/\xff.rs".as_slice(), "not UTF-8"),
+    ] {
+        let dir = repo(&[("TSK-001", NO_JOURNEY)], "");
+        let root = dir.path();
+        write(
+            root,
+            ".codeflow/policy.json",
+            r#"{"schema_version":1,"git":{"product_paths":["src/*[!0-9].rs"]}}"#,
+        );
+        commit(root, "docs: name the product paths");
+        git(root, &["switch", "-c", BRANCH]);
+        let raw = stage_raw(root, path, b"pub fn own() {}\n");
+        git(root, &["commit", "-qm", "feat: add own code"]);
+        let out = Command::new("git")
+            .args(["update-index", "--force-remove"])
+            .arg(&raw)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        git(root, &["commit", "-qm", "fix: remove own code"]);
+        assert_blocks(
+            &ci(root, BRANCH, "TSK-001"),
+            "own product work that cancels out",
+            &[needle],
+        );
+    }
+}

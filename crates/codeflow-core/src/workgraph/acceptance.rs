@@ -996,9 +996,10 @@ pub enum MergeReading {
     /// equals the merge's tree: the merge added nothing of its own.
     Clean,
     /// Two parents, and the merge's tree differs from the remerge: the
-    /// paths that differ, conflicted paths included. The resolution is the
-    /// range's own work, which a review must cover.
-    Changed(Vec<String>),
+    /// paths that differ, conflicted paths included, as the raw names git
+    /// records ([`git_name`] writes one for a message). The resolution is
+    /// the range's own work, which a review must cover.
+    Changed(Vec<Vec<u8>>),
     /// The merge cannot be read that way (an octopus merge, a missing
     /// object, an engine error): the reason. It never counts as clean and
     /// never drops out of the journey rule.
@@ -1039,9 +1040,8 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
     if let Err(error) = merge.tree().and_then(|tree| recorded.read_tree(&tree)) {
         return unreadable(error);
     }
-    // Entries compare by their raw path bytes, so two paths that read alike
-    // once converted stay two; each is reported as [`git_name`] writes it.
-    let path = git_name;
+    // Entries compare and are returned by their raw names, so two names
+    // that read alike once converted stay two.
     // Stage 0 holds a merged entry; stages 1 to 3 hold a conflict's sides.
     let entries = |index: &git2::Index| {
         index
@@ -1052,14 +1052,14 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
     };
     let remerged = entries(&merged);
     let ours = entries(&recorded);
-    let mut changed: std::collections::BTreeSet<String> = remerged
+    let mut changed: std::collections::BTreeSet<Vec<u8>> = remerged
         .iter()
         .filter(|(name, entry)| ours.get(*name) != Some(*entry))
-        .map(|(name, _)| path(name))
+        .map(|(name, _)| name.clone())
         .chain(
             ours.keys()
                 .filter(|name| !remerged.contains_key(*name))
-                .map(|name| path(name)),
+                .cloned(),
         )
         .collect();
     if merged.has_conflicts() {
@@ -1070,7 +1070,7 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
                         .into_iter()
                         .flatten()
                     {
-                        changed.insert(path(&side.path));
+                        changed.insert(side.path.clone());
                     }
                 }
             }
@@ -1094,9 +1094,9 @@ pub(super) fn read_merge(repo: &Repository, merge: &git2::Commit<'_>) -> MergeRe
 ///
 /// # Errors
 ///
-/// Returns a message when a revision or the history cannot be read, or a
-/// merge reads as [`MergeReading::Unknown`]: such a merge refuses, never
-/// drops out.
+/// Returns a message when a revision or the history cannot be read, a
+/// merge reads as [`MergeReading::Unknown`], or a name the range changes is
+/// not UTF-8, which path rules cannot match: each refuses, never drops out.
 pub fn owned_paths(
     repo_root: &std::path::Path,
     head: &str,
@@ -1123,7 +1123,11 @@ pub fn owned_paths(
         if commit.parent_count() > 1 {
             match read_merge(&repo, &commit) {
                 MergeReading::Clean => {}
-                MergeReading::Changed(changed) => paths.extend(changed),
+                MergeReading::Changed(changed) => {
+                    for name in changed {
+                        paths.insert(rule_name(&name)?);
+                    }
+                }
                 MergeReading::Unknown(reason) => return Err(reason),
             }
             continue;
@@ -1141,7 +1145,7 @@ pub fn owned_paths(
                 .into_iter()
                 .flatten()
             {
-                paths.insert(git_name(file.as_os_str().as_encoded_bytes()));
+                paths.insert(rule_name(file.as_os_str().as_encoded_bytes())?);
             }
         }
     }
@@ -1827,6 +1831,18 @@ pub(super) fn non_planning_change(
         .find(|path| !exact_path(path).is_some_and(is_planning_path))
         .map(|path| git_name(path.as_os_str().as_encoded_bytes()));
     Ok(outside)
+}
+
+/// A name the range changes, as text path rules match: the name itself,
+/// which must be UTF-8. Any rendering of other bytes can change whether a
+/// pattern matches it, so such a name refuses (TSK-234 review round 10).
+fn rule_name(raw: &[u8]) -> Result<String, String> {
+    std::str::from_utf8(raw).map(str::to_string).map_err(|_| {
+        format!(
+            "the range changes `{}`, whose name is not UTF-8, so path rules cannot match it; rename it",
+            git_name(raw)
+        )
+    })
 }
 
 /// A name git records, as text: the name itself when it is UTF-8, else its
