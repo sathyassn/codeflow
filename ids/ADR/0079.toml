@@ -1,0 +1,11 @@
+id = "ADR-0079"
+uid = "792358c4-c3e3-40e3-a348-ad091fd5c973"
+kind = "ADR"
+title = "Estimate outcomes are derived from git by a second read-only verb"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-05T22:17:46Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
