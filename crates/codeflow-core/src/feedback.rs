@@ -30,9 +30,7 @@ use crate::scaffold::state::FeedbackConfig;
 use crate::scaffold::template::TemplateContext;
 use crate::workgraph::allocate::{Allocator, NewRecord};
 use crate::workgraph::record_text::{scan_record, section_span, LineKind};
-use crate::workgraph::status_verb::{
-    append_to_section, replace_if_unchanged, set_frontmatter_value,
-};
+use crate::workgraph::status_verb::{append_to_section, set_frontmatter_value};
 use crate::workgraph::StoreError;
 
 /// Where feedback items live, from the project root.
@@ -329,6 +327,20 @@ pub fn write_index(root: &Path, content: &str) -> Result<(), String> {
     let path = contained_path(root, INDEX_PATH)?;
     replace_whole(&path, content, &path)
         .map_err(|error| format!("cannot write {INDEX_PATH}: {error}"))
+}
+
+/// Replace an item only when its bytes still hash to `expected`, keeping
+/// its permissions, so a concurrent edit is refused and a private item stays
+/// private.
+fn replace_item_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Result<(), String> {
+    let current = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if Sha256::digest(&current).as_slice() != expected {
+        return Err(format!(
+            "{} changed while the status change was prepared; nothing was written, run it again",
+            path.display()
+        ));
+    }
+    replace_whole(path, content, path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Replace `path` with `text` whole: a new temporary file beside it, then
@@ -697,7 +709,7 @@ pub fn set_status(root: &Path, id: &str, change: &StatusChange) -> Result<Status
     }
     let proposed = propose(root, &parsed, &item, &content, change)?;
     let digest = Sha256::digest(content.as_bytes());
-    replace_if_unchanged(&path, digest.as_slice(), &proposed).map_err(|error| error.to_string())?;
+    replace_item_if_unchanged(&path, digest.as_slice(), &proposed)?;
     Ok(StatusOutcome {
         path,
         from,

@@ -368,7 +368,11 @@ impl FeedbackConfig {
                 detail: "the feedback topics could not be added".to_string(),
             });
         }
-        write_record(root, PROJECT_TOML, updated.as_bytes())?;
+        // The state file keeps its permissions (a private one stays private).
+        let path = guard_beneath_root(root, Path::new(PROJECT_TOML))?;
+        sync::settle_before(&path)?;
+        crate::feedback::replace_whole(&path, &updated, &path)
+            .map_err(|error| ScaffoldError::io(&path, error))?;
         Ok((Self::load(root)?.topics_or_default(), true))
     }
 }

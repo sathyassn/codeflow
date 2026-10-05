@@ -745,3 +745,41 @@ fn an_unsafe_project_template_falls_back_to_the_shipped_one() {
     let record = std::fs::read_to_string(item_path(&root, "FB-002")).unwrap();
     assert!(record.contains("## Verbatim"), "{record}");
 }
+
+/// Feedback writes keep each file's permissions: a private project state
+/// file stays private when the first item adds the default topics, and a
+/// private item stays private through a status change.
+#[cfg(unix)]
+#[test]
+fn feedback_writes_keep_private_files_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let (_dir, root, _bare) = project("full");
+    let state_path = root.join(".codeflow/project.toml");
+    std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    new_item(&root, "process", "first");
+    assert!(std::fs::read_to_string(&state_path)
+        .unwrap()
+        .contains("[feedback]"));
+    assert_eq!(mode(&state_path), 0o600);
+    let item = item_path(&root, "FB-001");
+    std::fs::set_permissions(&item, std::fs::Permissions::from_mode(0o600)).unwrap();
+    ok(
+        &codeflow(
+            &root,
+            &[
+                "feedback",
+                "status",
+                "FB-001",
+                "placed",
+                "--in",
+                "README.md",
+            ],
+        ),
+        "placed",
+    );
+    assert!(std::fs::read_to_string(&item)
+        .unwrap()
+        .contains("status: placed"));
+    assert_eq!(mode(&item), 0o600);
+}
