@@ -1519,7 +1519,7 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
 /// that names it: the configured upstream of its local branch (on any
 /// remote), its `origin` tracking ref, and the local branch, in that
 /// order. Empty when none resolves.
-fn target_tips(repo: &Repository, name: &str) -> Vec<(String, Oid)> {
+pub(super) fn target_tips(repo: &Repository, name: &str) -> Vec<(String, Oid)> {
     let mut names = Vec::new();
     if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
         if let Ok(upstream) = upstream.as_str() {
@@ -1864,13 +1864,15 @@ pub fn journey_requirement(graph: &Graph, task_id: &str) -> Option<String> {
     })
 }
 
-/// Records of the range whose criteria differ from the target's (R-52).
+/// Records of the range whose criteria differ from the target's (R-52):
+/// the change of each task in `exempt` is printed as its delta, and any
+/// other change is refused.
 #[must_use]
 pub fn frozen_criteria(
     head: &Graph,
     target: &Graph,
     changed_paths: &[String],
-    exempt: Option<&str>,
+    exempt: &std::collections::BTreeSet<String>,
 ) -> Vec<Finding> {
     let mut found = Vec::new();
     for record in head
@@ -1886,27 +1888,8 @@ pub fn frozen_criteria(
         if before.is_some_and(|r| r.criteria.signature() == record.criteria.signature()) {
             continue;
         }
-        if exempt == Some(record.id.as_str()) {
-            let mut delta = Vec::new();
-            for item in old {
-                match new.iter().find(|next| next.id == item.id) {
-                    None => delta.push(format!(
-                        "{} removed: {} (give the reason in the PR body)",
-                        item.id, item.text
-                    )),
-                    Some(next) if next.text != item.text => delta.push(format!(
-                        "{} changed: {} -> {}",
-                        item.id, item.text, next.text
-                    )),
-                    _ => {}
-                }
-            }
-            for item in new
-                .iter()
-                .filter(|item| !old.iter().any(|prior| prior.id == item.id))
-            {
-                delta.push(format!("{} added: {}", item.id, item.text));
-            }
+        if exempt.contains(&record.id) {
+            let delta = criteria_delta(old, new);
             if !delta.is_empty() {
                 found.push(Finding {
                     epic_record: None,
@@ -1916,10 +1899,36 @@ pub fn frozen_criteria(
                 });
             }
         } else if before.is_some() {
-            found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or the epic amendment", record.id)));
+            found.push(finding(FROZEN_RULE, format!("{} changes its criteria on this branch; another task's criteria change by its own PR or by a planning amendment that names its epic (ADR-0078)", record.id)));
         }
     }
     found
+}
+
+/// The change from `old` to `new` criteria, one entry per criterion
+/// removed, changed or added.
+pub(super) fn criteria_delta(old: &[Criterion], new: &[Criterion]) -> Vec<String> {
+    let mut delta = Vec::new();
+    for item in old {
+        match new.iter().find(|next| next.id == item.id) {
+            None => delta.push(format!(
+                "{} removed: {} (give the reason in the PR body)",
+                item.id, item.text
+            )),
+            Some(next) if next.text != item.text => delta.push(format!(
+                "{} changed: {} -> {}",
+                item.id, item.text, next.text
+            )),
+            _ => {}
+        }
+    }
+    for item in new
+        .iter()
+        .filter(|item| !old.iter().any(|prior| prior.id == item.id))
+    {
+        delta.push(format!("{} added: {}", item.id, item.text));
+    }
+    delta
 }
 
 /// Enforce reopen equality before any range-class amendment exemption.
@@ -2045,7 +2054,7 @@ pub fn completions_in_range(
     run: &RunBases,
     line: Option<&str>,
 ) -> Result<Vec<Finding>, String> {
-    let amendable = *criteria == Criteria::Amendable;
+    let amendable = criteria.amends();
     // The task a task pull request is for may waive a criterion by a
     // record-only amendment in its own range (TSK-184); no other record may.
     let own_task = match criteria {
@@ -2215,7 +2224,7 @@ pub fn journey_requirement_at(
     Ok(journey_requirement(&graph, task_id))
 }
 
-/// Whether a range may change task criteria (R-52): a planning-only change
+/// Whether a range may change task criteria (R-52): a planning amendment
 /// or a validated epic integration line. The caller decides it from the
 /// pull request's validated class, never from the branch prefix alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2224,8 +2233,22 @@ pub enum Criteria {
     Frozen,
     /// Only the named, not previously complete task may amend its criteria.
     OwnTask(String),
-    /// A planning-only range or a validated epic line may change them.
+    /// A validated epic line or the workspace root branch may change them.
     Amendable,
+    /// A planning amendment (ADR-0078) may change them, and every change is
+    /// reported per epic. `Some` holds the epics its `Task:` line names: a
+    /// change to a record of any other epic is refused. A push has no body
+    /// yet, so it carries `None` and its report names the epics it finds.
+    Amendment(Option<Vec<String>>),
+}
+
+impl Criteria {
+    /// Whether the range may change criteria and carries completions from
+    /// their source on the line.
+    #[must_use]
+    pub fn amends(&self) -> bool {
+        matches!(self, Self::Amendable | Self::Amendment(_))
+    }
 }
 
 /// Select the own-task amendment only for a task not complete at the target.
@@ -2253,10 +2276,11 @@ pub fn task_criteria(
 }
 
 /// The findings of a pull request from `base` (the target tip) to `head`:
-/// criteria frozen unless `criteria` is [`Criteria::Amendable`], and every
-/// completion in the range bound. A frozen range is a task pull request and
-/// owns its changes; an amendable one carries completions from their source
-/// on the line. Both apply the same binding rule.
+/// criteria frozen unless `criteria` amends them ([`Criteria::amends`]), a
+/// planning amendment's changes reported per epic, and every completion in
+/// the range bound. A frozen range is a task pull request and owns its
+/// changes; an amending one carries completions from their source on the
+/// line. Both apply the same binding rule.
 ///
 /// # Errors
 ///
@@ -2308,11 +2332,28 @@ pub fn pull_request_findings_judged(
             .map_err(|error| error.message().to_string())?;
         let paths = super::lifecycle::changed_paths(&repo, &anchor.to_string(), Some(head))?;
         let at_target = Graph::from_revision(&repo, base)?;
-        let exempt = match criteria {
-            Criteria::OwnTask(id) => Some(id.as_str()),
-            _ => None,
-        };
-        found.extend(frozen_criteria(&at_head, &at_target, &paths, exempt));
+        match criteria {
+            Criteria::Amendment(named) => found.extend(super::amendment::findings(
+                &repo,
+                &at_target,
+                &at_head,
+                &paths,
+                named.as_deref(),
+                target_tip,
+            )),
+            Criteria::OwnTask(id) => found.extend(frozen_criteria(
+                &at_head,
+                &at_target,
+                &paths,
+                &std::collections::BTreeSet::from([id.clone()]),
+            )),
+            _ => found.extend(frozen_criteria(
+                &at_head,
+                &at_target,
+                &paths,
+                &std::collections::BTreeSet::new(),
+            )),
+        }
     }
     let candidate = authority.map(oid).transpose()?;
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));

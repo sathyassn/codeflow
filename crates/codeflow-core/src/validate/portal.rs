@@ -3578,11 +3578,9 @@ fn parse_git_batch(
     Ok(blobs)
 }
 
-fn hardened_git(
-    root: &Path,
-    args: &[&str],
-    piped_stdin: bool,
-) -> std::io::Result<std::process::Child> {
+/// A git command with a scrubbed environment, its stdin left to the caller
+/// (`git::spawn_with_input` pipes it; otherwise null).
+fn hardened_git(root: &Path, args: &[&str]) -> std::process::Command {
     let mut command = crate::git::command();
     command
         .arg("--no-pager")
@@ -3590,11 +3588,6 @@ fn hardened_git(
         .arg(root)
         .args(["-c", "core.fsmonitor=false", "-c", "core.pager=cat"])
         .args(args)
-        .stdin(if piped_stdin {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear()
@@ -3611,7 +3604,7 @@ fn hardened_git(
         .env("GIT_PAGER", "cat")
         .env("PAGER", "cat")
         .env("LC_ALL", "C");
-    command.spawn()
+    command
 }
 
 fn allowed_git_environment(
@@ -3671,7 +3664,14 @@ fn git_output_bounded(
     input: Option<Vec<u8>>,
     maximum_bytes: u64,
 ) -> std::io::Result<Vec<u8>> {
-    let mut child = hardened_git(root, args, input.is_some())?;
+    let mut command = hardened_git(root, args);
+    let (mut child, stdin_writer) = match input {
+        Some(bytes) => {
+            let (child, writer) = crate::git::spawn_with_input(&mut command, bytes)?;
+            (child, Some(writer))
+        }
+        None => (command.stdin(Stdio::null()).spawn()?, None),
+    };
     let stdout = child
         .stdout
         .take()
@@ -3685,10 +3685,6 @@ fn git_output_bounded(
     let stdout_thread =
         std::thread::spawn(move || drain_bounded(stdout, maximum_bytes, Some(&stdout_overflow)));
     let stderr_thread = std::thread::spawn(move || drain_bounded(stderr, 4 * 1024, None));
-    let stdin_thread = input.map(|bytes| {
-        let mut stdin = child.stdin.take().expect("piped Git stdin");
-        std::thread::spawn(move || stdin.write_all(&bytes))
-    });
     let started = Instant::now();
     let (status, aborted) = loop {
         if overflow.load(Ordering::Acquire) {
@@ -3710,11 +3706,10 @@ fn git_output_bounded(
     let error_bytes = stderr_thread
         .join()
         .map_err(|_| std::io::Error::other("Git stderr reader panicked"))??;
-    if let Some(stdin_thread) = stdin_thread {
-        match stdin_thread.join() {
-            Ok(Err(error)) if aborted.is_none() => return Err(error),
-            Ok(Ok(()) | Err(_)) => {}
-            Err(_) => return Err(std::io::Error::other("Git stdin writer panicked")),
+    if let Some(writer) = stdin_writer {
+        match writer.finish() {
+            Err(error) if aborted.is_none() => return Err(error),
+            _ => {}
         }
     }
     if let Some(message) = aborted {

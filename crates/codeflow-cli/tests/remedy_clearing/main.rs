@@ -105,6 +105,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("ACCEPTANCE_BINDING", Runs),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
+    ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),

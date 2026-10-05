@@ -13,7 +13,6 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -595,19 +594,13 @@ fn escape_ignore_path(path: &str) -> String {
     out
 }
 
-/// Run git in `root` with `input` on stdin; stdout on success.
+/// Run git in `root` with `input` on stdin; stdout on success. Stdin is
+/// written while stdout is drained, so output larger than a pipe cannot
+/// deadlock the exchange ([`crate::git::output_with_input`]).
 fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
-    let mut child = crate::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(input).ok()?;
-    let out = child.wait_with_output().ok()?;
+    let mut command = crate::git::command();
+    command.arg("-C").arg(root).args(args);
+    let out = crate::git::output_with_input(&mut command, input).ok()?;
     // check-ignore exits 1 when nothing matched, which is still an answer.
     if out.status.success() || out.status.code() == Some(1) {
         Some(out.stdout)

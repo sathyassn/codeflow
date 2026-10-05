@@ -3,7 +3,6 @@
 //! `commit-tree`, `update-ref`), so issuing never touches the working tree.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -94,25 +93,7 @@ impl Git {
     ///
     /// Returns an error naming the command and git's stderr.
     pub fn run_input(&self, args: &[&str], input: &[u8]) -> Result<String, IdsError> {
-        let mut child = self
-            .command(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| IdsError::Git("git stdin was not piped".to_string()))?;
-        let data = input.to_vec();
-        let writer = std::thread::spawn(move || stdin.write_all(&data));
-        let output = child
-            .wait_with_output()
-            .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))?;
-        writer
-            .join()
-            .map_err(|_| IdsError::Git("stdin writer panicked".to_string()))?
+        let output = crate::git::output_with_input(&mut self.command(args), input)
             .map_err(|error| IdsError::Git(format!("git {}: {error}", args.join(" "))))?;
         checked(args, &output)
     }
@@ -193,37 +174,20 @@ impl Git {
         if ids.is_empty() {
             return Ok(out);
         }
-        let mut child = self
-            .command(&["cat-file", "--batch"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| IdsError::Git(format!("git cat-file: {error}")))?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| IdsError::Git("git stdin was not piped".to_string()))?;
         let request = ids.iter().fold(String::new(), |mut acc, id| {
             acc.push_str(id);
             acc.push('\n');
             acc
         });
-        let writer = std::thread::spawn(move || stdin.write_all(request.as_bytes()));
-        let mut stdout = Vec::new();
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| IdsError::Git("git stdout was not piped".to_string()))?
-            .read_to_end(&mut stdout)
-            .map_err(|error| IdsError::Git(format!("git cat-file: {error}")))?;
-        let status = child
-            .wait()
-            .map_err(|error| IdsError::Git(format!("git cat-file: {error}")))?;
-        let _ = writer.join();
-        if !status.success() {
+        let output = crate::git::output_with_input(
+            &mut self.command(&["cat-file", "--batch"]),
+            request.as_bytes(),
+        )
+        .map_err(|error| IdsError::Git(format!("git cat-file: {error}")))?;
+        if !output.status.success() {
             return Err(IdsError::Git("git cat-file --batch failed".to_string()));
         }
+        let stdout = output.stdout;
         let mut cursor = 0;
         for id in ids {
             let end = stdout[cursor..]

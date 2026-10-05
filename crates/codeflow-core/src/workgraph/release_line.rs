@@ -1823,7 +1823,7 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
             }
         }
     }
-    match super::acceptance::non_planning_change(repo, landing.parent_id(0).ok(), landing.id()) {
+    match super::amendment::landing_problem(repo, landing.parent_id(0).ok(), landing.id()) {
         Ok(None) => Landed::Planning,
         Ok(Some(_)) if own_task_landing(repo, path, &landing) => Landed::OwnTask {
             landing: landing.id(),
