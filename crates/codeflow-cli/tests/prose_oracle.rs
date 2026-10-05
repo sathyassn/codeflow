@@ -326,11 +326,22 @@ fn certified_lines() -> BTreeSet<String> {
     lines
 }
 
+/// True when a redirect target names the file `name` in the working directory.
+fn allowed_write(writes: &[String], name: &str) -> bool {
+    writes
+        .iter()
+        .any(|target| Path::new(target).file_name().is_some_and(|f| f == name))
+}
+
 fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> {
     let certified = certify_with_writes(line).expect("a certified line");
     let mut allowed: BTreeSet<String> = STUBS.iter().map(ToString::to_string).collect();
     // A target in another directory cannot be created; a bare one can.
-    allowed.extend(certified.writes.iter().cloned());
+    allowed.extend(certified.writes.iter().filter_map(|target| {
+        Path::new(target)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }));
     for shell in shells {
         let calls = sandbox.run(shell, line);
         if !calls.is_empty() {
@@ -347,9 +358,21 @@ fn check(sandbox: &Sandbox, shells: &[Shell], line: &str) -> Result<(), String> 
                 shell.program
             ));
         }
+        // Nothing may appear beside the sandbox's own folders and script.
+        let stray: Vec<String> = fs::read_dir(sandbox.root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !["bin", "work", "tmp", "logs", "script.sh"].contains(&name.as_str()))
+            .collect();
+        if !stray.is_empty() {
+            return Err(format!(
+                "{}: certified line created {stray:?} outside the working directory: {line:?}",
+                shell.program
+            ));
+        }
         for name in STUBS {
             let content = fs::read_to_string(sandbox.work().join(name)).unwrap_or_default();
-            if content != "decoy" && !certified.writes.iter().any(|target| target == name) {
+            if content != "decoy" && !allowed_write(&certified.writes, name) {
                 return Err(format!(
                     "{}: certified line changed the decoy {name}: {line:?}",
                     shell.program

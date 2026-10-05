@@ -757,8 +757,10 @@ erratum below, never an edit of the section.
   `grep` and `cat` with plain, single-quoted or double-quoted words (no
   backslash, `$` or backtick), the separators `;`, `&&`, `||`, `|` and
   newline, redirects to a document file (`.md`, `.markdown`, `.txt`, `.rst`,
-  `.log`) that is new or an existing plain, non-executable file (never a
-  link, pipe, device or executable), and one quoted heredoc for `cat`. A
+  `.log`) that is new or an existing plain, non-executable file with one
+  hard link (never a symbolic link, hard-linked file, pipe, device or
+  executable, or a path under `/dev`, `/proc` or `/sys`), and one quoted
+  heredoc for `cat`. A
   certified line skips only the privilege, headless and dangerous checks;
   every other guard still runs, and PowerShell lines are never certified. The
   issue's `printf`, `grep '; su'`, quoted-heredoc and `echo "...; supersedes

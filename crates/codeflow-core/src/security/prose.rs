@@ -47,8 +47,9 @@
 //! `.rst` or `.log`) so an agent can write prose to a file and pass it by
 //! path. A document name proves nothing about what the write reaches, so the
 //! caller also checks each target on disk with [`writes_are_plain_files`]: a
-//! new file or an existing plain, non-executable file, never a link, a pipe, a
-//! device or an executable. The file's later use is judged on the line that
+//! new file or an existing plain, non-executable file with one hard link, in
+//! a directory that is not under `/dev`, `/proc` or `/sys` once links are
+//! resolved, never a link, a pipe, a device or an executable. The file's later use is judged on the line that
 //! uses it, as for any file; this module cannot prove a document is never run
 //! as a script.
 //! Whether a line is a POSIX shell line is the caller's call: only the Bash
@@ -108,18 +109,38 @@ pub fn certify_with_writes(raw: &str) -> Option<Certified> {
 
 /// True when every redirect target is a place a prose write cannot do harm:
 /// a file that does not exist yet, or an existing regular file that is not a
-/// symbolic link and has no execute bit. A symbolic link, a named pipe, a
-/// device and an executable file refuse, because a document name proves
-/// nothing about what the write reaches. Checked when the call is judged, so
-/// it covers a file or link made by an earlier call.
+/// symbolic link, has no execute bit and has no other hard link, in a
+/// directory that exists and, once links in the path are resolved, is not
+/// under `/dev`, `/proc` or `/sys`. A symbolic link, a hard link, a named
+/// pipe, a device and an executable file refuse, because a document name
+/// proves nothing about what the write reaches. Checked when the call is
+/// judged, so it covers a file or link made by an earlier call.
 #[must_use]
 pub fn writes_are_plain_files(writes: &[String], cwd: &std::path::Path) -> bool {
-    writes
+    writes.iter().all(|target| plain_target(target, cwd))
+}
+
+fn plain_target(target: &str, cwd: &std::path::Path) -> bool {
+    let path = cwd.join(target);
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let Some(parent) = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+    else {
+        return false;
+    };
+    if ["/dev", "/proc", "/sys"]
         .iter()
-        .all(|target| match std::fs::symlink_metadata(cwd.join(target)) {
-            Ok(meta) => meta.file_type().is_file() && !is_executable(&meta),
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        })
+        .any(|root| parent.starts_with(root))
+    {
+        return false;
+    }
+    match std::fs::symlink_metadata(parent.join(name)) {
+        Ok(meta) => meta.file_type().is_file() && !is_executable(&meta) && !is_linked(&meta),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
 }
 
 #[cfg(unix)]
@@ -130,6 +151,19 @@ fn is_executable(meta: &std::fs::Metadata) -> bool {
 
 #[cfg(not(unix))]
 fn is_executable(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// True when the file has another hard link, so a write here may also change
+/// a file under another name.
+#[cfg(unix)]
+fn is_linked(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() > 1
+}
+
+#[cfg(not(unix))]
+fn is_linked(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
@@ -450,6 +484,29 @@ mod tests {
         assert!(!check("dangling.md"), "a dangling link");
         std::fs::hard_link(cwd.join("job.sh"), cwd.join("hard.md")).unwrap();
         assert!(!check("hard.md"), "a hard link to an executable");
+        std::fs::write(cwd.join("script.py"), "x").unwrap();
+        std::fs::set_permissions(
+            cwd.join("script.py"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        std::fs::hard_link(cwd.join("script.py"), cwd.join("py.md")).unwrap();
+        assert!(
+            !check("py.md"),
+            "a hard link to a script without execute bits"
+        );
+        assert!(!check("missing/new.md"), "a directory that does not exist");
+        symlink("/dev", cwd.join("devlink")).unwrap();
+        for target in [
+            "devlink/x.md",
+            "/./dev/x.md",
+            "//dev/x.md",
+            "/./proc/x.md",
+            "/./sys/x.md",
+        ] {
+            assert!(!check(target), "{target}");
+        }
+        assert!(check("./new2.md"), "a leading dot-slash");
         std::fs::create_dir(cwd.join("dir.md")).unwrap();
         assert!(!check("dir.md"), "a directory");
         let fifo = cwd.join("pipe.md");

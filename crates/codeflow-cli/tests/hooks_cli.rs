@@ -1954,12 +1954,23 @@ fn exec_guard_does_not_certify_a_write_that_reaches_a_link_pipe_or_executable() 
     .unwrap();
     symlink("job.sh", dir.path().join("note.md")).unwrap();
     std::fs::hard_link(dir.path().join("job.sh"), dir.path().join("hard.md")).unwrap();
+    std::fs::write(dir.path().join("plain.py"), "true\n").unwrap();
+    std::fs::hard_link(dir.path().join("plain.py"), dir.path().join("py.md")).unwrap();
     assert!(Command::new("mkfifo")
         .arg(dir.path().join("pipe.md"))
         .status()
         .unwrap()
         .success());
-    for target in ["note.md", "hard.md", "pipe.md", "/dev/example.md"] {
+    for target in [
+        "note.md",
+        "hard.md",
+        "py.md",
+        "pipe.md",
+        "/dev/example.md",
+        "/./dev/example.md",
+        "//dev/example.md",
+        "/./proc/example.md",
+    ] {
         let out = exec_guard_tool(dir.path(), "Bash", &line(target));
         assert_eq!(
             out.status.code(),

@@ -109,10 +109,11 @@ tokenizer (`security/prose.rs`) certifies all of it:
   a glob, a brace and the like are not allowed);
 - commands are joined by `;`, `&&`, `||`, `|` or a newline;
 - a redirect writes a document file (`.md`, `.markdown`, `.txt`, `.rst`,
-  `.log`, not under `/dev/`, `/proc/` or `/sys/`), or is `2>&1` or `>&2`; when
-  the call is judged the target must be a file that does not exist yet or an
-  existing plain file with no execute bit, never a symbolic link, a named pipe,
-  a device or an executable;
+  `.log`), or is `2>&1` or `>&2`; when the call is judged the target must be a
+  file that does not exist yet or an existing plain file with no execute bit
+  and one hard link, in a directory that exists and, with links resolved, is not
+  under `/dev`, `/proc` or `/sys`; a symbolic link, a hard-linked file, a named
+  pipe, a device and an executable refuse;
 - `cat` may take one heredoc whose delimiter is quoted (`cat <<'EOF' > a.md`),
   and its body is data; an unquoted delimiter is not certified, so that line
   keeps the raw rules.
