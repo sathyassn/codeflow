@@ -673,3 +673,52 @@ fn review_round_four_link_modes_refuse() {
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
+
+/// Review round six: a globbed source of links copied as links, and an
+/// abbreviated target directory.
+#[test]
+fn review_round_six_forms_refuse() {
+    let f = Fixture::new();
+    for dir in ["out", "links", "nested-links", "plain", "fixtures", "sub"] {
+        std::fs::create_dir_all(f.project.join(dir)).unwrap();
+    }
+    std::fs::write(f.project.join("plain/a.txt"), "x\n").unwrap();
+    std::fs::write(f.project.join("sub/.envrc"), "x\n").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
+        std::os::unix::fs::symlink("../sub/.envrc", f.project.join("nested-links/one")).unwrap();
+    }
+    let mut wrong = Vec::new();
+    let mut refuse = vec![
+        "cp --target-dir=\"$HOME\" fixtures/.zshrc",
+        "cp --target-dir H/ fixtures/.zshrc",
+        "mv --target=H/ fixtures/.bashrc",
+    ];
+    if cfg!(unix) {
+        refuse.extend([
+            "cp -P links/* out/; echo glob >> out/one",
+            "cp -a links/{one,two} out/",
+            "mv links/* out/",
+            "cp -P nested-links/* out/; echo glob >> out/one",
+            "rsync -a links/ out/",
+        ]);
+    }
+    for command in refuse {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "cp -P plain/* out/",
+        "cp links/* out/",
+        "cp --target-dir=out notes.txt",
+        "cp --target-dir=H/ notes.txt",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}

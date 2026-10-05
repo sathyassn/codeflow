@@ -590,6 +590,47 @@ impl Line<'_> {
         placement.map_or(Judged::Ordinary, Judged::Placement)
     }
 
+    /// The paths a source word names: each brace reading, from each run
+    /// directory, with globs expanded within the walk budget. `None` when a
+    /// reading cannot be expanded or read whole (review round six:
+    /// `cp -P links/* out/`).
+    fn source_paths(&self, word: &str, dirs: &[PathBuf]) -> Option<Vec<PathBuf>> {
+        // Wider than the shell's matching (any case, dot files too), so a
+        // match it would make is never missed.
+        let options = glob::MatchOptions {
+            case_sensitive: false,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+        };
+        let mut out = Vec::new();
+        for reading in word_readings(word)? {
+            for dir in dirs {
+                let path = self.expand(&reading, dir)?;
+                let text = shown(&path);
+                if !has_glob(&text) {
+                    out.push(path);
+                    continue;
+                }
+                if !glob_within_budget(&text) {
+                    return None;
+                }
+                let mut patterns = vec![text.clone()];
+                if text.contains("**") {
+                    patterns.push(text.replace("**", "*"));
+                }
+                for pattern in patterns {
+                    for (seen, path) in glob::glob_with(&pattern, options).ok()?.enumerate() {
+                        if seen >= GLOB_LIMIT {
+                            return None;
+                        }
+                        out.push(path.ok()?);
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
     /// the home, `/etc` or a startup directory.
@@ -1544,10 +1585,15 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
         if options && a.starts_with('-') && a.len() > 1 {
             // The option letters of a short cluster, before any value.
             let mut letters = &a[1..];
-            if let Some(dir) = a.strip_prefix("--target-directory=") {
-                target = Some(dir.to_string());
-            } else if a == "-t" || a == "--target-directory" {
-                target = iter.next().cloned();
+            // `--target-directory` in any prefix GNU accepts, with the
+            // value attached or next (review round six: `--target-dir=`).
+            let names_target = matches!(name, "cp" | "mv" | "ln" | "install")
+                && long_prefix(a, "target-directory");
+            if names_target || a == "-t" {
+                target = match a.split_once('=') {
+                    Some((_, dir)) => Some(dir.to_string()),
+                    None => iter.next().cloned(),
+                };
             } else if copy_value_option(name, a) {
                 iter.next();
             } else if !a.starts_with("--") && matches!(name, "cp" | "mv" | "ln" | "install") {
@@ -1708,36 +1754,36 @@ fn source_link_violation(
 ) -> Option<Violation> {
     let is_link =
         |p: &PathBuf| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
-    let links: Vec<PathBuf> = dirs
-        .iter()
-        .filter_map(|d| line.expand(source, d))
-        .filter(is_link)
-        .collect();
-    if (call.keeps_links || name == "mv") && !links.is_empty() {
-        if let Judged::Class(label) = line.judge(source, dirs) {
+    let keeps = call.keeps_links || name == "mv";
+    // Every path the word names, globs and braces included; one the guard
+    // cannot list refuses where a kept link could reach the class.
+    let paths = line.source_paths(source, dirs);
+    if paths.is_none() && keeps {
+        if let Some(why) = line.unresolved_near_class(source, dirs) {
             return Some(finding(format!(
-                "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
+                "`{name}` copies `{source}` with its links kept, which the guard cannot list, and {why}"
             )));
         }
-        // The link's text is read again where the copy lands, so a
-        // relative one can reach a startup file from there (review round
-        // five: `cp -P relative-link out/copy`).
-        for text in links.iter().filter_map(|p| std::fs::read_link(p).ok()) {
-            let text = text.to_string_lossy().into_owned();
-            match line.judge(&text, landing) {
-                Judged::Class(label) => {
-                    return Some(finding(format!(
-                        "`{name}` copies the link `{source}`, whose text reaches the shell startup file `{label}` where it lands"
-                    )))
-                }
-                Judged::Unresolved(w) => {
-                    if let Some(why) = line.unresolved_near_class(&w, landing) {
-                        return Some(finding(format!(
-                            "`{name}` copies the link `{source}` to `{w}`, which the guard cannot resolve, and {why}"
-                        )));
-                    }
-                }
-                Judged::Placement(_) | Judged::Ordinary => {}
+    }
+    let paths = paths.unwrap_or_default();
+    if keeps {
+        // Each kept link, with the directories its text is read from
+        // where it lands: the named links, and those inside a tree the
+        // call copies or moves whole, walked within the budget (review
+        // round six: `rsync -a links/ out/`).
+        let mut kept: Vec<(PathBuf, Vec<PathBuf>)> = paths
+            .iter()
+            .filter(|p| is_link(p))
+            .map(|p| (p.clone(), landing.to_vec()))
+            .collect();
+        if call.recursive || name == "mv" {
+            for root in paths.iter().filter(|p| !is_link(p) && p.is_dir()) {
+                kept.extend(tree_links(root, landing));
+            }
+        }
+        for (link, text_dirs) in &kept {
+            if let Some(v) = kept_link_violation(name, source, link, text_dirs, line) {
+                return Some(v);
             }
         }
     }
@@ -1751,6 +1797,73 @@ fn source_link_violation(
         Judged::Unresolved(w) => line.unresolved_near_class(&w, link_dirs).map(|why| {
             finding(format!(
                 "`{name}` moves or links `{w}`, which the guard cannot resolve, and {why}"
+            ))
+        }),
+        Judged::Placement(_) | Judged::Ordinary => None,
+    }
+}
+
+/// The symbolic links inside a tree, each with the directories its text is
+/// read from once the tree lands in one of `landing`, either as itself or
+/// as its contents. A tree over the walk budget is not listed (a stated
+/// residual).
+fn tree_links(root: &Path, landing: &[PathBuf]) -> Vec<(PathBuf, Vec<PathBuf>)> {
+    let top = root.file_name().map(PathBuf::from).unwrap_or_default();
+    let mut found = Vec::new();
+    let mut seen = 0usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > GLOB_LIMIT {
+                return Vec::new();
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                stack.push(entry.path());
+            } else if kind.is_symlink() {
+                let rel = dir.strip_prefix(root).unwrap_or(Path::new(""));
+                let text_dirs = landing
+                    .iter()
+                    .flat_map(|l| [l.join(rel), l.join(&top).join(rel)])
+                    .collect();
+                found.push((entry.path(), text_dirs));
+            }
+        }
+    }
+    found
+}
+
+/// A kept link that is, or whose text from where it lands reaches, a
+/// startup file.
+fn kept_link_violation(
+    name: &str,
+    source: &str,
+    kept: &Path,
+    text_dirs: &[PathBuf],
+    line: &Line<'_>,
+) -> Option<Violation> {
+    if let Some(label) = line.class.target(kept) {
+        return Some(finding(format!(
+            "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
+        )));
+    }
+    // The link's text is read again where the copy lands, so a relative
+    // one can reach a startup file from there (review round five).
+    let text = std::fs::read_link(kept).ok()?;
+    let text = text.to_string_lossy().into_owned();
+    match line.judge(&text, text_dirs) {
+        Judged::Class(label) => Some(finding(format!(
+            "`{name}` copies the link `{source}`, whose text reaches the shell startup file `{label}` where it lands"
+        ))),
+        Judged::Unresolved(w) => line.unresolved_near_class(&w, text_dirs).map(|why| {
+            finding(format!(
+                "`{name}` copies the link `{source}` to `{w}`, which the guard cannot resolve, and {why}"
             ))
         }),
         Judged::Placement(_) | Judged::Ordinary => None,
