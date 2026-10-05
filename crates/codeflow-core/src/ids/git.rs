@@ -150,8 +150,14 @@ impl Git {
     ///
     /// Returns an error outside a repository.
     pub fn common_dir(&self) -> Result<PathBuf, IdsError> {
-        let dir = self.run(&["rev-parse", "--git-common-dir"])?;
-        let path = PathBuf::from(dir.trim());
+        // OS text rule (issue 79): the folder keys the registry's state and
+        // locks, so its exact bytes are used. Only git's own newline is
+        // framing: a name may end in a space or a carriage return.
+        let out = self.run_bytes(&["rev-parse", "--git-common-dir"])?;
+        let bytes = out.strip_suffix(b"\n").unwrap_or(&out);
+        let path = crate::git::GitName::from_bytes(bytes)
+            .os_path()
+            .map_err(|error| IdsError::Git(error.to_string()))?;
         Ok(if path.is_absolute() {
             path
         } else {
@@ -506,5 +512,42 @@ mod tests {
             .unwrap();
         let error = git.user_email().unwrap_err();
         assert!(error.to_string().contains("not valid UTF-8"), "{error}");
+    }
+
+    /// Round nine on issue 79: a git directory whose own name ends in a
+    /// carriage return is that directory, not a sibling without it.
+    #[test]
+    fn the_common_dir_keeps_a_trailing_carriage_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        crate::git::repo_with_tree(&main, &[(b"a.txt", b"x")]);
+        let bare = dir.path().join("meta\r");
+        let run = |cwd: &std::path::Path, args: &[&str]| {
+            let out = crate::git::command()
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        let target = bare.clone();
+        let clone = crate::git::command()
+            .args(["clone", "-q", "--bare"])
+            .arg(&main)
+            .arg(&target)
+            .output()
+            .unwrap();
+        if !clone.status.success() {
+            return; // this volume refuses the name
+        }
+        run(
+            &bare,
+            &["worktree", "add", "-q", "../wt", "-b", "other", "main"],
+        );
+        let common = Git::new(&dir.path().join("wt")).common_dir().unwrap();
+        assert_eq!(common.file_name().unwrap(), "meta\r");
     }
 }

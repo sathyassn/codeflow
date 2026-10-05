@@ -172,33 +172,33 @@ mod tests {
         assert_eq!(config_get_key(dir.path(), "demo.absent"), None);
     }
 
-    /// Round eight on issue 79: a folder whose name ends in a carriage return
-    /// is the folder, not its trimmed spelling.
+    /// Round eight on issue 79: a git directory whose own name ends in a
+    /// carriage return is that directory, not its trimmed spelling.
     #[test]
     fn the_common_dir_keeps_a_trailing_carriage_return() {
         let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().join("main\r");
-        if std::fs::create_dir(&main).is_err() {
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        crate::git::repo_with_tree(&main, &[(b"a.txt", b"x")]);
+        let bare = dir.path().join("meta\r");
+        let clone = crate::git::command()
+            .args(["clone", "-q", "--bare"])
+            .arg(&main)
+            .arg(&bare)
+            .output()
+            .unwrap();
+        if !clone.status.success() {
             return; // this volume refuses the name
         }
-        crate::git::repo_with_tree(&main, &[(b"a.txt", b"x")]);
-        let run = |args: &[&str]| {
-            let out = crate::git::command()
-                .args(args)
-                .current_dir(&main)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_SYSTEM", "/dev/null")
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{args:?}: {out:?}");
-        };
-        run(&["worktree", "add", "-q", "../wt", "-b", "other", "main"]);
-        let linked = dir.path().join("wt");
-        let common = common_dir(&linked).expect("a common dir");
-        assert_eq!(
-            common.canonicalize().unwrap(),
-            main.join(".git").canonicalize().unwrap()
-        );
-        assert!(common.to_string_lossy().contains("main\r"));
+        let out = crate::git::command()
+            .args(["worktree", "add", "-q", "../wt", "-b", "other", "main"])
+            .current_dir(&bare)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let common = common_dir(&dir.path().join("wt")).expect("a common dir");
+        assert_eq!(common.file_name().unwrap(), "meta\r");
     }
 }

@@ -373,9 +373,13 @@ fn merge_in_progress(root: &Path) -> bool {
         // OS text rule (issue 79): the folder is joined to a path, so its
         // exact bytes are used and one the platform cannot hold is not read.
         .and_then(|o| {
-            codeflow_core::git::GitName::from_bytes(o.stdout.trim_ascii_end())
-                .os_path()
-                .ok()
+            // Only git's own newline is framing: a name may end in a space or
+            // a carriage return.
+            codeflow_core::git::GitName::from_bytes(
+                o.stdout.strip_suffix(b"\n").unwrap_or(&o.stdout),
+            )
+            .os_path()
+            .ok()
         });
     match git_dir {
         Some(dir) => root.join(dir).join("MERGE_HEAD").exists(),

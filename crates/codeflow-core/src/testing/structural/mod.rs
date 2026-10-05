@@ -350,6 +350,10 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
 /// everything under the pattern's literal folder, links followed as the
 /// iterator follows them.
 fn refuse_names_that_are_not_text(project_dir: &Path, pattern: &str) -> Result<(), TestingError> {
+    // A literal file path names one file: no other name can match it.
+    if !pattern.contains(['*', '?', '[']) {
+        return Ok(());
+    }
     let mut base = PathBuf::new();
     for part in pattern.split('/') {
         if part.contains(['*', '?', '[']) {
@@ -539,6 +543,10 @@ mod tests {
                 .unwrap()
                 .pass
         );
+        // A pattern that is one literal file never needs a folder walk.
+        let mut literal = sample_target();
+        literal.structural.as_mut().unwrap().source_glob = vec!["src/alpha.sh".to_string()];
+        assert!(validate_target(&literal, root).unwrap().unwrap().pass);
         let odd = root
             .join("elsewhere")
             .join(std::ffi::OsStr::from_bytes(b"caf\xe9.sh"));
