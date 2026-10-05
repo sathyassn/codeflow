@@ -168,10 +168,9 @@ fn truncate(s: &str, max: usize) -> String {
 fn branch_line(root: &Path) -> Option<String> {
     let info = RepoInfo::discover(root)?;
     let policy = Policy::load(root);
-    let branch = if info.branch.is_empty() {
-        "(detached)".to_string()
-    } else {
-        info.branch.clone()
+    let branch = match &info.branch_name {
+        None => "(detached)".to_string(),
+        Some(name) => name.display().to_string(),
     };
     let kind = if info.is_worktree {
         "worktree"

@@ -692,22 +692,23 @@ fn paths_that_differ_only_in_an_invalid_byte_stay_two_paths() {
     assert!(
         entries
             .keys()
-            .any(|key| crate::git::path_key_bytes(key) == b"dir\xff/f"),
+            .any(|key| crate::git::GitName::from_storage_key(key).bytes() == b"dir\xff/f"),
         "a file under a directory that is not valid UTF-8 is walked, with its exact path"
     );
 }
 
-/// A branch name that is not valid UTF-8 reaches `scope` spelled by
-/// `ref_text`, whose escapes a release glob would misjudge, so it refuses.
+/// Whether a branch is a release branch changes ownership and acceptance
+/// rules, and the release pattern is a glob that needs text, so a checked-out
+/// branch whose name is not valid UTF-8 refuses instead of being guessed.
 #[test]
-fn a_release_scope_refuses_a_branch_name_that_is_not_utf8() {
-    let destination = Destination {
-        url: None,
-        default: None,
-        heads: Vec::new(),
-    };
-    let name = crate::git::ref_text(b"integration/release-\xe9");
-    let error = scope(Path::new("."), &destination, &name, None).unwrap_err();
+fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::git::repo_with_refs(dir.path(), &[b"refs/heads/integration/release-\xe9"]);
+    std::fs::write(
+        dir.path().join(".git").join("HEAD"),
+        b"ref: refs/heads/integration/release-\xe9\n",
+    )
+    .unwrap();
+    let error = checkout_scope(dir.path(), None).unwrap_err();
     assert!(error.contains("not valid UTF-8"), "{error}");
-    assert!(scope(Path::new("."), &destination, "task/TSK-001-x", None).is_ok());
 }

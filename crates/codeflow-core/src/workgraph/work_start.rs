@@ -9,9 +9,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use git2::{Oid, Repository, TreeWalkMode, TreeWalkResult};
+use git2::{Oid, Repository};
 use thiserror::Error;
 
+use crate::git::GitName;
 use crate::workgraph::deps::{parse_dependencies, Dependency, DependencyKind};
 use crate::workgraph::{
     is_canonical_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id,
@@ -543,15 +544,18 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
         .find_tree(entry.id())
         .map_err(|_| format!("{revision}: project-management is not a directory"))?;
     let mut found = false;
-    home.walk(TreeWalkMode::PreOrder, |root, entry| {
-        let path = format!("project-management/{root}{}", entry.name().unwrap_or(""));
+    crate::git::walk_tree(&repo, &home, &mut |name, _| {
+        // A record path is valid text; any other name is not a record.
+        let Ok(text) = name.rule_text() else {
+            return crate::git::Walk::Continue;
+        };
+        let path = format!("project-management/{text}");
         if record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
             found = true;
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
-        TreeWalkResult::Ok
+        crate::git::Walk::Continue
     })
-    .or_else(|error| if found { Ok(()) } else { Err(error) })
     .map_err(|error| error.to_string())?;
     Ok(found)
 }
@@ -765,6 +769,26 @@ pub(crate) fn work_suffix<'b>(prefixes: &[String], branch: &'b str) -> Option<&'
         .find_map(|prefix| branch.strip_prefix(prefix.as_str()))
 }
 
+/// [`work_suffix`] over exact bytes: the part of `branch` after one of
+/// `prefixes`, whatever the rest of the name holds.
+pub(crate) fn work_suffix_name(prefixes: &[String], branch: &GitName) -> Option<GitName> {
+    prefixes
+        .iter()
+        .find_map(|prefix| branch.strip_prefix(prefix.as_bytes()))
+}
+
+/// The longest of `ids` that `suffix` starts with, followed by `-`, read from
+/// bytes: `task/TSK-1-caf\xe9` still claims `TSK-1`.
+pub(crate) fn carried_task_id_name(
+    suffix: &GitName,
+    ids: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    ids.iter()
+        .filter(|id| suffix.starts_with(format!("{id}-").as_bytes()))
+        .max_by_key(|id| id.len())
+        .cloned()
+}
+
 /// Resolve the durable task id a work branch carries,
 /// `<prefix>/TSK-NNN-<slug>` on any sanctioned work prefix (`task/`, `fix/`,
 /// `feat/`, `spike/` and the rest of `git.branch_prefixes`).
@@ -805,7 +829,7 @@ fn carried_task_id(suffix: &str, ids: &std::collections::BTreeSet<String>) -> Op
 /// walks the refs and the record files again per branch.
 pub(crate) struct PinBranches {
     /// Task id, then branch name without its remote, then the tips it has.
-    tips: BTreeMap<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>,
+    tips: BTreeMap<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>,
     /// A branch of the task whose tip could not be read.
     unreadable: BTreeMap<String, String>,
     /// The task ids whose record the graph at a revision holds, parsed once
@@ -824,23 +848,27 @@ impl PinBranches {
     pub(crate) fn read(repo: &Repository, root: &Path) -> Result<Self, String> {
         let prefixes = work_prefixes(root);
         let ids = visible_task_ids(root);
-        let mut tips = BTreeMap::<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>::new();
+        let mut tips =
+            BTreeMap::<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>::new();
         let mut unreadable = BTreeMap::new();
         for branch in repo.branches(None).map_err(|e| e.to_string())? {
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
-            // OS text rule (issue 79): the name is matched against work
-            // prefixes and task ids, so a branch that is not valid UTF-8 is
-            // read with `ref_text` instead of failing the whole listing or
-            // hiding a claim on its task.
-            let name = crate::git::ref_text(branch.name_bytes().map_err(|e| e.to_string())?);
-            let name = name.as_str();
+            // OS text rule (issue 79): the name is exact bytes, matched
+            // against work prefixes and task ids by prefix, so a branch that
+            // is not valid UTF-8 neither fails the listing nor hides a claim
+            // on its task.
+            let name = crate::git::name::branch_name(&branch).map_err(|e| e.to_string())?;
             let name = if kind == git2::BranchType::Remote {
-                name.split_once('/').map_or(name, |(_, name)| name)
+                // `<remote>/<branch>`: the branch is after the first `/`.
+                match name.bytes().iter().position(|b| *b == b'/') {
+                    Some(at) => GitName::from_bytes(&name.bytes()[at + 1..]),
+                    None => name,
+                }
             } else {
                 name
             };
-            let Some(task_id) =
-                work_suffix(&prefixes, name).and_then(|suffix| carried_task_id(suffix, &ids))
+            let Some(task_id) = work_suffix_name(&prefixes, &name)
+                .and_then(|suffix| carried_task_id_name(&suffix, &ids))
             else {
                 continue;
             };
@@ -848,7 +876,7 @@ impl PinBranches {
                 Ok(commit) => {
                     tips.entry(task_id)
                         .or_default()
-                        .entry(name.to_string())
+                        .entry(name)
                         .or_default()
                         .insert(commit.id());
                 }
@@ -887,7 +915,7 @@ impl PinBranches {
     fn of(
         &self,
         task_id: &str,
-    ) -> Result<impl Iterator<Item = (&String, &std::collections::BTreeSet<Oid>)>, String> {
+    ) -> Result<impl Iterator<Item = (&GitName, &std::collections::BTreeSet<Oid>)>, String> {
         if let Some(error) = self.unreadable.get(task_id) {
             return Err(error.clone());
         }
@@ -906,7 +934,7 @@ impl PinBranches {
     ///
     /// # Errors
     /// Refuses a pin that is not the unique predecessor branch tip.
-    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<String, String> {
+    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<GitName, String> {
         let matching: Vec<_> = self
             .of(&pin.task_id)?
             .filter(|(_, tips)| tips.contains(&pin.revision))
@@ -970,7 +998,7 @@ impl PinBranches {
         &self,
         repo: &Repository,
         pin: &ReviewedPin,
-    ) -> Result<String, String> {
+    ) -> Result<GitName, String> {
         let name = self.pin_name(pin)?;
         self.pin_holds_record(repo, pin)?;
         Ok(name)
@@ -1069,7 +1097,9 @@ pub(crate) fn reviewed_pins_in(
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
-        if !lookup(&branch, &revision.to_string())? {
+        // The hosted review is found by branch name, which needs text.
+        let branch_text = branch.rule_text().map_err(|error| error.to_string())?;
+        if !lookup(branch_text, &revision.to_string())? {
             return Err(format!(
                 "no review names {task_id}@{sha}; cannot verify review for this pin"
             ));
@@ -1082,7 +1112,7 @@ pub(crate) fn reviewed_pins_in(
     Ok(pins)
 }
 
-fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
+fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
     PinBranches::once(&mut None, repo)?.pin_branch(repo, pin)
 }
 
@@ -1134,9 +1164,7 @@ pub fn check_work_start_on(
     let head = repo
         .head()
         .map_err(|e| WorkStartError::Repository(e.to_string()))?;
-    // OS text rule (issue 79): the branch is matched against work prefixes and
-    // task ids, so a name that is not valid UTF-8 reads through `ref_text`.
-    let branch = crate::git::reference_shorthand(&head);
+    let branch = head_branch_text(&head, task_id)?;
     if task_id_from_branch(root, &branch).as_deref() != Some(task_id) {
         return Err(WorkStartError::Branch {
             branch: branch.clone(),
@@ -1163,13 +1191,31 @@ pub fn check_work_start_on(
     let branch = repo
         .head()
         .ok()
-        .map(|r| crate::git::reference_shorthand(&r))
+        .map(|r| head_branch_text(&r, task_id))
+        .transpose()?
         .unwrap_or_default();
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
     let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;
     report.branch = branch;
     Ok(report)
+}
+
+/// The checked-out branch as text for the work-start rules.
+///
+/// OS text rule (issue 79): the rules match the branch against sanctioned work
+/// prefixes and the task id, which need text. A branch that is not valid UTF-8
+/// is refused as not carrying the task, with its escaped name shown, instead
+/// of being matched on a lossy spelling.
+fn head_branch_text(head: &git2::Reference<'_>, task_id: &str) -> Result<String, WorkStartError> {
+    let name = crate::git::name::reference_shorthand(head);
+    match name.rule_text() {
+        Ok(text) => Ok(text.to_string()),
+        Err(_) => Err(WorkStartError::Branch {
+            branch: name.display().to_string(),
+            task_id: task_id.to_string(),
+        }),
+    }
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -1189,7 +1235,7 @@ pub fn check_work_start(
     let head = repo
         .head()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let branch = crate::git::reference_shorthand(&head);
+    let branch = head_branch_text(&head, task_id)?;
     check_work_start_for_branch(repo_root, task_id, target, &branch)
 }
 
@@ -1246,7 +1292,8 @@ pub fn check_work_start_anchored(
     let branch = repo
         .head()
         .ok()
-        .map(|head| crate::git::reference_shorthand(&head))
+        .map(|head| head_branch_text(&head, task_id))
+        .transpose()?
         .unwrap_or_default();
     check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
 }
@@ -1910,28 +1957,33 @@ fn records_from_tree_matching(
     let odb = repo
         .odb()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let walk_result = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+    let walk_result = crate::git::walk_tree(repo, tree, &mut |name, entry| {
         if failure.is_some() {
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
-        let Ok(name) = entry.name() else {
-            return TreeWalkResult::Ok;
+        // A record path is valid text; a name that is not UTF-8 is never one,
+        // and a tree with such a name is not walked into for records.
+        let Ok(path) = name.rule_text() else {
+            return if entry.kind() == Some(git2::ObjectType::Tree) {
+                crate::git::Walk::SkipTree
+            } else {
+                crate::git::Walk::Continue
+            };
         };
-        let path = format!("{root}{name}");
         // Only the record paths are read (SPC-013 R-103): a tree elsewhere
         // is never loaded, so a partial clone that lacks it still reads.
         if entry.kind() == Some(git2::ObjectType::Tree) {
             return if path == RECORDS_ROOT || path.starts_with(&format!("{RECORDS_ROOT}/")) {
-                TreeWalkResult::Ok
+                crate::git::Walk::Continue
             } else {
-                TreeWalkResult::Skip
+                crate::git::Walk::SkipTree
             };
         }
-        let Some(kind) = record_kind_for_tree_path(&path) else {
-            return TreeWalkResult::Ok;
+        let Some(kind) = record_kind_for_tree_path(path) else {
+            return crate::git::Walk::Continue;
         };
-        if !include(&path, kind) {
-            return TreeWalkResult::Ok;
+        if !include(path, kind) {
+            return crate::git::Walk::Continue;
         }
         // A record's size is read from its object header before its bytes,
         // so a hostile tip cannot make every reader load it.
@@ -1942,28 +1994,28 @@ fn records_from_tree_matching(
             failure = Some(format!(
                 "{path}: record exceeds the 4 MiB bound for a work record"
             ));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         }
         let Ok(blob) = repo.find_blob(entry.id()) else {
             failure = Some(format!("{path}: cannot read blob"));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         };
         let Ok(content) = std::str::from_utf8(blob.content()) else {
             failure = Some(format!("{path}: record is not UTF-8"));
-            return TreeWalkResult::Abort;
+            return crate::git::Walk::Stop;
         };
         match parse_record(content, kind) {
             Ok(record) => {
                 if records.insert(record.id.clone(), record).is_some() {
                     failure = Some(format!("{path}: duplicate work id"));
-                    TreeWalkResult::Abort
+                    crate::git::Walk::Stop
                 } else {
-                    TreeWalkResult::Ok
+                    crate::git::Walk::Continue
                 }
             }
             Err(error) => {
                 failure = Some(format!("{path}: {error}"));
-                TreeWalkResult::Abort
+                crate::git::Walk::Stop
             }
         }
     });
@@ -2144,7 +2196,7 @@ pub fn review_repository(root: &std::path::Path, branch: &str) -> Result<String,
 /// remote-tracking branch names are listed once, not once per branch.
 pub struct ReviewRepositories {
     repo: Repository,
-    remote_branches: Result<Vec<String>, String>,
+    remote_branches: Result<Vec<GitName>, String>,
 }
 
 impl ReviewRepositories {
@@ -2161,12 +2213,11 @@ impl ReviewRepositories {
                 .map_err(|error| error.to_string())?
             {
                 let (candidate, _) = candidate.map_err(|error| error.to_string())?;
-                // OS text rule (issue 79): the names are only compared with a
-                // branch, so one that is not valid UTF-8 keeps its own
-                // spelling (`ref_text`) and matches nothing else.
-                names.push(crate::git::ref_text(
-                    candidate.name_bytes().map_err(|error| error.to_string())?,
-                ));
+                // OS text rule (issue 79): exact names, compared with a branch
+                // byte for byte.
+                names.push(
+                    crate::git::name::branch_name(&candidate).map_err(|error| error.to_string())?,
+                );
             }
             Ok(names)
         })();
@@ -2182,16 +2233,6 @@ impl ReviewRepositories {
     /// # Errors
     /// Refuses missing or ambiguous hosted repository identity.
     pub fn repository(&self, branch: &str) -> Result<String, String> {
-        // OS text rule (issue 79): a branch that is not valid UTF-8 reaches
-        // here spelled by `ref_text`, which does not address its
-        // `branch.<name>.remote` key, so the lookup would pick another
-        // repository. The hosted repository is an identity: refuse.
-        if branch.contains('\\') {
-            return Err(
-                "the branch name is not valid UTF-8, so its hosted repository cannot be read"
-                    .to_string(),
-            );
-        }
         let repo = &self.repo;
         let config = repo.config().map_err(|error| error.to_string())?;
         let mut names = std::collections::BTreeSet::new();
@@ -2200,8 +2241,19 @@ impl ReviewRepositories {
         }
         let suffix = format!("/{branch}");
         for candidate in self.remote_branches.as_ref().map_err(Clone::clone)? {
-            if let Some(name) = candidate.strip_suffix(&suffix) {
-                names.insert(name.to_string());
+            if let Some(remote) = candidate.bytes().strip_suffix(suffix.as_bytes()) {
+                // OS text rule (issue 79): the remote names the hosted
+                // repository, an identity. One that is not valid UTF-8 cannot
+                // be looked up, so the answer is a refusal, never another
+                // remote's repository.
+                let remote = GitName::from_bytes(remote);
+                let remote = remote.rule_text().map_err(|error| {
+                    format!(
+                        "cannot verify review for this pin: a remote name is not valid UTF-8 ({})",
+                        error.display()
+                    )
+                })?;
+                names.insert(remote.to_string());
             }
         }
         if names.is_empty() {
@@ -2279,6 +2331,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::set_permissions(&self.path, self.original.clone());
         }
+    }
+
+    const TASK_TEXT: &[u8] = b"---\nid: TSK-003\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: late\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n";
+
+    /// Issue 79: git2's `Tree::walk` gives the parent path as text and aborts
+    /// the whole walk at a directory whose name is not UTF-8. A record next to
+    /// such a directory, at the root or under `project-management`, is still
+    /// read, and a directory with that name is never taken for a record path.
+    #[test]
+    fn records_are_read_beside_a_directory_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (b"project-management/tasks/TSK-003.md", TASK_TEXT),
+                (b"project-management/notes\xff/TSK-004.md", TASK_TEXT),
+                (b"src/dir\xff/f.rs", b"x"),
+                (b"project-management/tasks/TSK-005\xff.md", TASK_TEXT),
+            ],
+        );
+        let tree = repo.find_commit(commit).unwrap().tree().unwrap();
+        let records = records_from_tree(&repo, &tree).expect("the walk reaches the record");
+        assert_eq!(records.keys().collect::<Vec<_>>(), ["TSK-003"]);
+        let home = tree.get_path(Path::new("project-management")).unwrap();
+        assert!(home.kind() == Some(git2::ObjectType::Tree));
     }
 
     #[test]
@@ -2429,7 +2506,10 @@ mod tests {
                 task_id: task_id.into(),
                 revision,
             };
-            assert_eq!(branches.pin_branch(&repo, &pin).unwrap(), branch);
+            assert_eq!(
+                branches.pin_branch(&repo, &pin).unwrap(),
+                GitName::from_text(branch)
+            );
         }
         assert_eq!(branches.task_ids.borrow().len(), 1);
     }
@@ -3219,22 +3299,20 @@ permission_preset = "strict"
         assert!(error.to_string().contains("duplicate work id"));
     }
 
-    /// Review finding on issue 79: a branch that is not valid UTF-8 reaches
-    /// the hosted-repository lookup spelled by `ref_text`, which does not
-    /// address its raw `branch.<name>.remote` key, so the lookup refuses.
+    /// Review finding on issue 79: a remote whose name is not valid UTF-8 and
+    /// that carries the branch cannot name a hosted repository, so the lookup
+    /// refuses instead of choosing another remote.
     #[test]
-    fn a_branch_that_is_not_utf8_has_no_hosted_repository_to_guess() {
+    fn a_remote_that_is_not_utf8_has_no_hosted_repository_to_guess() {
         let dir = tempfile::tempdir().unwrap();
-        crate::git::repo_with_refs(dir.path(), &[]);
+        crate::git::repo_with_refs(dir.path(), &[b"refs/remotes/caf\xe9/task/TSK-001-x"]);
         let repositories = ReviewRepositories::open(dir.path()).unwrap();
-        let error = repositories
-            .repository(&crate::git::ref_text(b"task/TSK-001-caf\xe9"))
-            .unwrap_err();
+        let error = repositories.repository("task/TSK-001-x").unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
     /// Review finding on issue 79: one branch whose name is not valid UTF-8
-    /// failed the whole listing of work branches. It is read with `ref_text`.
+    /// failed the whole listing of work branches. It is read as `GitName` bytes.
     #[test]
     fn a_branch_that_is_not_utf8_does_not_fail_the_branch_listing() {
         let dir = tempfile::tempdir().unwrap();

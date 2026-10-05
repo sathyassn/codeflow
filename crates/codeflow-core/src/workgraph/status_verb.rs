@@ -306,6 +306,35 @@ fn epic_binding(repo_root: &Path, epic: &RecordView) -> Vec<String> {
     .collect()
 }
 
+/// The merge base of the task's own branch with its target, when `HEAD` is
+/// that branch: the range a record-only amendment waiver may name (TSK-184).
+/// A branch name that is not valid UTF-8 is not the task's own branch, so no
+/// waiver is offered for its range.
+fn own_range_base(
+    repo_root: &Path,
+    repo: &git2::Repository,
+    task: &RecordView,
+    head: git2::Oid,
+) -> Option<git2::Oid> {
+    repo.head()
+        .ok()
+        .and_then(|head| {
+            crate::git::name::reference_shorthand(&head)
+                .rule_text()
+                .ok()
+                .map(str::to_string)
+        })
+        .filter(|branch| {
+            super::task_id_from_branch(repo_root, branch).as_deref() == Some(task.id.as_str())
+        })
+        .and_then(|_| {
+            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+        })
+        .and_then(|target| repo.revparse_single(&target).ok())
+        .and_then(|object| object.peel_to_commit().ok())
+        .and_then(|target| repo.merge_base(head, target.id()).ok())
+}
+
 /// The binding of a completion to the reviewed commit (R-60), with the
 /// working tree over `HEAD` as the completion: the verb runs where the
 /// reviewed result is checked out, and applies the judge CI applies.
@@ -380,23 +409,7 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             // amendment commit in the pull request's own range (TSK-184).
             // The binder withholds it from a range that reopens the task,
             // as it does for CI.
-            let own_range_base = repo
-                .head()
-                .ok()
-                .map(|head| crate::git::reference_shorthand(&head))
-                .filter(|branch| {
-                    super::task_id_from_branch(repo_root, branch).as_deref()
-                        == Some(task.id.as_str())
-                })
-                .and_then(|_| {
-                    super::work_start::resolve_work_target(
-                        repo_root,
-                        task.integration_target.as_deref(),
-                    )
-                })
-                .and_then(|target| repo.revparse_single(&target).ok())
-                .and_then(|object| object.peel_to_commit().ok())
-                .and_then(|target| repo.merge_base(head, target.id()).ok());
+            let own_range_base = own_range_base(repo_root, &repo, task, head);
             let run = verb_authorities(repo_root, &repo, task, default_target);
             shown(super::acceptance::bind_completion_with_amendment(
                 &repo,

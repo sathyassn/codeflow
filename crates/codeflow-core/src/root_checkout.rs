@@ -17,6 +17,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use crate::git::GitName;
 use crate::hooks::policy::{GitPolicy, PolicyLevel};
 use crate::hooks::{Violation, HUMAN_OVERRIDE_ENV};
 
@@ -203,7 +204,8 @@ impl fmt::Display for RootBranchSource {
 /// The branch the root checkout holds, and where that answer came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RootBranch {
-    pub name: String,
+    /// The branch name, exact; shown through its `Display`.
+    pub name: GitName,
     pub source: RootBranchSource,
 }
 
@@ -214,12 +216,11 @@ pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch
     if let Some(name) = repo
         .find_reference("refs/remotes/origin/HEAD")
         .ok()
-        // OS text rule (issue 79): the name is compared with the checked-out
-        // branch, which is spelled the same way (`ref_text`), so a root branch
-        // that is not valid UTF-8 is still recognised and no other branch
-        // takes its place.
-        .and_then(|r| r.symbolic_target_bytes().map(crate::git::ref_text))
-        .and_then(|t| t.strip_prefix("refs/remotes/origin/").map(str::to_string))
+        // OS text rule (issue 79): the name is exact bytes, compared with the
+        // checked-out branch byte for byte, so a root branch that is not valid
+        // UTF-8 is still recognised and no other branch takes its place.
+        .and_then(|r| crate::git::name::symbolic_target(&r))
+        .and_then(|t| t.strip_prefix(b"refs/remotes/origin/"))
     {
         return RootBranch {
             name,
@@ -231,13 +232,13 @@ pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch
             && repo.find_branch(pattern, git2::BranchType::Local).is_ok()
         {
             return RootBranch {
-                name: pattern.clone(),
+                name: GitName::from_text(pattern),
                 source: RootBranchSource::ProtectedList,
             };
         }
     }
     RootBranch {
-        name: "main".to_string(),
+        name: GitName::from_text("main"),
         source: RootBranchSource::Fallback,
     }
 }
@@ -250,7 +251,7 @@ pub fn root_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch {
         default_branch(repo, policy)
     } else {
         RootBranch {
-            name: configured.to_string(),
+            name: GitName::from_text(configured),
             source: RootBranchSource::Policy,
         }
     }
@@ -264,7 +265,7 @@ pub fn root_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Head {
     /// A branch, possibly unborn.
-    Branch(String),
+    Branch(GitName),
     /// A detached HEAD at the short commit id.
     Detached(String),
 }
@@ -285,16 +286,18 @@ pub fn head(repo: &git2::Repository) -> Option<Head> {
         Ok(reference) => {
             if reference.is_branch() {
                 // OS text rule (issue 79): a branch name that is not valid
-                // UTF-8 stays a branch, spelled by `ref_text`.
-                Some(Head::Branch(crate::git::reference_shorthand(&reference)))
+                // UTF-8 stays a branch, exact.
+                Some(Head::Branch(crate::git::name::reference_shorthand(
+                    &reference,
+                )))
             } else {
                 let id = reference.target()?.to_string();
                 Some(Head::Detached(id.chars().take(9).collect()))
             }
         }
-        Err(_) => crate::git::ref_text(repo.find_reference("HEAD").ok()?.symbolic_target_bytes()?)
-            .strip_prefix("refs/heads/")
-            .map(|b| Head::Branch(b.to_string())),
+        Err(_) => crate::git::name::symbolic_target(&repo.find_reference("HEAD").ok()?)?
+            .strip_prefix(b"refs/heads/")
+            .map(Head::Branch),
     }
 }
 
@@ -334,7 +337,8 @@ impl CommitFinding {
     /// The exact next step: the catalogued remedy.
     #[must_use]
     pub fn next_step(&self) -> crate::remedy::Remedy {
-        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &self.root_branch.name)])
+        let root = self.root_branch.name.to_string();
+        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &root)])
     }
 }
 
@@ -405,16 +409,29 @@ impl RootCheckout {
     /// is a detached HEAD. `None` on the root branch.
     #[must_use]
     pub fn commit_on(&self, branch: &str) -> Option<CommitFinding> {
-        if branch == self.root_branch.name {
+        // The hook plane's text for a branch that is not valid UTF-8 never
+        // equals a real branch name, so it is never the root branch.
+        self.commit_on_name(
+            (!branch.is_empty())
+                .then(|| GitName::from_text(branch))
+                .as_ref(),
+        )
+    }
+
+    /// The finding for a commit made here on `branch` (`None` is a detached
+    /// HEAD), compared with the root branch byte for byte.
+    #[must_use]
+    pub fn commit_on_name(&self, branch: Option<&GitName>) -> Option<CommitFinding> {
+        if branch == Some(&self.root_branch.name) {
             return None;
         }
-        let head = if branch.is_empty() {
+        let head = if let Some(name) = branch {
+            Head::Branch(name.clone())
+        } else {
             match &self.head {
                 Some(detached @ Head::Detached(_)) => detached.clone(),
                 _ => Head::Detached("an unknown commit".to_string()),
             }
-        } else {
-            Head::Branch(branch.to_string())
         };
         Some(CommitFinding {
             repo: self.repo.clone(),
@@ -475,7 +492,7 @@ pub fn commit_finding(path: &Path, policy: &GitPolicy) -> Option<CommitFinding> 
     let repo = git2::Repository::discover(path).ok()?;
     let root = RootCheckout::read(&repo, policy)?;
     match root.head.clone()? {
-        Head::Branch(branch) => root.commit_on(&branch),
+        Head::Branch(branch) => root.commit_on_name(Some(&branch)),
         detached @ Head::Detached(_) => Some(CommitFinding {
             repo: root.repo,
             head: detached,
@@ -1097,8 +1114,11 @@ pub fn tracked_changes(repo: &git2::Repository) -> Vec<String> {
 }
 
 /// Commits on the current branch that its upstream lacks, when it has one.
-fn ahead_of_upstream(repo: &git2::Repository, branch: &str) -> Option<usize> {
-    let local = repo.find_branch(branch, git2::BranchType::Local).ok()?;
+fn ahead_of_upstream(repo: &git2::Repository, branch: &GitName) -> Option<usize> {
+    // Advice only: a name that is not valid UTF-8 has no upstream to count.
+    let local = repo
+        .find_branch(branch.rule_text().ok()?, git2::BranchType::Local)
+        .ok()?;
     let upstream = local.upstream().ok()?;
     let (ahead, _) = repo
         .graph_ahead_behind(local.get().target()?, upstream.get().target()?)
@@ -1196,7 +1216,10 @@ fn missing_branch_finding(
 ) -> Option<Finding> {
     if root_branch.source != RootBranchSource::Policy
         || repo
-            .find_branch(&root_branch.name, git2::BranchType::Local)
+            .find_branch(
+                root_branch.name.rule_text().unwrap_or_default(),
+                git2::BranchType::Local,
+            )
             .is_ok()
     {
         return None;
@@ -1226,7 +1249,7 @@ fn head_finding(
     let changes = tracked_changes(repo);
     match head(repo)? {
         Head::Branch(ref b) if *b == root_branch.name => {
-            (policy.branch_is_protected(b) && !changes.is_empty()).then(|| Finding {
+            (policy.branch_is_protected_name(b) && !changes.is_empty()).then(|| Finding {
                 severity: Severity::Warn,
                 rule: ROOT_BRANCH_KEY,
                 message: format!(
@@ -1449,7 +1472,7 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
     let repo_label = label(&canonical(root));
     let target = workspace_branch_name(policy);
     let current = head(&repo);
-    if current == Some(Head::Branch(target.clone())) {
+    if current == Some(Head::Branch(GitName::from_text(&target))) {
         return Ok(BranchStep::AlreadyOn(target));
     }
     if repo.head().is_err() {
@@ -1477,11 +1500,10 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
         BranchStep::Reused(target)
     } else {
         let from = default_branch(&repo, policy).name;
-        // OS text rule (issue 79): the default branch is spelled by `ref_text`
-        // when it is not valid UTF-8, and git cannot be given that spelling,
-        // so the new branch cannot start from it. Say so instead of passing
-        // git a name that resolves to nothing.
-        if from.contains('\\') {
+        // OS text rule (issue 79): git cannot be given a default branch whose
+        // name is not valid UTF-8 as text, so the new branch cannot start from
+        // it. Say so instead of passing git a name that resolves to nothing.
+        let Ok(from_text) = from.rule_text() else {
             return Err(stop(
                 format!(
                     "the default branch of {repo_label} is not valid UTF-8, so the new branch \
@@ -1489,11 +1511,11 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
                 ),
                 "give the root checkout a default branch whose name is valid UTF-8".to_string(),
             ));
-        }
-        let start = if repo.find_branch(&from, git2::BranchType::Local).is_ok() {
-            from.clone()
+        };
+        let start = if repo.find_branch(from_text, git2::BranchType::Local).is_ok() {
+            from_text.to_string()
         } else {
-            format!("origin/{from}")
+            format!("origin/{from_text}")
         };
         git_run(
             root,
@@ -1502,7 +1524,7 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
         .map_err(|e| switch_failed(&repo_label, &target, &e))?;
         BranchStep::Created {
             branch: target,
-            from,
+            from: from.to_string(),
         }
     };
     Ok(step)

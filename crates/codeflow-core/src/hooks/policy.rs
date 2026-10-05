@@ -28,6 +28,12 @@ use crate::security::SecurityPolicy;
 /// Branch prefix for integration lines shared by policy and range checks.
 pub const INTEGRATION_BRANCH_PREFIX: &str = "integration/";
 
+/// Stands in for a checked-out branch whose name is not valid UTF-8 (issue
+/// 79). A NUL cannot be in a reference name, so no real branch equals it, and
+/// every branch rule treats it as protected: a name the guard cannot match
+/// against a glob is refused, never allowed or read as detached.
+pub const NON_UTF8_BRANCH: &str = "\0not-valid-utf8";
+
 /// Enforcement level for a policy rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -524,11 +530,25 @@ impl GitPolicy {
     /// Reuses the security plane's matcher so all planes agree (D7).
     #[must_use]
     pub fn branch_is_protected(&self, branch: &str) -> bool {
+        // A branch whose name is not valid UTF-8 cannot be matched against a
+        // glob, and a guard that cannot tell does not allow: it is protected.
+        if branch == NON_UTF8_BRANCH {
+            return true;
+        }
         let sec = SecurityPolicy {
             protected_branches: self.protected_branches.clone(),
             ..SecurityPolicy::defaults()
         };
         is_on_protected_branch(branch, &sec)
+    }
+
+    /// [`GitPolicy::branch_is_protected`] for an exact name. A name that is
+    /// not valid UTF-8 cannot be matched against a glob, so it is protected.
+    #[must_use]
+    pub fn branch_is_protected_name(&self, branch: &crate::git::GitName) -> bool {
+        branch
+            .rule_text()
+            .map_or(true, |text| self.branch_is_protected(text))
     }
 
     /// `true` when `branch` starts with one of the sanctioned prefixes

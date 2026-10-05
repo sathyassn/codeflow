@@ -78,7 +78,7 @@ pub fn revision(root: &Path) -> Option<String> {
 /// key, and two different invalid names differ in their hex, so one name never
 /// hides a change of another in the snapshot.
 fn tracked_entry(root: &Path, raw: &[u8]) -> (String, PathBuf) {
-    let key = crate::git::path_key(raw);
+    let key = crate::git::GitName::from_bytes(raw).storage_key();
     #[cfg(unix)]
     let path = {
         use std::os::unix::ffi::OsStrExt;

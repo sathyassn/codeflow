@@ -159,47 +159,59 @@ profile and Claude's credential mask, is in
 #### Text from the operating system and git
 
 Names, paths and process text that the operating system or git supplies are
-bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
+bytes, and valid UTF-8 is not promised (issue 79). One layer and one rule
+cover the engine.
 
-- **Read it as bytes or lossily where the value is only compared or shown.** A
-  process argument, an index path, a listing line or a config value is
-  compared as bytes or read with `String::from_utf8_lossy`, and never turns a
-  legal input into a failure.
-- **Never decode a value that is an identity.** A lossy spelling can equal a
-  different valid name (an invalid byte and a real U+FFFD both read as
-  U+FFFD), so a process argument, a config key or a snapshot key is compared
-  as bytes, or keyed so that no valid name can equal it, or dropped from the
-  comparison. Where a decode cannot be exact, the read refuses.
-- **Fail where a wrong value would change a security or identity decision**,
+The layer is `codeflow_core::git::GitName` (`git/name.rs`): the exact bytes of
+a ref, branch, remote, worktree, path or tree entry, read once where the name
+enters (git2 `*_bytes` accessors, NUL-separated git output, `OsStr` bytes).
+
+| View | Use | On a name that is not UTF-8 |
+|---|---|---|
+| `bytes()`, `starts_with`, `joined`, a map keyed by `GitName` | comparing, keying, prefix tests, building a path | exact, never lossy |
+| `rule_text()` | a rule that needs text (a glob, a task prefix, a config key, a record path) | returns an error that carries the display form, so the read refuses |
+| `display()` | output to a person: messages, logs, advice | escapes each invalid byte as `\xNN`; not a comparable value |
+| `os_path()` | a file system path | exact on Unix; refuses where the name cannot be one |
+| `storage_key()` | a key that is persisted or put in a map of text | valid text as is, else a lossy form, a NUL and hex: no two names share a key |
+
+The rule:
+
+- **A value that is compared or used in a decision is never decoded lossily.**
+  A lossy spelling can equal a different valid name (an invalid byte and a real
+  U+FFFD both read as U+FFFD). Decisions use the bytes, or `rule_text()`, or
+  refuse. Lossy decoding is for display only, and goes through `display()`.
+- **Refuse where a wrong value would change a security or identity decision**,
   and say why in a comment at that site, starting "OS text rule" or "Kept
   strict". Refuse and do not skip: a name the check cannot read is work or
   authority it cannot prove (a policy source ref, a remote name, a worktree
-  name, a state directory written into a hook command).
+  name, a state directory written into a hook command). Where leaving a name
+  out only keeps it (cleanup advice, a waiver offered for a branch), it is
+  left out and not guessed.
 - **A name that only matches a name this tool generates is skipped.** A
   directory entry tested against a UUID or a nonce-suffixed temporary name is
   not one of ours when it is not valid UTF-8, because every generated name is
   ASCII, so the scan moves on.
-- **A name matched against valid patterns keeps its invalid bytes visible.** A
-  branch or ref name tested against protected globs or task prefixes is read
-  with `git::ref_text`, which writes each invalid byte as `\xNN`. git forbids
-  a backslash in a reference name, so no valid name spells an escape and two
-  different names never read as one, as a lossy decode would make them. A
-  branch that is not valid UTF-8 is never read as detached or dropped from a
-  list that guards or cleanup depend on, except where leaving one out only
-  keeps it, as `codeflow status` cleanup advice does. A path compared with
-  another path is keyed by `git::path_key` (lossy text, a NUL and hex for an
-  invalid name). A branch name that reaches a glob or a config key spelled
-  with escapes is refused there, because the escapes are not the characters
-  the pattern or key would see. Where two OS values are compared with
-  each other, or one picks the object acted on (a checkout restored after a
-  failed landing, a path handed to `reset --hard`), the bytes decide or the
-  read refuses.
+- **Tree walks read names as bytes.** git2's `Tree::walk` stops with an error
+  at a directory whose name is not UTF-8; `git::walk_tree` reads the entries
+  as bytes. A record path is valid text, so a path that is not UTF-8 is not a
+  record, and a tree under it is never read as one.
+- **The hook plane keeps branch text.** A branch that is not valid UTF-8 reads
+  as one sentinel name that is always protected, so a guard fails closed, and
+  the exact name is kept for display.
 - **File content is not covered.** JSON, TOML, Markdown and blobs are a format
   contract, and a decode failure there names the file.
 
-The sites that stay strict are the ones with a comment. The pre-push and
-reference-transaction stdin reads are strict by an earlier decision that the
-`remedy_clearing` tests pin.
+A source scan (`crates/codeflow-core/tests/name_decode_scan.rs`) parses every
+production source with `syn` and fails on a new `from_utf8_lossy`,
+`to_string_lossy` or git2 text accessor (`shorthand`, `symbolic_target`,
+`name()` in a file that uses git2) outside the layer, unless it is listed with
+the reason it never feeds a decision. The list is keyed by file, enclosing
+item and call, with a count, and a stale entry fails. The scan sees only those
+calls, so each site also has its own test (a collision, a refusal or a
+whole-path fixture).
+
+The pre-push and reference-transaction stdin reads are strict by an earlier
+decision that the `remedy_clearing` tests pin.
 
 ### scaffold: `assets/`
 

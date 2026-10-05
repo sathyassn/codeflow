@@ -333,13 +333,13 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
 
     let rb = root_branch(&repo, &umbrella_policy());
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         (WORKSPACE_ROOT_BRANCH, RootBranchSource::Policy)
     );
 
     let rb = root_branch(&repo, &GitPolicy::default());
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::ProtectedList)
     );
 
@@ -349,7 +349,7 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
     };
     let rb = root_branch(&repo, &fallback);
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::Fallback)
     );
 
@@ -364,7 +364,7 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
     );
     let rb = root_branch(&repo, &GitPolicy::default());
     assert_eq!(
-        (rb.name.as_str(), rb.source),
+        (rb.name.rule_text().unwrap(), rb.source),
         ("trunk", RootBranchSource::OriginHead)
     );
 }
@@ -1826,7 +1826,7 @@ fn bootstrap_grace_suspends_the_rule() {
 
 /// Review finding on issue 79: a root branch or a checked-out branch whose
 /// name is not valid UTF-8 was read as absent, and a lossy spelling made it
-/// equal to a different branch. The bytes are spelled by `ref_text`, so each
+/// equal to a different branch. Each name is kept as `GitName` bytes, so each
 /// branch is itself and no other.
 #[test]
 fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
@@ -1852,19 +1852,19 @@ fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
     .unwrap();
     let repo = git2::Repository::open(&root).unwrap();
 
-    assert_eq!(
-        head(&repo),
-        Some(Head::Branch("release/caf\\xe9".to_string()))
-    );
+    let invalid = GitName::from_bytes(b"release/caf\xe9");
+    assert_eq!(head(&repo), Some(Head::Branch(invalid.clone())));
     let origin = default_branch(&repo, &GitPolicy::default());
     assert_eq!(
-        (origin.name.as_str(), origin.source),
-        ("release/caf\\xe9", RootBranchSource::OriginHead)
+        (origin.name, origin.source),
+        (invalid, RootBranchSource::OriginHead)
     );
 
     // On the root branch itself: no finding.
     let facts = RootCheckout::read(&repo, &GitPolicy::default()).unwrap();
-    assert!(facts.commit_on("release/caf\\xe9").is_none());
+    assert!(facts
+        .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
+        .is_none());
 
     // A policy root branch that holds a real U+FFFD is another branch, not
     // the one whose byte is invalid.
@@ -1873,7 +1873,9 @@ fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
         ..GitPolicy::default()
     };
     let facts = RootCheckout::read(&repo, &lookalike).unwrap();
-    assert!(facts.commit_on("release/caf\\xe9").is_some());
+    assert!(facts
+        .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
+        .is_some());
 }
 
 /// Review finding on issue 79: a default branch that is not valid UTF-8 was

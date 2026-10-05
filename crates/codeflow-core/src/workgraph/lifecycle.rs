@@ -21,8 +21,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use git2::{Repository, TreeWalkMode, TreeWalkResult};
+use git2::Repository;
 
+use crate::git::GitName;
 use crate::remedy::{self, Finding};
 
 use super::record_text::{
@@ -186,30 +187,26 @@ impl Graph {
             .map_err(|error| format!("cannot read the tree of {revision}: {}", error.message()))?;
         let mut graph = Self::default();
         let mut failure = None;
-        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
-            let Ok(name) = entry.name() else {
-                return TreeWalkResult::Ok;
+        crate::git::walk_tree(repo, &tree, &mut |name, entry| {
+            // A record path is valid text; any other name is not a record.
+            let Ok(path) = name.rule_text() else {
+                return crate::git::Walk::Continue;
             };
-            let path = format!("{root}{name}");
-            let Some(kind) = record_kind_for_tree_path(&path) else {
-                return TreeWalkResult::Ok;
+            let Some(kind) = record_kind_for_tree_path(path) else {
+                return crate::git::Walk::Continue;
             };
             match repo.find_blob(entry.id()) {
                 Ok(blob) => {
-                    graph.insert(kind, &path, &String::from_utf8_lossy(blob.content()));
-                    TreeWalkResult::Ok
+                    graph.insert(kind, path, &String::from_utf8_lossy(blob.content()));
+                    crate::git::Walk::Continue
                 }
                 Err(error) => {
                     failure = Some(format!("{path}: {}", error.message()));
-                    TreeWalkResult::Abort
+                    crate::git::Walk::Stop
                 }
             }
         })
-        .map_err(|error| {
-            failure
-                .clone()
-                .unwrap_or_else(|| error.message().to_string())
-        })?;
+        .map_err(|error| error.message().to_string())?;
         match failure {
             Some(failure) => Err(failure),
             None => Ok(graph),
@@ -1549,7 +1546,10 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
     // field of a commit starts with the newline that ends its header.
     let mut fields = output.stdout.split(|byte| *byte == 0);
     while let Some(field) = fields.next() {
-        let field = String::from_utf8_lossy(field);
+        // Header fields are git's own ASCII (hashes, modes, status).
+        let Ok(field) = std::str::from_utf8(field) else {
+            continue;
+        };
         let field = field.trim_start_matches('\n');
         if let Some(hash) = field.strip_prefix("commit ") {
             commits.push((
@@ -1564,8 +1564,12 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
         let Some(path) = fields.next() else {
             break;
         };
-        let path = String::from_utf8_lossy(path);
-        let path = path.as_ref();
+        // A record path is valid text; a path with an invalid byte is not
+        // one, and is never read as a lossy lookalike of one (issue 79).
+        let path = GitName::from_bytes(path);
+        let Ok(path) = path.rule_text() else {
+            continue;
+        };
         let Some(kind) = record_kind_for_tree_path(path) else {
             continue;
         };
@@ -2325,14 +2329,13 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
     references.flatten().any(|reference| {
         // OS text rule (issue 79): a branch that is not valid UTF-8 still
         // counts as active work when its prefix and task id match, so the name
-        // is read with `ref_text` instead of being dropped.
-        let name = crate::git::ref_text(reference.name_bytes());
-        let name = name.as_str();
-        let short = if let Some(local) = name.strip_prefix("refs/heads/") {
+        // is exact bytes and the prefix and marker are tested as bytes.
+        let name = crate::git::name::reference_name(&reference);
+        let short = if let Some(local) = name.strip_prefix(b"refs/heads/") {
             local
-        } else if let Some(remote) = name.strip_prefix("refs/remotes/") {
-            match remote.split_once('/') {
-                Some((_, branch)) => branch,
+        } else if let Some(remote) = name.strip_prefix(b"refs/remotes/") {
+            match remote.bytes().iter().position(|byte| *byte == b'/') {
+                Some(at) => crate::git::GitName::from_bytes(&remote.bytes()[at + 1..]),
                 None => return false,
             }
         } else {
@@ -2340,8 +2343,8 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         };
         let carries = prefixes.iter().any(|prefix| {
             short
-                .strip_prefix(prefix.as_str())
-                .is_some_and(|rest| rest.starts_with(&marker))
+                .strip_prefix(prefix.as_bytes())
+                .is_some_and(|rest| rest.starts_with(marker.as_bytes()))
         });
         if !carries {
             return false;

@@ -261,11 +261,18 @@ fn declared_target(
             continue;
         };
         let mut found = None;
-        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
-            let Some(id) = entry.name().ok().and_then(|n| n.strip_suffix(".md")) else {
-                return git2::TreeWalkResult::Ok;
+        // A record path is valid text; a name that is not UTF-8 is never one.
+        crate::git::walk_tree(repo, &tree, &mut |path, entry| {
+            let Ok(text) = path.rule_text() else {
+                return crate::git::Walk::Continue;
             };
-            if dir.starts_with("project-management/")
+            let Some((dir, file)) = text.rsplit_once('/') else {
+                return crate::git::Walk::Continue;
+            };
+            let Some(id) = file.strip_suffix(".md") else {
+                return crate::git::Walk::Continue;
+            };
+            if (dir == "project-management" || dir.starts_with("project-management/"))
                 && suffix.starts_with(&format!("{id}-"))
                 && id.starts_with("TSK-")
             {
@@ -282,7 +289,7 @@ fn declared_target(
                     }
                 }
             }
-            git2::TreeWalkResult::Ok
+            crate::git::Walk::Continue
         })
         .map_err(|e| e.to_string())?;
         if let Some(target) = found {
@@ -423,5 +430,35 @@ mod tests {
         std::fs::write(git.join("packed-refs"), packed).unwrap();
         let error = load(dir.path()).err().expect("the read is refused");
         assert!(error.contains("cannot read policy source"), "{error}");
+    }
+
+    /// Issue 79: git2's `Tree::walk` stops with an error at a directory whose
+    /// name is not valid UTF-8, so a landed record beside one was never found.
+    #[test]
+    fn a_landed_record_is_found_beside_a_directory_that_is_not_utf8() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit) = crate::git::repo_with_tree(
+            dir.path(),
+            &[
+                (
+                    b"project-management/tasks/TSK-007.md",
+                    b"---\nid: TSK-007\nintegration_target: integration/x\n---\n",
+                ),
+                (b"src/dir\xff/f.rs", b"x"),
+            ],
+        );
+        repo.reference("refs/remotes/origin/integration/x", commit, true, "test")
+            .unwrap();
+        let mut policy = Policy::default();
+        policy.git.root_branch = String::new();
+        let target = declared_target(
+            &repo,
+            "origin",
+            "task/TSK-007-late",
+            &policy,
+            "refs/remotes/origin/main",
+        )
+        .unwrap();
+        assert_eq!(target.as_deref(), Some("integration/x"));
     }
 }

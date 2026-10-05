@@ -160,13 +160,15 @@ fn clean_paths(
 }
 
 fn delete_branches(repo: &Repository, names: &[String]) -> Result<Option<String>, String> {
-    let removed: BTreeSet<_> = names.iter().map(|n| format!("refs/heads/{n}")).collect();
+    let removed: BTreeSet<crate::git::GitName> = names
+        .iter()
+        .map(|n| crate::git::GitName::from_text(&format!("refs/heads/{n}")))
+        .collect();
     let mut kept = Vec::new();
     for reference in repo.references().map_err(|e| e.to_string())? {
         let reference = reference.map_err(|e| e.to_string())?;
-        // Only compared with the branches named for deletion. The name keeps
-        // its invalid bytes as escapes, so it never equals a valid name.
-        let name = crate::git::ref_text(reference.name_bytes());
+        // Compared with the branches named for deletion as exact bytes.
+        let name = crate::git::name::reference_name(&reference);
         if !removed.contains(&name) {
             // Only commit-bearing refs establish another live reachability path.
             if let Ok(commit) = reference.peel_to_commit() {

@@ -519,11 +519,14 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
         // as bytes. A worktree whose folder name is not valid UTF-8 still has
         // a `config.worktree` that authority rests on, so it must stay in the
         // protected list instead of dropping out of it.
-        for name in names.iter_bytes() {
+        for name in crate::git::name::names_of(&names) {
+            // A folder the platform cannot hold as a path cannot be listed, so
+            // the target is judged protected rather than left out.
+            let Ok(folder) = name.os_path() else {
+                return true;
+            };
             paths.push((
-                Path::new("worktrees")
-                    .join(crate::git::os_component(name))
-                    .join("config.worktree"),
+                Path::new("worktrees").join(folder).join("config.worktree"),
                 false,
             ));
         }

@@ -113,7 +113,10 @@ pub fn build(info: &RepoInfo, payload: &serde_json::Value) -> SessionRecord {
 
     SessionRecord {
         session_id: str_field("session_id"),
-        branch: info.branch.clone(),
+        branch: info
+            .branch_name
+            .as_ref()
+            .map_or_else(String::new, |name| name.display().to_string()),
         base_branch,
         changed_files,
         commits_on_branch,

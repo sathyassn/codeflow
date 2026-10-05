@@ -1369,17 +1369,18 @@ fn holder_outside(
         let reference = reference.map_err(unreadable)?;
         // OS text rule (issue 79): a ref that holds the task outside the range
         // must still count when its name is not valid UTF-8, or removing a
-        // criterion would pass unchecked. Names are only shown and compared,
-        // so `ref_text` spells them without losing the ref.
-        let name = crate::git::ref_text(reference.name_bytes());
-        let name = name.as_str();
-        let tracked = name.starts_with("refs/heads/") || name.starts_with("refs/remotes/");
+        // criterion would pass unchecked. The name is exact bytes, tested by
+        // prefix; only the holder named in the refusal is its display form.
+        let name = crate::git::name::reference_name(&reference);
+        let tracked = name.starts_with(b"refs/heads/") || name.starts_with(b"refs/remotes/");
         if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
             continue;
         }
         if let Ok(commit) = reference.peel_to_commit() {
-            let short = crate::git::reference_shorthand(&reference);
-            refs.push((name.to_string(), short, commit.id()));
+            let short = crate::git::name::reference_shorthand(&reference)
+                .display()
+                .to_string();
+            refs.push((name, short, commit.id()));
         }
     }
     refs.sort();

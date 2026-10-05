@@ -140,10 +140,38 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
     if !status.success() {
         return Err(Failure::Exit);
     }
-    // OS text rule (issue 79): the advertised ref names are identities that
-    // are later matched, so each invalid byte is an escape (`ref_text`) and
-    // no name reads as another.
-    Ok(crate::git::ref_text(&bytes))
+    text_answer(&bytes)
+}
+
+/// The answer as text, one line per advertised ref.
+///
+/// OS text rule (issue 79): the advertised names are matched against declared
+/// targets and release patterns, which need text, and a lossy decode would let
+/// one name stand for another. A ref whose name is not valid UTF-8 is left out
+/// of the answer: it can be neither a declared target nor a release or epic
+/// line, so leaving it out only narrows what a caller can verify. The one name
+/// that cannot be left out is the default branch (`ref: ... HEAD`), whose
+/// answer is then a refusal, never another branch.
+fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
+    let mut text = String::new();
+    for line in bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+    {
+        match std::str::from_utf8(line) {
+            Ok(valid) => {
+                text.push_str(valid);
+                text.push('\n');
+            }
+            Err(_) if line.starts_with(b"ref: ") => {
+                return Err(Failure::Other(
+                    "the destination's default branch name is not valid UTF-8".to_string(),
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(text)
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
@@ -214,9 +242,9 @@ mod tests {
 
     /// Review finding on issue 79: advertised ref names were decoded lossily,
     /// so a valid `caf` plus U+FFFD resolved to the tip of the distinct branch
-    /// whose last byte is invalid. Each invalid byte is now an escape.
+    /// whose last byte is invalid. A name that is not valid UTF-8 is left out.
     #[test]
-    fn an_advertised_name_that_is_not_utf8_stays_distinct() {
+    fn an_advertised_name_that_is_not_utf8_is_left_out_and_never_aliased() {
         let dir = tempfile::tempdir().unwrap();
         let repo = crate::git::repo_with_refs(
             dir.path(),
@@ -224,8 +252,14 @@ mod tests {
         );
         let path = repo.workdir().unwrap().to_path_buf();
         let listed = ls_remote(&path, &["--heads", path.to_str().unwrap()]).unwrap();
-        assert!(listed.contains("refs/heads/caf\\xe9\n"), "{listed}");
         assert!(listed.contains("refs/heads/caf\u{fffd}\n"), "{listed}");
+        assert_eq!(listed.matches("refs/heads/caf").count(), 1, "{listed}");
+    }
+
+    #[test]
+    fn a_default_branch_that_is_not_utf8_refuses_the_answer() {
+        let answer = text_answer(b"ref: refs/heads/caf\xe9\tHEAD\n");
+        assert!(matches!(answer, Err(Failure::Other(ref why)) if why.contains("not valid UTF-8")));
     }
 
     /// The SSH command is executed, so one that is not valid UTF-8 refuses

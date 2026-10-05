@@ -40,6 +40,8 @@ use std::path::Path;
 
 use git2::{Oid, Repository};
 
+use crate::git::GitName;
+
 use super::acceptance::{
     active_block, bind_completion, blob_at, commit_of, finding, introduced_at, is_clean_remerge,
     Finding, Landing, Transport, BINDING_RULE, FROZEN_RULE,
@@ -289,15 +291,6 @@ pub fn scope(
     head: &str,
     into: Option<&str>,
 ) -> Result<Scope, String> {
-    // OS text rule (issue 79): a branch name that is not valid UTF-8 reaches
-    // here spelled by `ref_text`, whose escapes are not the characters the
-    // release pattern would see, so a glob such as `release-?` would judge it
-    // wrongly. A release check never guesses: it refuses.
-    if head.contains('\\') || into.is_some_and(|name| name.contains('\\')) {
-        return Err(
-            "a branch name is not valid UTF-8, so its release scope cannot be judged".to_string(),
-        );
-    }
     let (pattern, source) = match &destination.default {
         None => (
             BUILTIN_PATTERN.to_string(),
@@ -347,14 +340,23 @@ pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, Str
     let branch = repo
         .head()
         .ok()
-        .map(|head| crate::git::reference_shorthand(&head))
+        .map(|head| crate::git::name::reference_shorthand(&head))
         .unwrap_or_default();
+    // OS text rule (issue 79): the release pattern is a glob and needs text.
+    // Whether a branch is a release branch changes ownership and acceptance
+    // rules, so a name that is not valid UTF-8 refuses instead of guessing.
+    let branch = branch.rule_text().map_err(|error| {
+        format!(
+            "the checked-out branch is not valid UTF-8, so its release scope cannot be judged ({})",
+            error.display()
+        )
+    })?;
     let url = repo
         .find_remote("origin")
         .ok()
         .and_then(|remote| remote.url().ok().map(str::to_string));
     let destination = ask_destination(repo_root, url.as_deref())?;
-    scope(repo_root, &destination, &branch, into)
+    scope(repo_root, &destination, branch, into)
 }
 
 /// The merge a pull request from `head` into `base` would create, written
@@ -534,7 +536,7 @@ type Entry = (Oid, u32);
 
 /// Every entry of a tree by path, recursively.
 ///
-/// OS text rule (issue 79): a path is bytes. The key is `git::path_key`, so
+/// OS text rule (issue 79): a path is bytes. The key is `GitName::storage_key`, so
 /// `caf` plus an invalid byte and `caf` plus a real U+FFFD stay two paths and a
 /// change to one never reads as a change to the other, and a directory whose
 /// name is not valid UTF-8 is walked instead of stopping the check.
@@ -542,31 +544,16 @@ fn tree_entries(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Entry>, String> {
-    fn walk(
-        repo: &Repository,
-        tree: &git2::Tree<'_>,
-        prefix: &[u8],
-        entries: &mut BTreeMap<String, Entry>,
-    ) -> Result<(), String> {
-        for entry in tree {
-            let mut path = prefix.to_vec();
-            path.extend_from_slice(entry.name_bytes());
-            if entry.kind() == Some(git2::ObjectType::Tree) {
-                path.push(b'/');
-                let child = repo
-                    .find_tree(entry.id())
-                    .map_err(|error| format!("tree {}: {}", entry.id(), error.message()))?;
-                walk(repo, &child, &path, entries)?;
-                continue;
-            }
+    let mut entries = BTreeMap::new();
+    crate::git::walk_tree(repo, tree, &mut |path, entry| {
+        if entry.kind() != Some(git2::ObjectType::Tree) {
             #[allow(clippy::cast_sign_loss)] // git modes are small positive octal values
             let mode = entry.filemode() as u32;
-            entries.insert(crate::git::path_key(&path), (entry.id(), mode));
+            entries.insert(path.storage_key(), (entry.id(), mode));
         }
-        Ok(())
-    }
-    let mut entries = BTreeMap::new();
-    walk(repo, tree, b"", &mut entries)?;
+        crate::git::Walk::Continue
+    })
+    .map_err(|error| format!("tree: {}", error.message()))?;
     Ok(entries)
 }
 
@@ -603,7 +590,7 @@ fn changes(repo: &Repository, from: Option<Oid>, to: Oid) -> Result<Changes, Str
                 .path_bytes()
                 .or_else(|| delta.old_file().path_bytes())?;
             Some((
-                crate::git::path_key(path),
+                GitName::from_bytes(path).storage_key(),
                 (side(delta.old_file()), side(delta.new_file())),
             ))
         })
@@ -645,7 +632,7 @@ fn expected_import(
         result = BTreeMap::new();
         let mut conflicted = BTreeSet::new();
         for entry in index.iter() {
-            let path = crate::git::path_key(&entry.path);
+            let path = GitName::from_bytes(&entry.path).storage_key();
             let stage = (entry.flags >> 12) & 0x3;
             if stage == 0 {
                 result.insert(path, (entry.id, entry.mode));
@@ -675,7 +662,7 @@ fn expected_import(
                     id: *id,
                     flags: 0,
                     flags_extended: 0,
-                    path: crate::git::path_key_bytes(path),
+                    path: GitName::from_storage_key(path).bytes().to_vec(),
                 };
                 index.add(&entry).map_err(error)?;
             }

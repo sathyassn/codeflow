@@ -61,7 +61,13 @@ fn field(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
 fn current_branch(repo_root: &Path) -> Option<String> {
     let repo = git2::Repository::discover(repo_root).ok()?;
     let head = repo.head().ok()?;
-    Some(crate::git::reference_shorthand(&head))
+    // OS text rule (issue 79): the branch is matched against `plan/` and task
+    // prefixes, which need text. A name that is not valid UTF-8 reads as no
+    // branch, so the rule that needs a named branch refuses.
+    crate::git::name::reference_shorthand(&head)
+        .rule_text()
+        .ok()
+        .map(str::to_string)
 }
 
 /// File a follow-up of `source_id` (R-73): the new task records

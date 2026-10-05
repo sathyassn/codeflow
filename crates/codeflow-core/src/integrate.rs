@@ -466,11 +466,12 @@ fn current_checkout(repo_root: &Path) -> Option<String> {
         .current_dir(repo_root)
         .output()
         .ok()?;
-    // Shown only; `ref_text` keeps a name that is not valid UTF-8 distinct.
-    output
-        .status
-        .success()
-        .then(|| crate::git::ref_text(output.stdout.trim_ascii()))
+    // Shown only: the display form keeps a name that is not valid UTF-8 apart.
+    output.status.success().then(|| {
+        crate::git::GitName::from_bytes(output.stdout.trim_ascii())
+            .display()
+            .to_string()
+    })
 }
 
 fn refresh_target_worktrees(
@@ -492,7 +493,7 @@ fn refresh_target_worktrees(
     // path at a newline or spell it lossily, and then name another checkout.
     let target_ref = format!("refs/heads/{target}");
     for (path, head) in crate::git::checkout_heads(&repo) {
-        if head.as_deref() != Some(target_ref.as_bytes()) {
+        if head.as_ref().map(crate::git::GitName::bytes) != Some(target_ref.as_bytes()) {
             continue;
         }
         if path.canonicalize().unwrap_or_else(|_| path.clone()) == current {

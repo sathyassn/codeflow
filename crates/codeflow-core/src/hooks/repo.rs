@@ -9,14 +9,20 @@ use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
+use crate::git::GitName;
+use crate::hooks::policy::NON_UTF8_BRANCH;
+
 /// Resolved repository context for a hook invocation.
 pub struct RepoInfo {
     /// Working-tree root (the worktree's own root when in a worktree).
     pub root: PathBuf,
     /// The common git directory (`.git` of the main checkout).
     pub common_dir: PathBuf,
-    /// Current branch name, empty when detached or unborn-and-unreadable.
+    /// Current branch name as the hook plane matches it: empty when detached
+    /// or unreadable, [`NON_UTF8_BRANCH`] when the name is not valid UTF-8.
     pub branch: String,
+    /// The same branch, exact, for output.
+    pub branch_name: Option<GitName>,
     /// `true` when this checkout is a linked worktree.
     pub is_worktree: bool,
 }
@@ -30,11 +36,13 @@ impl RepoInfo {
         let root = repo.workdir()?.to_path_buf();
         let common_dir = repo.commondir().to_path_buf();
         let branch = current_branch(&repo);
+        let branch_name = current_branch_name(&repo);
         let is_worktree = repo.is_worktree();
         Some(Self {
             root,
             common_dir,
             branch,
+            branch_name,
             is_worktree,
         })
     }
@@ -52,33 +60,40 @@ impl RepoInfo {
     }
 }
 
-/// Current branch name for an open repository.
+/// The checked-out branch of an open repository, exactly: `None` when HEAD is
+/// detached or unreadable.
 ///
 /// Handles the unborn-HEAD case (fresh repo before the first commit) by
 /// reading the symbolic target, so branch protection applies from minute one.
 #[must_use]
-pub fn current_branch(repo: &Repository) -> String {
+pub fn current_branch_name(repo: &Repository) -> Option<GitName> {
     if let Ok(head) = repo.head() {
-        // OS text rule (issue 79, `docs/architecture.md`): the name keeps its
-        // invalid bytes as escapes and is never empty. It is matched against
-        // protected-branch patterns, which such a spelling matches as the
-        // bytes do, and an empty name would read a protected branch as
-        // detached and drop the refusal.
-        let name = crate::git::reference_shorthand(&head);
-        if name != "HEAD" && !name.is_empty() {
-            return name;
+        let name = crate::git::name::reference_shorthand(&head);
+        if name.bytes() != b"HEAD" && !name.is_empty() {
+            return Some(name);
         }
-        return String::new(); // detached
+        return None; // detached
     }
     // Unborn branch: HEAD exists as a symbolic ref with no target commit.
-    if let Ok(head_ref) = repo.find_reference("HEAD") {
-        if let Some(target) = head_ref.symbolic_target_bytes() {
-            if let Some(branch) = crate::git::ref_text(target).strip_prefix("refs/heads/") {
-                return branch.to_string();
-            }
-        }
+    let head_ref = repo.find_reference("HEAD").ok()?;
+    crate::git::name::symbolic_target(&head_ref)?.strip_prefix(b"refs/heads/")
+}
+
+/// Current branch name for the hook plane: its text, empty on a detached HEAD.
+///
+/// OS text rule (issue 79, `docs/architecture.md`): the name is matched
+/// against protected-branch globs, which need text. A name that is not valid
+/// UTF-8 cannot be matched, and reading it as detached or empty would drop a
+/// protected-branch refusal, so it reads as [`NON_UTF8_BRANCH`], which every
+/// branch rule treats as protected. Use [`current_branch_name`] to show it.
+#[must_use]
+pub fn current_branch(repo: &Repository) -> String {
+    match current_branch_name(repo) {
+        None => String::new(),
+        Some(name) => name
+            .rule_text()
+            .map_or_else(|_| NON_UTF8_BRANCH.to_string(), str::to_string),
     }
-    String::new()
 }
 
 /// Open the repository at (or above) `start` for direct git2 queries.
@@ -159,7 +174,8 @@ mod tests {
 
     /// Review finding on issue 79: a branch whose name is not valid UTF-8 read
     /// as detached, so a protected pattern never saw it and the refusal was
-    /// dropped. The name is now lossy and still matches the glob.
+    /// dropped. The hook plane now reads it as one sentinel that every branch
+    /// rule treats as protected, and the exact name is kept for display.
     #[test]
     fn a_branch_that_is_not_utf8_is_not_detached_and_stays_protected() {
         let dir = tempfile::tempdir().unwrap();
@@ -180,12 +196,16 @@ mod tests {
         std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
         let repo = Repository::open(dir.path()).unwrap();
         let name = current_branch(&repo);
-        assert_eq!(name, "release/caf\\xe9");
+        assert_eq!(name, NON_UTF8_BRANCH);
         let policy = crate::hooks::policy::GitPolicy {
-            protected_branches: vec!["release/*".to_string()],
+            protected_branches: vec!["main".to_string()],
             ..crate::hooks::policy::GitPolicy::default()
         };
         assert!(policy.branch_is_protected(&name));
+        assert_eq!(
+            current_branch_name(&repo).unwrap().display().to_string(),
+            "release/caf\\xe9"
+        );
         // The unborn case reads the symbolic target the same way.
         std::fs::write(git_dir.join("packed-refs"), b"").unwrap();
         assert_eq!(current_branch(&Repository::open(dir.path()).unwrap()), name);

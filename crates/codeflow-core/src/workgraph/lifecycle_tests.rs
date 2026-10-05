@@ -3163,3 +3163,23 @@ fn a_task_branch_that_is_not_utf8_is_active_work() {
     .unwrap();
     assert!(has_active_branch(&repo, &record, &["task/".to_string()]));
 }
+
+/// Issue 79: the graph of a revision is read through a tree that holds a
+/// directory whose name is not valid UTF-8. git2's own walk stopped there
+/// with an error; the record beside it is read and the odd name is no record.
+#[test]
+fn a_revision_graph_is_read_beside_a_directory_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let text: &[u8] = b"---\nid: TSK-003\nepic_id: null\nstandalone_reason: bounded outcome\nintegration_target: main\ntitle: late\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n";
+    let (repo, _) = crate::git::repo_with_tree(
+        dir.path(),
+        &[
+            (b"project-management/tasks/TSK-003.md", text),
+            (b"project-management/tasks\xff/TSK-004.md", text),
+            (b"src/dir\xff/f.rs", b"x"),
+        ],
+    );
+    let graph = Graph::from_revision(&repo, "main").expect("the walk reads the whole tree");
+    assert!(graph.get("TSK-003", RecordKind::Task).is_some());
+    assert!(graph.get("TSK-004", RecordKind::Task).is_none());
+}
