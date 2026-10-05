@@ -1,0 +1,11 @@
+id = "TSK-244"
+uid = "2c7ecead-c5f9-40a7-af81-3fa80e44e158"
+kind = "TSK"
+title = "Record writes refuse a symbolic link at any path component"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-05T20:27:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
