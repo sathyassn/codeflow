@@ -295,7 +295,9 @@ refuse the forms they can read (issue 86, TSK-242).
   fish and PowerShell startup files and directories in the home, the
   readline, tmux, screen, direnv and `~/.ssh/rc` files, the system ones under
   `/etc`, and `.envrc` in any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME`
-  move the matching entries when they are set.
+  move the matching entries when they are set. A relative `ZDOTDIR` names a
+  different directory wherever zsh starts, so with one set the zsh file
+  names are protected in every directory.
 - **Containment comes from the sandbox.** The guards are the backstop.
 
 | Harness | Native containment | Guards |
@@ -321,7 +323,12 @@ level:
 - a link of a file of the class, made under any name, since a later write
   through the link reaches the file;
 - `rg` without `--no-config`, since its configuration file can name a
-  `--pre` program, and `sed` with a `w` command or a script file.
+  `--pre` program, and `sed` unless its options change no file and its
+  script is only addressed print commands (GNU sed's `e` and `w` run a
+  command or write a file);
+- a copy into a target directory spelled `-t DIR`, `-tDIR` or
+  `--target-directory`, and a symbolic link whose text, read from the
+  link's own directory, reaches a startup file.
 
 git-guard refuses a user- or system-scope git key that runs a program, such
 as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
@@ -356,7 +363,7 @@ What stays open, by harness and platform:
 
 `codeflow doctor --check startup-files` reports a project whose settings
 lack the class, select another Codex profile, or let the selected profile
-or `cf-builder` write a class path or a directory above one, a moved `ZDOTDIR` or
+or `cf-builder` write a class path or a path above or below one, a moved `ZDOTDIR` or
 `XDG_CONFIG_HOME`, and the files the home's startup files source from
 outside the class.
 
