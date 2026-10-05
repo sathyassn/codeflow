@@ -183,6 +183,50 @@ fn installed_tiers_expose_exact_runnable_method_without_adoption() {
     }
 }
 
+/// TSK-239 AC-7 (journey): a fresh standard install carries the derived
+/// outcomes paragraph and its cold-start trigger, reports the reading
+/// budgets within their guidelines, and runs the outcomes report.
+#[test]
+fn fresh_standard_install_teaches_derived_outcomes_within_reading_guidelines() {
+    let project = Project::new();
+    project.success(&["init", "--yes", "--standard"]);
+    let text = |path: &str| {
+        String::from_utf8(project.read(path))
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for harness in [".agents", ".claude"] {
+        let model = text(&format!(
+            "{harness}/skills/cf-estimate/references/operating-model.md"
+        ));
+        assert!(model.contains("`codeflow estimate outcomes` reads each completed task's planned, started, blocked, completed and landed points from git"), "{model}");
+        assert!(model.contains("the first three completed outcomes, or one representative probe, trigger a recorded recalibration"), "{model}");
+        assert!(
+            model.contains(
+                "\"outcomes contradict the forecast\" is the moment to write a linked revision"
+            ),
+            "{model}"
+        );
+        let skill = text(&format!("{harness}/skills/cf-estimate/SKILL.md"));
+        assert!(
+            skill.contains("`codeflow estimate outcomes` derives timings from git"),
+            "{skill}"
+        );
+    }
+    let reading = project.run(&["doctor", "--check", "reading"]);
+    let reading = String::from_utf8_lossy(&reading.stdout).into_owned();
+    assert!(
+        reading.starts_with("ok    reading: within guidelines"),
+        "{reading}"
+    );
+    let outcomes = project.run(&["estimate", "outcomes"]);
+    let report = String::from_utf8_lossy(&outcomes.stdout).into_owned();
+    assert_eq!(outcomes.status.code(), Some(0), "{report}");
+    assert!(report.contains("no forecast joined"), "{report}");
+}
+
 #[test]
 fn brownfield_init_and_repeated_update_preserve_adoption_history_and_customization() {
     for (tier, home) in [

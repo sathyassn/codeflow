@@ -50,7 +50,7 @@ availability), not all estimates. Resolve discoverable facts yourself.
 ## Apply the method
 
 1. Establish a pinned delivery package. Anchored grades are optional: where
-   they help, read [rubric.md](references/rubric.md) to assign anchored
+   they help, read [rubric.md](references/rubric.md) to assign
    drivers. Materially missing scope/ownership/acceptance is
    UNSIZED; duration uncertainty alone is not. Show conditional alternatives
    separately. Keep grade, consequence, permission and model effort distinct.
@@ -62,17 +62,18 @@ availability), not all estimates. Resolve discoverable facts yourself.
    human/release availability. Check a feasible scenario, not just a capacity
    lower bound. Preserve sensitivity and unresolved disagreement.
 4. For durable adoption/snapshots or checker use, read
-   [records.md](references/records.md). The optional native
-   `codeflow estimate check <forecast-path> --json` verifies supplied data and
+   [records.md](references/records.md). The optional
+   `codeflow estimate check <forecast-path> --json` checks supplied data and
    allocations; it does not grade, predict, schedule, approve or execute work.
    Repair findings in the proposed snapshot; never rewrite an old prediction.
-5. For a first application, use [worked-example.md](references/worked-example.md)
-   to understand the calculation and adapt to this project's evidence. Its
-   fictional numbers are examples, never starter productivity coefficients.
+5. For a first application, read [worked-example.md](references/worked-example.md)
+   for the calculation, then adapt to this project's evidence. Its
+   fictional numbers are never starter productivity coefficients.
 6. At material change or closeout, preserve the original forecast and every
-   started outcome. Revise with a reason and predecessor link. Follow the
-   prospective comparison procedure in the operating reference before making
-   any claim of local predictive usefulness.
+   started outcome; `codeflow estimate outcomes` derives timings from git.
+   Revise with a reason and predecessor link. Follow the operating
+   reference's prospective comparison before claiming local predictive
+   usefulness.
 
 ## Return an actionable result
 

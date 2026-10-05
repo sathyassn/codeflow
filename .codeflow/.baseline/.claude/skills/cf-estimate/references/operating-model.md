@@ -103,6 +103,19 @@ waiting and human/release outcomes at the declared boundary, using available
 evidence. Do not invent missing timings. Keep actual scope and quality failures
 separate from original scope to understand error rather than conceal it.
 
+Derive outcome timings rather than recall them. `codeflow estimate outcomes`
+reads each completed task's planned, started, blocked, completed and landed
+points from git and joins them by task id to the frozen forecasts' planning
+scenario; the outcome record cites that report and adds what git cannot show,
+such as named waits, failures and reopens. A squash landing or a missing
+branch history reports started as unknown; never fill it in. At cold start,
+judged durations tend to anchor on human-scale effort: the first three
+completed outcomes, or one representative probe, trigger a recorded
+recalibration of the judged durations, and the report's line "outcomes
+contradict the forecast" is the moment to write a linked revision with its
+reason. Its thresholds are printed defaults, not policy; the predeclared
+evaluation rule below still decides any claim of usefulness.
+
 Predeclare a prospective evaluation rule before seeing the outcomes: representative
 and held-out work, forecast boundary, decision-relevant error and interval width,
 handling of unfinished outcomes, uncertainty method and a named simpler baseline
