@@ -1343,7 +1343,11 @@ fn reads_only(name: &str, args: &[String]) -> bool {
     match name {
         "printf" => !args.iter().any(|a| a.starts_with("-v")),
         "file" => !args.iter().any(|a| a == "-C" || a == "--compile"),
-        "source" | "." => true,
+        // Sourcing reads. Declarations set shell variables and write no
+        // file; a redirect on the line is judged before this, and startup
+        // variables set for a shell are judged on their own (review round
+        // seven: `export PATH=$PATH:./bin` from the home).
+        "source" | "." | "export" | "declare" | "typeset" | "local" | "readonly" | "unset" => true,
         // `sed -n 1,20p ~/.zshrc` reads. Only a script the guard can read
         // whole, made of commands that print, counts (review round three:
         // GNU sed's `e` runs a shell command).
@@ -1685,8 +1689,10 @@ impl LinkFlags {
                     || long("archive")
                     || long("preserve")
                     || has(&['P', 'd', 'a', 'r', 'R']);
-                // The last of `-L`/`-H` and `-P`/`-d`/`-a` wins, as cp
-                // reads them (security review F-6).
+                // The last of `-L` and `-P`/`-d`/`-a` wins, as cp reads
+                // them (security review F-6). `-H` follows only the named
+                // sources, so links inside a tree stay links and it never
+                // relaxes the judgment (review round seven).
                 if a == "--dereference" {
                     self.follow = true;
                 } else if long("no-dereference") || long("archive") {
@@ -1694,7 +1700,7 @@ impl LinkFlags {
                 } else if short {
                     for letter in letters.chars() {
                         match letter {
-                            'L' | 'H' => self.follow = true,
+                            'L' => self.follow = true,
                             'P' | 'd' | 'a' => self.follow = false,
                             _ => {}
                         }
@@ -1703,7 +1709,9 @@ impl LinkFlags {
             }
             "rsync" => {
                 self.preserve |= long("links") || long("archive") || has(&['l', 'a']);
-                self.follow |= matches!(a, "--copy-links" | "--copy-unsafe-links") || has(&['L']);
+                // `--copy-unsafe-links` keeps the links it calls safe, so
+                // only `-L`/`--copy-links` relaxes (review round seven).
+                self.follow |= a == "--copy-links" || has(&['L']);
             }
             "install" => self.symbolic |= long("link"),
             _ => {}
@@ -1776,9 +1784,21 @@ fn source_link_violation(
             .filter(|p| is_link(p))
             .map(|p| (p.clone(), landing.to_vec()))
             .collect();
-        if call.recursive || name == "mv" {
-            for root in paths.iter().filter(|p| !is_link(p) && p.is_dir()) {
-                kept.extend(tree_links(root, landing));
+        // A tree copied or moved whole, and a named link to a directory,
+        // whose contents a write through the copied link reaches.
+        let roots = paths
+            .iter()
+            .filter(|p| p.is_dir() && (call.recursive || name == "mv" || is_link(p)));
+        for root in roots {
+            match tree_links(root, landing) {
+                Some(links) => kept.extend(links),
+                None => {
+                    if let Some(why) = line.unresolved_near_class(source, dirs) {
+                        return Some(finding(format!(
+                            "`{name}` copies `{source}` with its links kept, and a directory in it cannot be read, and {why}"
+                        )));
+                    }
+                }
             }
         }
         for (link, text_dirs) in &kept {
@@ -1805,38 +1825,45 @@ fn source_link_violation(
 
 /// The symbolic links inside a tree, each with the directories its text is
 /// read from once the tree lands in one of `landing`, either as itself or
-/// as its contents. A tree over the walk budget is not listed (a stated
-/// residual).
-fn tree_links(root: &Path, landing: &[PathBuf]) -> Vec<(PathBuf, Vec<PathBuf>)> {
+/// as its contents. A link to a directory is followed, once, since a write
+/// through the copied link reaches what that directory holds (security
+/// review F-7). The walk stops at the budget with what it has found (the
+/// rest is a stated residual); `None` when a directory cannot be read.
+fn tree_links(root: &Path, landing: &[PathBuf]) -> Option<Vec<(PathBuf, Vec<PathBuf>)>> {
     let top = root.file_name().map(PathBuf::from).unwrap_or_default();
     let mut found = Vec::new();
     let mut seen = 0usize;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    let mut visited = std::collections::BTreeSet::new();
+    let mut stack = vec![(root.to_path_buf(), PathBuf::new())];
+    while let Some((dir, rel)) = stack.pop() {
+        if !visited.insert(std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone())) {
             continue;
-        };
+        }
+        let entries = std::fs::read_dir(&dir).ok()?;
         for entry in entries.flatten() {
             seen += 1;
             if seen > GLOB_LIMIT {
-                return Vec::new();
+                return Some(found);
             }
             let Ok(kind) = entry.file_type() else {
-                continue;
+                return None;
             };
+            let path = entry.path();
             if kind.is_dir() {
-                stack.push(entry.path());
+                stack.push((path, rel.join(entry.file_name())));
             } else if kind.is_symlink() {
-                let rel = dir.strip_prefix(root).unwrap_or(Path::new(""));
                 let text_dirs = landing
                     .iter()
-                    .flat_map(|l| [l.join(rel), l.join(&top).join(rel)])
+                    .flat_map(|l| [l.join(&rel), l.join(&top).join(&rel)])
                     .collect();
-                found.push((entry.path(), text_dirs));
+                if path.is_dir() {
+                    stack.push((path.clone(), rel.join(entry.file_name())));
+                }
+                found.push((path, text_dirs));
             }
         }
     }
-    found
+    Some(found)
 }
 
 /// A kept link that is, or whose text from where it lands reaches, a
@@ -1852,6 +1879,15 @@ fn kept_link_violation(
         return Some(finding(format!(
             "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
         )));
+    }
+    // A link to the home, `/etc` or a directory above a startup file gives
+    // a second path to the files there.
+    if kept.is_dir() {
+        if let Some(dir) = line.class.placement(kept) {
+            return Some(finding(format!(
+                "`{name}` copies a link to the directory `{dir}`, where shell startup files live, so a later write through the copy reaches them"
+            )));
+        }
     }
     // The link's text is read again where the copy lands, so a relative
     // one can reach a startup file from there (review round five).

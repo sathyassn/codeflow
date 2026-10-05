@@ -722,3 +722,82 @@ fn review_round_six_forms_refuse() {
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
+
+/// Review round seven: partial dereferencing keeps links, and declarations
+/// write no file.
+#[test]
+fn review_round_seven_forms() {
+    let f = Fixture::new();
+    for dir in ["out", "out2", "links", "safe-links"] {
+        std::fs::create_dir_all(f.project.join(dir)).unwrap();
+    }
+    std::fs::write(f.project.join("safe-links/.envrc"), "x\n").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
+        std::os::unix::fs::symlink(".envrc", f.project.join("safe-links/one")).unwrap();
+    }
+    let mut wrong = Vec::new();
+    let mut refuse = vec![
+        "export X=notes > ~/.zshrc",
+        "export BASH_ENV=notes; bash -c true",
+    ];
+    if cfg!(unix) {
+        refuse.extend([
+            "cp -RH links out/; echo tree >> out/links/one",
+            "rsync -l --copy-unsafe-links safe-links/one out2/copy; echo rsync >> out2/copy",
+        ]);
+    }
+    for command in refuse {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "export PATH=$PATH:./bin",
+        "export PATH=\"$HOME/bin:$PATH\"",
+        "readonly CACHE=\"$CACHE\"",
+        "declare -x EDITOR=vim",
+    ] {
+        let found = f.judge_in(command, &f.home, &f.env());
+        if refused(&found) {
+            wrong.push(format!(
+                "refused from the home: {command}: {}",
+                found[0].message
+            ));
+        }
+    }
+    for command in ["cp -RL links out/", "rsync -aL links/ out/"] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// Security review F-7: a directory link inside a copied tree, or named
+/// itself, is followed, so a startup link behind it is seen.
+#[cfg(unix)]
+#[test]
+fn directory_links_in_copied_trees_are_followed() {
+    let f = Fixture::new();
+    for dir in ["out", "tree", "elsewhere/dl"] {
+        std::fs::create_dir_all(f.project.join(dir)).unwrap();
+    }
+    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("elsewhere/dl/one")).unwrap();
+    std::os::unix::fs::symlink(f.project.join("elsewhere"), f.project.join("tree/dirlink"))
+        .unwrap();
+    std::os::unix::fs::symlink(f.project.join("elsewhere"), f.project.join("dirlink")).unwrap();
+    for command in [
+        "cp -r tree out/; echo x >> out/tree/dirlink/dl/one",
+        "cp -P dirlink out/",
+        "rsync -a tree/ out/",
+    ] {
+        assert!(refused(&f.judge(command)), "allowed: {command}");
+    }
+    assert!(!refused(&f.judge("cp -rL tree out/")));
+    std::os::unix::fs::symlink(&f.home, f.project.join("homelink")).unwrap();
+    assert!(refused(&f.judge("cp -P homelink out/")));
+    assert!(!refused(&f.judge("cp -L -r homelink/work out/")));
+}
