@@ -601,6 +601,12 @@ catalog! {
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
+    /// Harness settings without the shell startup class (TSK-242).
+    DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
+        "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Files the home's startup files source from outside the class.
+    DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
+        "move what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inline it, so the guards and sandboxes protect it";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";

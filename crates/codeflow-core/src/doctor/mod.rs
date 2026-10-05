@@ -24,6 +24,7 @@ use crate::scaffold::state::InstalledManifest;
 
 mod ci_pin;
 mod grok_hooks;
+mod startup_files;
 
 /// Outcome of a health check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -281,6 +282,7 @@ const CHECK_NAMES: &[&str] = &[
     "claude",
     "codex",
     "grok",
+    "startup-files",
     "config",
     "permissions",
     "policy-source",
@@ -316,6 +318,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("claude", check_claude);
     m.insert("codex", check_codex);
     m.insert("grok", check_grok);
+    m.insert("startup-files", startup_files::check);
     m.insert("config", check_config);
     m.insert("permissions", check_permissions);
     m.insert("network", check_network);
@@ -3356,7 +3359,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 20);
+        assert_eq!(check_names().len(), 21);
     }
 
     #[test]

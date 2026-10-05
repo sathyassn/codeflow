@@ -131,7 +131,7 @@ required tools before the first non-trivial task goes to
 | `update` | Refresh managed scaffold files (3-way merge, never clobbers) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `status` | Show the branch, worktrees, in-flight work and capabilities; `--delivery` adds the capability-delivery rollup |
-| `doctor` | Health checks (20): hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
+| `doctor` | Health checks (21): hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
 | `test` | Run the test gate; `test setup` detects root stacks, lists templates and appends targets |
 | `validate` | Validate policy and records; `--docs` adds doc-graph checks and `--portal <dir>` verifies portal evidence without running project code |
 | `ci` | Check a commit range and branch name against policy, the same check CI runs; exit 2 on a violation or invalid policy |

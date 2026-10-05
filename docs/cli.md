@@ -191,7 +191,7 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow integrate <BRANCH>` | | Land a branch into a target: flock(rebase to test to ff-merge) |
 | | `<BRANCH>` | Branch to integrate. |
 | | `--into <INTO>` | Target branch to land on. Default `main`. |
-| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
+| `codeflow doctor` | | Health checks: hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit. See `doctor --list` |
 | | `--check <CHECK>` | Run a single named check (see `doctor --list`). |
 | | `--list` | List available check names. |
 | `codeflow work next` | | List ready tasks first, then waiting and blocked ones with their reasons, from the refs as last fetched. Checks review evidence for stack hints |
