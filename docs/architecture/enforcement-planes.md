@@ -320,8 +320,10 @@ level:
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
   `--no-rcs` and carries no `+` option, `-o` or other long option;
-- a link of a file of the class, made under any name, since a later write
-  through the link reaches the file;
+- a link of a file of the class, made under any name and by any program
+  (`ln`, `cp -s`, `cp -l`, BSD `install -l`), since a later write through
+  the link reaches the file, and a copy that keeps a source link to one
+  (`cp -P`, `cp -a`, `rsync -l`);
 - `rg` without `--no-config`, since its configuration file can name a
   `--pre` program, and `sed` unless its options change no file and its
   script is only addressed print commands (GNU sed's `e` and `w` run a
@@ -340,6 +342,10 @@ What stays open, by harness and platform:
   that writes the file; only a sandbox holds those, so on a seat without
   one they stay open. An interpreter call whose code names a startup file
   is refused even when it only reads; read with `cat` or `grep` instead.
+  A tree copied with its links kept is not walked, so a link to a startup
+  file already inside it is copied unseen. A home whose startup files are
+  themselves links, as dotfile managers make them, sees `cp -a ~/.zshrc
+  backup` refused; `cp ~/.zshrc backup` follows the link and passes.
 - **Claude Code.** The generated denies name the default locations. A
   `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
   Claude's file tools do not run edit-guard, so a native `Write` there is
