@@ -207,14 +207,24 @@ branch=$(git symbolic-ref --short -q HEAD || true)
 # so the toolchain it installs and the variables it exports reach the gate
 # and a failing command fails the run. The project owns the file; `codeflow
 # update` never writes it.
+# The hook runs with the gate's authority, so it cannot move what the
+# gate calls or where: the binary and the folder are fixed read-only
+# first, set -eu holds again once the hook returns, and a run the
+# hook ends (an `exit` in it) fails before the gate.
+codeflow_bin=$(command -v codeflow)
+codeflow_root=$(pwd)
+readonly codeflow_bin codeflow_root
+codeflow_gated=
+trap '[ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }' EXIT
 if [ -f .codeflow/ci-setup.sh ]; then
   echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
-  codeflow_root=$(pwd)
   . ./.codeflow/ci-setup.sh
+  set -eu
   cd "$codeflow_root"
 fi
-codeflow test --strict
-codeflow validate --docs
+codeflow_gated=1
+"$codeflow_bin" test --strict
+"$codeflow_bin" validate --docs
 # <<< codeflow pinned run
 
 # Optional external add-ons (uncomment once the tools are on PATH):

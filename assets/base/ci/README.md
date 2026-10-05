@@ -216,16 +216,37 @@ managed and the gate runs once, on the project's toolchain:
   that runs the gate, so write POSIX sh. Variables it exports and `PATH`
   changes reach `codeflow test`; on GitHub it may also write `GITHUB_PATH`
   or `GITHUB_ENV`. A `cd` in it does not move the gate.
-- A failing command fails the job before the gate runs; `exit` ends the run.
+- A failing command fails the job before the gate runs, and so does an
+  `exit` in it, even `exit 0`, since the gate never ran.
+- It cannot move what the gate calls: the gate runs the `codeflow` binary
+  found before the hook, from the folder the hook started in, and `set -eu`
+  holds again once the hook returns, so a `codeflow` function, a `PATH`
+  entry or `set +e` in it does not skip the gate.
 - It is the change's own file, as the test targets are, and has the gate's
-  authority: it could redefine `codeflow` or end the run early, as an edited
-  test target could. It runs in the gates job, never in the secret-scan job
-  or the enforcing policy job, and in the shared run only after the
-  lowered-pin refusal and the target's `codeflow ci`, which it cannot undo.
+  authority over what the tests see. It runs in the gates job, never in the
+  secret-scan job, the security review or the enforcing policy job, and in
+  the shared run only after the lowered-pin refusal and the target's
+  `codeflow ci`, which it cannot undo. Every enforcement level and exemption
+  those jobs use comes from the trusted commit, out of its reach.
 - The project owns it. `codeflow update` never writes, merges or removes
   it, and `codeflow doctor --check ci-perimeter` says whether it exists,
   whether the CI file sources it, and its first command; doctor does not
   audit what it does.
+
+## Security review levels
+
+The GitHub `security review` job reads `git.security_review` and
+`git.dep_audit` from the trusted commit: the pull request's base, or the
+pushed commit on a push. A pull request cannot lower the level that judges
+it, and `codeflow ci` names a change that lowers or removes either key so
+its reviewer sees it. The job fails when the policy file is missing at that
+commit, when either key is missing or unreadable, or when a value is not
+`block`, `warn` or `off`. The `osv-scanner.toml` suppressions come from the
+trusted commit too, so a new suppression takes effect once its own pull
+request lands; in `block` mode, an advisory that already blocks every pull
+request is cleared by fixing the dependency or by landing the suppression
+through your review. Since 3.1.0 a policy without both keys fails this job;
+`codeflow update` adds them with their defaults.
 
 ## Two planes, deliberately
 

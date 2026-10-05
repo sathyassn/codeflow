@@ -794,6 +794,199 @@ fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
     let (out, log) = run_test_step(&work);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(log.trim(), "hook");
+
+    // sathyassn/codeflow#81: the hook cannot move what the gate calls. A
+    // `codeflow` function, a `codeflow` earlier on PATH and `set +e` leave
+    // the real gate running, and reassigning the binary fails the step.
+    let decoy = dir.path().join("decoy");
+    std::fs::create_dir_all(&decoy).unwrap();
+    std::fs::write(
+        decoy.join("codeflow"),
+        "#!/bin/sh\necho decoy >> \"$LOG\"\n",
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(decoy.join("codeflow"))
+        .status()
+        .unwrap();
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        format!(
+            "set +e\nexport PATH='{}':\"$PATH\"\ncodeflow() {{ echo skipped >> \"$LOG\"; }}\n",
+            decoy.display()
+        ),
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.trim(),
+        format!(
+            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    );
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        format!("codeflow_bin='{}'\n", decoy.join("codeflow").display()),
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "");
+
+    // A hook that exits, even with status 0, fails the step: the gate
+    // never ran.
+    std::fs::write(work.join(".codeflow/ci-setup.sh"), "exit 0\n").unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("the run ended before codeflow test ran"),
+        "{out:?}"
+    );
+}
+
+/// A repository whose base commit holds `base_policy` (none when `None`)
+/// and whose checked-out head holds `head_policy`; `suppression` names the
+/// side (`"base"` or `"head"`) that adds an `osv-scanner.toml` beside the
+/// lockfile. Returns the base SHA.
+fn audit_repo(
+    work: &Path,
+    base_policy: Option<&str>,
+    head_policy: &str,
+    suppression: &str,
+) -> String {
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    git(work, &["init", "-q", "-b", "main"]);
+    git(work, &["config", "user.email", "t@example.com"]);
+    git(work, &["config", "user.name", "t"]);
+    std::fs::write(work.join("Cargo.lock"), "# lock\n").unwrap();
+    if let Some(policy) = base_policy {
+        std::fs::write(work.join(".codeflow/policy.json"), policy).unwrap();
+    }
+    if suppression == "base" {
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+    }
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-qm", "base"]);
+    let base = git(work, &["rev-parse", "HEAD"]);
+    std::fs::write(work.join(".codeflow/policy.json"), head_policy).unwrap();
+    if suppression == "head" {
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+    }
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
+    base
+}
+
+/// Run the security-review job's dependency audit step in `repo` with
+/// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
+/// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
+/// beside the lockfile.
+fn run_audit_step(repo: &Path, trusted: &str) -> Output {
+    let script = run_blocks(CI, "dependency audit").remove(0);
+    let bin = repo.parent().unwrap().join("audit-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let scanner = "#!/bin/sh\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho 'GHSA-test advisory'; exit 1\n";
+    let curl = format!(
+        "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
+        scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
+    );
+    for (name, text) in [
+        ("curl", curl.as_str()),
+        ("sha256sum", "#!/bin/sh\ncat >/dev/null\nexit 0\n"),
+    ] {
+        std::fs::write(bin.join(name), text).unwrap();
+        Command::new("chmod")
+            .arg("755")
+            .arg(bin.join(name))
+            .status()
+            .unwrap();
+    }
+    Command::new("bash")
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+        .current_dir(repo)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("TRUSTED_SHA", trusted)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap()
+}
+
+fn levels(security_review: &str, dep_audit: &str) -> String {
+    format!(
+        "{{\"git\": {{\"security_review\": \"{security_review}\", \"dep_audit\": \"{dep_audit}\"}}}}\n"
+    )
+}
+
+/// sathyassn/codeflow#81: the dependency audit reads its levels from the
+/// trusted commit, so a pull request that turns both keys off, deletes
+/// them or adds its own suppression is still judged by the base, and a
+/// base whose policy cannot be read fails the job instead of warning.
+#[test]
+fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit() {
+    let run = |base: Option<&str>, head: &str, suppression: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        let trusted = audit_repo(&work, base, head, suppression);
+        let out = run_audit_step(&work, &trusted);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let block = levels("warn", "block");
+
+    // The head turns both keys off: the base's block still fails the job.
+    let (ok, text) = run(Some(&block), &levels("off", "off"), "");
+    assert!(!ok, "{text}");
+    assert!(text.contains("dep_audit=block"), "{text}");
+    assert!(!text.contains("skipping"), "{text}");
+
+    // The head deletes the keys: the base still judges.
+    let (ok, text) = run(Some(&block), "{\"git\": {}}\n", "");
+    assert!(!ok, "{text}");
+
+    // The head adds its own suppression: the base's (none) applies.
+    let (ok, text) = run(Some(&block), &block, "head");
+    assert!(!ok, "{text}");
+    assert!(text.contains("GHSA-test"), "{text}");
+
+    // A missing policy, a missing key or a value outside block, warn and
+    // off fails closed whatever the head says.
+    for base in [
+        None,
+        Some("{\"git\": {\"dep_audit\": \"block\"}}\n"),
+        Some(levels("warn", "loud").as_str()),
+        Some("not json\n"),
+    ] {
+        let (ok, text) = run(base, &levels("off", "off"), "");
+        assert!(!ok, "{base:?}: {text}");
+        assert!(text.contains("fails closed"), "{base:?}: {text}");
+    }
+
+    // The base's own levels still decide: warn reports, off skips, and a
+    // suppression the base holds applies.
+    let (ok, text) = run(Some(&levels("warn", "warn")), &block, "");
+    assert!(ok, "{text}");
+    assert!(text.contains("::warning::dependency advisories"), "{text}");
+    let (ok, text) = run(Some(&levels("off", "off")), &block, "");
+    assert!(ok, "{text}");
+    assert!(text.contains("skipping"), "{text}");
+    let (ok, text) = run(Some(&block), &block, "base");
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("suppressions from trusted commit: osv-scanner.toml"),
+        "{text}"
+    );
 }
 
 /// sathyassn/codeflow#48: the full-history secret scan runs on a schedule

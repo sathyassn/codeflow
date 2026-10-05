@@ -857,6 +857,38 @@ fn the_shared_run_sources_the_project_setup_hook_before_the_test_gate() {
             "{platform:?}: {:?}",
             fx.calls()
         );
+
+        // sathyassn/codeflow#81: a `codeflow` function and `set +e` in the
+        // hook leave the real gate running, and an `exit 0` fails the run.
+        std::fs::write(
+            fx.repo().join(".codeflow/ci-setup.sh"),
+            "export HOOK_VALUE=set\nset +e\ncodeflow() { :; }\n",
+        )
+        .unwrap();
+        let shadow = fx.commit("ci: shadow codeflow in the hook");
+        let ok = fx.run(platform, Some(&shadow), &shadow);
+        assert!(ok.status.success(), "{platform:?}: {}", text(&ok));
+        assert!(
+            fx.calls()
+                .iter()
+                .any(|c| c.starts_with("1.2.3 test --strict")),
+            "{platform:?}: {:?}",
+            fx.calls()
+        );
+        std::fs::write(fx.repo().join(".codeflow/ci-setup.sh"), "exit 0\n").unwrap();
+        let exiting = fx.commit("ci: exit from the hook");
+        let ended = fx.run(platform, Some(&exiting), &exiting);
+        assert!(!ended.status.success(), "{platform:?}: {}", text(&ended));
+        assert!(
+            text(&ended).contains("the run ended before codeflow test ran"),
+            "{platform:?}: {}",
+            text(&ended)
+        );
+        assert!(
+            !fx.calls().iter().any(|c| c.starts_with("1.2.3 test")),
+            "{platform:?}: {:?}",
+            fx.calls()
+        );
     }
 }
 

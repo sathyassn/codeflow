@@ -164,13 +164,23 @@ jobs:
       - name: codeflow test
         run: |
           set -eu
+          # The hook runs with the gate's authority, so it cannot move what the
+          # gate calls or where: the binary and the folder are fixed read-only
+          # first, set -eu holds again once the hook returns, and a run the
+          # hook ends (an `exit` in it) fails before the gate.
+          codeflow_bin=$(command -v codeflow)
+          codeflow_root=$(pwd)
+          readonly codeflow_bin codeflow_root
+          codeflow_gated=
+          trap '[ -n "$codeflow_gated" ] || { echo "::error::the run ended before codeflow test ran; a project setup hook must not exit"; exit 1; }' EXIT
           if [ -f .codeflow/ci-setup.sh ]; then
             echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
-            codeflow_root=$(pwd)
             . ./.codeflow/ci-setup.sh
+            set -eu
             cd "$codeflow_root"
           fi
-          codeflow test --strict
+          codeflow_gated=1
+          "$codeflow_bin" test --strict
 
       - name: codeflow validate --docs
         run: codeflow validate --docs
@@ -800,16 +810,78 @@ jobs:
       #   block — an advisory (or scan error) fails the job (the hard CI gate);
       #   warn  — reported, not failed (the shipped default);
       #   off   — skipped (only when both keys are off).
+      # Both keys are read from the trusted commit: the pull request's base,
+      # or the pushed commit on a push, so a pull request cannot lower the
+      # level that judges it. A missing policy file, a missing or unreadable
+      # key, or a value other than block, warn or off fails the job;
+      # `codeflow update` adds missing keys with their defaults.
       # Record a justified suppression for an accepted or unreachable advisory in
       # an osv-scanner.toml in the same directory as the lockfile it covers
       # (with no --config, as here, osv-scanner reads no other name and no
       # parent directory), so a transitive advisory in unchanged code cannot
-      # block an unrelated PR.
+      # block an unrelated PR. Suppressions also come from the trusted commit:
+      # the step replaces every osv-scanner.toml in the checkout with the
+      # trusted commit's copies, so a new suppression takes effect once its
+      # own pull request lands.
       - name: dependency audit (osv-scanner)
+        env:
+          TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
         run: |
           set -u
-          sr=$(jq -r '.git.security_review // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
-          da=$(jq -r '.git.dep_audit // "warn"' .codeflow/policy.json 2>/dev/null || echo warn)
+          case ${TRUSTED_SHA:-} in
+            '') echo "::error::no trusted commit to read the security policy from; failing closed"; exit 1 ;;
+          esac
+          if ! policy=$(git show "${TRUSTED_SHA}:.codeflow/policy.json" 2>/dev/null); then
+            echo "::error::cannot read .codeflow/policy.json at the trusted commit ${TRUSTED_SHA}; the security review fails closed until it is committed there"
+            exit 1
+          fi
+          sr=$(printf '%s' "$policy" | jq -er '.git.security_review' 2>/dev/null) || sr=
+          da=$(printf '%s' "$policy" | jq -er '.git.dep_audit' 2>/dev/null) || da=
+          for key in security_review dep_audit; do
+            if [ "$key" = security_review ]; then value=$sr; else value=$da; fi
+            case $value in
+              block|warn|off) ;;
+              *) echo "::error::git.${key} in .codeflow/policy.json at the trusted commit ${TRUSTED_SHA} is missing or not block, warn or off; the security review fails closed. Run \`codeflow update\` to add a missing key, or set block, warn or off."
+                 exit 1 ;;
+            esac
+          done
+          echo "Security policy from trusted commit ${TRUSTED_SHA}: security_review=${sr}, dep_audit=${da}."
+          python3 -I -c '
+          import os, subprocess, sys
+          sha = sys.argv[1]
+          name = b"osv-scanner.toml"
+          def refuse(message):
+              print(f"::error::{message}; failing closed")
+              sys.exit(1)
+          # Remove every suppression file the checkout holds, links included.
+          for top, dirs, files in os.walk(b".", followlinks=False):
+              dirs[:] = [d for d in dirs if d != b".git"]
+              for entry in files:
+                  if entry == name:
+                      os.unlink(os.path.join(top, entry))
+          listing = subprocess.run(["git", "ls-tree", "-r", "-z", "--full-tree", sha],
+                                   check=True, capture_output=True).stdout
+          for record in filter(None, listing.split(b"\0")):
+              meta, path = record.split(b"\t", 1)
+              mode, _, blob = meta.split()
+              if os.path.basename(path) != name:
+                  continue
+              shown = path.decode("utf-8", "replace")
+              if mode not in (b"100644", b"100755"):
+                  refuse(f"{shown} on trusted commit {sha} is not a regular file")
+              where = b"."
+              for part in path.split(b"/")[:-1]:
+                  where = os.path.join(where, part)
+                  if os.path.islink(where) or (os.path.lexists(where) and not os.path.isdir(where)):
+                      refuse(f"the change replaces a folder holding {shown} with a link or a file")
+                  os.makedirs(where, exist_ok=True)
+              data = subprocess.run(["git", "cat-file", "blob", blob.decode()],
+                                    check=True, capture_output=True).stdout
+              fd = os.open(os.path.join(b".", path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+              with os.fdopen(fd, "wb") as out:
+                  out.write(data)
+              print(f"osv-scanner suppressions from trusted commit: {shown}")
+          ' "$TRUSTED_SHA"
           if [ "$sr" = "block" ] || [ "$da" = "block" ]; then
             level=block
           elif [ "$sr" = "off" ] && [ "$da" = "off" ]; then

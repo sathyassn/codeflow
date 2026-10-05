@@ -81,6 +81,38 @@ fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
     );
 }
 
+/// sathyassn/codeflow#81: a change that lowers or removes a security level
+/// is named for its reviewer; raising one or leaving it alone says nothing.
+#[test]
+fn a_head_that_lowers_a_security_level_is_named() {
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#,
+    ));
+    let root = dir.path();
+    write(root, POLICY, r#"{"git": {"security_review": "off"}}"#);
+    commit(root, "chore: relax the security review");
+    let text = said(&ci(root));
+    assert!(
+        text.contains("this change lowers git.security_review from block to off"),
+        "{text}"
+    );
+    assert!(text.contains("this change removes git.dep_audit"), "{text}");
+
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "warn", "dep_audit": "warn"}}"#,
+    ));
+    let root = dir.path();
+    write(
+        root,
+        POLICY,
+        r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#,
+    );
+    commit(root, "chore: harden the security review");
+    let text = said(&ci(root));
+    assert!(!text.contains("this change lowers"), "{text}");
+    assert!(!text.contains("this change removes"), "{text}");
+}
+
 #[test]
 fn the_base_policy_also_lets_through_what_it_allows() {
     let dir = fixture(Some(LOOSER));

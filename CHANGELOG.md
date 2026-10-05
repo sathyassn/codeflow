@@ -256,6 +256,23 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **A pull request can no longer lower its own security review.** The
+  managed `security review` job read `git.security_review` and
+  `git.dep_audit` from the pull request's own checkout and fell back to
+  `warn`, so a pull request could set both to `off`, or delete them, and
+  skip the dependency audit that judged it (sathyassn/codeflow#81). The job
+  now reads both keys, and the `osv-scanner.toml` suppressions, from the
+  trusted commit: the pull request's base, or the pushed commit on a push.
+  A missing policy file, a missing or unreadable key, or a value other than
+  `block`, `warn` or `off` fails the job instead of warning. `codeflow ci`
+  names a change that lowers or removes either key. The project setup hook
+  can no longer skip the test gate: the gate runs the `codeflow` found
+  before the hook, `set -eu` holds again after it, and an `exit` in it fails
+  the run. To adopt, run `codeflow update`, which also adds either key if
+  your policy lacks it; a new suppression now takes effect once its own pull
+  request lands.
+
+<!-- codeflow:release-impact patch -->
 - **A secret scan finding on one branch no longer fails every pull
   request.** The managed secret scan read the whole history of HEAD, so a
   finding already in the base, or on any branch merged into it, failed the

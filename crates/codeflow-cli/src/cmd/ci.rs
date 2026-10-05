@@ -291,6 +291,7 @@ pub fn run(args: &CiArgs) -> i32 {
     let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
         return 2;
     };
+    note_lowered_security_levels(&root, &judging.raw, &head);
     let configured = &judging.policy.git;
     let mut tagged: Vec<TaggedViolation> = Vec::new();
     let adoption = adopter::resolve(
@@ -1161,6 +1162,54 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         policy,
         raw: Ok(Some(raw)),
     })
+}
+
+/// The strength of a security level as the managed security review reads
+/// it; anything else ranks below `off`, since that job refuses it.
+fn security_rank(level: &str) -> u8 {
+    match level {
+        "block" => 3,
+        "warn" => 2,
+        "off" => 1,
+        _ => 0,
+    }
+}
+
+/// sathyassn/codeflow#81: name a change that lowers or removes
+/// `git.security_review` or `git.dep_audit`, so its reviewer sees it. The
+/// managed security review keeps reading the target's levels, so the lower
+/// level applies only once the change lands.
+fn note_lowered_security_levels(
+    root: &Path,
+    judging: &Result<Option<serde_json::Value>, String>,
+    head: &str,
+) {
+    let Ok(Some(base)) = judging else {
+        return;
+    };
+    let Ok(Some(text)) = codeflow_core::hooks::landed_policy::policy_text_at(root, head) else {
+        return;
+    };
+    let head_raw = serde_json::from_str::<serde_json::Value>(&text).ok();
+    for key in ["security_review", "dep_audit"] {
+        let pointer = format!("/git/{key}");
+        let Some(was) = base.pointer(&pointer).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let now = head_raw
+            .as_ref()
+            .and_then(|raw| raw.pointer(&pointer))
+            .and_then(serde_json::Value::as_str);
+        match now {
+            None => println!(
+                "codeflow ci: note: this change removes git.{key} (it is {was} on the target); the security review fails closed without it once the change lands"
+            ),
+            Some(now) if security_rank(now) < security_rank(was) => println!(
+                "codeflow ci: note: this change lowers git.{key} from {was} to {now}; the security review keeps the target's {was} until the change lands"
+            ),
+            Some(_) => {}
+        }
+    }
 }
 
 /// Report the ruleset actually enforced: the loader falls back to the
