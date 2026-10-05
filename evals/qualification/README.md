@@ -325,7 +325,9 @@ them after its final config snapshot and records `evaluator_locks_released`,
 and a launch refused before it tried to start the native seat frees them at
 once. Every refusal or error before the seat is recorded in `launch.json`.
 A lock record is owned from the moment it is created, so a failed write
-leaves none behind. After a crash, run
+leaves none behind. `launch` claims its output folder by creating it; a
+launch that finds the folder already there refuses and writes nothing into
+it, so two launches of one output never overwrite each other's evidence. After a crash, run
 `finish` on that trial's output; remove a lock record by hand only when no
 trial is running.
 

@@ -2087,8 +2087,11 @@ def launch(args) -> None:
             raise Refused(f"declared directory is unavailable: {directory}")
         if args.output.resolve().is_relative_to(Path(directory)):
             raise Refused("runner evidence must live outside declared directories")
-    if args.output.exists():
-        raise Refused("output already exists; never reuse a trial launch")
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.mkdir()  # the claim: only the launch that creates it writes there
+    except FileExistsError:
+        raise Refused("output already exists; never reuse a trial launch") from None
     hook_trust = {"option": args.codex_hook_trust, "flag_used": False, "evaluator_home": None, "hooks_sha256": None, "plugins": [],
                   "checks": {"evaluator_home": "not_checked", "fixture_hooks": "not_checked"}}
     try:
@@ -2124,7 +2127,6 @@ def launch(args) -> None:
         # One trial at a time per Codex and Grok home, taken before anything
         # of this trial changes, peer launchers included, and recorded at once;
         # `finish` frees them. The fixture's own environment names the homes.
-        args.output.mkdir(parents=True)
         write(args.output / "launch.json", {"harness": args.harness, "status": "preparing", "hook_trust": hook_trust})
         locks = acquire_evaluator_locks(record["subject_environment"], args.output)
         write(args.output / "launch.json", {"harness": args.harness, "status": "preparing", "hook_trust": hook_trust,
@@ -2133,8 +2135,7 @@ def launch(args) -> None:
         peers = prepare_peers(repository, environment, args.workspace, args.codex_hook_trust)
     except BaseException as exc:
         # Every refusal or error before the seat is recorded; no seat started,
-        # so any lock taken here is freed at once.
-        args.output.mkdir(parents=True, exist_ok=True)
+        # so any lock taken here is freed at once, before anything is written.
         refused = {"harness": args.harness, "status": "refused", "refused_flag": getattr(exc, "flag", None),
                    "error": str(exc), "hook_trust": hook_trust}
         if locals().get("locks"):
@@ -2155,8 +2156,8 @@ def launch(args) -> None:
            "authentication": authentication,
            "instruction_ancestors": ancestry, "trust_acceptances": [], "display_choices": [], "verified_frames": [],
            "status": "prepared", "started_at": time.time()}
-    write(args.output / "launch.json", run)
     try:
+        write(args.output / "launch.json", run)
         argv = ["tab", "create", "--workspace", args.workspace, "--label",
                 f"eval-{record['case_id'][:30]}", "--cwd", str(repository), "--no-focus"]
         for key, value in environment.items():
@@ -2251,7 +2252,7 @@ def launch(args) -> None:
             if done.returncode:
                 raise Refused("delivery refused; inspect the recorded result, never resend blindly")
         run["status"] = "started"
-    except (Refused, OSError, subprocess.SubprocessError, KeyError, ValueError) as exc:
+    except BaseException as exc:
         run.update(status="refused", error=str(exc))
         if not run.get("native_start_attempted") and run.get("evaluator_locks"):
             # No seat was started, so nothing can still write the homes.

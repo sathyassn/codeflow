@@ -9003,6 +9003,91 @@ class EvaluatorHomeExtensionTests(unittest.TestCase):
             self.assertNotIn("evaluator_locks", saved)
             runner.release_evaluator_locks(running)
 
+    def launch_args(self, root, name):
+        return type("A", (), {"record": root.parent / "r.json", "output": root.parent / name, "workspace": "w",
+                              "harness": "codex", "codex_hook_trust": "review", "watch_dir": [],
+                              "max_entries": 10, "snapshot_seconds": 1, "start_timeout": 1,
+                              "native": ["--", "--model", "gpt-6-astra", "--ask-for-approval", "never",
+                                         "--sandbox", "danger-full-access"]})()
+
+    def test_a_launch_never_writes_into_an_output_it_did_not_create(self):
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            subject = root.parent / "subjects"
+            (subject / "t/repository").mkdir(parents=True)
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            args = self.launch_args(root, "shared")
+            # Another launch claimed this output first and wrote its record.
+            args.output.mkdir()
+            winner = '{"status": "started", "owner": "the other launch"}\n'
+            (args.output / "launch.json").write_text(winner)
+            with patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
+                                                                    subject / "t/repository", [])), \
+                 patch.object(runner, "watch_directories", return_value=[]), \
+                 patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                 patch.object(runner, "herdr") as transport, \
+                 self.assertRaisesRegex(runner.Refused, "output already exists"):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual(winner, (args.output / "launch.json").read_text())
+            self.assertEqual(["launch.json"], [path.name for path in args.output.iterdir()])
+            lock_paths = [runner.evaluator_lock_path(Path(env[variable])) for variable in runner.LOCKED_HOMES]
+            self.assertFalse(any(path.exists() for path in lock_paths))
+            # Two launches of one output at once: a competitor tries to claim it
+            # while this launch runs its checks. Whoever claims it first keeps it.
+            args = self.launch_args(root, "raced")
+            outcome = {}
+            def competitor(*_args, **_kwargs):
+                try:
+                    args.output.mkdir()
+                except FileExistsError:
+                    outcome["competitor"] = "lost"
+                else:
+                    outcome["competitor"] = "won"
+                    (args.output / "launch.json").write_text(winner)
+                return {"signed_in": True}
+            with patch.object(runner, "load_fixture", return_value=({"subject_environment": env, "case_id": "c"},
+                                                                    subject / "t/repository", [])), \
+                 patch.object(runner, "watch_directories", return_value=[]), \
+                 patch.object(runner, "check_evaluator_auth", side_effect=competitor), \
+                 patch.object(runner, "prepare_peers", side_effect=runner.Refused("stop here")), \
+                 patch.object(runner, "herdr") as transport, self.assertRaises(runner.Refused):
+                runner.launch(args)
+            transport.assert_not_called()
+            self.assertEqual("lost", outcome["competitor"])
+            self.assertEqual("stop here", json.loads((args.output / "launch.json").read_text())["error"])
+            self.assertFalse(any(path.exists() for path in lock_paths))
+
+    def test_a_failed_launch_record_write_frees_the_locks(self):
+        import errno
+        runner = self.runner()
+        with self.home() as root:
+            eval_kit.prepare_eval_homes()
+            subject = root.parent / "subjects"
+            (subject / "t/repository").mkdir(parents=True)
+            env = eval_kit.subject_environment(subject / "t", subject / "bin/codeflow", [])
+            lock_paths = [runner.evaluator_lock_path(Path(env[variable])) for variable in runner.LOCKED_HOMES]
+            real_write = runner.write
+            for label, failing in [("the full record", {"prepared"}), ("the refusal record too", {"prepared", "refused"})]:
+                with self.subTest(label):
+                    def full_disk(path, value):
+                        if isinstance(value, dict) and value.get("status") in failing:
+                            raise OSError(errno.ENOSPC, "No space left on device")
+                        return real_write(path, value)
+                    args = self.launch_args(root, label.replace(" ", "-"))
+                    with patch.object(runner, "load_fixture", return_value=(
+                            {"subject_environment": env, "case_id": "c"}, subject / "t/repository", [])), \
+                         patch.object(runner, "watch_directories", return_value=[]), \
+                         patch.object(runner, "check_evaluator_auth", return_value={"signed_in": True}), \
+                         patch.object(runner, "prepare_peers", return_value={}), \
+                         patch.object(runner, "write", side_effect=full_disk), \
+                         patch.object(runner, "herdr") as transport, self.assertRaises(OSError):
+                        runner.launch(args)
+                    transport.assert_not_called()
+                    self.assertFalse(any(path.exists() for path in lock_paths), label)
+            runner.release_evaluator_locks(runner.acquire_evaluator_locks(env, root.parent / "next"))
+
     def test_a_failed_lock_write_leaves_no_orphan_record(self):
         import errno
         runner = self.runner()
