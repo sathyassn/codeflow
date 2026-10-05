@@ -665,3 +665,49 @@ fn an_epic_closed_on_the_release_line_binds_its_own_block() {
         judged.findings
     );
 }
+
+/// Review finding on issue 79: tree and change paths were keyed by a lossy
+/// spelling, so `caf` plus an invalid byte and `caf` plus a real U+FFFD were
+/// one path and a change to one hid behind the other.
+#[test]
+fn paths_that_differ_only_in_an_invalid_byte_stay_two_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    let blob = repo.blob(b"x").unwrap();
+    let mut inner = repo.treebuilder(None).unwrap();
+    inner.insert(&b"f"[..], blob, 0o100_644).unwrap();
+    let inner = inner.write().unwrap();
+    let mut builder = repo.treebuilder(None).unwrap();
+    builder.insert(&b"caf\xe9"[..], blob, 0o100_644).unwrap();
+    builder
+        .insert("caf\u{fffd}".as_bytes(), blob, 0o100_644)
+        .unwrap();
+    builder.insert(&b"dir\xff"[..], inner, 0o040_000).unwrap();
+    let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+    let entries = tree_entries(&repo, &tree).unwrap();
+    let keys: Vec<_> = entries.keys().map(String::as_str).collect();
+    assert_eq!(keys.len(), 3, "{keys:?}");
+    assert!(keys.contains(&"caf\u{fffd}"));
+    assert!(keys.iter().any(|key| key.starts_with("caf\u{fffd}\0")));
+    assert!(
+        entries
+            .keys()
+            .any(|key| crate::git::path_key_bytes(key) == b"dir\xff/f"),
+        "a file under a directory that is not valid UTF-8 is walked, with its exact path"
+    );
+}
+
+/// A branch name that is not valid UTF-8 reaches `scope` spelled by
+/// `ref_text`, whose escapes a release glob would misjudge, so it refuses.
+#[test]
+fn a_release_scope_refuses_a_branch_name_that_is_not_utf8() {
+    let destination = Destination {
+        url: None,
+        default: None,
+        heads: Vec::new(),
+    };
+    let name = crate::git::ref_text(b"integration/release-\xe9");
+    let error = scope(Path::new("."), &destination, &name, None).unwrap_err();
+    assert!(error.contains("not valid UTF-8"), "{error}");
+    assert!(scope(Path::new("."), &destination, "task/TSK-001-x", None).is_ok());
+}

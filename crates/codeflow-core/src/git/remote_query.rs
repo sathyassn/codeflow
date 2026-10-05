@@ -78,7 +78,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         .env("GIT_ASKPASS", "false")
         .env("SSH_ASKPASS", "false")
         .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", batch_ssh_command(root))
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root)?)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -140,35 +140,57 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
     if !status.success() {
         return Err(Failure::Exit);
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    // OS text rule (issue 79): the advertised ref names are identities that
+    // are later matched, so each invalid byte is an escape (`ref_text`) and
+    // no name reads as another.
+    Ok(crate::git::ref_text(&bytes))
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
 /// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
 /// then `GIT_SSH`, then `ssh`.
-fn batch_ssh_command(root: &Path) -> String {
-    let configured = std::env::var("GIT_SSH_COMMAND")
-        .ok()
-        .filter(|command| !command.trim().is_empty())
-        .or_else(|| {
-            crate::git::command()
-                .arg("-C")
-                .arg(root)
-                .args(["config", "--get", "core.sshCommand"])
-                .output()
-                .ok()
-                .filter(|out| out.status.success())
-                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
-                .filter(|command| !command.is_empty())
-        })
-        .or_else(|| {
-            std::env::var("GIT_SSH")
-                .ok()
-                .filter(|program| !program.is_empty())
-                .map(|program| format!("'{}'", program.replace('\'', "'\\''")))
-        })
-        .unwrap_or_else(|| "ssh".to_string());
-    format!("{configured} -o BatchMode=yes")
+///
+/// OS text rule (issue 79): the command is executed, so it must be exactly what
+/// git would run. A value that is not valid UTF-8 cannot be passed on as text,
+/// and a lossy spelling would run a different program, so the query refuses.
+fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
+    let not_utf8 = |name: &str| {
+        Failure::Other(format!(
+            "{name} is not valid UTF-8, so the remote is not asked"
+        ))
+    };
+    let text =
+        |name: &str, value: std::ffi::OsString| value.into_string().map_err(|_| not_utf8(name));
+    let from_env = |name: &str| -> Result<Option<String>, Failure> {
+        match std::env::var_os(name) {
+            Some(value) => Ok(Some(text(name, value)?)),
+            None => Ok(None),
+        }
+    };
+    let mut configured = from_env("GIT_SSH_COMMAND")?.filter(|command| !command.trim().is_empty());
+    if configured.is_none() {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["config", "--get", "core.sshCommand"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success());
+        if let Some(out) = out {
+            let value = std::str::from_utf8(&out.stdout)
+                .map_err(|_| not_utf8("core.sshCommand"))?
+                .trim()
+                .to_string();
+            configured = Some(value).filter(|command| !command.is_empty());
+        }
+    }
+    if configured.is_none() {
+        configured = from_env("GIT_SSH")?
+            .filter(|program| !program.is_empty())
+            .map(|program| format!("'{}'", program.replace('\'', "'\\''")));
+    }
+    let configured = configured.unwrap_or_else(|| "ssh".to_string());
+    Ok(format!("{configured} -o BatchMode=yes"))
 }
 
 /// Kill a child and, on Unix, the process group it leads (an SSH or
@@ -184,4 +206,45 @@ fn kill_group(child: &mut std::process::Child) {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review finding on issue 79: advertised ref names were decoded lossily,
+    /// so a valid `caf` plus U+FFFD resolved to the tip of the distinct branch
+    /// whose last byte is invalid. Each invalid byte is now an escape.
+    #[test]
+    fn an_advertised_name_that_is_not_utf8_stays_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/caf\xe9", "refs/heads/caf\u{fffd}".as_bytes()],
+        );
+        let path = repo.workdir().unwrap().to_path_buf();
+        let listed = ls_remote(&path, &["--heads", path.to_str().unwrap()]).unwrap();
+        assert!(listed.contains("refs/heads/caf\\xe9\n"), "{listed}");
+        assert!(listed.contains("refs/heads/caf\u{fffd}\n"), "{listed}");
+    }
+
+    /// The SSH command is executed, so one that is not valid UTF-8 refuses
+    /// the query instead of running a lossy lookalike.
+    #[test]
+    fn a_configured_ssh_command_that_is_not_utf8_refuses_the_query() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand = ssh \xff\n");
+        std::fs::write(&config, text).unwrap();
+        let error = batch_ssh_command(dir.path()).err().unwrap();
+        assert!(
+            matches!(error, Failure::Other(ref why) if why.contains("not valid UTF-8")),
+            "refused"
+        );
+    }
 }

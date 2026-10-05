@@ -97,6 +97,8 @@ pub struct LinkedWorktree {
     pub name: String,
     /// The checkout, as git records it in the worktree's `gitdir` file.
     pub path: PathBuf,
+    /// The administrative folder, `<common dir>/worktrees/<name>`.
+    pub admin: PathBuf,
 }
 
 /// Every linked worktree of `repo`, whatever its folder name holds.
@@ -122,7 +124,12 @@ pub fn linked_worktrees(repo: &git2::Repository) -> Vec<LinkedWorktree> {
             Err(_) => gitdir_checkout(repo, name),
         };
         if let Some(path) = path {
-            out.push(LinkedWorktree { name: lossy, path });
+            let admin = repo.commondir().join("worktrees").join(os_component(name));
+            out.push(LinkedWorktree {
+                name: lossy,
+                path,
+                admin,
+            });
         }
     }
     out
@@ -139,6 +146,70 @@ fn gitdir_checkout(repo: &git2::Repository, name: &[u8]) -> Option<PathBuf> {
     let text = std::fs::read(file).ok()?;
     let gitdir = os_path(text.trim_ascii_end());
     gitdir.parent().map(std::path::Path::to_path_buf)
+}
+
+/// Every checkout of the repository, the main one and each linked worktree,
+/// with the full name of the reference its `HEAD` names (`None` when it is
+/// detached or unreadable).
+///
+/// OS text rule (issue 79): the path is exact bytes where the platform allows
+/// it and is read from git's own files, never from a text listing, where a
+/// newline in a folder name would end the path early and name another
+/// checkout. A caller that acts on a checkout (a `reset --hard`) can trust the
+/// path it gets here.
+#[must_use]
+pub fn checkout_heads(repo: &git2::Repository) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    let head_of = |git_dir: &std::path::Path| -> Option<Vec<u8>> {
+        let text = std::fs::read(git_dir.join("HEAD")).ok()?;
+        text.trim_ascii_end()
+            .strip_prefix(b"ref: ")
+            .map(<[u8]>::to_vec)
+    };
+    let mut out = Vec::new();
+    if let Ok(main) = git2::Repository::open(repo.commondir()) {
+        if let Some(workdir) = main.workdir() {
+            out.push((workdir.to_path_buf(), head_of(repo.commondir())));
+        }
+    }
+    for worktree in linked_worktrees(repo) {
+        let head = head_of(&worktree.admin);
+        out.push((worktree.path, head));
+    }
+    out
+}
+
+/// A path as a key that names its bytes exactly.
+///
+/// OS text rule (issue 79): a path is bytes. The key is the path itself when
+/// it is valid UTF-8. Otherwise it is the lossy text, a NUL and the hex of the
+/// bytes: a path never holds a NUL, so no valid path can equal that key, and
+/// two different invalid paths differ in their hex. A plain lossy decode would
+/// give `caf` plus an invalid byte and `caf` plus a real U+FFFD one key, and a
+/// change to one would read as a change to the other.
+#[must_use]
+pub fn path_key(raw: &[u8]) -> String {
+    use std::fmt::Write as _;
+    if let Ok(name) = std::str::from_utf8(raw) {
+        return name.to_string();
+    }
+    let mut key = String::from_utf8_lossy(raw).into_owned();
+    key.push('\0');
+    for byte in raw {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}
+
+/// The bytes a [`path_key`] names.
+#[must_use]
+pub fn path_key_bytes(key: &str) -> Vec<u8> {
+    let Some((_, hex)) = key.split_once('\0') else {
+        return key.as_bytes().to_vec();
+    };
+    hex.as_bytes()
+        .chunks(2)
+        .filter_map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
 }
 
 /// One path component from bytes, exact where the platform allows it.
@@ -264,5 +335,29 @@ mod tests {
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0].name, "caf\u{fffd}");
         assert_eq!(listed[0].path, checkout);
+    }
+}
+
+#[cfg(test)]
+mod path_key_tests {
+    use super::{path_key, path_key_bytes};
+
+    #[test]
+    fn a_path_key_names_its_bytes_and_no_other_path() {
+        assert_eq!(path_key(b"dir/plain.txt"), "dir/plain.txt");
+        assert_eq!(path_key("caf\u{e9}".as_bytes()), "caf\u{e9}");
+        let invalid = path_key(b"caf\xe9");
+        // A real U+FFFD in a valid path is another path.
+        assert_ne!(invalid, path_key("caf\u{fffd}".as_bytes()));
+        assert_ne!(invalid, path_key(b"caf\xff"));
+        // The key goes back to its bytes, so a path can be rebuilt from it.
+        for raw in [
+            &b"caf\xe9"[..],
+            b"a/b\xff\xfe/c",
+            b"plain",
+            "caf\u{e9}".as_bytes(),
+        ] {
+            assert_eq!(path_key_bytes(&path_key(raw)), raw);
+        }
     }
 }

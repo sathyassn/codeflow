@@ -289,6 +289,15 @@ pub fn scope(
     head: &str,
     into: Option<&str>,
 ) -> Result<Scope, String> {
+    // OS text rule (issue 79): a branch name that is not valid UTF-8 reaches
+    // here spelled by `ref_text`, whose escapes are not the characters the
+    // release pattern would see, so a glob such as `release-?` would judge it
+    // wrongly. A release check never guesses: it refuses.
+    if head.contains('\\') || into.is_some_and(|name| name.contains('\\')) {
+        return Err(
+            "a branch name is not valid UTF-8, so its release scope cannot be judged".to_string(),
+        );
+    }
     let (pattern, source) = match &destination.default {
         None => (
             BUILTIN_PATTERN.to_string(),
@@ -524,19 +533,40 @@ fn ensure_objects(
 type Entry = (Oid, u32);
 
 /// Every entry of a tree by path, recursively.
-fn tree_entries(tree: &git2::Tree<'_>) -> Result<BTreeMap<String, Entry>, String> {
-    let mut entries = BTreeMap::new();
-    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
-        if entry.kind() == Some(git2::ObjectType::Tree) {
-            return git2::TreeWalkResult::Ok;
+///
+/// OS text rule (issue 79): a path is bytes. The key is `git::path_key`, so
+/// `caf` plus an invalid byte and `caf` plus a real U+FFFD stay two paths and a
+/// change to one never reads as a change to the other, and a directory whose
+/// name is not valid UTF-8 is walked instead of stopping the check.
+fn tree_entries(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+) -> Result<BTreeMap<String, Entry>, String> {
+    fn walk(
+        repo: &Repository,
+        tree: &git2::Tree<'_>,
+        prefix: &[u8],
+        entries: &mut BTreeMap<String, Entry>,
+    ) -> Result<(), String> {
+        for entry in tree {
+            let mut path = prefix.to_vec();
+            path.extend_from_slice(entry.name_bytes());
+            if entry.kind() == Some(git2::ObjectType::Tree) {
+                path.push(b'/');
+                let child = repo
+                    .find_tree(entry.id())
+                    .map_err(|error| format!("tree {}: {}", entry.id(), error.message()))?;
+                walk(repo, &child, &path, entries)?;
+                continue;
+            }
+            #[allow(clippy::cast_sign_loss)] // git modes are small positive octal values
+            let mode = entry.filemode() as u32;
+            entries.insert(crate::git::path_key(&path), (entry.id(), mode));
         }
-        let name = String::from_utf8_lossy(entry.name_bytes());
-        #[allow(clippy::cast_sign_loss)] // git modes are small positive octal values
-        let mode = entry.filemode() as u32;
-        entries.insert(format!("{root}{name}"), (entry.id(), mode));
-        git2::TreeWalkResult::Ok
-    })
-    .map_err(|error| format!("tree {}: {}", tree.id(), error.message()))?;
+        Ok(())
+    }
+    let mut entries = BTreeMap::new();
+    walk(repo, tree, b"", &mut entries)?;
     Ok(entries)
 }
 
@@ -545,7 +575,7 @@ fn commit_entries(repo: &Repository, commit: Oid) -> Result<BTreeMap<String, Ent
         .find_commit(commit)
         .and_then(|commit| commit.tree())
         .map_err(|error| format!("{commit}: {}", error.message()))?;
-    tree_entries(&tree)
+    tree_entries(repo, &tree)
 }
 
 /// Each path a commit changes against `from` (none for a root commit),
@@ -570,10 +600,10 @@ fn changes(repo: &Repository, from: Option<Oid>, to: Oid) -> Result<Changes, Str
         .filter_map(|delta| {
             let path = delta
                 .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())?;
+                .path_bytes()
+                .or_else(|| delta.old_file().path_bytes())?;
             Some((
-                path.to_string_lossy().replace('\\', "/"),
+                crate::git::path_key(path),
                 (side(delta.old_file()), side(delta.new_file())),
             ))
         })
@@ -611,11 +641,11 @@ fn expected_import(
         let index = repo
             .merge_trees(&ancestor, &ours, &theirs, None)
             .map_err(error)?;
-        let incoming_entries = tree_entries(&theirs)?;
+        let incoming_entries = tree_entries(repo, &theirs)?;
         result = BTreeMap::new();
         let mut conflicted = BTreeSet::new();
         for entry in index.iter() {
-            let path = String::from_utf8_lossy(&entry.path).into_owned();
+            let path = crate::git::path_key(&entry.path);
             let stage = (entry.flags >> 12) & 0x3;
             if stage == 0 {
                 result.insert(path, (entry.id, entry.mode));
@@ -645,7 +675,7 @@ fn expected_import(
                     id: *id,
                     flags: 0,
                     flags_extended: 0,
-                    path: path.as_bytes().to_vec(),
+                    path: crate::git::path_key_bytes(path),
                 };
                 index.add(&entry).map_err(error)?;
             }
