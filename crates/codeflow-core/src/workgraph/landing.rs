@@ -890,7 +890,7 @@ mod tests {
     use super::*;
 
     fn git(root: &std::path::Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
