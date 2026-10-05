@@ -56,6 +56,9 @@ const REFUSED: &[&str] = &[
     "ZDOTDIR=/tmp/z zsh -f -o rcs -c true",
     "rg alias ~/.zshrc",
     "sed -n 'w /tmp/x' ~/.zshrc",
+    // Review round three.
+    "cp -t\"$HOME\" fixtures/.zshrc",
+    "sed -n '1e echo x >> sub/.envrc' notes",
 ];
 
 /// Reads and ordinary work stay allowed.

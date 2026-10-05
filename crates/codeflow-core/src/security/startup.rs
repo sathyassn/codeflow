@@ -60,20 +60,30 @@ pub struct StartupEnv {
 }
 
 impl StartupEnv {
-    /// The locations from this process's environment. A relative or empty
-    /// value is ignored, as the shells ignore it.
+    /// The locations from this process's environment. An empty value, or a
+    /// relative home, is ignored. A relative `ZDOTDIR` is kept as it is:
+    /// zsh reads it from whatever directory it starts in, so the class then
+    /// protects the zsh file names in every directory. A relative
+    /// `XDG_CONFIG_HOME` is read from this process's directory (review
+    /// round three).
     #[must_use]
     pub fn from_process() -> Self {
         let var = |name: &str| {
             std::env::var_os(name)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)
-                .filter(|p| p.is_absolute())
         };
+        let absolute = |name: &str| var(name).filter(|p| p.is_absolute());
         Self {
-            home: var("HOME").or_else(|| var("USERPROFILE")),
+            home: absolute("HOME").or_else(|| absolute("USERPROFILE")),
             zdotdir: var("ZDOTDIR"),
-            xdg_config: var("XDG_CONFIG_HOME"),
+            xdg_config: var("XDG_CONFIG_HOME").map(|x| {
+                if x.is_absolute() {
+                    x
+                } else {
+                    std::env::current_dir().map_or(x.clone(), |cwd| cwd.join(&x))
+                }
+            }),
         }
     }
 
@@ -116,6 +126,7 @@ impl Class {
     pub(crate) fn new(env: &StartupEnv) -> Self {
         let table = &actions::table().startup_paths;
         let mut entries = Vec::new();
+        let mut anywhere_zsh = Vec::new();
         let mut needles = Vec::new();
         let mut add = |label: String, path: PathBuf, dir: bool| {
             let mut readings = vec![key(&lexical(&path))];
@@ -141,8 +152,14 @@ impl Class {
             let zsh = ZSH_FILES
                 .iter()
                 .any(|f| rel == *f || rel.strip_prefix(f) == Some(".zwc"));
-            if let (true, Some(zdot)) = (zsh, &env.zdotdir) {
-                add(format!("$ZDOTDIR/{rel}"), zdot.join(rel), dir);
+            match (zsh, &env.zdotdir) {
+                (true, Some(zdot)) if zdot.is_absolute() => {
+                    add(format!("$ZDOTDIR/{rel}"), zdot.join(rel), dir);
+                }
+                // A relative `ZDOTDIR` names a different directory for each
+                // place zsh starts, so the file name is protected anywhere.
+                (true, Some(_)) => anywhere_zsh.push(rel.to_lowercase()),
+                _ => {}
             }
             if let (Some(rest), Some(xdg)) = (rel.strip_prefix(".config/"), &env.xdg_config) {
                 add(format!("$XDG_CONFIG_HOME/{rest}"), xdg.join(rest), dir);
@@ -154,6 +171,7 @@ impl Class {
             needles.push(path.to_lowercase());
             add(path.to_string(), PathBuf::from(path), dir);
         }
+        entries.extend(anywhere_zsh.into_iter().map(Entry::Name));
         for name in &table.anywhere {
             needles.push(name.to_lowercase());
             entries.push(Entry::Name(name.to_lowercase()));
@@ -1144,20 +1162,141 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     placing_violation(name, args, line, &dirs)
 }
 
+/// Whether a `sed` call only prints. Its options must be ones that change
+/// no file and read no script file (`-n`, `-E`, `-r`, `-s`, `-u`, `-z` and
+/// their long forms), and every script, from `-e` or the first operand,
+/// must be a list of print-only commands that [`sed_script_prints`] reads.
+fn sed_reads(args: &[String]) -> bool {
+    const FLAGS: &[&str] = &[
+        "--quiet",
+        "--silent",
+        "--regexp-extended",
+        "--separate",
+        "--unbuffered",
+        "--null-data",
+        "--posix",
+    ];
+    let mut scripts = Vec::new();
+    let mut operands = Vec::new();
+    let mut iter = args.iter();
+    let mut options = true;
+    while let Some(arg) = iter.next() {
+        let a = arg.as_str();
+        if !options || a == "-" || !a.starts_with('-') {
+            operands.push(a.to_string());
+            continue;
+        }
+        if a == "--" {
+            options = false;
+        } else if a == "-e" || a == "--expression" {
+            match iter.next() {
+                Some(script) => scripts.push(script.clone()),
+                None => return false,
+            }
+        } else if let Some(script) = a.strip_prefix("--expression=") {
+            scripts.push(script.to_string());
+        } else if FLAGS.contains(&a) {
+        } else if a.starts_with("--") {
+            return false;
+        } else {
+            let cluster = &a[1..];
+            match cluster.find(|c: char| !"nErsuz".contains(c)) {
+                None => {}
+                Some(at) if cluster[at..].starts_with('e') => {
+                    let rest = &cluster[at + 1..];
+                    if rest.is_empty() {
+                        match iter.next() {
+                            Some(script) => scripts.push(script.clone()),
+                            None => return false,
+                        }
+                    } else {
+                        scripts.push(rest.to_string());
+                    }
+                }
+                Some(_) => return false,
+            }
+        }
+    }
+    if scripts.is_empty() {
+        if operands.is_empty() {
+            return false;
+        }
+        scripts.push(operands.remove(0));
+    }
+    scripts.iter().all(|s| sed_script_prints(s))
+}
+
+/// Whether a sed script is only addressed print commands: each command,
+/// split at `;` or a newline, is an optional address (a line number, `$`
+/// or `/regex/`, a range of two, an optional `!`) and one of `p`, `P`,
+/// `d`, `D`, `q`, `Q`, `=`, `l`, `n`, `N`, `g`, `G`, `h`, `H`, `x`, `z`,
+/// or `s/regex/text/` with only the `g`, `p`, `i`, `I` or number flags.
+/// Anything else, a `w`, `r`, `e` or another delimiter included, is not.
+fn sed_script_prints(script: &str) -> bool {
+    fn address(s: &str) -> Option<&str> {
+        let s = s.trim_start();
+        if let Some(rest) = s.strip_prefix('$') {
+            return Some(rest);
+        }
+        if let Some(rest) = s.strip_prefix('/') {
+            let end = rest.find('/')?;
+            return (!rest[..end].contains('\\')).then(|| &rest[end + 1..]);
+        }
+        let digits = s.len() - s.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        (digits > 0).then(|| &s[digits..])
+    }
+    let mut any = false;
+    for command in script.split([';', '\n']) {
+        let mut s = command.trim();
+        if s.is_empty() {
+            continue;
+        }
+        any = true;
+        if let Some(rest) = address(s) {
+            s = rest.trim_start();
+            if let Some(rest) = s.strip_prefix(',') {
+                let Some(rest) = address(rest) else {
+                    return false;
+                };
+                s = rest.trim_start();
+            }
+            s = s.strip_prefix('!').unwrap_or(s).trim_start();
+        }
+        let ok = if let Some(rest) = s.strip_prefix("s/") {
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            parts.len() == 3
+                && !parts[0].contains('\\')
+                && !parts[1].contains('\\')
+                && parts[2]
+                    .trim_end()
+                    .chars()
+                    .all(|c| matches!(c, 'g' | 'p' | 'i' | 'I') || c.is_ascii_digit())
+        } else {
+            let mut chars = s.chars();
+            let first = chars.next();
+            let rest = chars.as_str().trim();
+            first.is_some_and(|c| "pPdDqQ=lnNgGhHxz".contains(c))
+                && (rest.is_empty()
+                    || (matches!(first, Some('q' | 'Q'))
+                        && rest.chars().all(|c| c.is_ascii_digit())))
+        };
+        if !ok {
+            return false;
+        }
+    }
+    any
+}
+
 /// Whether a command only reads the paths it names.
 fn reads_only(name: &str, args: &[String]) -> bool {
     match name {
         "printf" => !args.iter().any(|a| a.starts_with("-v")),
         "file" => !args.iter().any(|a| a == "-C" || a == "--compile"),
         "source" | "." => true,
-        // `sed -n 1,20p ~/.zshrc` reads; an in-place edit, a script file,
-        // or anything that may hold a `w` command does not.
-        "sed" => !args.iter().any(|a| {
-            (a.starts_with('-') && !a.starts_with("--") && a.contains(['i', 'I', 'f']))
-                || a.starts_with("--in-place")
-                || a.starts_with("--file")
-                || a.contains(['w', 'W'])
-        }),
+        // `sed -n 1,20p ~/.zshrc` reads. Only a script the guard can read
+        // whole, made of commands that print, counts (review round three:
+        // GNU sed's `e` runs a shell command).
+        "sed" => sed_reads(args),
         // ripgrep writes nothing, but `--pre`, on the command line or in the
         // file `RIPGREP_CONFIG_PATH` names, runs a program on each file.
         "rg" => {
@@ -1378,20 +1517,45 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
             continue;
         }
         if options && a.starts_with('-') && a.len() > 1 {
+            // The option letters of a short cluster, before any value.
+            let mut letters = &a[1..];
             if let Some(dir) = a.strip_prefix("--target-directory=") {
                 target = Some(dir.to_string());
             } else if a == "-t" || a == "--target-directory" {
                 target = iter.next().cloned();
             } else if copy_value_option(name, a) {
                 iter.next();
+            } else if !a.starts_with("--") && matches!(name, "cp" | "mv" | "ln" | "install") {
+                // A short cluster: the first option letter that takes a
+                // value takes the rest of the word, or the next word
+                // (`-t"$HOME"`, `-ft DIR`; review round three).
+                for (at, letter) in a[1..].char_indices() {
+                    let value = a[1 + at + letter.len_utf8()..].to_string();
+                    let takes = letter == 'S'
+                        || letter == 't'
+                        || (name == "install" && matches!(letter, 'm' | 'o' | 'g'));
+                    if !takes {
+                        continue;
+                    }
+                    letters = &a[1..=at];
+                    let value = if value.is_empty() {
+                        iter.next().cloned()
+                    } else {
+                        Some(value)
+                    };
+                    if letter == 't' {
+                        target = value;
+                    }
+                    break;
+                }
             }
             let short = !a.starts_with("--");
             recursive |= matches!(a, "--recursive" | "--archive" | "--mirror")
-                || (short && a[1..].contains(['r', 'R', 'a']));
-            if name == "ln" && (a == "--symbolic" || (short && a[1..].contains('s'))) {
+                || (short && letters.contains(['r', 'R', 'a']));
+            if name == "ln" && (a == "--symbolic" || (short && letters.contains('s'))) {
                 hard_link = false;
             }
-            if name == "cp" && (a == "--link" || (short && a[1..].contains('l'))) {
+            if name == "cp" && (a == "--link" || (short && letters.contains('l'))) {
                 hard_link = true;
             }
             continue;
@@ -1409,6 +1573,26 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
         recursive,
         hard_link,
     })
+}
+
+/// The directories a symbolic link's text is read from: the command's own,
+/// and the one the link lands in (`ln -s ../../.zshrc out/rc`; review round
+/// three), so its sources are judged from both.
+fn link_text_dirs(dest: &str, sources: usize, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = dirs.to_vec();
+    for dir in dirs {
+        if let Some(landing) = line.expand(dest, dir) {
+            let at = if landing.is_dir() || sources > 1 {
+                landing
+            } else {
+                landing.parent().map_or(landing.clone(), Path::to_path_buf)
+            };
+            if !out.contains(&at) {
+                out.push(at);
+            }
+        }
+    }
+    out
 }
 
 /// A copy, link or move judged as a whole: the destination and each
@@ -1447,16 +1631,21 @@ fn copy_judgment(
         }
         Judged::Placement(_) | Judged::Ordinary => {}
     }
+    let link_dirs = if name == "ln" && !hard_link {
+        link_text_dirs(dest, sources.len(), line, dirs)
+    } else {
+        dirs.to_vec()
+    };
     for source in sources {
         if moves || hard_link || name == "ln" {
-            match line.judge(source, dirs) {
+            match line.judge(source, &link_dirs) {
                 Judged::Class(label) => {
                     return Some(finding(format!(
                         "`{name}` moves or links the shell startup file `{label}`, so a later write through the new name edits it"
                     )))
                 }
                 Judged::Unresolved(w) => {
-                    if let Some(why) = line.unresolved_near_class(&w, dirs) {
+                    if let Some(why) = line.unresolved_near_class(&w, &link_dirs) {
                         return Some(finding(format!(
                             "`{name}` moves or links `{w}`, which the guard cannot resolve, and {why}"
                         )));

@@ -546,3 +546,61 @@ fn review_round_two_forms_refuse() {
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
+
+/// Review round three: an attached target directory, a relative link text
+/// read from the link's own directory, GNU sed's `e`, and a relative
+/// `ZDOTDIR`.
+#[test]
+fn review_round_three_forms_refuse() {
+    let f = Fixture::new();
+    std::fs::create_dir_all(f.project.join("out")).unwrap();
+    std::fs::create_dir_all(f.project.join("fixtures")).unwrap();
+    let mut wrong = Vec::new();
+    for command in [
+        "cp -tH/ fixtures/.zshrc",
+        "cp -ftH/ fixtures/.zshrc",
+        "mv -tH/ fixtures/.bashrc",
+        "ln -s ../../../.zshrc out/rc",
+        "ln -s ../../../.zshrc out/rc; echo relative >> out/rc",
+        "ln -st out ../../../.zshrc",
+        "sed -n '1e echo x >> sub/.envrc' notes",
+        "sed -n 's/a/b/e' ~/.zshrc",
+        "sed -n -e 1p -e 'w /tmp/x' ~/.zshrc",
+        "sed -n '1p;y/a/b/' ~/.zshrc",
+        "sed -f script ~/.zshrc",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "cp -t out notes.txt",
+        "cp -tH/work notes.txt",
+        "ln -s ../shared out/shared",
+        "sed -n '/alias/p' ~/.zshrc",
+        "sed 's/a/b/g' ~/.zshrc",
+        "sed -n -e 1p -e '$p' ~/.zshrc",
+        "sed -ne '1,20p;$=' ~/.zshrc",
+        "sed -E -n '/^alias/p' ~/.bashrc",
+    ] {
+        let found = f.judge(command);
+        if refused(&found) {
+            wrong.push(format!("refused: {command}: {}", found[0].message));
+        }
+    }
+    // A relative `ZDOTDIR` protects the zsh file names in every directory.
+    let env = StartupEnv {
+        zdotdir: Some(PathBuf::from("zdir")),
+        ..f.env()
+    };
+    if !refused(&f.judge_in("echo x > zdir/.zshenv", &f.project, &env)) {
+        wrong.push("allowed with ZDOTDIR=zdir: echo x > zdir/.zshenv".to_string());
+    }
+    if class_target(&f.project.join("zdir/.zshrc"), &env).is_none() {
+        wrong.push("not a class target with ZDOTDIR=zdir: zdir/.zshrc".to_string());
+    }
+    if refused(&f.judge_in("echo x > zdir/notes", &f.project, &env)) {
+        wrong.push("refused with ZDOTDIR=zdir: echo x > zdir/notes".to_string());
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
