@@ -1,0 +1,11 @@
+id = "TSK-243"
+uid = "ba54c744-2074-4b46-adfe-57390fcabebd"
+kind = "TSK"
+title = "Document the multi-epic Task line in the git rules"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-05T15:05:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
