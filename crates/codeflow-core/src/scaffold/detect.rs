@@ -296,6 +296,26 @@ mod tests {
         assert_eq!(git_dir_hooks(&main), None);
     }
 
+    /// Round seven on issue 79: a quoted hooks path that ends in a carriage
+    /// return is not the shipped hooks path; it is another owner's path.
+    #[test]
+    fn a_hooks_path_with_a_trailing_carriage_return_is_not_ours() {
+        use std::io::Write as _;
+        let tmp = tempfile::tempdir().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(tmp.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(format!("[core]\n\thooksPath = \"{CODEFLOW_HOOKS_PATH}\r\"\n").as_bytes())
+            .unwrap();
+        assert!(matches!(
+            detect_hook_manager(tmp.path()),
+            Some(HookManager::HooksPath(_))
+        ));
+    }
+
     /// Issue 79: a `core.hooksPath` that is not valid UTF-8 is an existing
     /// hook setup, so detection reports it and init does not overwrite it.
     #[test]

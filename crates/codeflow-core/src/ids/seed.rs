@@ -173,7 +173,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
 /// The entries a seed would add: every id on every ref or in retained
 /// history that the registry does not hold yet.
 fn plan(git: &Git, ledger: &Ledger, map: Option<&SeedMap>) -> Result<Vec<Entry>, IdsError> {
-    let mapped_by = format!("{} {}", git.user_email(), super::today());
+    let mapped_by = format!("{} {}", git.user_email()?, super::today());
     let mut entries = Vec::new();
     let mut undecided = Vec::new();
     for (id, copies) in copies_on_refs(git)? {

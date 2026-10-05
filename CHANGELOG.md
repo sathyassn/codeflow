@@ -301,8 +301,10 @@ erratum below, never an edit of the section.
   path in the configuration that is not UTF-8 is refused or kept, never read
   as unset, so `codeflow init` does not overwrite an existing hooks path and
   a review lookup does not fall back to another remote. The deletion guard
-  and `find -name` keep a name that a `?` or `[..]` pattern may match, and
-  the id registry reads name lists as bytes. One rule is in
+  and `find -name` keep a name that a `?` or `[..]` pattern may match, the
+  structural check reports a source or test file whose name is not UTF-8
+  instead of leaving it out, and the id registry reads name lists as bytes
+  and refuses an issuer email that is not UTF-8. One rule is in
   `docs/architecture.md`, a source scan fails on a new lossy decode that
   is not listed with its reason, and each site that stays strict says why
   next to the code.

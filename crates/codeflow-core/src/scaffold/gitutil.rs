@@ -67,31 +67,18 @@ pub fn init_repo(root: &Path) -> Result<(), ScaffoldError> {
     git_ok(root, &["init", "--quiet"])
 }
 
-/// `git config --get <key>` → Some(value) when set and non-empty.
-pub fn config_get(root: &Path, key: &str) -> Option<String> {
-    git(root, &["config", "--get", key]).ok().and_then(|o| {
-        if o.status.success() {
-            // A config value that is not valid UTF-8 is not read (OS text
-            // rule, issue 79).
-            let v = std::str::from_utf8(&o.stdout).ok()?.trim().to_string();
-            (!v.is_empty()).then_some(v)
-        } else {
-            None
-        }
-    })
-}
-
 /// `git config --get <key>` as a storage key (OS text rule, issue 79): a
 /// value that is not valid UTF-8 keeps its exact bytes in the key, so it is
 /// never read as unset and never equals a text value. Use it where an
 /// existing setting decides what the scaffold may overwrite.
 pub fn config_get_key(root: &Path, key: &str) -> Option<String> {
-    let out = git(root, &["config", "--get", key]).ok()?;
+    // `--null` frames the value with a NUL, so a value that ends in a carriage
+    // return or a newline keeps it (a quoted value can).
+    let out = git(root, &["config", "--null", "--get", key]).ok()?;
     if !out.status.success() {
         return None;
     }
-    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
-    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    let bytes = out.stdout.strip_suffix(&[0]).unwrap_or(&out.stdout);
     (!bytes.is_empty()).then(|| crate::git::GitName::from_bytes(bytes).storage_key())
 }
 
@@ -125,7 +112,7 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
     }
 
     let has_identity =
-        config_get(root, "user.email").is_some() && config_get(root, "user.name").is_some();
+        config_get_key(root, "user.email").is_some() && config_get_key(root, "user.name").is_some();
     let mut args: Vec<&str> = vec![];
     if !has_identity {
         args.extend([
@@ -159,24 +146,6 @@ pub fn add_and_commit(root: &Path, paths: &[String], message: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Issue 79: a config value that is not valid UTF-8 is not read as its
-    /// lossy spelling.
-    #[test]
-    fn a_config_value_that_is_not_utf8_is_not_read() {
-        use std::io::Write as _;
-        let dir = tempfile::tempdir().unwrap();
-        git2::Repository::init(dir.path()).unwrap();
-        let mut config = std::fs::OpenOptions::new()
-            .append(true)
-            .open(dir.path().join(".git").join("config"))
-            .unwrap();
-        config
-            .write_all(b"[demo]\n\tword = caf\xe9\n\tplain = ok\n")
-            .unwrap();
-        assert_eq!(config_get(dir.path(), "demo.plain").as_deref(), Some("ok"));
-        assert_eq!(config_get(dir.path(), "demo.word"), None);
-    }
 
     /// A hooks path that is not valid UTF-8 is kept as a key, never read as
     /// unset, so init does not overwrite it.

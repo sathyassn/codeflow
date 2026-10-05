@@ -3221,13 +3221,15 @@ fn instruction_file(dir: &Path) -> Option<(&'static str, usize)> {
 }
 
 fn chain_label(file: &str) -> String {
+    // The file is a storage key; a person sees its display form.
+    let shown = crate::git::display_key(file);
     if Path::new(file)
         .parent()
         .is_some_and(|parent| parent.as_os_str().is_empty())
     {
-        file.to_string()
+        shown
     } else {
-        format!("{file} with its parent instructions")
+        format!("{shown} with its parent instructions")
     }
 }
 

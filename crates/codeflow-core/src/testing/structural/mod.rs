@@ -113,6 +113,16 @@ pub fn validate_target(
             result.sources_excluded += 1;
             continue;
         }
+        if !crate::git::key_is_text(source) {
+            // OS text rule (issue 79): a source whose name is not valid UTF-8
+            // cannot map to a test path through a text rule, so it is
+            // reported, never left out of the check.
+            result.missing.push(MissingFinding {
+                source: crate::git::display_key(source),
+                expected_test: None,
+            });
+            continue;
+        }
         let expected = plan.derive_test_path(source);
         let hit = expected
             .as_deref()
@@ -129,6 +139,12 @@ pub fn validate_target(
     for test in &tests {
         if plan.test_excluded(test) {
             result.tests_excluded += 1;
+            continue;
+        }
+        if !crate::git::key_is_text(test) {
+            result.orphans.push(OrphanFinding {
+                test: crate::git::display_key(test),
+            });
             continue;
         }
         if !plan.test_has_source(test, &sources) {
@@ -335,11 +351,66 @@ fn gather_matches(project_dir: &Path, patterns: &[String]) -> Result<Vec<String>
                 collected.push(rel_str);
             }
         }
+        non_text_matches(project_dir, pattern, options, &mut collected);
     }
 
     collected.sort();
     collected.dedup();
     Ok(collected)
+}
+
+/// The files under `pattern`'s literal folder whose path is not valid UTF-8,
+/// which the `glob` crate's iterator skips without a word (OS text rule, issue
+/// 79). A file that the pattern may match is collected as its storage key, so
+/// the check reports it instead of leaving it out. A pattern with `?` or `[`
+/// may match any one byte, so it keeps every such file under the folder.
+fn non_text_matches(
+    project_dir: &Path,
+    pattern: &str,
+    options: glob::MatchOptions,
+    out: &mut Vec<String>,
+) {
+    let Ok(compiled) = glob::Pattern::new(pattern) else {
+        return;
+    };
+    let any_byte = pattern.contains(['?', '[']);
+    let mut base = PathBuf::new();
+    for part in pattern.split('/') {
+        if part.contains(['*', '?', '[']) {
+            break;
+        }
+        base.push(part);
+    }
+    let mut stack = vec![project_dir.join(&base)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(project_dir) else {
+                continue;
+            };
+            let name = crate::git::GitName::from_os_str(rel.as_os_str());
+            if name.rule_text().is_ok() {
+                continue;
+            }
+            let shown = name.display().to_string();
+            if any_byte || compiled.matches_with(&shown, options) {
+                out.push(name.storage_key());
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +541,47 @@ mod tests {
             tags: Vec::new(),
             test_files: Vec::new(),
         }
+    }
+
+    /// Round seven on issue 79: the `glob` iterator skips a file whose name is
+    /// not valid UTF-8, so an untested source of that name must still be
+    /// reported, as must a test with no source.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_is_not_utf8_is_reported_and_not_left_out() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(&root.join("src/alpha.sh"), "# alpha");
+        write(&root.join("tests/test-alpha.sh"), "# test");
+        let odd_source = root
+            .join("src")
+            .join(std::ffi::OsStr::from_bytes(b"caf\xe9.sh"));
+        if fs::write(&odd_source, "# odd").is_err() {
+            return; // this volume refuses names that are not UTF-8
+        }
+        let odd_test = root
+            .join("tests")
+            .join(std::ffi::OsStr::from_bytes(b"test-caf\xff.sh"));
+        fs::write(&odd_test, "# odd test").unwrap();
+        let result = validate_target(&sample_target(), root).unwrap().unwrap();
+        assert!(!result.pass);
+        assert!(
+            result
+                .missing
+                .iter()
+                .any(|finding| finding.source == "src/caf\\xe9.sh"),
+            "{:?}",
+            result.missing
+        );
+        assert!(
+            result
+                .orphans
+                .iter()
+                .any(|finding| finding.test == "tests/test-caf\\xff.sh"),
+            "{:?}",
+            result.orphans
+        );
     }
 
     #[test]

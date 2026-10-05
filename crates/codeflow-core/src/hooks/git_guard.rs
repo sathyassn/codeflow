@@ -1365,6 +1365,28 @@ fn in_enforcement_dir(dir: &Path) -> bool {
 const BRACE_UNREAD_DIR: &str =
     "repository enforcement files (a directory the guard cannot resolve)";
 
+/// The integrity path a file-system path (a glob expansion or a `find`
+/// candidate) reaches. Text is read as the token it spells. A path that is not
+/// valid UTF-8 has no honest token (its storage key holds a NUL and resolves
+/// to nothing), so the file-system checks run on the exact path, links
+/// followed (OS text rule, issue 79).
+fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'static str> {
+    let shown = crate::portable_path::slashed(path);
+    if crate::git::key_is_text(&shown) {
+        return token_integrity_path_literal(&shown, cwd, payload_cwd);
+    }
+    let exact = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    if super::edit_guard::repository_authority_target(&exact, payload_cwd, true) {
+        return Some(super::edit_guard::AUTHORITY_PATH);
+    }
+    super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true)
+        .then_some("repository enforcement files")
+}
+
 /// [`token_integrity_path`] for the token as written, without expanding a
 /// glob in it.
 fn token_integrity_path_literal(
@@ -2041,8 +2063,7 @@ fn expand_components(
 fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
     let glob = WordGlob::new(word, cwd);
     let reached = |path: &Path| {
-        let shown = crate::portable_path::slashed(path);
-        token_integrity_path_literal(&shown, cwd, payload_cwd)
+        path_integrity(path, cwd, payload_cwd)
             .map(str::to_string)
             .or_else(|| {
                 checkout_under(path, cwd, payload_cwd, None)
@@ -3668,7 +3689,12 @@ fn find_action_violation(
                         ));
                     }
                     let shown = crate::portable_path::slashed(candidate);
-                    if let Some(p) = token_integrity_path(&shown, cwd, payload_cwd) {
+                    let reach = if crate::git::key_is_text(&shown) {
+                        token_integrity_path(&shown, cwd, payload_cwd)
+                    } else {
+                        path_integrity(candidate, cwd, payload_cwd)
+                    };
+                    if let Some(p) = reach {
                         return Some(hook_integrity_violation(
                             level,
                             format!("`find -delete` would delete the integrity path `{p}`"),
@@ -8535,6 +8561,31 @@ mod registry_guard_tests {
 mod tests {
     use super::super::policy::PolicyLevel;
     use super::*;
+
+    /// Round seven on issue 79: a link whose name is not valid UTF-8 and that
+    /// points at an enforcement file is followed on its exact path, not on a
+    /// storage key that resolves to nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_glob_reach_follows_a_link_whose_name_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        let odd = root.join(std::ffi::OsStr::from_bytes(b"alias-\xe9"));
+        if std::os::unix::fs::symlink(".codeflow/policy.json", &odd).is_err() {
+            return; // this volume refuses names that are not UTF-8
+        }
+        std::os::unix::fs::symlink(".codeflow/policy.json", root.join("alias-plain")).unwrap();
+        assert!(
+            glob_reach("alias-p*", &root, &root).is_some(),
+            "the valid control"
+        );
+        std::fs::remove_file(root.join("alias-plain")).unwrap();
+        assert!(glob_reach("alias-*", &root, &root).is_some());
+    }
 
     /// Issue 79: `-name '??'` may match a name of two bytes that is not valid
     /// UTF-8 (one replacement character as text), so the candidate stays; a

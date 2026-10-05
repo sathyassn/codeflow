@@ -85,7 +85,10 @@ pub fn reserve(root: &Path, request: &Request) -> Result<Reservation, IdsError> 
 
 fn reserve_locked(git: &Git, request: &Request) -> Result<Reservation, IdsError> {
     let uid = request.uid.clone().unwrap_or_else(super::new_uid);
-    let issuer = request.issuer.clone().unwrap_or_else(|| git.user_email());
+    let issuer = match request.issuer.clone() {
+        Some(issuer) => issuer,
+        None => git.user_email()?,
+    };
     if !git.has_remote(AUTHORITY) {
         return commit_local(git, request, &uid, &issuer, Standing::Local, None);
     }
@@ -848,7 +851,7 @@ pub fn admit(
         target: target.to_string(),
         uid: Some(uid.to_string()),
         wanted: Some(id.clone()),
-        issuer: Some(format!("admit:{}", git.user_email())),
+        issuer: Some(format!("admit:{}", git.user_email()?)),
         verb: "admit",
         resume: None,
     };
@@ -962,7 +965,7 @@ pub fn resume(root: &Path, id: &RegId) -> Result<Unwritten, IdsError> {
             "no reservation of {id} is waiting for its record in this clone"
         )));
     };
-    let me = git.user_email();
+    let me = git.user_email()?;
     if unwritten.issuer != me {
         return Err(IdsError::Invalid(format!(
             "{id} was reserved by {}, not by {me}",

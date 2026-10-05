@@ -166,14 +166,29 @@ impl Git {
             .is_ok_and(|output| output.status.success())
     }
 
-    /// `user.email`, or `unknown`.
-    #[must_use]
-    pub fn user_email(&self) -> String {
-        self.run(&["config", "user.email"])
-            .map(|value| value.trim().to_string())
-            .ok()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "unknown".to_string())
+    /// `user.email`, or `unknown` when it is not set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is not valid UTF-8: it is an issuer
+    /// identity, so two different values never both read as `unknown` (OS
+    /// text rule, issue 79).
+    pub fn user_email(&self) -> Result<String, IdsError> {
+        let Ok(output) = self.output(&["config", "user.email"]) else {
+            return Ok("unknown".to_string());
+        };
+        if !output.status.success() {
+            return Ok("unknown".to_string());
+        }
+        let value = String::from_utf8(output.stdout).map_err(|_| {
+            IdsError::Git("git config user.email: the value is not valid UTF-8".to_string())
+        })?;
+        let value = value.trim();
+        Ok(if value.is_empty() {
+            "unknown".to_string()
+        } else {
+            value.to_string()
+        })
     }
 
     /// Read many blobs in one `cat-file --batch` process.
@@ -238,15 +253,24 @@ impl Git {
         let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", rev, "--"];
         args.extend_from_slice(paths);
         let listing = self.run_bytes(&args)?;
-        Ok(z_fields(&listing)
-            .iter()
-            .filter_map(|line| {
-                let (meta, path) = line.split_once('\t')?;
+        // Each row is `mode SP type SP blob TAB path`. The meta is ASCII, so
+        // the row is split on its first tab as bytes, and only the path is
+        // read as a name (OS text rule, issue 79).
+        Ok(listing
+            .split(|byte| *byte == 0)
+            .filter_map(|row| {
+                let tab = row.iter().position(|byte| *byte == b'\t')?;
+                let (meta, path) = (&row[..tab], &row[tab + 1..]);
+                let meta = std::str::from_utf8(meta).ok()?;
                 let mut parts = meta.split_whitespace();
                 let mode = parts.next()?.to_string();
                 let _kind = parts.next()?;
                 let blob = parts.next()?.to_string();
-                Some((mode, blob, path.to_string()))
+                Some((
+                    mode,
+                    blob,
+                    crate::git::GitName::from_bytes(path).storage_key(),
+                ))
             })
             .collect())
     }
@@ -445,6 +469,12 @@ mod tests {
             paths[1].contains('\0'),
             "the key of a name that is not text"
         );
+        // Only the path is encoded: it decodes to the exact bytes, with no
+        // mode or blob in front of it.
+        assert_eq!(
+            crate::git::GitName::from_storage_key(paths[1]).bytes(),
+            b"docs/caf\xe9.md"
+        );
     }
 
     #[test]
@@ -457,5 +487,24 @@ mod tests {
         let written = git.write_blob(b"caf\xe9").unwrap();
         assert!(git.run(&["cat-file", "blob", &written]).is_err());
         assert!(git.run(&["cat-file", "blob", &blob]).is_ok());
+    }
+
+    /// Round seven on issue 79: an issuer identity that is not valid UTF-8 is
+    /// a refusal, never `unknown`, which another value or none also reads as.
+    #[test]
+    fn a_user_email_that_is_not_utf8_is_refused_not_unknown() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let git = Git::new(dir.path());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[user]\n\temail = caf\xe9@example.test\n")
+            .unwrap();
+        let error = git.user_email().unwrap_err();
+        assert!(error.to_string().contains("not valid UTF-8"), "{error}");
     }
 }
