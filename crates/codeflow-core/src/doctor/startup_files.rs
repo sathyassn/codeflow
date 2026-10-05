@@ -313,8 +313,10 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
 }
 
 /// A Codex filesystem path as doctor compares it: `~` expanded with
-/// `home`, no trailing slash, lower case; `None` for a path it cannot place
-/// (relative, or `~user`).
+/// `home`, `.` and `..` components folded, the longest existing ancestor
+/// read through its symbolic links, no trailing slash, lower case, so
+/// equivalent spellings compare equal (review round five); `None` for a
+/// path it cannot place (relative, or `~user`).
 fn normal_path(path: &str, home: Option<&str>) -> Option<String> {
     let expanded = match (path.strip_prefix('~'), home) {
         (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
@@ -323,9 +325,35 @@ fn normal_path(path: &str, home: Option<&str>) -> Option<String> {
         (Some(_), _) => return None,
         (None, _) => path.to_string(),
     };
-    expanded
-        .starts_with('/')
-        .then(|| expanded.trim_end_matches('/').to_lowercase())
+    if !expanded.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in expanded.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let lexical = PathBuf::from(format!("/{}", parts.join("/")));
+    let mut base = lexical.clone();
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let real = loop {
+        if let Ok(real) = std::fs::canonicalize(&base) {
+            break rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (base.file_name(), base.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_os_string());
+                base = parent.to_path_buf();
+            }
+            _ => break lexical,
+        }
+    };
+    Some(real.to_string_lossy().trim_end_matches('/').to_lowercase())
 }
 
 /// One profile's filesystem entries, direct and scoped
@@ -543,6 +571,12 @@ mod tests {
                 "grants write on `~/.config/fish/conf.d/evil.fish`",
             ),
             ("\"~/**\" = \"write\"", "grants write on `~/**`"),
+            // Equivalent spellings (review round five).
+            ("\"~/./.zshrc\" = \"write\"", "grants write on `~/./.zshrc`"),
+            (
+                "\"~/work/../.zshrc\" = \"write\"",
+                "grants write on `~/work/../.zshrc`",
+            ),
         ] {
             let reopened = shipped_text.replacen(
                 anchor,
@@ -557,7 +591,7 @@ mod tests {
         let benign = shipped_text.replacen(
             anchor,
             &format!(
-                "[permissions.cf-builder.filesystem.\"~/.config/fish/conf.d\"]\n\"x.fish\" = \"read\"\n\n[permissions.cf-builder.filesystem.\"~/work\"]\n\"notes\" = \"write\"\n\n{anchor}"
+                "[permissions.cf-builder.filesystem.\"~/.config/fish/conf.d\"]\n\"x.fish\" = \"read\"\n\n[permissions.cf-builder.filesystem.\"~/./work\"]\n\"notes\" = \"write\"\n\n{anchor}"
             ),
             1,
         );
