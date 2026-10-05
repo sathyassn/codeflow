@@ -33,7 +33,7 @@ malformed, repeated or mismatched `Task:` line is refused.
 | Whole-flow evidence | after Testing, when a CLI command's behavior, flags or output; install, update or scaffold; a hook or guard; an automation handoff; or a rendered UI changed | one bullet per journey: what ran, what was observed, what was not exercised |
 | Breaking change | after Release impact, when Breaking is yes and the migration needs more than one line | what breaks and the migration steps |
 | Risk and follow-up | after Release impact, when Impact is the breaking level, a watched contract path changed, a hook, guard, secret scan, sandbox or permission surface changed, or landing needs a human step | what can go wrong, how to back out, steps after merge |
-| Links | last, when the change serves tracked work, a decision or durable evidence | the IDs and the record that carries the detail; omitted, not `N/A`, when there is nothing to link |
+| Links | last, when it serves tracked work, a decision or durable evidence | the IDs, any FB ids of feedback it closes, and the record with the detail; omitted, not `N/A`, if none |
 
 - Keep the Testing heading the project's policy requires (`Testing` by
   default); a renamed heading fails an unchanged policy. A conditional

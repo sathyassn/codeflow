@@ -313,6 +313,7 @@ the table below gives the commands.
 | Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor's reviewed head before it lands |
 | A later change of scope | One batched epic amendment on a `plan/` branch, reviewed once; a task changes only its own criteria, in its own PR, and CI prints the change for the reviewer |
 | A team tracker already owns the portfolio | Link its ids in `external_refs`; do not mirror its status, specs or task trees |
+| Operator feedback (FB) | `codeflow feedback new --topic <topic> --source chat "<summary>"` for feedback that sets a standing rule, declines or reorders planned work, or spans several units; `codeflow feedback status` places, closes, declines or supersedes it, and `codeflow feedback list` shows it by topic. Topics are `[feedback] topics` in `.codeflow/project.toml` |
 
 ### Update
 

@@ -322,6 +322,50 @@ multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
 
+### Operator feedback
+
+Feedback from the operator is a request like any other and attaches to its
+unit. At the full tier it also gets a record when its words must outlive
+that unit: it sets a standing rule, declines or reorders planned work, or
+spans more than one unit. An ordinary request needs no record.
+
+- **One item, one home.** `codeflow feedback new --topic <topic> --source
+  chat|pr|review|issue "<summary>"` issues `FB-NNN` from the registry and
+  writes `project-management/feedback/FB-NNN.md` as `received`. Topics come
+  from `[feedback] topics` in `.codeflow/project.toml`; the first item writes
+  a default list the project edits. A rule, plan line or record that applies
+  an item cites its id instead of restating it.
+- **Quote, then read.** Verbatim holds the operator's words exactly, typos
+  kept, and is never edited; Reading holds what the agent understood, and a
+  correction goes there with a note.
+- **Lifecycle.** `codeflow feedback status` moves an item by its table:
+  received to placed (`--in` a task, an epic or a path), placed to closed
+  (`--evidence`), an open item to declined (`--confirmed-by operator
+  --reason`), and received, placed or closed to superseded (`--by FB-NNN`).
+  The placement's unit shows progress, so there is no acting state.
+- **Standing rules.** Feedback that sets a standing rule closes with the
+  rule's line in `AGENTS.md` or a rules file, which cites the id. The record
+  stays the history; the rule file stays the instruction.
+- **Questions and decisions stay where they are.** An open question lives in
+  the pull request body or the task, an architectural decision in an ADR.
+  Feedback that answers a question is linked from it, and a decision taken
+  in response cites the id.
+- **Views.** `codeflow feedback list` groups items by topic, open first;
+  `--write` writes an optional index beside the items, which
+  `validate --docs` warns about once it is stale. `codeflow status` counts open items and `codeflow
+  recall` searches them. A pull request that closes feedback names its ids
+  under Links.
+- **Migration.** Import each entry of an older log once, with its old id in
+  `external_refs`, and mark the old log as frozen history. Harness memory
+  points at FB ids instead of keeping its own copy of the words.
+
+`validate --docs` fails an item whose id and file name disagree, a repeated
+uid, an unlisted topic, an empty Verbatim, a placed item with no placement
+that resolves, a closed item with an empty Closure, a declined item without
+`confirmed_by: operator`, and a superseded item whose successor is missing.
+The standard and minimal tiers have no `project-management/`; there feedback
+stays with its unit in the harness's task tools.
+
 ## Choose the lightest durable artifact
 
 ```text

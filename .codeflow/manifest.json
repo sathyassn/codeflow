@@ -425,7 +425,7 @@
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "045053339774f4f8d699e06452dd38ed51a86c30d1b6d074aeb16e7015db96fc",
+      "sha256": "bf8b337b6d58d0cbf90712f5cb916c2f5240b5cf75b5d76858aba86a12941a39",
       "exec": false
     },
     ".agents/skills/cf-method/references/skill-authoring.md": {
@@ -797,7 +797,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "d5ead0eec30ac39737726607f3e604e4387feffa537c2e1c7976060a6f66348d",
+      "sha256": "8ae79515739bf177d4346d177ae9ae2a2b6acf5ae7bee7da68c8d0818a611bbe",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-integration.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
-      "sha256": "045053339774f4f8d699e06452dd38ed51a86c30d1b6d074aeb16e7015db96fc",
+      "sha256": "bf8b337b6d58d0cbf90712f5cb916c2f5240b5cf75b5d76858aba86a12941a39",
       "exec": false
     },
     ".claude/skills/cf-method/references/skill-authoring.md": {
@@ -1631,7 +1631,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "d5ead0eec30ac39737726607f3e604e4387feffa537c2e1c7976060a6f66348d",
+      "sha256": "8ae79515739bf177d4346d177ae9ae2a2b6acf5ae7bee7da68c8d0818a611bbe",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-integration.md": {
@@ -1860,6 +1860,12 @@
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
       "sha256": "397d95546a0fe8325fe4807c9f756b1cab30f0218c2f0ebe060c310ed7e6e5cb",
+      "exec": false
+    },
+    "project-management/templates/feedback.md": {
+      "src": "pm/feedback.md.tmpl",
+      "ownership": "managed",
+      "sha256": "c2851a9ec64e96de0bd0c1441d6e1a00cc165d981eb0107447e9fa64662d8d54",
       "exec": false
     },
     "project-management/templates/spec.md": {
