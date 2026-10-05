@@ -100,7 +100,7 @@ enum Command {
     Adr(cmd::new::AdrArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),
-    /// Check explicit forecast allocations and pinned evidence without writes.
+    /// Check forecast allocations and compare outcomes derived from git, without writes.
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),

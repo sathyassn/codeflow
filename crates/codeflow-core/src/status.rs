@@ -125,6 +125,8 @@ pub struct StatusView {
     /// Per-capability delivery rollup. `None` when either the registry or the
     /// project-management tier is absent (the view needs both links).
     pub delivery: Option<Vec<CapabilityDelivery>>,
+    /// The estimates line, only where `.codeflow/estimate.json` exists.
+    pub estimates: Option<String>,
     /// Tier/degradation notes (absent layers, parse problems).
     pub notes: Vec<String>,
 }
@@ -168,6 +170,11 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
     };
     let capabilities = collect_capabilities(repo_root, &mut notes);
     let delivery = collect_delivery(repo_root, capabilities.as_deref());
+    let completed = work
+        .as_ref()
+        .and_then(|work| work.tasks_by_status.get("complete").copied())
+        .unwrap_or(0);
+    let estimates = crate::estimate::adoption::status_line(repo_root, completed);
 
     StatusView {
         branch,
@@ -178,6 +185,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         derived,
         capabilities,
         delivery,
+        estimates,
         notes,
     }
 }
@@ -636,6 +644,10 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
         None => {
             let _ = writeln!(out, "capabilities: (no registry)");
         }
+    }
+
+    if let Some(line) = &view.estimates {
+        let _ = writeln!(out, "{line}");
     }
 
     for note in &view.notes {
