@@ -164,7 +164,44 @@ fn reads_and_ordinary_writes_pass() {
             wrong.push(format!("{command}: {}", found[0].message));
         }
     }
+    // Reads with a program that can also write, and placing calls whose
+    // output goes somewhere named, from the home itself (the TSK-242
+    // differential over developer commands).
+    for command in [
+        "sed -n 1,20p ~/.zshrc",
+        "sed -n '/alias/p' .bashrc",
+        "tar -czf out.tgz build",
+        "tar -tf bundle.tar",
+        "tar -xzf vendor.tgz -C vendor",
+        "unzip pkg.zip -d vendor",
+        "wget -O x.json https://example.invalid/x",
+        "rsync -a src/ build/src/",
+        "git clean -fd",
+        "git worktree add ../wt -b x",
+    ] {
+        let found = f.judge_in(command, &f.home, &f.env());
+        if refused(&found) {
+            wrong.push(format!("{command} from the home: {}", found[0].message));
+        }
+    }
     assert!(wrong.is_empty(), "refused:\n{}", wrong.join("\n"));
+    for command in [
+        "sed -i '' 's/a/b/' .zshrc",
+        "sed -n 'w .bashrc' notes",
+        "sed -f edit.sed .zshrc",
+        "tar -xzf vendor.tgz",
+        "tar xf vendor.tar",
+        "tar -f vendor.tar",
+        "tar -xf vendor.tar -C .config",
+        "unzip pkg.zip",
+        "wget https://example.invalid/x",
+        "curl -O https://example.invalid/x",
+        "git worktree add .zsh",
+        "git checkout -- .",
+    ] {
+        let found = f.judge_in(command, &f.home, &f.env());
+        assert!(refused(&found), "{command} from the home");
+    }
 }
 
 /// A target the guard cannot resolve refuses near the class and keeps
@@ -223,6 +260,32 @@ fn placing_into_the_home_refuses() {
     assert!(refused(&found), "git in the home");
     let found = f.judge_in("git status", &f.home, &f.env());
     assert!(!refused(&found), "a git read in the home");
+    // Git judged where it runs: its `-C` directory, and only for a
+    // subcommand that can write the working tree.
+    let project = f.project.display().to_string();
+    for command in [
+        "git push origin --tags",
+        "git fetch origin",
+        "git commit -m x",
+        "git add notes.md",
+        "git tag v1",
+        format!("git -C '{project}' checkout -- .").as_str(),
+        format!("git -C {project} pull").as_str(),
+    ] {
+        let found = f.judge_in(command, &f.home, &f.env());
+        assert!(!refused(&found), "{command} from the home: {found:?}");
+    }
+    for command in [
+        "git -C ~ pull",
+        "git -C . checkout -- .",
+        "git -C $UNSET_DIR checkout -- . && ls ~",
+        "git config -f ~/.zshrc a.b c",
+    ] {
+        let found = f.judge_in(command, &f.home, &f.env());
+        assert!(refused(&found), "{command} from the home");
+    }
+    let found = f.judge(&format!("git -C {} merge main", f.home.display()));
+    assert!(refused(&found), "git -C to the home from a project");
     for command in [
         "tar -xf bundle.tar",
         "unzip dots.zip -d vendor",

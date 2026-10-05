@@ -34,7 +34,7 @@ use crate::hooks::Violation;
 pub const RULE: &str = "security.shell_startup";
 
 /// The sanctioned path printed with every refusal.
-pub const SANCTIONED: &str = "shell startup files belong to the user: edit the file yourself, outside the agent session; no policy key relaxes this rule, and the harness sandbox denies these writes where one runs (issue 86)";
+pub const SANCTIONED: &str = "shell startup files belong to the operator: ask the operator to make this change by hand, outside the agent session; no policy key relaxes this rule, and the harness sandbox denies these writes where one runs (issue 86)";
 
 /// The most entries a glob word is expanded over before the guard stops
 /// and judges the word as unresolved.
@@ -621,6 +621,54 @@ const GIT_READS: &[&str] = &[
     "name-rev",
 ];
 
+/// Git subcommands that write no file in the directory git runs in other
+/// than one they name, so that directory does not matter to the class. A
+/// path they name is still judged word by word (`git config -f ~/.zshrc`,
+/// `git worktree add ~/.zsh`).
+const GIT_KEEPS_WORKTREE: &[&str] = &[
+    "push",
+    "fetch",
+    "remote",
+    "ls-remote",
+    "tag",
+    "branch",
+    "commit",
+    "add",
+    "rm",
+    "notes",
+    "config",
+    "init",
+    "gc",
+    "prune",
+    "repack",
+    "fsck",
+    "reflog",
+    "count-objects",
+    "verify-commit",
+    "verify-tag",
+    "maintenance",
+    "clean",
+    "worktree",
+    "update-ref",
+    "symbolic-ref",
+    "update-index",
+    "write-tree",
+    "commit-tree",
+    "mktag",
+    "mktree",
+    "hash-object",
+    "pack-refs",
+    "show-ref",
+    "show-branch",
+    "merge-base",
+    "check-ignore",
+    "check-attr",
+    "check-ref-format",
+    "cherry",
+    "range-diff",
+    "var",
+];
+
 /// Programs that can write files whose names are not on the command line
 /// (archive members, a download's remote name, a checkout's tree), so a
 /// destination or working directory in the home or a startup directory
@@ -931,6 +979,14 @@ fn reads_only(name: &str, args: &[String]) -> bool {
         "printf" => !args.iter().any(|a| a.starts_with("-v")),
         "file" => !args.iter().any(|a| a == "-C" || a == "--compile"),
         "source" | "." => true,
+        // `sed -n 1,20p ~/.zshrc` reads; an in-place edit, a script file,
+        // or anything that may hold a `w` command does not.
+        "sed" => !args.iter().any(|a| {
+            (a.starts_with('-') && !a.starts_with("--") && a.contains(['i', 'I', 'f']))
+                || a.starts_with("--in-place")
+                || a.starts_with("--file")
+                || a.contains(['w', 'W'])
+        }),
         "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
             GIT_READS.contains(&sub)
                 && !rest
@@ -971,6 +1027,30 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
         }
     }
     None
+}
+
+/// The `-C` directories among git's global options, in order.
+fn git_dirs(args: &[String]) -> Vec<&str> {
+    let mut dirs = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        if matches!(
+            arg.as_str(),
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
+        ) {
+            if arg == "-C" {
+                if let Some(dir) = args.get(at + 1) {
+                    dirs.push(dir.as_str());
+                }
+            }
+            at += 2;
+        } else if arg.starts_with('-') {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    dirs
 }
 
 /// The value part of an option word (`--output=~/.zshrc`, `-o~/.zshrc`
@@ -1258,6 +1338,22 @@ fn placing_violation(
         // Without a remote name, curl writes only the files it names.
         return None;
     }
+    // Where the program puts the files it does not name: its working
+    // directory, unless an option moves it there or the call places none.
+    let shifts = placing_dirs(name, args)?;
+    let mut unknown = line.unknown.is_some();
+    let mut dirs = dirs.to_vec();
+    for dir in shifts {
+        dirs = dirs
+            .iter()
+            .filter_map(|d| {
+                let moved = line.expand(dir, d);
+                unknown |= moved.is_none();
+                moved
+            })
+            .collect();
+    }
+    let dirs = dirs.as_slice();
     for word in args {
         let value = value_of(word);
         if !path_like(value) {
@@ -1276,7 +1372,7 @@ fn placing_violation(
             )));
         }
     }
-    if line.unknown.is_some() {
+    if unknown {
         let spelled = ["~", "$HOME", "${HOME}", "/etc"]
             .iter()
             .any(|marker| line.text.contains(marker))
@@ -1292,6 +1388,87 @@ fn placing_violation(
         }
     }
     None
+}
+
+/// The directories, relative to the working directory and applied in
+/// order, where a placing call puts files it does not name, or `None`
+/// when the call places none there: a git subcommand that keeps the
+/// working tree, a tar that does not extract, a download to a named file,
+/// a copy into its named destination. An empty list means the working
+/// directory itself. A path the call names is judged word by word either
+/// way.
+fn placing_dirs<'a>(name: &str, args: &'a [String]) -> Option<Vec<&'a str>> {
+    let has = |names: &[&str]| {
+        args.iter().any(|a| {
+            names
+                .iter()
+                .any(|n| a == n || a.starts_with(&format!("{n}=")))
+        })
+    };
+    match name {
+        "git" => {
+            if git_subcommand(args).is_some_and(|(sub, _)| GIT_KEEPS_WORKTREE.contains(&sub)) {
+                return None;
+            }
+            Some(git_dirs(args))
+        }
+        "tar" | "bsdtar" | "gtar" => {
+            tar_extracts(args).then(|| option_values(args, &["-C", "--directory"]))
+        }
+        "unzip" => Some(option_values(args, &["-d"])),
+        "wget" if has(&["-O", "--output-document"]) => None,
+        "wget" => Some(option_values(args, &["-P", "--directory-prefix"])),
+        "curl" => Some(option_values(args, &["--output-dir"])),
+        "rsync" | "scp" | "ditto" => None,
+        _ => Some(Vec::new()),
+    }
+}
+
+/// Whether a tar call extracts, or its mode cannot be told (fail closed).
+fn tar_extracts(args: &[String]) -> bool {
+    let mut other_mode = false;
+    for (at, arg) in args.iter().enumerate() {
+        if let Some(long) = arg.strip_prefix("--") {
+            match long.split('=').next().unwrap_or(long) {
+                "extract" | "get" => return true,
+                "create" | "list" | "append" | "update" | "diff" | "compare" | "delete" => {
+                    other_mode = true;
+                }
+                _ => {}
+            }
+        } else if let Some(cluster) = arg.strip_prefix('-').or((at == 0).then_some(arg.as_str())) {
+            // A short cluster (`-xzf`), or the old style first word (`xzf`).
+            if cluster.contains('x') {
+                return true;
+            }
+            if cluster.contains(['c', 't', 'r', 'u', 'd']) {
+                other_mode = true;
+            }
+        }
+    }
+    !other_mode
+}
+
+/// The values of the named options, as `-C DIR`, `-CDIR`, `--dir=DIR` or
+/// `--dir DIR`.
+fn option_values<'a>(args: &'a [String], names: &[&str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    for (at, arg) in args.iter().enumerate() {
+        for name in names {
+            if arg == name {
+                if let Some(value) = args.get(at + 1) {
+                    out.push(value.as_str());
+                }
+            } else if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+                out.push(value);
+            } else if !name.starts_with("--") {
+                if let Some(value) = arg.strip_prefix(name).filter(|v| !v.is_empty()) {
+                    out.push(value);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The class entry a native edit targets, for edit-guard.
