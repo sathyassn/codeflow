@@ -195,9 +195,10 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
             None => Ok(None),
         }
     };
-    // Only an empty value reads as unset: whitespace, a carriage return
-    // included, is part of the command git would run.
-    let mut configured = from_env("GIT_SSH_COMMAND")?.filter(|command| !command.is_empty());
+    // A value that is set is the command git would run, whatever it holds: an
+    // empty one refuses below, as git refuses it, and never falls back to
+    // another program.
+    let mut configured = from_env("GIT_SSH_COMMAND")?;
     if configured.is_none() {
         let out = crate::git::command()
             .arg("-C")
@@ -213,13 +214,20 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
             let value = std::str::from_utf8(framed)
                 .map_err(|_| not_utf8("core.sshCommand"))?
                 .to_string();
-            configured = Some(value).filter(|command| !command.is_empty());
+            configured = Some(value);
         }
     }
     if configured.is_none() {
-        configured = from_env("GIT_SSH")?
-            .filter(|program| !program.is_empty())
-            .map(|program| format!("'{}'", program.replace('\'', "'\\''")));
+        configured =
+            from_env("GIT_SSH")?.map(|program| format!("'{}'", program.replace('\'', "'\\''")));
+    }
+    if configured
+        .as_deref()
+        .is_some_and(|command| command.is_empty())
+    {
+        return Err(Failure::Other(
+            "the configured ssh command is empty, so the remote is not asked".to_string(),
+        ));
     }
     let configured = configured.unwrap_or_else(|| "ssh".to_string());
     Ok(format!("{configured} -o BatchMode=yes"))
@@ -301,5 +309,25 @@ mod tests {
         std::fs::write(&config, text).unwrap();
         let command = batch_ssh_command(dir.path()).ok().unwrap();
         assert_eq!(command, "ssh-wrapper\r -o BatchMode=yes");
+    }
+
+    /// Round thirteen on issue 79: a configured command that is empty is
+    /// refused, as git refuses it, and never replaced by `ssh`.
+    #[test]
+    fn an_empty_configured_ssh_command_refuses_and_never_falls_back() {
+        if std::env::var_os("GIT_SSH_COMMAND").is_some() || std::env::var_os("GIT_SSH").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(dir.path(), &[]);
+        let config = repo.path().join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[core]\n\tsshCommand =\n");
+        std::fs::write(&config, text).unwrap();
+        let error = batch_ssh_command(dir.path()).err().unwrap();
+        assert!(
+            matches!(error, Failure::Other(ref why) if why.contains("empty")),
+            "refused"
+        );
     }
 }

@@ -535,10 +535,16 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    // OS text rule (issue 79): the base branch is judged against protected
-    // globs, so a name that is not valid UTF-8 is not read as a lossy
-    // lookalike (gh prints JSON text, which is always UTF-8).
-    let base = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    base_from_answer(out.stdout)
+}
+
+/// The base branch `gh` printed. OS text rule (issue 79): the base is judged
+/// against protected globs, so a name that is not valid UTF-8 is not read as a
+/// lossy lookalike, and only the answer's own newline is framing: a name that
+/// ends in other whitespace keeps it.
+fn base_from_answer(stdout: Vec<u8>) -> Option<String> {
+    let text = String::from_utf8(stdout).ok()?;
+    let base = text.strip_suffix('\n').unwrap_or(&text).to_string();
     (!base.is_empty()).then_some(base)
 }
 
@@ -571,8 +577,24 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::read_bounded_utf8;
+    use super::{base_from_answer, read_bounded_utf8};
     use std::io::Cursor;
+
+    /// Round thirteen on issue 79: the base branch is exact, so a name that
+    /// ends in a no-break space is not the protected name without it.
+    #[test]
+    fn the_base_branch_keeps_whitespace_that_is_part_of_its_name() {
+        assert_eq!(
+            base_from_answer(b"release\n".to_vec()).as_deref(),
+            Some("release")
+        );
+        assert_eq!(
+            base_from_answer("release\u{a0}\n".as_bytes().to_vec()).as_deref(),
+            Some("release\u{a0}")
+        );
+        assert_eq!(base_from_answer(b"caf\xe9\n".to_vec()), None);
+        assert_eq!(base_from_answer(b"\n".to_vec()), None);
+    }
 
     #[test]
     fn schema_hook_input_is_bounded_and_requires_utf8() {

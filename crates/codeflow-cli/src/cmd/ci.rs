@@ -1493,7 +1493,9 @@ const LIGHT_SECTIONS: [&str; 2] = ["Summary", "Changes"];
 /// Everything unrecognized — code, config, CI yml, `Cargo.*`, `src/` — is a
 /// code change; in particular `.github/workflows/**` is CI config, not docs.
 fn is_docs_path(path: &str) -> bool {
-    let p = path.trim();
+    // The path is an exact name (OS text rule, issue 79): trimming it would
+    // let `README.md` plus a carriage return borrow the `md` exemption.
+    let p = path;
     let name = p.rsplit('/').next().unwrap_or(p);
     // Instructions and shipped assets can change runtime/agent behavior even
     // when their serialization is Markdown. Prefer extra evidence to a prose
@@ -3214,6 +3216,8 @@ mod tests {
         }
         assert!(is_docs_path("docs/assets/overview.md"));
         assert!(is_docs_path("assets-guide.md"));
+        // A path is an exact name: a carriage return is part of its extension.
+        assert!(!is_docs_path("README.md\r"));
     }
 
     // -- range detection --------------------------------------------------

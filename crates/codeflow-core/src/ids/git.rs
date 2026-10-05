@@ -189,7 +189,8 @@ impl Git {
         let value = String::from_utf8(output.stdout).map_err(|_| {
             IdsError::Git("git config user.email: the value is not valid UTF-8".to_string())
         })?;
-        let value = value.trim();
+        // Only git's own newline is framing: another value is another identity.
+        let value = value.strip_suffix('\n').unwrap_or(&value);
         Ok(if value.is_empty() {
             "unknown".to_string()
         } else {
@@ -549,5 +550,23 @@ mod tests {
         );
         let common = Git::new(&dir.path().join("wt")).common_dir().unwrap();
         assert_eq!(common.file_name().unwrap(), "meta\r");
+    }
+
+    /// Round thirteen on issue 79: an email that ends in a no-break space is
+    /// another identity, not the one without it.
+    #[test]
+    fn a_user_email_keeps_whitespace_that_is_part_of_it() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let git = Git::new(dir.path());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all("[user]\n\temail = \"owner@example.test\u{a0}\"\n".as_bytes())
+            .unwrap();
+        assert_eq!(git.user_email().unwrap(), "owner@example.test\u{a0}");
     }
 }
