@@ -277,6 +277,8 @@ erratum below, never an edit of the section.
   `docs/architecture.md`, a source scan fails on a new lossy decode that
   is not listed with its reason, and each site that stays strict says why
   next to the code.
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any
