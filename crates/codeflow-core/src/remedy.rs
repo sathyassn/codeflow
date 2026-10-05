@@ -611,6 +611,9 @@ catalog! {
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
         "move what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inline it, so the guards and sandboxes protect it";
+    /// `ZDOTDIR` or `XDG_CONFIG_HOME` moved away from where the denies point.
+    DOCTOR_STARTUP_RELOCATED = Step::Edit(".claude/settings.json"),
+        "add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the relocated startup files to .claude/settings.json and read entries to the Codex profile, or set ZDOTDIR and XDG_CONFIG_HOME back to their defaults; the generated rules cover only the default locations";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";

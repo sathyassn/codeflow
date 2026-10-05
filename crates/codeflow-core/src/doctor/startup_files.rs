@@ -120,13 +120,18 @@ fn literal(word: &str, home: &Path) -> Option<PathBuf> {
 }
 
 /// The class rules missing from the project's Claude settings and Codex
-/// profile, as listed rules.
+/// profile, as listed rules. An absent or unreadable file is named, never
+/// read as a pass, and the Codex profile counts only when it is the one
+/// selected with no `sandbox_mode` key to shadow it.
 fn missing_rules(root: &Path) -> Vec<String> {
     let table = &actions::table().startup_paths;
     let mut missing = Vec::new();
-    let claude = root.join(".claude/settings.json");
-    if let Ok(text) = std::fs::read_to_string(&claude) {
-        match serde_json::from_str::<serde_json::Value>(&text) {
+    let claude_file = ".claude/settings.json";
+    match std::fs::read_to_string(root.join(claude_file)) {
+        Err(_) => missing.push(format!(
+            "{claude_file} is absent or unreadable, so no Claude rule from this project protects the class"
+        )),
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
                 let has = |list: &serde_json::Value, rule: &str| {
                     list.as_array()
@@ -140,7 +145,7 @@ fn missing_rules(root: &Path) -> Vec<String> {
                     .count();
                 if lost > 0 {
                     missing.push(format!(
-                        ".claude/settings.json lacks {lost} shell startup `Edit` denies"
+                        "{claude_file} lacks {lost} shell startup `Edit` denies"
                     ));
                 }
                 let write = &value["sandbox"]["filesystem"]["denyWrite"];
@@ -151,17 +156,34 @@ fn missing_rules(root: &Path) -> Vec<String> {
                     .count();
                 if lost > 0 {
                     missing.push(format!(
-                        ".claude/settings.json lacks {lost} shell startup sandbox `denyWrite` entries"
+                        "{claude_file} lacks {lost} shell startup sandbox `denyWrite` entries"
                     ));
                 }
             }
-            Err(_) => missing.push(".claude/settings.json does not parse".to_string()),
-        }
+            Err(_) => missing.push(format!("{claude_file} does not parse")),
+        },
     }
-    let codex = root.join(".codex/config.toml");
-    if let Ok(text) = std::fs::read_to_string(&codex) {
-        match text.parse::<toml::Value>() {
+    let codex_file = ".codex/config.toml";
+    match std::fs::read_to_string(root.join(codex_file)) {
+        Err(_) => missing.push(format!(
+            "{codex_file} is absent or unreadable, so no Codex profile from this project protects the class"
+        )),
+        Ok(text) => match text.parse::<toml::Value>() {
             Ok(value) => {
+                let selected = value
+                    .get("default_permissions")
+                    .and_then(toml::Value::as_str);
+                if !matches!(selected, Some("cf-guard" | "cf-builder")) {
+                    missing.push(format!(
+                        "{codex_file} selects `{}`, not `cf-guard` or `cf-builder`",
+                        selected.unwrap_or("no profile")
+                    ));
+                }
+                if value.get("sandbox_mode").is_some() {
+                    missing.push(format!(
+                        "{codex_file} sets `sandbox_mode`, which shadows the profile"
+                    ));
+                }
                 let fs = value
                     .get("permissions")
                     .and_then(|p| p.get("cf-guard"))
@@ -177,19 +199,42 @@ fn missing_rules(root: &Path) -> Vec<String> {
                             .map(|e| e.trim_end_matches('/').to_string()),
                     )
                     .filter(|path| {
-                        fs.and_then(|fs| fs.get(path)).and_then(toml::Value::as_str) != Some("read")
+                        fs.and_then(|fs| fs.get(path))
+                            .and_then(toml::Value::as_str)
+                            != Some("read")
                     })
                     .count();
                 if lost > 0 {
                     missing.push(format!(
-                        ".codex/config.toml's cf-guard profile leaves {lost} shell startup paths writable"
+                        "{codex_file}'s cf-guard profile leaves {lost} shell startup paths writable"
                     ));
                 }
             }
-            Err(_) => missing.push(".codex/config.toml does not parse".to_string()),
-        }
+            Err(_) => missing.push(format!("{codex_file} does not parse")),
+        },
     }
     missing
+}
+
+/// `ZDOTDIR` or `XDG_CONFIG_HOME` set away from the defaults the generated
+/// rules name, so the relocated startup files have no native deny; the
+/// guards still follow them.
+fn relocated(env: &StartupEnv) -> Vec<String> {
+    let Some(home) = env.home.as_deref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(z) = env.zdotdir.as_deref().filter(|z| *z != home) {
+        out.push(format!("ZDOTDIR is {}", z.display()));
+    }
+    if let Some(x) = env
+        .xdg_config
+        .as_deref()
+        .filter(|x| *x != home.join(".config"))
+    {
+        out.push(format!("XDG_CONFIG_HOME is {}", x.display()));
+    }
+    out
 }
 
 pub(super) fn check(opts: &Options) -> CheckResult {
@@ -197,41 +242,50 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let root = PathBuf::from(&opts.project_dir);
     let env = StartupEnv::from_process();
     let missing = missing_rules(&root);
+    let moved = relocated(&env);
     let sourced = sourced_files(&env);
-    let (status, message) = if !missing.is_empty() {
-        (
-            Status::Warn(remedy::DOCTOR_STARTUP_PRESETS.remedy()),
-            format!(
-                "{}; the harness sandboxes do not deny every shell startup write (listed rules; native enforcement is not observed here)",
-                missing.join("; ")
-            ),
-        )
-    } else if !sourced.unprotected.is_empty() || !sourced.unresolved.is_empty() {
-        let mut parts = Vec::new();
-        if !sourced.unprotected.is_empty() {
-            parts.push(format!(
-                "sourced files outside the protected class: {}",
-                sourced.unprotected.join(", ")
-            ));
-        }
-        if !sourced.unresolved.is_empty() {
-            parts.push(format!(
-                "sourced files not resolved: {}",
-                sourced.unresolved.join(", ")
-            ));
-        }
-        (
-            Status::Warn(remedy::DOCTOR_STARTUP_SOURCED.remedy()),
-            format!(
-                "{}; an agent could plant a definition there that no rule or sandbox entry protects",
-                parts.join("; ")
-            ),
-        )
-    } else {
-        (
+    // Every finding is reported together; the remedy is the first one's.
+    let mut parts = Vec::new();
+    let mut remedy = None;
+    if !missing.is_empty() {
+        parts.push(format!(
+            "{}; the harness sandboxes do not deny every shell startup write (listed rules; native enforcement is not observed here)",
+            missing.join("; ")
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_PRESETS.remedy());
+    }
+    if !moved.is_empty() {
+        parts.push(format!(
+            "{}, so the startup files there have no generated deny; the guards still refuse visible writes to them",
+            moved.join(" and ")
+        ));
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_RELOCATED.remedy());
+    }
+    if !sourced.unprotected.is_empty() {
+        parts.push(format!(
+            "sourced files outside the protected class: {}",
+            sourced.unprotected.join(", ")
+        ));
+    }
+    if !sourced.unresolved.is_empty() {
+        parts.push(format!(
+            "sourced files not resolved: {}",
+            sourced.unresolved.join(", ")
+        ));
+    }
+    if !sourced.unprotected.is_empty() || !sourced.unresolved.is_empty() {
+        parts.push(
+            "an agent could plant a definition in a sourced file that no rule or sandbox entry protects"
+                .to_string(),
+        );
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_SOURCED.remedy());
+    }
+    let (status, message) = match remedy {
+        Some(remedy) => (Status::Warn(remedy), parts.join("; ")),
+        None => (
             Status::Pass,
-            "the shell startup class is in the project's harness settings (listed rules), and the home's startup files source nothing outside it".to_string(),
-        )
+            "the shell startup class is in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
+        ),
     };
     CheckResult {
         name: "startup-files".into(),
@@ -271,12 +325,17 @@ mod tests {
     fn missing_rules_name_each_settings_file() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
+        // Absent files are findings, never a pass (review round one).
+        let missing = missing_rules(root);
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        assert!(missing.iter().all(|m| m.contains("absent")), "{missing:?}");
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::create_dir_all(root.join(".codex")).unwrap();
         std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         let missing = missing_rules(root);
-        assert_eq!(missing.len(), 3, "{missing:?}");
+        // Edit denies, denyWrite, no profile selected, cf-guard entries.
+        assert_eq!(missing.len(), 4, "{missing:?}");
         let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
         std::fs::copy(
             shipped.join("settings/default.json"),
@@ -289,5 +348,43 @@ mod tests {
         )
         .unwrap();
         assert!(missing_rules(root).is_empty(), "{:?}", missing_rules(root));
+        // The shipped profile's entries do not count when another profile,
+        // or a `sandbox_mode` key, is what Codex runs.
+        let shipped_text = std::fs::read_to_string(root.join(".codex/config.toml")).unwrap();
+        for (from, to) in [
+            (
+                "default_permissions = \"cf-guard\"",
+                "default_permissions = \":danger-full-access\"",
+            ),
+            (
+                "default_permissions = \"cf-guard\"",
+                "default_permissions = \"cf-guard\"\nsandbox_mode = \"danger-full-access\"",
+            ),
+        ] {
+            assert!(shipped_text.contains(from));
+            std::fs::write(
+                root.join(".codex/config.toml"),
+                shipped_text.replacen(from, to, 1),
+            )
+            .unwrap();
+            assert_eq!(missing_rules(root).len(), 1, "{to}");
+        }
+    }
+
+    #[test]
+    fn relocated_startup_directories_are_reported() {
+        let home = PathBuf::from("/fixture/home");
+        let at_defaults = StartupEnv {
+            home: Some(home.clone()),
+            zdotdir: Some(home.clone()),
+            xdg_config: Some(home.join(".config")),
+        };
+        assert!(relocated(&at_defaults).is_empty());
+        let moved = StartupEnv {
+            home: Some(home),
+            zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
+            xdg_config: Some(PathBuf::from("/fixture/xdg")),
+        };
+        assert_eq!(relocated(&moved).len(), 2);
     }
 }
