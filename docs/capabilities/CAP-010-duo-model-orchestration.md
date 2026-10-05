@@ -257,7 +257,7 @@ and its tasks (ADR-0076). The flow from there to `main` is on
 | Guards | select mutually exclusive branches. A later join may list every structural candidate while waiting only for active predecessors plus resolution evidence for the alternatives. Missing or ambiguous guard evidence creates Plan vN+1 rather than an improvised route |
 | New plan version | a change of outcome, cross-task interface, dependency graph or safety boundary forces Plan vN+1 and both approvals. An ownership change and a task's own criteria change do not (ADR-0076 narrows ADR-0040) |
 | Same plan version | ordinary steps, bounded rework, extra strengthening tests, in-node implementation detail, or another safe topological order inside the same contract remain execution-ledger evidence |
-| A later change of scope | a follow-up, a new or split outcome, a reassignment or another task's criteria ride in one batched epic amendment on a `plan/` branch with one other-lineage reviewer. Nothing plans again per task |
+| A later change of scope | a follow-up, a new or split outcome, a reassignment or another task's criteria ride in one batched epic amendment on a `plan/` branch with one other-lineage reviewer. One amendment may span several epics and names each (ADR-0078). Nothing plans again per task |
 | `validate --docs` | checks canonical identities and filenames, references, relationship shape, parent-or-standalone ownership, spec readiness, stable integration targets, completed acceptance criteria, and malformed, dangling, self-referential, duplicate, or cyclic topology |
 | `codeflow work start` | checks the planning anchor of the task the branch carries on any work prefix (`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or `integration/`). The anchor is the epic's planning change for an epic task, or the record at head for a standalone task whose record arrives in its own pull request. The check covers the parent or standalone rationale, approved specs and completed predecessors, and does not mutate repository state |
 | CI, once per pull request | applies the same read-only merge-base check when full-tier or recognizable historical task tracking is active, proving validated planning is present on the declared stable target. The per-commit hook does not. CI shares the structural core of the check and not the start gate, so it admits a standalone task's own record that arrives complete with a valid acceptance block |
@@ -269,8 +269,10 @@ and its tasks (ADR-0076). The flow from there to `main` is on
 With tracking on, `codeflow ci` classifies every pull request as one of:
 
 - tracked: `Task: TSK-NNN`, or the id the branch carries
-- an epic's planning-only range: `Task: EPC-NNN`, with records and `docs/plan/`
-  only
+- a planning amendment: `Task: EPC-NNN`, or `Task: EPC-001, EPC-002` naming
+  every epic it changes, with records, `docs/plan/`, other docs outside the
+  adopter-facing set, and `AGENTS.md` with its managed block unchanged
+  (ADR-0078)
 - an epic's integration line: `Task: EPC-NNN`. A task of the epic targets it,
   it lands on the default target, and it holds only merges
 - an automation profile
@@ -292,6 +294,7 @@ Refused:
 - a pull request that adds an epic task's record and claims it
 - any record added beside a standalone task's own
 - a spike that lands anything but `docs/research/` findings and its own record
+- a planning amendment that changes a record of an epic it does not name
 
 A standalone task's own record, added in its pull request on a branch carrying
 its id, is admitted through the structural checks of readiness and may arrive
