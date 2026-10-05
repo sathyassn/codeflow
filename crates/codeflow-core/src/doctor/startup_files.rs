@@ -269,21 +269,44 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
             ".codex/config.toml's `{selected}` profile leaves the workspace root's `.envrc` writable"
         ));
     }
+    // A write grant on, above or below a class path, in any spelling, can
+    // reopen it: Codex applies narrower grants, and a write wins over a
+    // read at the same path (review rounds two and three).
+    let home = std::env::var("HOME").ok();
+    let normal = |path: &str| -> Option<String> {
+        let expanded = match (path.strip_prefix('~'), &home) {
+            (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+                format!("{}{rest}", home.trim_end_matches('/'))
+            }
+            (Some(_), _) => return None,
+            (None, _) => path.to_string(),
+        };
+        expanded
+            .starts_with('/')
+            .then(|| expanded.trim_end_matches('/').to_lowercase())
+    };
+    let class: Vec<String> = paths.iter().filter_map(|p| normal(p)).collect();
     for profile in &chain {
         let Some(fs) = filesystem(profile).and_then(toml::Value::as_table) else {
             continue;
         };
         for (path, mode) in fs {
-            if mode.as_str() != Some("write") {
+            if mode.as_str() != Some("write") || path.starts_with(':') {
                 continue;
             }
-            let above = path.trim_end_matches('/');
-            if paths
+            let Some(grant) = normal(path) else {
+                gaps.push(format!(
+                    "the `{profile}` profile grants write on `{path}`, which doctor cannot place"
+                ));
+                continue;
+            };
+            let near = |a: &str, b: &str| a == b || a.starts_with(&format!("{b}/"));
+            if class
                 .iter()
-                .any(|class| class.starts_with(&format!("{above}/")) || class == above)
+                .any(|c| near(c, &grant) || near(&grant, c) || grant.is_empty())
             {
                 gaps.push(format!(
-                    "the `{profile}` profile grants write on `{path}`, above or on shell startup paths"
+                    "the `{profile}` profile grants write on `{path}`, on, above or below shell startup paths"
                 ));
             }
         }
@@ -450,10 +473,21 @@ mod tests {
         // seats select cf-builder at launch (review round two).
         let anchor = "[permissions.cf-builder.filesystem.\":workspace_roots\"]";
         assert!(shipped_text.contains(anchor));
+        let home = std::env::var("HOME").unwrap();
+        let absolute = format!("\"{home}/.zshrc\" = \"write\"");
+        let absolute_expect = format!("grants write on `{home}/.zshrc`");
         for (grant, expect) in [
             ("\"~/.zshrc\" = \"write\"", "`cf-builder` profile leaves 1"),
             ("\"~/.config\" = \"write\"", "grants write on `~/.config`"),
             ("\"~\" = \"write\"", "grants write on `~`"),
+            // Below a class directory, and the home spelled absolutely
+            // (review round three).
+            (
+                "\"~/.config/fish/conf.d/evil.fish\" = \"write\"",
+                "grants write on `~/.config/fish/conf.d/evil.fish`",
+            ),
+            (absolute.as_str(), absolute_expect.as_str()),
+            ("\"relative/x\" = \"write\"", "doctor cannot place"),
         ] {
             let reopened = shipped_text.replacen(
                 anchor,
