@@ -368,11 +368,9 @@ impl FeedbackConfig {
                 detail: "the feedback topics could not be added".to_string(),
             });
         }
-        // The state file keeps its permissions (a private one stays private).
-        let path = guard_beneath_root(root, Path::new(PROJECT_TOML))?;
-        sync::settle_before(&path)?;
-        crate::feedback::replace_whole(&path, &updated, &path)
-            .map_err(|error| ScaffoldError::io(&path, error))?;
+        // The state file keeps its permissions (a private one stays
+        // private) and the scaffold writer's durability.
+        write_record_keeping_mode(root, PROJECT_TOML, updated.as_bytes())?;
         Ok((Self::load(root)?.topics_or_default(), true))
     }
 }
@@ -493,6 +491,21 @@ impl Baseline {
 /// sync waits until a record write ([`write_record`]) or
 /// [`SyncBatch::finish`] needs it (see the `sync` module).
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    write_file_with_mode(path, bytes, None)
+}
+
+/// [`write_file`], and when `mode_from` names an existing regular file, the
+/// result takes its permissions: the temporary file is private (0600 on
+/// unix) until they are applied, so a private file never reads wider.
+fn write_file_with_mode(
+    path: &Path,
+    bytes: &[u8],
+    mode_from: Option<&Path>,
+) -> Result<(), ScaffoldError> {
+    let permissions = mode_from
+        .and_then(|from| std::fs::symlink_metadata(from).ok())
+        .filter(std::fs::Metadata::is_file)
+        .map(|meta| meta.permissions());
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
             path,
@@ -509,13 +522,21 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
 
     let result = (|| {
         use std::io::Write;
-        let mut temp = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if permissions.is_some() {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        let mut temp = options
             .open(&temp_path)
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
         temp.write_all(bytes)
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        if let Some(permissions) = &permissions {
+            temp.set_permissions(permissions.clone())
+                .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        }
         sync::content(&temp, !batched).map_err(|e| ScaffoldError::io(&temp_path, e))?;
         #[cfg(test)]
         interruption::before_rename(path, bytes)?;
@@ -548,6 +569,14 @@ pub(crate) fn write_record(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), S
     let path = guard_beneath_root(root, Path::new(rel))?;
     sync::settle_before(&path)?;
     write_file(&path, bytes)
+}
+
+/// [`write_record`] that keeps the record's permissions, for a write that
+/// must not widen a file the project made private (the feedback topics).
+fn write_record_keeping_mode(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    sync::settle_before(&path)?;
+    write_file_with_mode(&path, bytes, Some(&path))
 }
 
 /// One scaffold run's deferred directory syncs and device flushes (TSK-153).
@@ -1507,6 +1536,42 @@ mod tests {
     }
 
     // TSK-153: sync calls per file and per run.
+
+    /// Adding the default feedback topics is a scaffold record write: it is
+    /// flushed like any single write (content and directory, in full) and
+    /// the state file keeps its permissions.
+    #[test]
+    fn feedback_topics_are_written_durably_and_keep_the_file_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_file(&ProjectState::path(root), b"schema_version = 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                ProjectState::path(root),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let before = sync_counts();
+        let (_, written) = FeedbackConfig::write_defaults(root).unwrap();
+        let after = sync_counts();
+        assert!(written);
+        assert_eq!(after.files_written - before.files_written, 1);
+        let directory = usize::from(cfg!(unix));
+        assert_eq!(after.directory_syncs - before.directory_syncs, directory);
+        assert_eq!(after.full_flushes - before.full_flushes, 1 + directory);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(ProjectState::path(root))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
 
     #[test]
     fn a_single_write_outside_a_batch_is_fully_flushed_at_once() {
