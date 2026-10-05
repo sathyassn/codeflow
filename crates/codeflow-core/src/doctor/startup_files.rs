@@ -273,28 +273,26 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
     // reopen it: Codex applies narrower grants, and a write wins over a
     // read at the same path (review rounds two and three).
     let home = std::env::var("HOME").ok();
-    let normal = |path: &str| -> Option<String> {
-        let expanded = match (path.strip_prefix('~'), &home) {
-            (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-                format!("{}{rest}", home.trim_end_matches('/'))
-            }
-            (Some(_), _) => return None,
-            (None, _) => path.to_string(),
-        };
-        expanded
-            .starts_with('/')
-            .then(|| expanded.trim_end_matches('/').to_lowercase())
-    };
+    let normal = |path: &str| normal_path(path, home.as_deref());
     let class: Vec<String> = paths.iter().filter_map(|p| normal(p)).collect();
     for profile in &chain {
         let Some(fs) = filesystem(profile).and_then(toml::Value::as_table) else {
             continue;
         };
-        for (path, mode) in fs {
-            if mode.as_str() != Some("write") || path.starts_with(':') {
+        let grants = profile_grants(profile, fs, &mut gaps);
+        for (path, mode) in &grants {
+            if mode != "write" {
                 continue;
             }
-            let Some(grant) = normal(path) else {
+            // A glob grants everything below its literal directory.
+            let literal: String = path
+                .split('/')
+                .take_while(|part| !part.contains(['*', '?', '[']))
+                .collect::<Vec<_>>()
+                .join("/");
+            let Some(grant) = normal(if literal.is_empty() { path } else { &literal })
+                .filter(|_| !path.starts_with(':') && !literal.is_empty())
+            else {
                 gaps.push(format!(
                     "the `{profile}` profile grants write on `{path}`, which doctor cannot place"
                 ));
@@ -312,6 +310,57 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
         }
     }
     gaps
+}
+
+/// A Codex filesystem path as doctor compares it: `~` expanded with
+/// `home`, no trailing slash, lower case; `None` for a path it cannot place
+/// (relative, or `~user`).
+fn normal_path(path: &str, home: Option<&str>) -> Option<String> {
+    let expanded = match (path.strip_prefix('~'), home) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
+            format!("{}{rest}", home.trim_end_matches('/'))
+        }
+        (Some(_), _) => return None,
+        (None, _) => path.to_string(),
+    };
+    expanded
+        .starts_with('/')
+        .then(|| expanded.trim_end_matches('/').to_lowercase())
+}
+
+/// One profile's filesystem entries, direct and scoped
+/// (`[filesystem."~/dir"]` with `"name" = "write"`), as one list of spelled
+/// paths and modes (review round four). Settings such as
+/// `glob_scan_max_depth` are not paths; a scoped entry that is not a mode
+/// is a finding.
+fn profile_grants(
+    profile: &str,
+    fs: &toml::map::Map<String, toml::Value>,
+    gaps: &mut Vec<String>,
+) -> Vec<(String, String)> {
+    let mut grants = Vec::new();
+    for (path, value) in fs {
+        match value {
+            toml::Value::String(mode) => grants.push((path.clone(), mode.clone())),
+            toml::Value::Table(scoped) if path != ":workspace_roots" => {
+                for (sub, mode) in scoped {
+                    let spelled = if sub == "." {
+                        path.clone()
+                    } else {
+                        format!("{}/{sub}", path.trim_end_matches('/'))
+                    };
+                    match mode.as_str() {
+                        Some(mode) => grants.push((spelled, mode.to_string())),
+                        None => gaps.push(format!(
+                            "the `{profile}` profile has an entry under `{path}` doctor cannot read"
+                        )),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    grants
 }
 
 /// `ZDOTDIR` or `XDG_CONFIG_HOME` set away from the defaults the generated
@@ -488,6 +537,12 @@ mod tests {
             ),
             (absolute.as_str(), absolute_expect.as_str()),
             ("\"relative/x\" = \"write\"", "doctor cannot place"),
+            // A scoped grant and a glob (review round four).
+            (
+                "[permissions.cf-builder.filesystem.\"~/.config/fish/conf.d\"]\n\"evil.fish\" = \"write\"",
+                "grants write on `~/.config/fish/conf.d/evil.fish`",
+            ),
+            ("\"~/**\" = \"write\"", "grants write on `~/**`"),
         ] {
             let reopened = shipped_text.replacen(
                 anchor,
@@ -498,6 +553,16 @@ mod tests {
             let gaps = missing_rules(root);
             assert!(gaps.iter().any(|g| g.contains(expect)), "{grant}: {gaps:?}");
         }
+        // Scoped reads and writes away from the class stay clean.
+        let benign = shipped_text.replacen(
+            anchor,
+            &format!(
+                "[permissions.cf-builder.filesystem.\"~/.config/fish/conf.d\"]\n\"x.fish\" = \"read\"\n\n[permissions.cf-builder.filesystem.\"~/work\"]\n\"notes\" = \"write\"\n\n{anchor}"
+            ),
+            1,
+        );
+        std::fs::write(root.join(".codex/config.toml"), benign).unwrap();
+        assert!(missing_rules(root).is_empty(), "{:?}", missing_rules(root));
     }
 
     #[test]
