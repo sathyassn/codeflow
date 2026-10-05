@@ -346,15 +346,17 @@ spans more than one unit. An ordinary request needs no record.
 - **Standing rules.** Feedback that sets a standing rule closes with the
   rule's line in `AGENTS.md` or a rules file, which cites the id. The record
   stays the history; the rule file stays the instruction.
-- **Questions and decisions stay where they are.** An open question lives in
-  the pull request body or the task, an architectural decision in an ADR.
-  Feedback that answers a question is linked from it, and a decision taken
-  in response cites the id.
+- **Questions, decisions and defects stay where they are.** An open
+  question lives in the pull request body or the task, an architectural
+  decision in an ADR, and a reported defect follows
+  [issue-handling.md](issue-handling.md). Feedback that answers a question
+  or rules on a defect is linked from it, and a decision taken in response
+  cites the id.
 - **Views.** `codeflow feedback list` groups items by topic, open first;
   `--write` writes an optional index beside the items, which
-  `validate --docs` warns about once it is stale. `codeflow status` counts open items and `codeflow
-  recall` searches them. A pull request that closes feedback names its ids
-  under Links.
+  `validate --docs` warns about once it is stale. `codeflow status` counts
+  open items and `codeflow recall` searches them. A pull request that
+  closes feedback names its ids under Links.
 - **Migration.** Import each entry of an older log once, with its old id in
   `external_refs`, and mark the old log as frozen history. Harness memory
   points at FB ids instead of keeping its own copy of the words.
