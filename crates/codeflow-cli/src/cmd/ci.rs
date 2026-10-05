@@ -368,7 +368,16 @@ pub fn run(args: &CiArgs) -> i32 {
         .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
         .or_else(|| args.base.as_deref().and_then(named_branch));
     let line_target = line_target(&root, into.as_deref());
-    let destination = args.destination.clone().or_else(|| origin_url(&root));
+    let destination = match args.destination.clone() {
+        Some(destination) => Some(destination),
+        None => match origin_url(&root) {
+            Ok(url) => url,
+            Err(error) => {
+                eprintln!("codeflow ci: {error}");
+                return 2;
+            }
+        },
+    };
     let advertisement = if args.advertisement_stdin {
         let mut listed = String::new();
         if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
@@ -1702,17 +1711,30 @@ fn named_branch(base: &str) -> Option<String> {
     (!hex && !name.is_empty() && !name.contains(['~', '^', ':', '@'])).then(|| name.to_string())
 }
 
-/// `origin`'s fetch URL, when the repository has that remote.
-fn origin_url(root: &Path) -> Option<String> {
-    let out = codeflow_core::git::command()
+/// `origin`'s fetch URL: `Ok(None)` when the repository has no such remote
+/// (or it has no URL), an error when the URL is not valid UTF-8. The URL names
+/// the destination whose policy judges the push, so an unreadable one refuses
+/// instead of reading as absent (OS text rule, issue 79).
+fn origin_url(root: &Path) -> Result<Option<String>, String> {
+    let Ok(out) = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["remote", "get-url", "origin"])
         .output()
-        .ok()?;
-    // A URL that is not valid UTF-8 is not read (OS text rule, issue 79).
-    let url = std::str::from_utf8(&out.stdout).ok()?.trim().to_string();
-    (out.status.success() && !url.is_empty()).then_some(url)
+    else {
+        return Ok(None);
+    };
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+    let url = std::str::from_utf8(bytes)
+        .map_err(|_| {
+            "the URL of `origin` is not valid UTF-8, so its policy cannot be asked".to_string()
+        })?
+        .trim()
+        .to_string();
+    Ok((!url.is_empty()).then_some(url))
 }
 
 /// Auto-detect the head branch NAME to name-check. Verified variable names:
@@ -2273,6 +2295,30 @@ mod tests {
             files: files.iter().map(|s| (*s).to_string()).collect(),
             is_merge: false,
         }
+    }
+
+    /// Round ten on issue 79: an `origin` URL that is not valid UTF-8 refuses;
+    /// no `origin` is absent.
+    #[test]
+    fn an_origin_url_that_is_not_utf8_is_refused_and_no_origin_is_absent() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let init = codeflow_core::git::command()
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+        assert_eq!(origin_url(dir.path()), Ok(None));
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[remote \"origin\"]\n\turl = file:///caf\xe9\n")
+            .unwrap();
+        let error = origin_url(dir.path()).unwrap_err();
+        assert!(error.contains("not valid UTF-8"), "{error}");
     }
 
     // -- commit-range evaluation -----------------------------------------

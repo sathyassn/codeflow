@@ -69,7 +69,9 @@ def fail(message: str) -> NoReturn:
 
 def run(args: list[str], *, cwd: Path = ROOT, check: bool = True) -> subprocess.CompletedProcess[str]:
     # Git output can hold text that is not UTF-8, such as a commit message in
-    # another encoding (issue 79); it is only read, so it is decoded lossily.
+    # another encoding (issue 79). This reader is for text that is shown or
+    # searched for markers, so it is decoded lossily. A path is never read
+    # through it: see changed_paths.
     result = subprocess.run(
         args, cwd=cwd, text=True, errors="replace", stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -363,11 +365,23 @@ def file_at_ref(ref: str, path: str, *, cwd: Path) -> bytes:
 
 
 def changed_paths(base: str, head: str, *, cwd: Path) -> list[str]:
-    return [
-        line
-        for line in git("diff", "--name-only", f"{base}...{head}", "--", cwd=cwd).splitlines()
-        if line
-    ]
+    """The changed paths, each an exact name (issue 79).
+
+    A path is matched against the watched globs, so a lossy spelling could miss
+    a pattern. The names are read as NUL-delimited bytes and decoded with the
+    file system's surrogate escapes: one escape per invalid byte, so a `?`
+    matches one byte as it does in the C locale, and no two names share a
+    spelling."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "-z", f"{base}...{head}", "--"],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip() or "no output"
+        fail(f"command failed (git diff --name-only {base}...{head}): {detail}")
+    return [os.fsdecode(raw) for raw in result.stdout.split(b"\0") if raw]
 
 
 def matches_any(path: str, patterns: list[str]) -> bool:

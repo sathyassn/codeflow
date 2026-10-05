@@ -851,6 +851,7 @@ impl PinBranches {
         let mut tips =
             BTreeMap::<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>::new();
         let mut unreadable = BTreeMap::new();
+        let remotes = crate::git::name::remote_names(repo).map_err(|e| e.to_string())?;
         for branch in repo.branches(None).map_err(|e| e.to_string())? {
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
             // OS text rule (issue 79): the name is exact bytes, matched
@@ -859,11 +860,9 @@ impl PinBranches {
             // on its task.
             let name = crate::git::name::branch_name(&branch).map_err(|e| e.to_string())?;
             let name = if kind == git2::BranchType::Remote {
-                // `<remote>/<branch>`: the branch is after the first `/`.
-                match name.bytes().iter().position(|b| *b == b'/') {
-                    Some(at) => GitName::from_bytes(&name.bytes()[at + 1..]),
-                    None => name,
-                }
+                // `<remote>/<branch>`: a remote name may hold `/`, so the
+                // configured remotes decide where the branch starts.
+                crate::git::tracking_branch(&name, &remotes).unwrap_or(name)
             } else {
                 name
             };

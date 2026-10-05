@@ -351,10 +351,21 @@ pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, Str
             error.display()
         )
     })?;
-    let url = repo
-        .find_remote("origin")
-        .ok()
-        .and_then(|remote| remote.url().ok().map(str::to_string));
+    // OS text rule (issue 79): an `origin` without a URL is absent, but one
+    // whose URL is not valid UTF-8 names a destination this check cannot ask,
+    // so it refuses instead of judging under another destination's policy.
+    let url = match repo.find_remote("origin") {
+        Ok(remote) if remote.url_bytes().is_empty() => None,
+        Ok(remote) => Some(
+            std::str::from_utf8(remote.url_bytes())
+                .map_err(|_| {
+                    "the URL of `origin` is not valid UTF-8, so its release policy cannot be asked"
+                        .to_string()
+                })?
+                .to_string(),
+        ),
+        Err(_) => None,
+    };
     let destination = ask_destination(repo_root, url.as_deref())?;
     scope(repo_root, &destination, branch, into)
 }

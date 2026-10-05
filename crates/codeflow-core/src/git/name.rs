@@ -288,6 +288,25 @@ pub fn remote_names(repo: &git2::Repository) -> Result<Vec<GitName>, git2::Error
     Ok(names_of(&repo.remotes()?))
 }
 
+/// The branch part of a remote-tracking name `<remote>/<branch>`, read with
+/// the configured remote names: a remote name may hold `/`, so the longest
+/// remote that prefixes the name wins, and only when none does is the name
+/// split at its first `/` (a stale ref of a remote that is gone). `None`
+/// when the name has no `/`.
+#[must_use]
+pub fn tracking_branch(name: &GitName, remotes: &[GitName]) -> Option<GitName> {
+    let bytes = name.bytes();
+    let configured = remotes
+        .iter()
+        .filter(|remote| {
+            bytes.starts_with(remote.bytes()) && bytes.get(remote.bytes().len()) == Some(&b'/')
+        })
+        .map(|remote| remote.bytes().len())
+        .max();
+    let at = configured.or_else(|| bytes.iter().position(|byte| *byte == b'/'))?;
+    Some(GitName::from_bytes(&bytes[at + 1..]))
+}
+
 /// The path of every file a diff touches (the old and the new path of each
 /// delta, one when they are the same), as exact bytes.
 #[must_use]
@@ -504,6 +523,40 @@ mod tests {
             result.is_err() || seen < 3,
             "git2 walk read all {seen} entries"
         );
+    }
+
+    /// Round ten on issue 79: a remote name may hold `/`, so the configured
+    /// remotes, not the first `/`, decide where the branch starts.
+    #[test]
+    fn a_tracking_name_is_split_by_the_configured_remote() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[remote \"a/caf\xff\"]\n\turl = x\n[remote \"a\"]\n\turl = y\n")
+            .unwrap();
+        let remotes = remote_names(&repo).unwrap();
+        assert!(remotes.iter().any(|name| name.bytes() == b"a/caf\xff"));
+        let tracking = GitName::from_bytes(b"a/caf\xff/task/TSK-001-other");
+        let branch = tracking_branch(&tracking, &remotes).unwrap();
+        assert_eq!(branch.bytes(), b"task/TSK-001-other");
+        // Another remote's branch still splits at its own remote.
+        let other = GitName::from_bytes(b"a/task/TSK-002-x");
+        assert_eq!(
+            tracking_branch(&other, &remotes).unwrap().bytes(),
+            b"task/TSK-002-x"
+        );
+        // A stale ref of a remote that is gone splits at the first slash.
+        let stale = GitName::from_bytes(b"gone/task/TSK-003-x");
+        assert_eq!(
+            tracking_branch(&stale, &remotes).unwrap().bytes(),
+            b"task/TSK-003-x"
+        );
+        assert!(tracking_branch(&GitName::from_bytes(b"flat"), &remotes).is_none());
     }
 
     #[test]

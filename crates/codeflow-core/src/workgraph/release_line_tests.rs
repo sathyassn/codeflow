@@ -760,3 +760,22 @@ fn a_direct_commit_of_a_record_name_that_is_not_utf8_is_not_planning_only() {
         .iter()
         .all(|finding| !finding.message.contains('\0')));
 }
+
+/// Round ten on issue 79: an `origin` whose URL is not valid UTF-8 names a
+/// destination whose policy cannot be asked, so the scope refuses instead of
+/// being judged under the built-in pattern as if there were no `origin`.
+#[test]
+fn a_release_scope_refuses_an_origin_url_that_is_not_utf8() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap();
+    crate::git::repo_with_refs(dir.path(), &[]);
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join(".git").join("config"))
+        .unwrap();
+    config
+        .write_all(b"[remote \"origin\"]\n\turl = file:///caf\xff\n")
+        .unwrap();
+    let error = checkout_scope(dir.path(), None).unwrap_err();
+    assert!(error.contains("not valid UTF-8"), "{error}");
+}

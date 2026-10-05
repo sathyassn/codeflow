@@ -2565,5 +2565,39 @@ class NonUtf8TextTests(unittest.TestCase):
         self.assertEqual(release.run(raw).stdout, "fix: caf\ufffd")
 
 
+class ChangedPathTests(unittest.TestCase):
+    """Issue 79: a changed path is an exact name, so a watch pattern still sees it."""
+
+    def test_a_path_that_is_not_utf8_matches_a_one_byte_wildcard(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+            blob = subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"],
+                cwd=root, input=b"x", stdout=subprocess.PIPE, check=True,
+            ).stdout.decode().strip()
+            env = {
+                **os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.test",
+                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.test",
+                "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+            }
+            def commit(message: str) -> str:
+                subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", message], cwd=root, env=env, check=True)
+                return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, stdout=subprocess.PIPE, check=True).stdout.decode().strip()
+            base = commit("chore: base")
+            name = b"contracts/caf\xe2\x82.txt"
+            subprocess.run(
+                ["git", "update-index", "--add", "--cacheinfo", b"100644," + blob.encode() + b"," + name],
+                cwd=root, check=True,
+            )
+            head = commit("chore: add")
+            paths = release.changed_paths(base, head, cwd=root)
+            self.assertEqual(len(paths), 1)
+            self.assertEqual(os.fsencode(paths[0]), name)
+            # `?` is one byte in the C locale, so `caf??` matches the two bytes.
+            self.assertTrue(release.matches_any(paths[0], ["contracts/caf??.txt"]))
+            self.assertNotIn("\ufffd", paths[0])
+
+
 if __name__ == "__main__":
     unittest.main()

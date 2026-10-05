@@ -304,7 +304,10 @@ erratum below, never an edit of the section.
   and `find -name` keep a name that a `?` or `[..]` pattern may match, the
   structural check refuses a source or test folder that holds a name that
   is not UTF-8 instead of leaving it out, and the id registry reads name lists as bytes
-  and refuses an issuer email that is not UTF-8. One rule is in
+  and refuses an issuer email that is not UTF-8. An `origin` URL that is not
+  UTF-8 refuses the release policy lookup, a remote name that holds `/` is
+  split by the configured remotes, and the release script reads changed paths
+  as exact bytes. One rule is in
   `docs/architecture.md`, a source scan fails on a new lossy decode that
   is not listed with its reason, and each site that stays strict says why
   next to the code.
