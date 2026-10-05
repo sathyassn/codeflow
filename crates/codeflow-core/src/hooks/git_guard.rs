@@ -6521,6 +6521,73 @@ fn code_running_key(key: &str) -> bool {
     })
 }
 
+/// Whether a `git config --file` path is the user's or the system's
+/// configuration: `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` (by
+/// default `~/.config/git/config`) or `/etc/gitconfig`, spelled with `~`,
+/// `$HOME` or an absolute path. A relative path is one of them only when it
+/// is exactly `.gitconfig` or `.config/git/config`, which the home would
+/// make it; one that climbs with `..` or is filled in at run time is
+/// treated as one. A project file such as `fixtures/.gitconfig` is not
+/// (review round two).
+fn user_config_file(file: &str) -> bool {
+    let file = file.replace('\\', "/");
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let expanded = match &home {
+        Some(home) => {
+            let home = home.to_string_lossy();
+            if file == "~" || file == "$HOME" || file == "${HOME}" {
+                home.to_string()
+            } else if let Some(rest) = file
+                .strip_prefix("~/")
+                .or_else(|| file.strip_prefix("$HOME/"))
+                .or_else(|| file.strip_prefix("${HOME}/"))
+            {
+                format!("{}/{rest}", home.trim_end_matches('/'))
+            } else {
+                file.clone()
+            }
+        }
+        None => file.clone(),
+    };
+    if expanded.contains(['$', '`']) || expanded.starts_with('~') {
+        return true;
+    }
+    let lexical = |text: &str| {
+        let mut parts: Vec<&str> = Vec::new();
+        for part in text.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                _ => parts.push(part),
+            }
+        }
+        parts.join("/").to_lowercase()
+    };
+    if !expanded.starts_with('/') {
+        let trimmed = expanded.trim_start_matches("./");
+        return trimmed.split('/').any(|part| part == "..")
+            || matches!(
+                lexical(trimmed).as_str(),
+                ".gitconfig" | ".config/git/config"
+            );
+    }
+    let target = lexical(&expanded);
+    let mut user = vec!["etc/gitconfig".to_string()];
+    if let Some(home) = &home {
+        let home = home.to_string_lossy();
+        user.push(lexical(&format!("{home}/.gitconfig")));
+        user.push(lexical(&format!("{home}/.config/git/config")));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        user.push(lexical(&format!("{}/git/config", xdg.to_string_lossy())));
+    }
+    user.contains(&target)
+}
+
 /// Whether a section, renamed or written whole, holds a key whose value
 /// git runs: its first part names a section of `CODE_RUNNING_KEYS`.
 fn section_runs_code(section: &str) -> bool {
@@ -6540,17 +6607,10 @@ fn section_runs_code(section: &str) -> bool {
 fn config_writes_code_key(rest: &[String]) -> Option<String> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
-    // The user's or the system's file by name: `.gitconfig`, `gitconfig`
-    // (`/etc/gitconfig`) or `git/config` outside a `.git` directory,
-    // wherever the path puts it, since a relative one may be read from the
-    // home. A project file such as `fixture.gitconfig` is not.
-    let file_is_user = parsed.values_of('f', "--file").into_iter().any(|file| {
-        let file = file.replace('\\', "/");
-        let name = file.rsplit('/').next().unwrap_or(&file);
-        name.eq_ignore_ascii_case(".gitconfig")
-            || name.eq_ignore_ascii_case("gitconfig")
-            || (file.ends_with("git/config") && !file.contains(".git/"))
-    });
+    let file_is_user = parsed
+        .values_of('f', "--file")
+        .into_iter()
+        .any(user_config_file);
     if !(any_long(&["--global", "--system"]) || file_is_user) || config_only_reads(rest) {
         return None;
     }
@@ -9749,6 +9809,9 @@ mod tests {
             "git config --global --rename-section harmless alias",
             "git config rename-section --global harmless.x credential.x",
             "git config --file /etc/gitconfig core.pager cat",
+            "git config --file .gitconfig alias.x y",
+            "git config --file ../.gitconfig alias.x y",
+            "git config --file $HOME/.gitconfig alias.x y",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
@@ -9765,6 +9828,9 @@ mod tests {
             "git config --file .git/config alias.co checkout",
             "git config get --global core.editor",
             "git config --file fixture.gitconfig alias.x y",
+            "git config --file fixtures/.gitconfig alias.x y",
+            "git config --file fixtures/git/config alias.x y",
+            "git config --file fixtures/gitconfig alias.x y",
             "git config --global --rename-section old.x user.x",
             "git config --global --remove-section alias",
         ] {
