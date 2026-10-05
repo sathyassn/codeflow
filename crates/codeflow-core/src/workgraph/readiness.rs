@@ -203,6 +203,9 @@ fn shown(target: &str) -> String {
 /// Returns the reason when an explicit remote-tracking ref names no
 /// configured remote.
 fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
+    // OS text rule (issue 79): a remote name that is not valid UTF-8 cannot be
+    // a fetch remote CodeFlow names, so the lookup fails and the caller
+    // refuses with "not configured" instead of choosing another remote.
     let owned = |buf: git2::Buf| std::str::from_utf8(&buf).ok().map(str::to_owned);
     if declared.starts_with("refs/remotes/") {
         return repo
@@ -243,13 +246,14 @@ fn visible_work_branches(
     for (branch, kind) in branches.flatten() {
         // OS text rule (issue 79, `docs/architecture.md`): a branch name is
         // matched against valid work prefixes and task ids and shown, so it is
-        // read lossily. Dropping a branch that is not valid UTF-8 would hide a
-        // claim on its task id.
+        // read with `ref_text`. Dropping a branch that is not valid UTF-8
+        // would hide a claim on its task id, and a plain lossy read would
+        // make two different names one claim.
         let Ok(raw) = branch.name_bytes() else {
             continue;
         };
-        let name = String::from_utf8_lossy(raw);
-        let name = name.as_ref();
+        let name = crate::git::ref_text(raw);
+        let name = name.as_str();
         let (name, short) = match kind {
             BranchType::Local => (name.to_string(), name.to_string()),
             BranchType::Remote => {
@@ -259,7 +263,7 @@ fn visible_work_branches(
                 let remote = if std::str::from_utf8(raw).is_ok() {
                     repo.branch_remote_name(&format!("refs/remotes/{name}"))
                         .ok()
-                        .map(|buf| String::from_utf8_lossy(&buf).into_owned())
+                        .map(|buf| crate::git::ref_text(&buf))
                 } else {
                     repo.remotes().ok().and_then(|names| {
                         names
@@ -268,7 +272,7 @@ fn visible_work_branches(
                                 raw.starts_with(remote) && raw.get(remote.len()) == Some(&b'/')
                             })
                             .max_by_key(|remote| remote.len())
-                            .map(|remote| String::from_utf8_lossy(remote).into_owned())
+                            .map(crate::git::ref_text)
                     })
                 };
                 let Some(remote) = remote else {
@@ -895,6 +899,9 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())?
         .flatten()
     {
+        // OS text rule (issue 79): the name is only compared with a declared
+        // target, which is valid text in a record, so a name that is not valid
+        // UTF-8 can never be that target and is skipped.
         let Ok(name) = reference.name() else { continue };
         if name.ends_with("/HEAD") {
             continue;
@@ -986,7 +993,7 @@ fn standalone_claim_base(
     let current = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| crate::git::reference_shorthand(&head))
         .unwrap_or_default();
     if crate::hooks::policy::Policy::load(root)
         .git
@@ -1028,7 +1035,7 @@ pub fn claim_on(
     let current = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| crate::git::reference_shorthand(&head))
         .unwrap_or_default();
     let mut rename = false;
     if !records.contains_key(task_id) && stack.is_none() {
@@ -1511,7 +1518,18 @@ mod tests {
         let carried = visible_work_branches(&repository, &["task/".to_string()], &ids);
         let claims = &carried["TSK-238"];
         assert_eq!(claims.len(), 1, "{carried:?}");
-        assert_eq!(claims[0].0, "task/TSK-238-caf\u{fffd}");
+        assert_eq!(claims[0].0, "task/TSK-238-caf\\xe9");
+        // A real U+FFFD in another branch is another claim, not the same one.
+        run(root, &["branch", "task/TSK-238-caf\u{fffd}"]);
+        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids);
+        let names: BTreeSet<_> = carried["TSK-238"]
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["task/TSK-238-caf\\xe9", "task/TSK-238-caf\u{fffd}"])
+        );
     }
 
     #[test]

@@ -828,9 +828,12 @@ impl PinBranches {
         let mut unreadable = BTreeMap::new();
         for branch in repo.branches(None).map_err(|e| e.to_string())? {
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
-            let Some(name) = branch.name().map_err(|e| e.to_string())? else {
-                continue;
-            };
+            // OS text rule (issue 79): the name is matched against work
+            // prefixes and task ids, so a branch that is not valid UTF-8 is
+            // read with `ref_text` instead of failing the whole listing or
+            // hiding a claim on its task.
+            let name = crate::git::ref_text(branch.name_bytes().map_err(|e| e.to_string())?);
+            let name = name.as_str();
             let name = if kind == git2::BranchType::Remote {
                 name.split_once('/').map_or(name, |(_, name)| name)
             } else {
@@ -1131,12 +1134,12 @@ pub fn check_work_start_on(
     let head = repo
         .head()
         .map_err(|e| WorkStartError::Repository(e.to_string()))?;
-    let branch = head
-        .shorthand()
-        .map_err(|e| WorkStartError::Repository(e.to_string()))?;
-    if task_id_from_branch(root, branch).as_deref() != Some(task_id) {
+    // OS text rule (issue 79): the branch is matched against work prefixes and
+    // task ids, so a name that is not valid UTF-8 reads through `ref_text`.
+    let branch = crate::git::reference_shorthand(&head);
+    if task_id_from_branch(root, &branch).as_deref() != Some(task_id) {
         return Err(WorkStartError::Branch {
-            branch: branch.into(),
+            branch: branch.clone(),
             task_id: task_id.into(),
         });
     }
@@ -1160,7 +1163,7 @@ pub fn check_work_start_on(
     let branch = repo
         .head()
         .ok()
-        .and_then(|r| r.shorthand().ok().map(str::to_string))
+        .map(|r| crate::git::reference_shorthand(&r))
         .unwrap_or_default();
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
@@ -1186,10 +1189,7 @@ pub fn check_work_start(
     let head = repo
         .head()
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
-    let branch = head
-        .shorthand()
-        .map(str::to_owned)
-        .map_err(|_| WorkStartError::Repository("HEAD is detached".to_string()))?;
+    let branch = crate::git::reference_shorthand(&head);
     check_work_start_for_branch(repo_root, task_id, target, &branch)
 }
 
@@ -1246,7 +1246,7 @@ pub fn check_work_start_anchored(
     let branch = repo
         .head()
         .ok()
-        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .map(|head| crate::git::reference_shorthand(&head))
         .unwrap_or_default();
     check_task_anchor(repo_root, task_id, target, &branch, false, &[], None)
 }
@@ -2161,9 +2161,12 @@ impl ReviewRepositories {
                 .map_err(|error| error.to_string())?
             {
                 let (candidate, _) = candidate.map_err(|error| error.to_string())?;
-                if let Some(name) = candidate.name().map_err(|error| error.to_string())? {
-                    names.push(name.to_string());
-                }
+                // OS text rule (issue 79): the names are only compared with a
+                // branch, so one that is not valid UTF-8 keeps its own
+                // spelling (`ref_text`) and matches nothing else.
+                names.push(crate::git::ref_text(
+                    candidate.name_bytes().map_err(|error| error.to_string())?,
+                ));
             }
             Ok(names)
         })();
@@ -3204,5 +3207,17 @@ permission_preset = "strict"
         let error = check_work_start(dir.path(), "TSK-002", "main").unwrap_err();
         assert!(matches!(error, WorkStartError::InvalidGraph(_)));
         assert!(error.to_string().contains("duplicate work id"));
+    }
+
+    /// Review finding on issue 79: one branch whose name is not valid UTF-8
+    /// failed the whole listing of work branches. It is read with `ref_text`.
+    #[test]
+    fn a_branch_that_is_not_utf8_does_not_fail_the_branch_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/task/TSK-001-caf\xe9", b"refs/heads/other\xff"],
+        );
+        assert!(PinBranches::read(&repo, dir.path()).is_ok());
     }
 }

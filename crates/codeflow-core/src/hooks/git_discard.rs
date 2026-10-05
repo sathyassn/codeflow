@@ -164,10 +164,10 @@ fn delete_branches(repo: &Repository, names: &[String]) -> Result<Option<String>
     let mut kept = Vec::new();
     for reference in repo.references().map_err(|e| e.to_string())? {
         let reference = reference.map_err(|e| e.to_string())?;
-        // Only compared with the branches named for deletion, so a ref name
-        // that is not valid UTF-8 is read lossily and can never match one.
-        let name = String::from_utf8_lossy(reference.name_bytes());
-        if !removed.contains(name.as_ref()) {
+        // Only compared with the branches named for deletion. The name keeps
+        // its invalid bytes as escapes, so it never equals a valid name.
+        let name = crate::git::ref_text(reference.name_bytes());
+        if !removed.contains(&name) {
             // Only commit-bearing refs establish another live reachability path.
             if let Ok(commit) = reference.peel_to_commit() {
                 kept.push(commit.id());
@@ -605,8 +605,8 @@ mod tests {
         assert_eq!(untracked_paths(&repo, true).unwrap(), ["caf\u{fffd}"]);
         let clean = Intent::CleanNonIgnored {
             paths: vec![],
-            directories: false,
+            directories: true,
         };
-        assert!(inspect(dir.path(), None, &clean).is_ok());
+        assert!(inspect(dir.path(), None, &clean).unwrap().is_some());
     }
 }

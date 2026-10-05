@@ -199,6 +199,8 @@ fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> Option<String>)
         let reference = repo.find_reference(name).ok()?;
         let resolved = reference.resolve().ok()?;
         let tree = resolved.peel_to_commit().ok()?.tree().ok()?.id();
+        // OS text rule (issue 79): the name is only shown; the tree is already
+        // resolved, so a name that is not valid UTF-8 falls back to the ref.
         let shown = resolved
             .shorthand()
             .map_or_else(|_| (*name).to_string(), str::to_string);

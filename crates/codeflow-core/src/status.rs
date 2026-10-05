@@ -191,8 +191,14 @@ struct CleanupTarget {
 fn cleanup_target(repo: &git2::Repository) -> Option<CleanupTarget> {
     let mut names = Vec::new();
     if let Ok(head) = repo.find_reference("refs/remotes/origin/HEAD") {
-        if let Ok(Some(symbolic)) = head.symbolic_target() {
-            names.push(symbolic.to_string());
+        match head.symbolic_target_bytes() {
+            // OS text rule (issue 79): the default branch decides what counts
+            // as landed. One whose name is not valid UTF-8 cannot be looked up
+            // by name, and falling back to `main` would prove landing against
+            // the wrong branch, so no target is named and nothing is proven.
+            Some(bytes) if std::str::from_utf8(bytes).is_err() => return None,
+            Some(bytes) => names.push(String::from_utf8_lossy(bytes).into_owned()),
+            None => {}
         }
     }
     names.extend(
@@ -275,6 +281,9 @@ fn collect_cleanup(
     if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
         for item in branches.flatten() {
             let (branch, _) = item;
+            // OS text rule (issue 79): a branch whose name is not valid UTF-8
+            // is left out of the cleanup advice. Leaving it out keeps it, and
+            // advice only ever offers a removal, so nothing is lost.
             let Some(name) = branch.name().ok().flatten() else {
                 continue;
             };
@@ -814,6 +823,27 @@ mod tests {
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    /// Review finding on issue 79: an `origin/HEAD` that names a branch whose
+    /// name is not valid UTF-8 fell back to `main`, so cleanup advice proved
+    /// landing against the wrong branch. No target is named instead.
+    #[test]
+    fn a_default_branch_that_is_not_utf8_names_no_cleanup_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/main", b"refs/remotes/origin/release/caf\xe9"],
+        );
+        assert!(cleanup_target(&repo).is_some(), "main is the fallback");
+        let origin = dir.path().join(".git/refs/remotes/origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::write(
+            origin.join("HEAD"),
+            b"ref: refs/remotes/origin/release/caf\xe9\n",
+        )
+        .unwrap();
+        assert!(cleanup_target(&repo).is_none());
     }
 
     fn init_repo(dir: &Path) {

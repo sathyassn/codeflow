@@ -3859,6 +3859,51 @@ fn a_stale_branch_holding_the_record_is_named() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
 }
 
+/// Review finding on issue 79: a stale branch whose name is not valid UTF-8
+/// was skipped, so a task with its record held there read as new and could
+/// change its criteria on reopen. The branch counts and is named by its
+/// escaped bytes.
+#[test]
+fn a_stale_branch_whose_name_is_not_utf8_still_holds_the_record() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    git(root, &["switch", "-c", "planning-draft"]);
+    write(
+        root,
+        &path,
+        &standalone_one(&task("TSK-001", "todo", OWN_JOURNEY, "A draft.\n")),
+    );
+    commit(root, "docs: draft the task");
+    let admitted = codeflow()
+        .args(["ids", "admit", &path])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(admitted.status.success());
+    git(root, &["switch", "-c", "task/TSK-001-fix", "main"]);
+    git(root, &["pack-refs", "--all"]);
+    let packed_file = root.join(".git").join("packed-refs");
+    let packed = std::fs::read(&packed_file).unwrap();
+    let from = b"refs/heads/planning-draft\n";
+    let at = packed
+        .windows(from.len())
+        .position(|window| window == from)
+        .expect("the stale branch is packed");
+    let mut renamed = packed[..at].to_vec();
+    renamed.extend_from_slice(b"refs/heads/planning-draft\xe9\n");
+    renamed.extend_from_slice(&packed[at + from.len()..]);
+    std::fs::write(&packed_file, renamed).unwrap();
+    let shape = |record: String| standalone_one(&record);
+    let results = complete_reopen_complete(root, &path, &shape, "main", false);
+    let wrong = wrongly_accepted(
+        "stale branch with a name that is not UTF-8",
+        results,
+        "`planning-draft\\xe9` records this task outside this range",
+    );
+    assert!(wrong.is_empty(), "{}", wrong.join("\n---\n"));
+}
+
 /// Copies of the task's record that came from this range's own commits do
 /// not count as recorded elsewhere: a branch stacked on the reviewed fix
 /// and a remote copy of the task branch with an unrelated commit on top

@@ -1358,13 +1358,18 @@ fn holder_outside(
     let mut refs = Vec::new();
     for reference in repo.references().map_err(unreadable)? {
         let reference = reference.map_err(unreadable)?;
-        let Ok(name) = reference.name() else { continue };
+        // OS text rule (issue 79): a ref that holds the task outside the range
+        // must still count when its name is not valid UTF-8, or removing a
+        // criterion would pass unchecked. Names are only shown and compared,
+        // so `ref_text` spells them without losing the ref.
+        let name = crate::git::ref_text(reference.name_bytes());
+        let name = name.as_str();
         let tracked = name.starts_with("refs/heads/") || name.starts_with("refs/remotes/");
         if !tracked || reference.kind() == Some(git2::ReferenceType::Symbolic) {
             continue;
         }
         if let Ok(commit) = reference.peel_to_commit() {
-            let short = reference.shorthand().unwrap_or(name).to_string();
+            let short = crate::git::reference_shorthand(&reference);
             refs.push((name.to_string(), short, commit.id()));
         }
     }
@@ -1459,16 +1464,27 @@ struct DefaultName {
 /// ([`super::work_start::default_work_target`]). Any other default branch is
 /// found only through `origin/HEAD`, so its absence is the refusal returned.
 fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
-    let origin_head = repo
-        .find_reference("refs/remotes/origin/HEAD")
-        .ok()
-        .and_then(|head| {
-            head.symbolic_target()
-                .ok()
-                .flatten()
-                .and_then(|target| target.strip_prefix("refs/remotes/origin/"))
+    let origin_head = match repo.find_reference("refs/remotes/origin/HEAD") {
+        // OS text rule (issue 79): the default target decides what a task
+        // is measured against. One whose name is not valid UTF-8 cannot be
+        // named in a record, and falling back to `main` would measure
+        // against the wrong branch, so the answer is a refusal.
+        Ok(head)
+            if head
+                .symbolic_target_bytes()
+                .is_some_and(|b| std::str::from_utf8(b).is_err()) =>
+        {
+            return Err(
+                "origin/HEAD names a default branch whose name is not valid UTF-8".to_string(),
+            );
+        }
+        Ok(head) => head.symbolic_target().ok().flatten().and_then(|target| {
+            target
+                .strip_prefix("refs/remotes/origin/")
                 .map(str::to_string)
-        });
+        }),
+        Err(_) => None,
+    };
     if let Some(name) = origin_head {
         return Ok(DefaultName {
             name,
@@ -2539,5 +2555,27 @@ mod tests {
             reviewed_part(&base.replace("{hidden}", "status: todo")),
             reviewed_part(&body_status)
         );
+    }
+
+    /// Review finding on issue 79: an `origin/HEAD` that names a branch whose
+    /// name is not valid UTF-8 fell back to `main`, so the task was measured
+    /// against the wrong target. The default target is refused instead.
+    #[test]
+    fn a_default_target_that_is_not_utf8_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = crate::git::repo_with_refs(
+            dir.path(),
+            &[b"refs/heads/main", b"refs/remotes/origin/caf\xe9"],
+        );
+        let origin = dir
+            .path()
+            .join(".git")
+            .join("refs")
+            .join("remotes")
+            .join("origin");
+        std::fs::create_dir_all(&origin).unwrap();
+        std::fs::write(origin.join("HEAD"), b"ref: refs/remotes/origin/caf\xe9\n").unwrap();
+        let error = default_target_name(&repo).err().unwrap();
+        assert!(error.contains("not valid UTF-8"), "{error}");
     }
 }

@@ -145,6 +145,26 @@ impl std::fmt::Display for IntegrateOutcome {
     }
 }
 
+/// The branch to restore after a failed landing.
+///
+/// OS text rule (issue 79): a failed landing puts the checkout back on this
+/// branch by name. A name that is not valid UTF-8 cannot be given back
+/// exactly, and falling back to another name would restore the wrong
+/// checkout, so integrate refuses before it changes anything.
+fn checked_out_branch(repo: &git2::Repository, target: &str) -> Result<String, IntegrateError> {
+    match repo.head() {
+        Ok(head) => match head.shorthand() {
+            Ok(name) => Ok(name.to_string()),
+            Err(_) => Err(IntegrateError::Preflight(
+                "the checked-out branch name is not valid UTF-8, so integrate could not \
+                 restore it after a failure; switch to another branch first"
+                    .to_string(),
+            )),
+        },
+        Err(_) => Ok(target.to_string()),
+    }
+}
+
 /// Integrate `branch` into `target`: flock → preflight → rebase → test →
 /// ff-merge. The target ref moves only when every stage succeeds.
 ///
@@ -182,11 +202,7 @@ pub fn integrate(
     let (policy, _) = Policy::load_effective(repo_root);
     let target_protected = policy.git.branch_is_protected(target);
 
-    let original = repo
-        .head()
-        .ok()
-        .and_then(|h| h.shorthand().ok().map(ToString::to_string))
-        .unwrap_or_else(|| target.to_string());
+    let original = checked_out_branch(&repo, target)?;
     let old_target_short = short_id(&repo, target_oid);
 
     // Stage 2: rebase the branch onto the target.
@@ -450,10 +466,11 @@ fn current_checkout(repo_root: &Path) -> Option<String> {
         .current_dir(repo_root)
         .output()
         .ok()?;
+    // Shown only; `ref_text` keeps a name that is not valid UTF-8 distinct.
     output
         .status
         .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .then(|| crate::git::ref_text(output.stdout.trim_ascii()))
 }
 
 fn refresh_target_worktrees(
@@ -482,13 +499,21 @@ fn refresh_target_worktrees(
     let current = repo_root
         .canonicalize()
         .unwrap_or_else(|_| repo_root.to_path_buf());
-    for record in String::from_utf8_lossy(&output.stdout).split("\n\n") {
+    // OS text rule (issue 79): the path below is handed to `reset --hard`, so
+    // it is read as bytes. A lossy spelling could name a different folder.
+    let target_ref = format!("refs/heads/{target}");
+    for record in output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .collect::<Vec<_>>()
+        .split(|line| line.is_empty())
+    {
         let path = record
-            .lines()
-            .find_map(|line| line.strip_prefix("worktree "))
-            .map(PathBuf::from);
-        let branch = record.lines().find_map(|line| line.strip_prefix("branch "));
-        if branch != Some(&format!("refs/heads/{target}")) {
+            .iter()
+            .find_map(|line| line.strip_prefix(b"worktree "))
+            .map(crate::git::os_component);
+        let branch = record.iter().find_map(|line| line.strip_prefix(b"branch "));
+        if branch != Some(target_ref.as_bytes()) {
             continue;
         }
         let Some(path) = path else { continue };
@@ -498,13 +523,9 @@ fn refresh_target_worktrees(
         match worktree_clean_at(&path, old_target_oid) {
             Ok(true) => {
                 let reset = crate::git::command()
-                    .args([
-                        "-C",
-                        path.to_string_lossy().as_ref(),
-                        "reset",
-                        "--hard",
-                        &tested_oid.to_string(),
-                    ])
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["reset", "--hard", &tested_oid.to_string()])
                     .output();
                 if !reset.as_ref().is_ok_and(|result| result.status.success()) {
                     warnings.push(format!(
@@ -642,6 +663,71 @@ mod tests {
     fn gate_token_env_name_is_the_coordinated_constant() {
         // f-hooks reads the same constant; the name is contract.
         assert_eq!(GATE_TOKEN_ENV, "CODEFLOW_INTEGRATE_TOKEN");
+    }
+
+    /// Review finding on issue 79: a checked-out branch whose name is not
+    /// valid UTF-8 was replaced by the target name, so a failed landing
+    /// restored the wrong checkout. Integrate refuses before changing anything.
+    #[test]
+    fn a_checked_out_branch_that_is_not_utf8_is_refused_before_any_change() {
+        let dir = repo_with_feature_branch();
+        let tip = branch_oid(dir.path(), "main");
+        crate::git::write_packed_refs(
+            &dir.path().join(".git"),
+            &[
+                (tip.clone(), b"refs/heads/main".to_vec()),
+                (tip, b"refs/heads/caf\xe9".to_vec()),
+            ],
+        );
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/caf\xe9\n").unwrap();
+        let before = branch_oid(dir.path(), "feat/x");
+        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(
+            matches!(error, IntegrateError::Preflight(ref why) if why.contains("not valid UTF-8")),
+            "{error}"
+        );
+        assert_eq!(before, branch_oid(dir.path(), "feat/x"));
+    }
+
+    /// Review finding on issue 79: the path of another worktree that holds the
+    /// target was read lossily and handed to `reset --hard`. It is the exact
+    /// path now. Runs where the file system accepts the name, as on Linux.
+    #[cfg(unix)]
+    #[test]
+    fn a_target_worktree_whose_path_is_not_utf8_is_refreshed_at_that_path() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = repo_with_feature_branch();
+        let old = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        git(dir.path(), &["branch", "land"]);
+        let parent = tempfile::tempdir().unwrap();
+        let wt = parent.path().join(std::ffi::OsStr::from_bytes(b"wt\xff"));
+        if fs::create_dir(&wt).is_err() {
+            return;
+        }
+        let added = crate::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["worktree", "add", "--force"])
+            .arg(&wt)
+            .arg("land")
+            .output()
+            .unwrap();
+        assert!(added.status.success(), "{added:?}");
+        let warnings = refresh_target_worktrees(
+            dir.path(),
+            "land",
+            git2::Oid::from_str(&old).unwrap(),
+            git2::Oid::from_str(&tested).unwrap(),
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let head = crate::git::command()
+            .arg("-C")
+            .arg(&wt)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), tested);
     }
 
     #[test]

@@ -3146,3 +3146,20 @@ fn recompletion_preserves_the_anchored_acceptance_even_with_equal_active_block()
         }
     }
 }
+
+/// Review finding on issue 79: a task branch whose name is not valid UTF-8
+/// was dropped, so a task with live work on it read as having none.
+#[test]
+fn a_task_branch_that_is_not_utf8_is_active_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = crate::git::repo_with_refs(dir.path(), &[b"refs/heads/task/TSK-001-caf\xe9"]);
+    let record = RecordView::parse(
+        RecordKind::Task,
+        TASK_PATH,
+        // A target that resolves nowhere, so the tip has not "landed".
+        &task("TSK-001", "todo", CRITERIA, "")
+            .replace("integration_target: main", "integration_target: nowhere"),
+    )
+    .unwrap();
+    assert!(has_active_branch(&repo, &record, &["task/".to_string()]));
+}

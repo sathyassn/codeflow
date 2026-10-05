@@ -59,10 +59,11 @@ impl RepoInfo {
 #[must_use]
 pub fn current_branch(repo: &Repository) -> String {
     if let Ok(head) = repo.head() {
-        // OS text rule (issue 79, `docs/architecture.md`): the name is lossy,
-        // never empty. It is matched against protected-branch patterns, which
-        // a lossy spelling matches as the bytes do, and an empty name would
-        // read a protected branch as detached and drop the refusal.
+        // OS text rule (issue 79, `docs/architecture.md`): the name keeps its
+        // invalid bytes as escapes and is never empty. It is matched against
+        // protected-branch patterns, which such a spelling matches as the
+        // bytes do, and an empty name would read a protected branch as
+        // detached and drop the refusal.
         let name = crate::git::reference_shorthand(&head);
         if name != "HEAD" && !name.is_empty() {
             return name;
@@ -72,7 +73,7 @@ pub fn current_branch(repo: &Repository) -> String {
     // Unborn branch: HEAD exists as a symbolic ref with no target commit.
     if let Ok(head_ref) = repo.find_reference("HEAD") {
         if let Some(target) = head_ref.symbolic_target_bytes() {
-            if let Some(branch) = String::from_utf8_lossy(target).strip_prefix("refs/heads/") {
+            if let Some(branch) = crate::git::ref_text(target).strip_prefix("refs/heads/") {
                 return branch.to_string();
             }
         }
@@ -179,7 +180,7 @@ mod tests {
         std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
         let repo = Repository::open(dir.path()).unwrap();
         let name = current_branch(&repo);
-        assert_eq!(name, "release/caf\u{fffd}");
+        assert_eq!(name, "release/caf\\xe9");
         let policy = crate::hooks::policy::GitPolicy {
             protected_branches: vec!["release/*".to_string()],
             ..crate::hooks::policy::GitPolicy::default()

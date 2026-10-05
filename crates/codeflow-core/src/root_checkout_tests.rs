@@ -1823,3 +1823,55 @@ fn bootstrap_grace_suspends_the_rule() {
     p.suspend_for_bootstrap();
     assert_eq!(p.root_checkout_commits, PolicyLevel::Off);
 }
+
+/// Review finding on issue 79: a root branch or a checked-out branch whose
+/// name is not valid UTF-8 was read as absent, and a lossy spelling made it
+/// equal to a different branch. The bytes are spelled by `ref_text`, so each
+/// branch is itself and no other.
+#[test]
+fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    let git_dir = root.join(".git");
+    crate::git::write_packed_refs(
+        &git_dir,
+        &[
+            (tip.clone(), b"refs/heads/main".to_vec()),
+            (tip.clone(), b"refs/heads/release/caf\xe9".to_vec()),
+            (tip, b"refs/remotes/origin/release/caf\xe9".to_vec()),
+        ],
+    );
+    let _ = std::fs::remove_file(git_dir.join("refs/heads/main"));
+    std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
+    std::fs::create_dir_all(git_dir.join("refs/remotes/origin")).unwrap();
+    std::fs::write(
+        git_dir.join("refs/remotes/origin/HEAD"),
+        b"ref: refs/remotes/origin/release/caf\xe9\n",
+    )
+    .unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+
+    assert_eq!(
+        head(&repo),
+        Some(Head::Branch("release/caf\\xe9".to_string()))
+    );
+    let origin = default_branch(&repo, &GitPolicy::default());
+    assert_eq!(
+        (origin.name.as_str(), origin.source),
+        ("release/caf\\xe9", RootBranchSource::OriginHead)
+    );
+
+    // On the root branch itself: no finding.
+    let facts = RootCheckout::read(&repo, &GitPolicy::default()).unwrap();
+    assert!(facts.commit_on("release/caf\\xe9").is_none());
+
+    // A policy root branch that holds a real U+FFFD is another branch, not
+    // the one whose byte is invalid.
+    let lookalike = GitPolicy {
+        root_branch: "release/caf\u{fffd}".to_string(),
+        ..GitPolicy::default()
+    };
+    let facts = RootCheckout::read(&repo, &lookalike).unwrap();
+    assert!(facts.commit_on("release/caf\\xe9").is_some());
+}

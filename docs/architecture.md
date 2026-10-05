@@ -179,10 +179,16 @@ bytes, and valid UTF-8 is not promised (issue 79). One rule covers the engine:
   directory entry tested against a UUID or a nonce-suffixed temporary name is
   not one of ours when it is not valid UTF-8, because every generated name is
   ASCII, so the scan moves on.
-- **A name matched against valid patterns may be read lossily.** A branch
-  name tested against protected globs or task prefixes matches as its bytes do.
-  Where two OS values are compared with each other, or one picks the object
-  acted on, the bytes decide.
+- **A name matched against valid patterns keeps its invalid bytes visible.** A
+  branch or ref name tested against protected globs or task prefixes is read
+  with `git::ref_text`, which writes each invalid byte as `\xNN`. git forbids
+  a backslash in a reference name, so no valid name spells an escape and two
+  different names never read as one, as a lossy decode would make them. A
+  branch that is not valid UTF-8 is never read as detached or dropped from a
+  list that guards or cleanup depend on. Where two OS values are compared with
+  each other, or one picks the object acted on (a checkout restored after a
+  failed landing, a path handed to `reset --hard`), the bytes decide or the
+  read refuses.
 - **File content is not covered.** JSON, TOML, Markdown and blobs are a format
   contract, and a decode failure there names the file.
 

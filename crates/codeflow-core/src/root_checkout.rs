@@ -214,7 +214,11 @@ pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch
     if let Some(name) = repo
         .find_reference("refs/remotes/origin/HEAD")
         .ok()
-        .and_then(|r| r.symbolic_target().ok().flatten().map(str::to_string))
+        // OS text rule (issue 79): the name is compared with the checked-out
+        // branch, which is spelled the same way (`ref_text`), so a root branch
+        // that is not valid UTF-8 is still recognised and no other branch
+        // takes its place.
+        .and_then(|r| r.symbolic_target_bytes().map(crate::git::ref_text))
         .and_then(|t| t.strip_prefix("refs/remotes/origin/").map(str::to_string))
     {
         return RootBranch {
@@ -280,21 +284,15 @@ pub fn head(repo: &git2::Repository) -> Option<Head> {
     match repo.head() {
         Ok(reference) => {
             if reference.is_branch() {
-                reference
-                    .shorthand()
-                    .ok()
-                    .map(|s| Head::Branch(s.to_string()))
+                // OS text rule (issue 79): a branch name that is not valid
+                // UTF-8 stays a branch, spelled by `ref_text`.
+                Some(Head::Branch(crate::git::reference_shorthand(&reference)))
             } else {
                 let id = reference.target()?.to_string();
                 Some(Head::Detached(id.chars().take(9).collect()))
             }
         }
-        Err(_) => repo
-            .find_reference("HEAD")
-            .ok()?
-            .symbolic_target()
-            .ok()
-            .flatten()?
+        Err(_) => crate::git::ref_text(repo.find_reference("HEAD").ok()?.symbolic_target_bytes()?)
             .strip_prefix("refs/heads/")
             .map(|b| Head::Branch(b.to_string())),
     }

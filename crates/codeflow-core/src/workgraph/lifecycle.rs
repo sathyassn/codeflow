@@ -2323,9 +2323,11 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
     };
     let marker = format!("{}-", task.id);
     references.flatten().any(|reference| {
-        let Ok(name) = reference.name() else {
-            return false;
-        };
+        // OS text rule (issue 79): a branch that is not valid UTF-8 still
+        // counts as active work when its prefix and task id match, so the name
+        // is read with `ref_text` instead of being dropped.
+        let name = crate::git::ref_text(reference.name_bytes());
+        let name = name.as_str();
         let short = if let Some(local) = name.strip_prefix("refs/heads/") {
             local
         } else if let Some(remote) = name.strip_prefix("refs/remotes/") {
