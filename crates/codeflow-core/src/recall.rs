@@ -13,7 +13,7 @@
 //! | `ledger`     | `<state>/ledger/{work-graph,config}/*.jsonl` (per line) |
 //! | `session`    | `<state>/ledger/{sessions,memory-events}/*.jsonl` (per line) |
 //! | `adr`        | `docs/decisions/*.md` |
-//! | `pm`         | `project-management/{epics,tasks,specs}/*.md` |
+//! | `pm`         | `project-management/{epics,tasks,specs,feedback}/*.md` |
 //! | `capability` | `docs/capabilities.md` |
 //! | `product`    | `docs/product.md` |
 //! | `plan`       | `docs/plan/**/*.md` (recursive) |
@@ -364,6 +364,7 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
         .into_iter()
         .chain(crate::workgraph::layout::task_record_files(&pm_root))
         .chain(crate::workgraph::layout::spec_record_files(&pm_root))
+        .chain(crate::feedback::item_files(root))
     {
         sources.push(source_file(root, abs, "pm"));
     }
@@ -955,6 +956,38 @@ mod tests {
         assert!(report.results.iter().any(|result| {
             result.path == "project-management/specs/SPC-009.md" && result.kind == "pm"
         }));
+    }
+
+    #[test]
+    fn test_recall_finds_feedback_by_its_verbatim_words() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        make_repo(repo.path());
+        let feedback = repo.path().join(crate::feedback::FEEDBACK_DIR);
+        fs::create_dir_all(&feedback).unwrap();
+        fs::write(
+            feedback.join("FB-001.md"),
+            "---\nid: FB-001\ntitle: Version the API\nstatus: received\n---\n\n\
+             # FB-001: Version the API\n\n## Verbatim\n\n> always say zebrafish versioning\n",
+        )
+        .unwrap();
+        fs::write(feedback.join("INDEX.md"), "# zebrafish index\n").unwrap();
+
+        let report = recall(
+            &home.path().join("recall.db"),
+            &[target("r1", repo.path())],
+            "zebrafish",
+            &RecallOptions::default(),
+        )
+        .unwrap();
+
+        let paths: Vec<&str> = report.results.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["project-management/feedback/FB-001.md"],
+            "{paths:?}"
+        );
+        assert_eq!(report.results[0].kind, "pm");
     }
 
     #[test]

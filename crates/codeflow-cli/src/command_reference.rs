@@ -23,7 +23,7 @@ pub const JOBS: [(&str, &[&str]); 6] = [
     (
         "Scaffold",
         &[
-            "init", "update", "epic", "spec", "task", "adr", "ids", "estimate",
+            "init", "update", "epic", "spec", "task", "adr", "ids", "estimate", "feedback",
         ],
     ),
     ("Enforce", &["hook", "git-hook", "ci", "policy", "remote"]),

@@ -559,13 +559,7 @@ fn tracked(
         .iter()
         .filter(|(status, _)| status == "A")
         .map(|(_, path)| path.as_str())
-        .filter(|path| {
-            path.starts_with("project-management/")
-                && Path::new(path)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                && !path.starts_with("project-management/templates/")
-        })
+        .filter(|path| is_added_work_record(path))
         .collect();
     if added_records
         .iter()
@@ -665,6 +659,19 @@ fn journey(
     }
 }
 
+/// Whether an added path is a work record a task pull request may not add
+/// beyond its own: Markdown under `project-management/`, except the record
+/// templates and operator feedback items, which are not work records and
+/// whose ids the registry merge rule binds (TSK-241).
+fn is_added_work_record(path: &str) -> bool {
+    path.starts_with("project-management/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        && !path.starts_with("project-management/templates/")
+        && !path.starts_with(&format!("{}/", codeflow_core::feedback::FEEDBACK_DIR))
+}
+
 fn is_record_of(path: &str, task_id: &str) -> bool {
     path.starts_with("project-management/")
         && path
@@ -736,6 +743,27 @@ mod tests {
 
     fn paths(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()
+    }
+
+    /// TSK-241: a task pull request may add operator feedback items beside
+    /// its own record; any other added record is still refused.
+    #[test]
+    fn a_task_pr_may_add_feedback_items_but_no_other_record() {
+        assert!(is_added_work_record("project-management/tasks/TSK-002.md"));
+        assert!(is_added_work_record("project-management/epics/EPC-001.md"));
+        assert!(is_added_work_record("project-management/specs/SPC-001.md"));
+        assert!(!is_added_work_record(
+            "project-management/feedback/FB-001.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/feedback/INDEX.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/templates/feedback.md"
+        ));
+        assert!(is_added_work_record(
+            "project-management/feedbackx/TSK-001.md"
+        ));
     }
 
     #[test]

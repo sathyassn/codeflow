@@ -699,6 +699,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "epics/EPC-NNN.md",
     "specs/SPC-NNN.md",
     "tasks/TSK-NNN.md",
+    // An operator feedback item, named where project organization teaches
+    // the tracker (TSK-241).
+    "project-management/feedback/FB-NNN.md",
     ".claude/settings.json",
     // A retention fixture's window setting (TSK-130), in the disposable
     // fixture only.

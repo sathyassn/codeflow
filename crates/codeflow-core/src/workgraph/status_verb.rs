@@ -624,7 +624,7 @@ fn insert_section_before(content: &str, section: &str, before: &str) -> String {
 
 /// Append text at the end of a section, creating the section at the end of
 /// the record when it is absent.
-fn append_to_section(content: &str, heading: &str, text: &str) -> String {
+pub(crate) fn append_to_section(content: &str, heading: &str, text: &str) -> String {
     let lines: Vec<&str> = content.split('\n').collect();
     match section_range(&lines, heading) {
         Some((_, end)) => {

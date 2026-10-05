@@ -125,6 +125,9 @@ pub struct StatusView {
     /// Per-capability delivery rollup. `None` when either the registry or the
     /// project-management tier is absent (the view needs both links).
     pub delivery: Option<Vec<CapabilityDelivery>>,
+    /// Open operator feedback items, in total and by topic; `None` when the
+    /// project keeps no `project-management/feedback/` directory.
+    pub feedback: Option<(usize, Vec<(String, usize)>)>,
     /// Tier/degradation notes (absent layers, parse problems).
     pub notes: Vec<String>,
 }
@@ -178,6 +181,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         derived,
         capabilities,
         delivery,
+        feedback: crate::feedback::open_summary(repo_root),
         notes,
     }
 }
@@ -601,6 +605,18 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
     if let Some(backlog) = &view.derived {
         render_derived(&mut out, backlog);
+    }
+    if let Some((open, by_topic)) = &view.feedback {
+        let topics = by_topic
+            .iter()
+            .map(|(topic, count)| format!("{topic} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if topics.is_empty() {
+            let _ = writeln!(out, "feedback: {open} open");
+        } else {
+            let _ = writeln!(out, "feedback: {open} open ({topics})");
+        }
     }
 
     match &view.capabilities {

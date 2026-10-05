@@ -277,6 +277,9 @@ fn run_docs_lint(root: &Path) -> bool {
     for note in &report.notes {
         println!("{}", note.line("validate --docs", "note"));
     }
+    for warning in &report.warnings {
+        eprintln!("{}", warning.line("validate --docs", "warning"));
+    }
     for issue in &report.issues {
         eprintln!("{issue}");
     }

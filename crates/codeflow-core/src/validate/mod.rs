@@ -187,6 +187,7 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         .issues
         .extend(docs.issues.into_iter().map(|issue| issue.to_string()));
     report.notes = docs.notes;
+    report.warnings.extend(docs.warnings);
     report.issues.sort();
     report.issues.dedup();
     report.warnings.sort();

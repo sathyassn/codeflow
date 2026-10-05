@@ -204,6 +204,170 @@ impl ScaffoldConfig {
     }
 }
 
+/// The `[feedback]` section of `project.toml`: the topics an operator
+/// feedback item may carry (`codeflow feedback`). User-owned like
+/// `[scaffold]`: [`ProjectState::store`] round-trips it as a foreign key, and
+/// only [`FeedbackConfig::write_defaults`] ever adds it, once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedbackConfig {
+    /// The project's topic list; `None` when the section or key is absent.
+    pub topics: Option<Vec<String>>,
+}
+
+impl FeedbackConfig {
+    /// The list written on the first `codeflow feedback new` when the project
+    /// has none.
+    pub const DEFAULT_TOPICS: [&'static str; 7] = [
+        "process",
+        "design",
+        "architecture",
+        "writing",
+        "tooling",
+        "security",
+        "scope",
+    ];
+
+    /// Reads `[feedback]` from `project.toml`. A missing file, section or key
+    /// yields no list.
+    ///
+    /// # Errors
+    ///
+    /// IO failures other than not-found, invalid TOML, or a section that is
+    /// not a table of non-empty topic strings.
+    pub fn load(root: &Path) -> Result<Self, ScaffoldError> {
+        let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
+            return Ok(Self::default());
+        };
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
+        let invalid = |detail: String| ScaffoldError::InvalidState {
+            what: PROJECT_TOML.to_string(),
+            detail,
+        };
+        let Some(section) = table.get("feedback") else {
+            return Ok(Self::default());
+        };
+        let section = section
+            .as_table()
+            .ok_or_else(|| invalid("feedback: expected a table".to_string()))?;
+        let Some(topics) = section.get("topics") else {
+            return Ok(Self::default());
+        };
+        let topics = topics
+            .as_array()
+            .ok_or_else(|| invalid("feedback.topics: expected an array of strings".to_string()))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|topic| !topic.is_empty() && !topic.contains(char::is_whitespace))
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "feedback.topics[{index}]: expected a one-word topic string"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            topics: Some(topics),
+        })
+    }
+
+    /// The project's topics, or the default list when it has none.
+    #[must_use]
+    pub fn topics_or_default(&self) -> Vec<String> {
+        self.topics.clone().unwrap_or_else(|| {
+            Self::DEFAULT_TOPICS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+    }
+
+    /// Write the default list as a `[feedback]` section appended to an
+    /// existing `project.toml`, when it has no `feedback.topics`; the rest of
+    /// the file keeps its bytes. Returns the topics in force afterwards and
+    /// whether the file was written.
+    ///
+    /// # Errors
+    ///
+    /// [`ScaffoldError::NotInitialized`] without a `project.toml`, IO
+    /// failures, invalid TOML, or a `[feedback]` value that is not a table.
+    pub fn write_defaults(root: &Path) -> Result<(Vec<String>, bool), ScaffoldError> {
+        let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
+            return Err(ScaffoldError::NotInitialized);
+        };
+        let current = Self::load(root)?;
+        if let Some(topics) = current.topics {
+            return Ok((topics, false));
+        }
+        let mut table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
+        let defaults = toml::Value::Array(
+            Self::DEFAULT_TOPICS
+                .iter()
+                .map(|topic| toml::Value::String((*topic).to_string()))
+                .collect(),
+        );
+        let updated = if let Some(section) = table.get_mut("feedback") {
+            // A `[feedback]` table without `topics`: add the key and write the
+            // table back, as `ProjectState::store` does.
+            section
+                .as_table_mut()
+                .ok_or_else(|| ScaffoldError::InvalidState {
+                    what: PROJECT_TOML.to_string(),
+                    detail: "feedback: expected a table".to_string(),
+                })?
+                .insert("topics".to_string(), defaults);
+            toml::to_string_pretty(&table).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?
+        } else {
+            // The common case: append a new section, so every other byte of
+            // the file stays as the project wrote it.
+            let mut updated = text.clone();
+            if !updated.is_empty() && !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            updated.push_str("\n[feedback]\ntopics = [\n");
+            for topic in Self::DEFAULT_TOPICS {
+                updated.push_str("    \"");
+                updated.push_str(topic);
+                updated.push_str("\",\n");
+            }
+            updated.push_str("]\n");
+            updated
+        };
+        let check: toml::Table =
+            toml::from_str(&updated).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: format!("adding the feedback topics would break the file: {e}"),
+            })?;
+        if check
+            .get("feedback")
+            .and_then(|v| v.get("topics"))
+            .is_none()
+        {
+            return Err(ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: "the feedback topics could not be added".to_string(),
+            });
+        }
+        write_record(root, PROJECT_TOML, updated.as_bytes())?;
+        Ok((Self::load(root)?.topics_or_default(), true))
+    }
+}
+
 /// One record in `.codeflow/manifest.json`.
 ///
 /// `sha256` semantics by ownership class:
@@ -1156,6 +1320,55 @@ mod tests {
             .unwrap()
             .ignore
             .is_empty());
+    }
+
+    #[test]
+    fn feedback_topics_default_once_and_keep_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(matches!(
+            FeedbackConfig::write_defaults(root),
+            Err(ScaffoldError::NotInitialized)
+        ));
+        let original =
+            "# kept\nschema_version = 1\ntier = \"full\"\n\n[scaffold]\nignore = [\".codex/**\"]\n";
+        write_file(&ProjectState::path(root), original.as_bytes()).unwrap();
+        assert_eq!(FeedbackConfig::load(root).unwrap().topics, None);
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(written);
+        assert_eq!(topics, FeedbackConfig::DEFAULT_TOPICS.to_vec());
+        let text = std::fs::read_to_string(ProjectState::path(root)).unwrap();
+        assert!(text.starts_with(original), "{text}");
+        assert_eq!(ScaffoldConfig::load(root).unwrap().ignore, [".codex/**"]);
+
+        // A project's own list is kept and never rewritten.
+        let own = format!("{original}\n[feedback]\ntopics = [\"ux\", \"process\"]\n");
+        write_file(&ProjectState::path(root), own.as_bytes()).unwrap();
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(!written);
+        assert_eq!(topics, ["ux", "process"]);
+        assert_eq!(
+            std::fs::read_to_string(ProjectState::path(root)).unwrap(),
+            own
+        );
+
+        // A `[feedback]` table without topics gains the key.
+        write_file(
+            &ProjectState::path(root),
+            b"schema_version = 1\n\n[feedback]\nnote = \"x\"\n",
+        )
+        .unwrap();
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(written);
+        assert_eq!(topics.len(), FeedbackConfig::DEFAULT_TOPICS.len());
+
+        write_file(
+            &ProjectState::path(root),
+            b"schema_version = 1\n[feedback]\ntopics = [\"two words\"]\n",
+        )
+        .unwrap();
+        let error = FeedbackConfig::load(root).unwrap_err().to_string();
+        assert!(error.contains("feedback.topics[0]"), "{error}");
     }
 
     #[test]

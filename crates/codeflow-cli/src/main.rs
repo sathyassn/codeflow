@@ -98,6 +98,8 @@ enum Command {
     Work(cmd::work::WorkArgs),
     /// Create an ADR: number the next ADR-NNNN and write it as proposed.
     Adr(cmd::new::AdrArgs),
+    /// Operator feedback items: record (FB-NNN), move by the transition table, list.
+    Feedback(cmd::feedback::FeedbackArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),
     /// Check explicit forecast allocations and pinned evidence without writes.
@@ -320,6 +322,7 @@ fn main() -> anyhow::Result<()> {
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
         Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
+        Command::Feedback(args) => std::process::exit(cmd::feedback::run(&args)),
         Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),

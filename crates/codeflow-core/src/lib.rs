@@ -10,6 +10,7 @@ pub mod delegate;
 pub mod doctor;
 pub mod error;
 pub mod estimate;
+pub mod feedback;
 pub mod file_lock;
 pub mod git;
 pub mod hooks;

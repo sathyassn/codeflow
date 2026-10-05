@@ -2004,6 +2004,12 @@ dest = "project-management/templates/spec.md"
 ownership = "managed"
 tiers = ["full"]
 
+[[entry]]
+src = "pm/feedback.md.tmpl"
+dest = "project-management/templates/feedback.md"
+ownership = "managed"
+tiers = ["full"]
+
 # Optional agentic estimation guidance; project forecasts remain user-owned.
 
 [[entry]]
