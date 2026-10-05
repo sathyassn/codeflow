@@ -383,6 +383,12 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
     out
 }
 
+/// A frontmatter fence, read as the record parser reads it: `---` with
+/// any trailing spaces, tabs or carriage return.
+fn is_fence(line: &str) -> bool {
+    line.trim_end_matches(['\n', '\r', ' ', '\t']) == "---"
+}
+
 /// Insert `key: value` after the frontmatter's `after` line.
 fn insert_after(text: &str, after: &str, line: &str) -> Option<String> {
     let mut out = String::with_capacity(text.len() + line.len() + 1);
@@ -392,7 +398,7 @@ fn insert_after(text: &str, after: &str, line: &str) -> Option<String> {
         out.push_str(current);
         let bare = current.trim_end_matches(['\r', '\n']);
         if index == 0 {
-            in_front = bare == "---";
+            in_front = is_fence(bare);
             continue;
         }
         if in_front && !inserted && bare.starts_with(&format!("{after}:")) {
@@ -400,7 +406,7 @@ fn insert_after(text: &str, after: &str, line: &str) -> Option<String> {
             out.push('\n');
             inserted = true;
         }
-        if in_front && bare == "---" {
+        if in_front && is_fence(bare) {
             in_front = false;
         }
     }
@@ -490,6 +496,13 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
             "{from} has several files in this working tree"
         )));
     };
+    let rel = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    guard_beneath_root(root, Path::new(&rel))
+        .map_err(|error| IdsError::Invalid(format!("{rel} cannot be renumbered: {error}")))?;
     let text = std::fs::read_to_string(path)?;
     let uid = frontmatter_value(&text, "uid").ok_or_else(|| {
         IdsError::Invalid(format!(
@@ -536,36 +549,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         let reservation = issue::reserve(root, &request)?;
         (reservation.id, reservation.standing)
     };
-    let rewritten = rewrite_links(&git, from, &to)?;
-    let file = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .replacen(&from.to_string(), &to.to_string(), 1);
-    let new_path = path.with_file_name(file);
-    let rel = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let new_rel = new_path
-        .strip_prefix(root)
-        .unwrap_or(&new_path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    for checked in [&rel, &new_rel] {
-        guard_beneath_root(root, Path::new(checked)).map_err(|error| {
-            IdsError::Invalid(format!("{checked} cannot be renumbered: {error}"))
-        })?;
-    }
-    let content = std::fs::read_to_string(path)?;
-    let content =
-        replace_id(&content, from, &to, kept_range(&rel, &content).as_ref()).unwrap_or(content);
-    let content = add_former_id(&content, from);
-    std::fs::write(&new_path, content)?;
-    if new_path != *path {
-        std::fs::remove_file(path)?;
-    }
+    let (new_path, rewritten) = renumber_files(root, &git, path, &rel, from, &to)?;
     Ok(Retarget {
         from: from.clone(),
         to,
@@ -573,6 +557,66 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         standing,
         rewritten,
     })
+}
+
+/// Write a renumbering: the record under its new name with `former_ids`,
+/// and every tracked link. Every change is computed and checked first, so
+/// a refusal (a linked destination, a changed Verbatim section) writes
+/// nothing. Returns the record's new path and the rewritten files.
+fn renumber_files(
+    root: &Path,
+    git: &Git,
+    path: &Path,
+    rel: &str,
+    from: &RegId,
+    to: &RegId,
+) -> Result<(PathBuf, Vec<PathBuf>), IdsError> {
+    let file = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .replacen(&from.to_string(), &to.to_string(), 1);
+    let new_path = path.with_file_name(file);
+    let new_rel = new_path
+        .strip_prefix(root)
+        .unwrap_or(&new_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    guard_beneath_root(root, Path::new(&new_rel))
+        .map_err(|error| IdsError::Invalid(format!("{new_rel} cannot be written: {error}")))?;
+    // Every change is computed and checked before any file is written, so
+    // a refusal leaves the record and its links as they were.
+    let mut planned = plan_link_rewrites(git, from, to)?;
+    let before = std::fs::read_to_string(path)?;
+    let base = match planned.iter().position(|change| change.rel == rel) {
+        Some(index) => planned.remove(index).after,
+        None => replace_id(&before, from, to, kept_range(rel, &before).as_ref())
+            .unwrap_or_else(|| before.clone()),
+    };
+    let record = Rewrite {
+        rel: rel.to_string(),
+        path: new_path.clone(),
+        after: add_former_id(&base, from),
+        before,
+    };
+    for change in planned.iter().chain(std::iter::once(&record)) {
+        if !verbatim_kept(&change.rel, &change.before, &change.after) {
+            return Err(IdsError::Invalid(format!(
+                "{} would change the operator's words in its Verbatim section; nothing was renumbered",
+                change.rel
+            )));
+        }
+    }
+    let mut rewritten = Vec::with_capacity(planned.len());
+    for change in planned {
+        std::fs::write(&change.path, &change.after)?;
+        rewritten.push(change.path);
+    }
+    std::fs::write(&new_path, &record.after)?;
+    if new_path != path {
+        std::fs::remove_file(path)?;
+    }
+    Ok((new_path, rewritten))
 }
 
 fn add_former_id(text: &str, from: &RegId) -> String {
@@ -589,7 +633,7 @@ fn add_former_id(text: &str, from: &RegId) -> String {
         let mut fences = 0;
         for line in text.split_inclusive('\n') {
             let bare = line.trim_end_matches(['\n', '\r']);
-            if bare == "---" {
+            if is_fence(bare) {
                 fences += 1;
             }
             if fences == 1 && bare.starts_with("former_ids:") {
@@ -645,13 +689,34 @@ fn replace_id(
     })
 }
 
-/// Rewrite links to `from` in tracked text under the record roots and docs.
-fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, IdsError> {
+/// One planned file change: its repository path, where it is written, and
+/// its text before and after.
+struct Rewrite {
+    rel: String,
+    path: PathBuf,
+    before: String,
+    after: String,
+}
+
+/// Whether a change keeps a feedback item's Verbatim section byte for
+/// byte: the operator's words are never renumbered, whatever rewrote them.
+fn verbatim_kept(rel: &str, before: &str, after: &str) -> bool {
+    let quoted = |text: &str| {
+        kept_range(rel, text)
+            .and_then(|range| text.get(range))
+            .map(str::to_string)
+    };
+    quoted(before) == quoted(after)
+}
+
+/// The rewrites of links to `from` in tracked text under the record roots
+/// and docs, computed and not yet written.
+fn plan_link_rewrites(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<Rewrite>, IdsError> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
     let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
-    let mut changed = Vec::new();
+    let mut planned = Vec::new();
     for file in files {
         // A tracked symbolic link is left alone: rewriting through it could
         // change a file outside the checkout.
@@ -665,11 +730,15 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
             continue;
         };
         if let Some(updated) = replace_id(&text, from, to, kept_range(&file, &text).as_ref()) {
-            std::fs::write(&path, updated)?;
-            changed.push(path);
+            planned.push(Rewrite {
+                rel: file,
+                path,
+                before: text,
+                after: updated,
+            });
         }
     }
-    Ok(changed)
+    Ok(planned)
 }
 
 #[cfg(test)]
@@ -789,20 +858,108 @@ mod tests {
         };
         git(&["init", "-q"]);
         git(&["add", "-A"]);
-        let changed = rewrite_links(
+        let planned = plan_link_rewrites(
             &Git::new(root),
             &RegId::parse("TSK-005").unwrap(),
             &RegId::parse("TSK-006").unwrap(),
         )
         .unwrap();
-        assert_eq!(changed.len(), 1, "{changed:?}");
+        let rels: Vec<&str> = planned.iter().map(|change| change.rel.as_str()).collect();
+        assert_eq!(rels, ["project-management/feedback/FB-001.md"]);
+        assert!(planned[0].after.contains("TSK-006"));
         assert_eq!(
             std::fs::read_to_string(&target).unwrap(),
             "---\nid: FB-002\n---\nTSK-005\n"
         );
-        assert!(std::fs::read_to_string(feedback.join("FB-001.md"))
-            .unwrap()
-            .contains("TSK-006"));
+    }
+
+    /// A closing fence with trailing spaces still ends the frontmatter, as
+    /// the record parser reads it; the body keeps every byte.
+    #[test]
+    fn a_fence_with_trailing_space_still_ends_the_frontmatter() {
+        let id = RegId::parse("FB-001").unwrap();
+        let text = "---\nid: FB-002\nuid: u\nformer_ids: [FB-000]\n---  \n\n## Verbatim\n\nformer_ids: [keep]\nuid: body\n";
+        assert_eq!(
+            add_former_id(text, &id),
+            "---\nid: FB-002\nuid: u\nformer_ids: [FB-000, FB-001]\n---  \n\n## Verbatim\n\nformer_ids: [keep]\nuid: body\n"
+        );
+        let bare = "---\nid: FB-002\n---\t\nuid: body\n";
+        assert!(insert_after(bare, "uid", "former_ids: [FB-001]").is_none());
+    }
+
+    /// The last check before any write: a change to a feedback item's
+    /// Verbatim section refuses the renumbering, whatever made it.
+    #[test]
+    fn a_change_to_the_verbatim_section_is_caught() {
+        let rel = "project-management/feedback/FB-001.md";
+        let before =
+            "---\nid: FB-001\n---\n\n## Verbatim\n\nkeep TSK-005\n\n## Reading\n\nTSK-005\n";
+        let reading = before.replace("\nTSK-005\n", "\nTSK-006\n");
+        assert!(verbatim_kept(rel, before, &reading));
+        let quoted = before.replace("keep TSK-005", "keep TSK-006");
+        assert!(!verbatim_kept(rel, before, &quoted));
+        assert!(verbatim_kept(
+            "project-management/tasks/TSK-001.md",
+            before,
+            &quoted
+        ));
+    }
+
+    /// A destination that is a symbolic link refuses the renumbering before
+    /// anything is written: the record and the links to it keep their bytes.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_destination_writes_nothing() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let feedback = root.join("project-management/feedback");
+        let tasks = root.join("project-management/tasks");
+        std::fs::create_dir_all(&feedback).unwrap();
+        std::fs::create_dir_all(&tasks).unwrap();
+        let record = "---\nid: FB-001\nuid: u\n---\n\n# FB-001: x\n";
+        let link = "---\nid: TSK-001\n---\nsee FB-001\n";
+        std::fs::write(feedback.join("FB-001.md"), record).unwrap();
+        std::fs::write(tasks.join("TSK-001.md"), link).unwrap();
+        let out = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let out = std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let elsewhere = outside.path().join("elsewhere.md");
+        std::fs::write(&elsewhere, "outside\n").unwrap();
+        symlink(&elsewhere, feedback.join("FB-002.md")).unwrap();
+
+        let error = renumber_files(
+            root,
+            &Git::new(root),
+            &feedback.join("FB-001.md"),
+            "project-management/feedback/FB-001.md",
+            &RegId::parse("FB-001").unwrap(),
+            &RegId::parse("FB-002").unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("cannot be written"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(feedback.join("FB-001.md")).unwrap(),
+            record
+        );
+        assert_eq!(
+            std::fs::read_to_string(tasks.join("TSK-001.md")).unwrap(),
+            link
+        );
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "outside\n");
     }
 
     #[test]
