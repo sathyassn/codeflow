@@ -327,17 +327,45 @@ pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
 /// A refused path or an I/O error.
 pub fn write_index(root: &Path, content: &str) -> Result<(), String> {
     let path = contained_path(root, INDEX_PATH)?;
-    let temporary = path.with_file_name(format!(".INDEX.md.{}.tmp", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    replace_whole(&path, content, &path)
+        .map_err(|error| format!("cannot write {INDEX_PATH}: {error}"))
+}
+
+/// Replace `path` with `text` whole: a new temporary file beside it, then
+/// a rename over it, so a reader or a failure never sees half a file. The
+/// result keeps the permissions of `mode_from` (the file it replaces, or
+/// the one it is renamed from); the temporary file is private until they
+/// are applied. With no `mode_from` file, the usual default applies.
+pub(crate) fn replace_whole(path: &Path, text: &str, mode_from: &Path) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    let permissions = std::fs::symlink_metadata(mode_from)
+        .ok()
+        .filter(std::fs::Metadata::is_file)
+        .map(|meta| meta.permissions());
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if permissions.is_some() {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    }
+    let written = options
         .open(&temporary)
-        .and_then(|mut file| std::io::Write::write_all(&mut file, content.as_bytes()))
-        .and_then(|()| std::fs::rename(&temporary, &path));
-    written.map_err(|error| {
+        .and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            if let Some(permissions) = permissions {
+                file.set_permissions(permissions)?;
+            }
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
         let _ = std::fs::remove_file(&temporary);
-        format!("cannot write {INDEX_PATH}: {error}")
-    })
+    }
+    written
 }
 
 /// Every item the project keeps, and each file that could not be read.

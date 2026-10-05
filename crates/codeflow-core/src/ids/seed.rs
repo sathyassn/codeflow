@@ -620,21 +620,32 @@ fn renumber_files(
             .unwrap_or_default(),
         1,
     );
-    let mut steps: Vec<(String, &Path, &str)> = planned
+    // Each step: the file written, its text, and the file whose permissions
+    // it keeps (itself, or for the record the file it is renamed from).
+    let mut steps: Vec<(String, &Path, &str, &Path)> = planned
         .iter()
         .map(|change| {
             (
                 change.rel.clone(),
                 change.path.as_path(),
                 change.after.as_str(),
+                change.path.as_path(),
             )
         })
         .collect();
-    steps.push((new_rel.clone(), new_path.as_path(), record.after.as_str()));
+    steps.push((
+        new_rel.clone(),
+        new_path.as_path(),
+        record.after.as_str(),
+        path,
+    ));
     let mut landed: Vec<String> = Vec::with_capacity(steps.len());
-    for (index, (step_rel, target, text)) in steps.iter().enumerate() {
-        if let Err(error) = replace_whole(target, text) {
-            let pending: Vec<&str> = steps[index..].iter().map(|(r, _, _)| r.as_str()).collect();
+    for (index, (step_rel, target, text, mode_from)) in steps.iter().enumerate() {
+        if let Err(error) = crate::feedback::replace_whole(target, text, mode_from) {
+            let pending: Vec<&str> = steps[index..]
+                .iter()
+                .map(|(r, _, _, _)| r.as_str())
+                .collect();
             return Err(partial_renumbering(
                 from,
                 to,
@@ -660,29 +671,6 @@ fn renumber_files(
     }
     let rewritten = planned.into_iter().map(|change| change.path).collect();
     Ok((new_path, rewritten))
-}
-
-/// Replace `path` with `text` whole: a new temporary file beside it, then a
-/// rename over it, so a reader or a failure never sees half a file.
-fn replace_whole(path: &Path, text: &str) -> std::io::Result<()> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("record");
-    let temporary = path.with_file_name(format!(".{name}.{}.renumber.tmp", std::process::id()));
-    let written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .and_then(|mut file| {
-            std::io::Write::write_all(&mut file, text.as_bytes())?;
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
 }
 
 /// The refusal for a renumbering that stopped part way: what failed, which
@@ -1126,6 +1114,60 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// A renumbering keeps each file's permissions: an executable link
+    /// stays executable, a private one stays private, and the renamed
+    /// record keeps the mode of the file it was renamed from.
+    #[cfg(unix)]
+    #[test]
+    fn a_renumbering_keeps_each_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let feedback = root.join("project-management/feedback");
+        let docs = root.join("docs");
+        std::fs::create_dir_all(&feedback).unwrap();
+        std::fs::create_dir_all(&docs).unwrap();
+        let files = [
+            (docs.join("verify.sh"), "#!/bin/sh\necho FB-001\n", 0o755),
+            (docs.join("private.md"), "see FB-001\n", 0o600),
+            (
+                feedback.join("FB-001.md"),
+                "---\nid: FB-001\nuid: u\n---\n\n# FB-001: x\n",
+                0o640,
+            ),
+        ];
+        for (path, text, mode) in &files {
+            std::fs::write(path, text).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode)).unwrap();
+        }
+        for args in [&["init", "-q"][..], &["add", "-A"][..]] {
+            let out = crate::git::command()
+                .args(args)
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        }
+        renumber_files(
+            root,
+            &Git::new(root),
+            &feedback.join("FB-001.md"),
+            "project-management/feedback/FB-001.md",
+            &RegId::parse("FB-001").unwrap(),
+            &RegId::parse("FB-002").unwrap(),
+        )
+        .unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&docs.join("verify.sh")), 0o755);
+        assert_eq!(mode(&docs.join("private.md")), 0o600);
+        assert_eq!(mode(&feedback.join("FB-002.md")), 0o640);
+        assert!(std::fs::read_to_string(docs.join("verify.sh"))
+            .unwrap()
+            .contains("FB-002"));
+        assert!(!feedback.join("FB-001.md").exists());
     }
 
     #[test]
