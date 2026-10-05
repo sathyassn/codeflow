@@ -225,8 +225,10 @@ impl Sandbox {
         // A certified `grep -r` or `cat` may read a huge tree or a device when a
         // mutation turns a path into `/`; it executes nothing, so stop it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut timed_out = false;
         while child.try_wait().unwrap().is_none() {
             if std::time::Instant::now() > deadline {
+                timed_out = true;
                 TIMEOUTS.fetch_add(1, Ordering::Relaxed);
                 let _ = Command::new("kill")
                     .args(["-KILL", &format!("-{}", child.id())])
@@ -247,8 +249,12 @@ impl Sandbox {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let marker =
-            fs::read_to_string(tmp.join("marker.out")).unwrap_or_else(|_| "unchanged".into());
+        // A killed run has no report; a run that finished must have written one.
+        let marker = match fs::read_to_string(tmp.join("marker.out")) {
+            Ok(marker) => marker,
+            Err(_) if timed_out => "unchanged".into(),
+            Err(error) => format!("no report: {error}"),
+        };
         (calls, marker)
     }
 }
