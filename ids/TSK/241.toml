@@ -1,0 +1,11 @@
+id = "TSK-241"
+uid = "7baf8eb9-d930-4599-9930-07a1cfc58156"
+kind = "TSK"
+title = "Operator feedback has one tracker with ids the CLI issues"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-05T00:15:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
