@@ -127,6 +127,12 @@ other-lineage seat:
 - a concurrency or integration constraint change that keeps isolation and
   safety.
 
+One amendment may span several epics: its PR names each on one `Task:` line
+(`Task: EPC-001, EPC-002`) and may carry docs and the project section of
+`AGENTS.md`; CI reports each change per epic and refuses a change to an epic
+the line does not name (ADR-0078). It lands once on `main`, and each
+integration line takes it by merging `main`.
+
 A task's own criteria change rides in its own PR, where CI prints the change
 for the reviewer.
 

@@ -419,7 +419,13 @@
     ".agents/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "45cf8bfb5363adf1a33a7b18412ca60e48f4059b9ca82ded6be6c9dc38413a1f",
+      "sha256": "01a1188240970613fdbed02d907967c22d1ea60f06450a5fba32188a32d70f89",
+      "exec": false
+    },
+    ".agents/skills/cf-method/references/issue-handling.md": {
+      "src": "claude/skills/cf-method/references/issue-handling.md",
+      "ownership": "managed",
+      "sha256": "287966d066e264280421d489f0020ce4fe4597d10f98f1397ee92d0eb1af274e",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -437,7 +443,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "f90d0c3a313d354f03920c838f16bbf91253a930896d65ad883ca40485f41ce8",
+      "sha256": "1819abcd37e124a20abbcd0f28976e49b0dcb44931510986c39ca4ea0e4cd0bc",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -635,7 +641,7 @@
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/task-graph.md",
       "ownership": "managed",
-      "sha256": "8bbb99627cbbb38384b4c183e90e474b2ab68e63d7d528708d8f1f32132939db",
+      "sha256": "7f29fd4f8c12d1bd7c4b884f3d6e2bc8c5ce71522a37295631370b58438fc2f2",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/verification-selection.md": {
@@ -821,7 +827,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "1048bd5cdd8caf2105355c61f9de78b37ff76f37bd1f39bbfea3323c2716b6a8",
+      "sha256": "700c1262a3b6bd41004c0928ee730a55e409fd870388401f3b0938abbffa3a7d",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -1253,7 +1259,13 @@
     ".claude/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "45cf8bfb5363adf1a33a7b18412ca60e48f4059b9ca82ded6be6c9dc38413a1f",
+      "sha256": "01a1188240970613fdbed02d907967c22d1ea60f06450a5fba32188a32d70f89",
+      "exec": false
+    },
+    ".claude/skills/cf-method/references/issue-handling.md": {
+      "src": "claude/skills/cf-method/references/issue-handling.md",
+      "ownership": "managed",
+      "sha256": "287966d066e264280421d489f0020ce4fe4597d10f98f1397ee92d0eb1af274e",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {
@@ -1271,7 +1283,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "f90d0c3a313d354f03920c838f16bbf91253a930896d65ad883ca40485f41ce8",
+      "sha256": "1819abcd37e124a20abbcd0f28976e49b0dcb44931510986c39ca4ea0e4cd0bc",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
@@ -1469,7 +1481,7 @@
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/task-graph.md",
       "ownership": "managed",
-      "sha256": "8bbb99627cbbb38384b4c183e90e474b2ab68e63d7d528708d8f1f32132939db",
+      "sha256": "7f29fd4f8c12d1bd7c4b884f3d6e2bc8c5ce71522a37295631370b58438fc2f2",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/verification-selection.md": {
