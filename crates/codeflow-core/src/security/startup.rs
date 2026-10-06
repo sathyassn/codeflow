@@ -18,6 +18,8 @@
 //! that reads startup files, and `direnv allow`. What it cannot see is
 //! stated, not guessed: a path built at run time, a script written in one
 //! call and run in another, and a program that writes the file on its own.
+//! Copier trees, link text at its landing place, preservation and dereference
+//! semantics, and long-option prefixes are also outside this backstop.
 //! A sandbox that denies the writes is the containment for those.
 
 use std::collections::BTreeMap;
@@ -26,7 +28,8 @@ use std::path::{Component, Path, PathBuf};
 use super::actions;
 use crate::hooks::git_guard::{
     basename, command_argv, expand_commands, has_glob, is_shell, launcher_effects, redirect_writes,
-    run_dirs, shell_tokens, strip_launchers, strip_reserved_words, unresolved_word, word_readings,
+    run_dirs, shell_tokens, startup_glob_paths, strip_launchers, strip_reserved_words,
+    unresolved_word, word_readings,
 };
 use crate::hooks::Violation;
 
@@ -35,10 +38,6 @@ pub const RULE: &str = "security.shell_startup";
 
 /// The sanctioned path printed with every refusal.
 pub const SANCTIONED: &str = "shell startup files belong to the operator: ask the operator to make this change by hand, outside the agent session; no policy key relaxes this rule, and the harness sandbox denies these writes where one runs (issue 86)";
-
-/// The most entries a glob word is expanded over before the guard stops
-/// and judges the word as unresolved.
-const GLOB_LIMIT: usize = 4096;
 
 /// The most symbolic links one path is followed through.
 const LINK_LIMIT: usize = 40;
@@ -553,82 +552,19 @@ impl Line<'_> {
                 }
             }
         }
-        // The walk is bounded by the entries it lists, which the match limit
-        // below does not count: a tree over the budget, or one a directory
-        // link could extend, is not walked and refuses near the class
-        // (review F-1 and round two).
-        if !glob_within_budget(pattern) {
+        let Some(paths) = startup_glob_paths(Path::new(pattern), dots) else {
             return Judged::Unresolved(pattern.to_string());
-        }
-        // A shell without `globstar` reads `**` as `*`, which also matches
-        // files; the glob crate reads it as directories only. Both readings
-        // are walked (review round two).
-        let mut readings = vec![pattern.to_string()];
-        if pattern.contains("**") {
-            readings.push(pattern.replace("**", "*"));
-        }
+        };
         let mut placement = None;
-        for reading in &readings {
-            let Ok(paths) = glob::glob_with(reading, options) else {
-                return Judged::Unresolved(pattern.to_string());
-            };
-            for (seen, path) in paths.enumerate() {
-                if seen >= GLOB_LIMIT {
-                    return Judged::Unresolved(pattern.to_string());
-                }
-                let Ok(path) = path else {
-                    return Judged::Unresolved(pattern.to_string());
-                };
-                if let Some(label) = self.class.target(&path) {
-                    return Judged::Class(label);
-                }
-                if placement.is_none() {
-                    placement = self.class.placement(&path);
-                }
+        for path in paths {
+            if let Some(label) = self.class.target(&path) {
+                return Judged::Class(label);
+            }
+            if placement.is_none() {
+                placement = self.class.placement(&path);
             }
         }
         placement.map_or(Judged::Ordinary, Judged::Placement)
-    }
-
-    /// The paths a source word names: each brace reading, from each run
-    /// directory, with globs expanded within the walk budget. `None` when a
-    /// reading cannot be expanded or read whole (review round six:
-    /// `cp -P links/* out/`).
-    fn source_paths(&self, word: &str, dirs: &[PathBuf]) -> Option<Vec<PathBuf>> {
-        // Wider than the shell's matching (any case, dot files too), so a
-        // match it would make is never missed.
-        let options = glob::MatchOptions {
-            case_sensitive: false,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        };
-        let mut out = Vec::new();
-        for reading in word_readings(word)? {
-            for dir in dirs {
-                let path = self.expand(&reading, dir)?;
-                let text = shown(&path);
-                if !has_glob(&text) {
-                    out.push(path);
-                    continue;
-                }
-                if !glob_within_budget(&text) {
-                    return None;
-                }
-                let mut patterns = vec![text.clone()];
-                if text.contains("**") {
-                    patterns.push(text.replace("**", "*"));
-                }
-                for pattern in patterns {
-                    for (seen, path) in glob::glob_with(&pattern, options).ok()?.enumerate() {
-                        if seen >= GLOB_LIMIT {
-                            return None;
-                        }
-                        out.push(path.ok()?);
-                    }
-                }
-            }
-        }
-        Some(out)
     }
 
     /// Whether an unresolved word may name a startup file: the line names
@@ -638,15 +574,12 @@ impl Line<'_> {
         if let Some(name) = self.class.named_in(self.text) {
             return Some(format!("the line names `{name}`"));
         }
-        for dir in dirs {
-            if let Some(path) = self.expand(word, dir) {
-                let text = shown(&path);
-                if has_glob(&text) && !glob_within_budget(&text) {
-                    return Some(format!(
-                        "its glob reaches more than the {GLOB_LIMIT} entries the guard reads, or a directory link"
-                    ));
-                }
-            }
+        if dirs
+            .iter()
+            .filter_map(|dir| self.expand(word, dir))
+            .any(|path| has_glob(&shown(&path)) && startup_glob_paths(&path, false).is_none())
+        {
+            return Some("its glob exceeds the shell reader's bounded expansion".to_string());
         }
         if self.uses_assigned(word) {
             // Judged with the inherited value as well as the assigned one.
@@ -1199,7 +1132,7 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
         return None;
     }
     if let Some(call) = copy_call(name, args) {
-        return copy_judgment(name, &call, line, &dirs).or_else(|| {
+        return copy_judgment(name, args, &call, line, &dirs).or_else(|| {
             (name == "rsync")
                 .then(|| placing_violation(name, args, line, &dirs))
                 .flatten()
@@ -1505,425 +1438,84 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
     }
 }
 
-/// Whether an option of this copying program takes the next word as its
-/// value, so that word is not read as a source or destination. Each program
-/// has its own table: `cp -f` forces, `rsync -f` takes a filter (review
-/// round two).
-fn copy_value_option(name: &str, a: &str) -> bool {
-    match name {
-        "cp" | "mv" | "ln" => matches!(a, "-S" | "--suffix"),
-        "install" => matches!(
-            a,
-            "-S" | "--suffix" | "-m" | "--mode" | "-o" | "--owner" | "-g" | "--group"
-        ),
-        "rsync" => matches!(
-            a,
-            "-e" | "--rsh"
-                | "-f"
-                | "--filter"
-                | "--exclude"
-                | "--include"
-                | "--exclude-from"
-                | "--include-from"
-                | "--files-from"
-                | "--backup-dir"
-                | "--suffix"
-                | "--link-dest"
-                | "--compare-dest"
-                | "--copy-dest"
-                | "--chmod"
-                | "--chown"
-                | "--temp-dir"
-                | "-T"
-                | "--partial-dir"
-                | "-B"
-                | "--block-size"
-        ),
-        "scp" => matches!(a, "-i" | "-o" | "-P" | "-F" | "-c" | "-l" | "-S" | "-J"),
-        "ditto" => matches!(a, "--arch" | "--bom"),
-        _ => false,
-    }
-}
-
-/// A copy, link or move with a source and a destination.
+/// Named operands only. Copier option effects and links inside trees are
+/// outside this text backstop; the sandbox holds writes through them.
 struct CopyCall {
     dest: String,
     sources: Vec<String>,
-    recursive: bool,
-    /// What the call makes of each source.
-    mode: LinkMode,
-    /// A source that is itself a symbolic link is copied as that link.
-    keeps_links: bool,
 }
 
-/// Whether a copier copies its sources or links to them.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LinkMode {
-    Copy,
-    Hard,
-    /// A symbolic link, whose text is read from where it lands.
-    Symbolic,
-}
-
-/// The operands of a copy, link or move, or `None` for another program or
-/// a single operand (`install -d DIR`, judged word by word instead).
+/// Split sources from the destination, recognizing exact target-directory
+/// options and a short table of operand-taking options. Do not emulate a
+/// copier's dereference, preservation or long-option abbreviation rules.
 fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
     if !COPIERS.contains(&name) {
         return None;
     }
     let mut operands = Vec::new();
     let mut target = None;
-    let mut recursive = name == "ditto";
-    let mut flags = LinkFlags {
-        preserve: name == "ditto",
-        ..LinkFlags::default()
-    };
     let mut iter = args.iter();
     let mut options = true;
+    let targeted = matches!(name, "cp" | "mv" | "ln" | "install");
     while let Some(arg) = iter.next() {
-        let a = arg.as_str();
-        if options && a == "--" {
+        if options && arg == "--" {
             options = false;
-            continue;
-        }
-        if options && a.starts_with('-') && a.len() > 1 {
-            // The option letters of a short cluster, before any value.
-            let mut letters = &a[1..];
-            // `--target-directory` in any prefix GNU accepts, with the
-            // value attached or next (review round six: `--target-dir=`).
-            let gnu_target = matches!(name, "cp" | "mv" | "ln" | "install");
-            let names_target = gnu_target && long_prefix(a, "target-directory");
-            if names_target || (gnu_target && a == "-t") {
-                target = match a.split_once('=') {
-                    Some((_, dir)) => Some(dir.to_string()),
-                    None => iter.next().cloned(),
-                };
-            } else if copy_value_option(name, a) {
+        } else if options && arg.starts_with('-') && arg.len() > 1 {
+            if targeted && arg == "--target-directory" {
+                target = iter.next().cloned();
+            } else if targeted && arg.starts_with("--target-directory=") {
+                target = arg.split_once('=').map(|(_, v)| v.to_string());
+            } else if (targeted && arg == "--suffix")
+                || (name == "install" && matches!(arg.as_str(), "--mode" | "--owner" | "--group"))
+            {
                 iter.next();
-            } else if !a.starts_with("--") {
-                // A short cluster: the first option letter that takes a
-                // value takes the rest of the word, or the next word, by
-                // each program's own table (`-t"$HOME"`, `-ft DIR`, rsync
-                // `-eL`; review rounds three and nine).
-                for (at, letter) in a[1..].char_indices() {
-                    let value = a[1 + at + letter.len_utf8()..].to_string();
-                    if !short_takes_value(name, letter) {
+            } else if targeted && !arg.starts_with("--") {
+                for (at, letter) in arg[1..].char_indices() {
+                    if !(matches!(letter, 't' | 'S')
+                        || name == "install" && matches!(letter, 'm' | 'o' | 'g' | 'l'))
+                    {
                         continue;
                     }
-                    letters = &a[1..=at];
-                    let value = if value.is_empty() {
+                    let rest = &arg[at + 2..];
+                    let value = if rest.is_empty() {
                         iter.next().cloned()
                     } else {
-                        Some(value)
+                        Some(rest.to_string())
                     };
                     if letter == 't' {
                         target = value;
                     }
-                    // BSD `install -l` links instead of copying; any
-                    // link flag is judged as a symbolic link.
-                    if letter == 'l' {
-                        flags.symbolic = true;
-                    }
                     break;
                 }
             }
-            let short = !a.starts_with("--");
-            let has = |set: &[char]| short && letters.contains(set);
-            // GNU programs accept any unambiguous prefix of a long option
-            // (`--sym` for `--symbolic-link`), so a long option that may
-            // name one is read as it (review round five, builder sweep).
-            let long = |full: &str| long_prefix(a, full);
-            recursive |=
-                long("recursive") || long("archive") || long("mirror") || has(&['r', 'R', 'a']);
-            flags.read(name, a, letters);
-            continue;
+        } else {
+            operands.push(arg.clone());
         }
-        operands.push(arg.clone());
     }
-    let dest = match target {
-        Some(dir) => dir,
-        None if operands.len() >= 2 => operands.pop()?,
-        None => return None,
-    };
+    let dest = target.or_else(|| (operands.len() >= 2).then(|| operands.pop()).flatten())?;
     Some(CopyCall {
         dest,
         sources: operands,
-        recursive,
-        mode: if flags.symbolic {
-            LinkMode::Symbolic
-        } else if flags.hard || name == "ln" {
-            LinkMode::Hard
-        } else {
-            LinkMode::Copy
-        },
-        keeps_links: flags.preserve && !flags.follow,
     })
 }
 
-/// The link options a copier has read so far.
-#[derive(Default)]
-#[allow(clippy::struct_excessive_bools)]
-struct LinkFlags {
-    hard: bool,
-    symbolic: bool,
-    follow: bool,
-    preserve: bool,
-}
-
-impl LinkFlags {
-    /// Read one option word, `letters` being a short cluster's option
-    /// letters before any value (review rounds four and five: `cp -s`,
-    /// `install -l s`, `cp --sym`, `cp -LP`).
-    fn read(&mut self, name: &str, a: &str, letters: &str) {
-        let short = !a.starts_with("--");
-        let has = |set: &[char]| short && letters.contains(set);
-        let long = |full: &str| long_prefix(a, full);
-        match name {
-            "ln" => self.symbolic |= long("symbolic") || has(&['s']),
-            "cp" => {
-                self.hard |= long("link") || has(&['l']);
-                self.symbolic |= long("symbolic-link") || has(&['s']);
-                self.preserve |= long("no-dereference")
-                    || long("archive")
-                    || long("preserve")
-                    || has(&['P', 'd', 'a', 'r', 'R']);
-                // The last of `-L` and `-P`/`-d`/`-a` wins, as cp reads
-                // them (security review F-6). `-H` follows only the named
-                // sources, so links inside a tree stay links and it never
-                // relaxes the judgment (review round seven).
-                if a == "--dereference" {
-                    self.follow = true;
-                } else if long("no-dereference")
-                    || long("archive")
-                    || long("dereference-command-line")
-                {
-                    self.follow = false;
-                } else if short {
-                    for letter in letters.chars() {
-                        match letter {
-                            'L' => self.follow = true,
-                            'P' | 'd' | 'a' | 'H' => self.follow = false,
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            "rsync" => {
-                self.preserve |= long("links") || long("archive") || has(&['l', 'a']);
-                // `--copy-unsafe-links` keeps the links it calls safe, so
-                // only `-L`/`--copy-links` relaxes (review round seven).
-                self.follow |= a == "--copy-links" || has(&['L']);
-            }
-            "install" => self.symbolic |= long("link"),
-            _ => {}
+/// Exact flags and short clusters, stopping at a value-taking option.
+fn copy_flag(name: &str, args: &[String], short: &[char], long: &[&str]) -> bool {
+    args.iter().take_while(|a| a.as_str() != "--").any(|arg| {
+        if arg.starts_with("--") {
+            long.contains(&arg.as_str())
+        } else if let Some(letters) = arg.strip_prefix('-') {
+            letters
+                .chars()
+                .take_while(|c| {
+                    !(matches!(c, 't' | 'S')
+                        || name == "install" && matches!(c, 'm' | 'o' | 'g' | 'l'))
+                })
+                .any(|c| short.contains(&c))
+        } else {
+            false
         }
-    }
-}
-
-/// Whether a copier's short option letter takes a value, attached or in
-/// the next word. `-t` names the target directory only for the GNU
-/// copiers; rsync's `-t` keeps times (review round nine).
-fn short_takes_value(name: &str, letter: char) -> bool {
-    match name {
-        "cp" | "mv" | "ln" => matches!(letter, 'S' | 't'),
-        "install" => matches!(letter, 'S' | 't' | 'm' | 'o' | 'g' | 'l'),
-        "rsync" => matches!(letter, 'e' | 'f' | 'B' | 'T' | 'M' | '@'),
-        "scp" => matches!(
-            letter,
-            'i' | 'o' | 'P' | 'F' | 'c' | 'l' | 'S' | 'J' | 'D' | 'X'
-        ),
-        _ => false,
-    }
-}
-
-/// Whether `arg` is a long option that may name `full`: `--full` or any
-/// prefix of it GNU would accept, with or without `=value`. Only following
-/// options are matched exactly, so a prefix never relaxes the judgment.
-fn long_prefix(arg: &str, full: &str) -> bool {
-    arg.strip_prefix("--")
-        .map(|name| name.split('=').next().unwrap_or(name))
-        .is_some_and(|name| !name.is_empty() && full.starts_with(name))
-}
-
-/// The directories a symbolic link's text is read from: the command's own,
-/// and the one the link lands in (`ln -s ../../.zshrc out/rc`; review round
-/// three), so its sources are judged from both.
-fn link_text_dirs(dest: &str, sources: usize, line: &Line<'_>, dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out = dirs.to_vec();
-    for dir in dirs {
-        if let Some(landing) = line.expand(dest, dir) {
-            let at = if landing.is_dir() || sources > 1 {
-                landing
-            } else {
-                landing.parent().map_or(landing.clone(), Path::to_path_buf)
-            };
-            if !out.contains(&at) {
-                out.push(at);
-            }
-        }
-    }
-    out
-}
-
-/// A source a copy, link or move gives a second name: a startup file moved
-/// or linked by any program, or a link to one copied as the link (review
-/// round four: `cp -s`, `install -l s`, `cp -P`).
-fn source_link_violation(
-    name: &str,
-    call: &CopyCall,
-    source: &str,
-    line: &Line<'_>,
-    dirs: &[PathBuf],
-    link_dirs: &[PathBuf],
-    landing: &[PathBuf],
-) -> Option<Violation> {
-    let is_link =
-        |p: &PathBuf| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
-    let keeps = call.keeps_links || name == "mv";
-    // Every path the word names, globs and braces included; one the guard
-    // cannot list refuses where a kept link could reach the class.
-    let paths = line.source_paths(source, dirs);
-    if paths.is_none() && keeps {
-        if let Some(why) = line.unresolved_near_class(source, dirs) {
-            return Some(finding(format!(
-                "`{name}` copies `{source}` with its links kept, which the guard cannot list, and {why}"
-            )));
-        }
-    }
-    let paths = paths.unwrap_or_default();
-    if keeps {
-        // Each kept link, with the directories its text is read from
-        // where it lands: the named links, and those inside a tree the
-        // call copies or moves whole, walked within the budget (review
-        // round six: `rsync -a links/ out/`).
-        // The named links first, so a link to the home refuses before any
-        // walk (security review F-8).
-        for link in paths.iter().filter(|p| is_link(p)) {
-            if let Some(v) = kept_link_violation(name, source, link, landing, line) {
-                return Some(v);
-            }
-        }
-        let mut kept: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
-        // A tree copied or moved whole, and a named link to a directory,
-        // whose contents a write through the copied link reaches.
-        let roots = paths
-            .iter()
-            .filter(|p| p.is_dir() && (call.recursive || name == "mv" || is_link(p)));
-        for root in roots {
-            match tree_links(root, landing) {
-                Some(links) => kept.extend(links),
-                None => {
-                    if let Some(why) = line.unresolved_near_class(source, dirs) {
-                        return Some(finding(format!(
-                            "`{name}` copies `{source}` with its links kept, and a directory in it cannot be read, and {why}"
-                        )));
-                    }
-                }
-            }
-        }
-        for (link, text_dirs) in &kept {
-            if let Some(v) = kept_link_violation(name, source, link, text_dirs, line) {
-                return Some(v);
-            }
-        }
-    }
-    if name != "mv" && call.mode == LinkMode::Copy {
-        return None;
-    }
-    match line.judge(source, link_dirs) {
-        Judged::Class(label) => Some(finding(format!(
-            "`{name}` moves or links the shell startup file `{label}`, so a later write through the new name edits it"
-        ))),
-        Judged::Unresolved(w) => line.unresolved_near_class(&w, link_dirs).map(|why| {
-            finding(format!(
-                "`{name}` moves or links `{w}`, which the guard cannot resolve, and {why}"
-            ))
-        }),
-        Judged::Placement(_) | Judged::Ordinary => None,
-    }
-}
-
-/// The symbolic links inside a tree, each with the directories its text is
-/// read from once the tree lands in one of `landing`, either as itself or
-/// as its contents. A link to a directory is followed, once, since a write
-/// through the copied link reaches what that directory holds (security
-/// review F-7). The walk stops at the budget with what it has found (the
-/// rest is a stated residual); `None` when a directory cannot be read.
-fn tree_links(root: &Path, landing: &[PathBuf]) -> Option<Vec<(PathBuf, Vec<PathBuf>)>> {
-    let top = root.file_name().map(PathBuf::from).unwrap_or_default();
-    let mut found = Vec::new();
-    let mut seen = 0usize;
-    let mut visited = std::collections::BTreeSet::new();
-    let mut stack = vec![(root.to_path_buf(), PathBuf::new())];
-    while let Some((dir, rel)) = stack.pop() {
-        if !visited.insert(std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone())) {
-            continue;
-        }
-        let entries = std::fs::read_dir(&dir).ok()?;
-        for entry in entries.flatten() {
-            seen += 1;
-            if seen > GLOB_LIMIT {
-                return Some(found);
-            }
-            let Ok(kind) = entry.file_type() else {
-                return None;
-            };
-            let path = entry.path();
-            if kind.is_dir() {
-                stack.push((path, rel.join(entry.file_name())));
-            } else if kind.is_symlink() {
-                let text_dirs = landing
-                    .iter()
-                    .flat_map(|l| [l.join(&rel), l.join(&top).join(&rel)])
-                    .collect();
-                if path.is_dir() {
-                    stack.push((path.clone(), rel.join(entry.file_name())));
-                }
-                found.push((path, text_dirs));
-            }
-        }
-    }
-    Some(found)
-}
-
-/// A kept link that is, or whose text from where it lands reaches, a
-/// startup file.
-fn kept_link_violation(
-    name: &str,
-    source: &str,
-    kept: &Path,
-    text_dirs: &[PathBuf],
-    line: &Line<'_>,
-) -> Option<Violation> {
-    if let Some(label) = line.class.target(kept) {
-        return Some(finding(format!(
-            "`{name}` copies a link to the shell startup file `{label}`, so a later write through the copy edits it"
-        )));
-    }
-    // A link to the home, `/etc` or a directory above a startup file gives
-    // a second path to the files there.
-    if kept.is_dir() {
-        if let Some(dir) = line.class.placement(kept) {
-            return Some(finding(format!(
-                "`{name}` copies a link to the directory `{dir}`, where shell startup files live, so a later write through the copy reaches them"
-            )));
-        }
-    }
-    // The link's text is read again where the copy lands, so a relative
-    // one can reach a startup file from there (review round five).
-    let text = std::fs::read_link(kept).ok()?;
-    let text = text.to_string_lossy().into_owned();
-    match line.judge(&text, text_dirs) {
-        Judged::Class(label) => Some(finding(format!(
-            "`{name}` copies the link `{source}`, whose text reaches the shell startup file `{label}` where it lands"
-        ))),
-        Judged::Unresolved(w) => line.unresolved_near_class(&w, text_dirs).map(|why| {
-            finding(format!(
-                "`{name}` copies the link `{source}` to `{w}`, which the guard cannot resolve, and {why}"
-            ))
-        }),
-        Judged::Placement(_) | Judged::Ordinary => None,
-    }
+    })
 }
 
 /// A copy, link or move judged as a whole: the destination and each
@@ -1934,18 +1526,18 @@ fn kept_link_violation(
 /// (`cp ~/.bashrc ./backup`).
 fn copy_judgment(
     name: &str,
+    args: &[String],
     call: &CopyCall,
     line: &Line<'_>,
     dirs: &[PathBuf],
 ) -> Option<Violation> {
-    let CopyCall {
-        dest,
-        sources,
-        recursive,
-        ..
-    } = call;
-    let (dest, recursive) = (dest.as_str(), *recursive);
+    let CopyCall { dest, sources } = call;
+    let dest = dest.as_str();
+    let recursive =
+        name == "ditto" || copy_flag(name, args, &['r', 'R', 'a'], &["--recursive", "--archive"]);
     let moves = name == "mv";
+    let links = name == "ln"
+        || (name == "cp" && copy_flag(name, args, &['s', 'l'], &["--symbolic-link", "--link"]));
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
         Judged::Class(label) => {
@@ -1962,16 +1554,11 @@ fn copy_judgment(
         }
         Judged::Placement(_) | Judged::Ordinary => {}
     }
-    let landing = link_text_dirs(dest, sources.len(), line, dirs);
-    let link_dirs = if call.mode == LinkMode::Symbolic {
-        landing.clone()
-    } else {
-        dirs.to_vec()
-    };
     for source in sources {
-        if let Some(v) = source_link_violation(name, call, source, line, dirs, &link_dirs, &landing)
-        {
-            return Some(v);
+        if moves || links {
+            if let Some(v) = word_violation(name, source, line, dirs) {
+                return Some(v);
+            }
         }
         let existing_dir = dirs
             .iter()
@@ -2187,58 +1774,6 @@ fn option_values<'a>(args: &'a [String], names: &[&str]) -> Vec<&'a str> {
         }
     }
     out
-}
-
-/// Whether a glob's tree can be read within the budget: the entries below
-/// its literal directory, to the depth its wild parts reach (any depth for
-/// `**`), number at most [`GLOB_LIMIT`], and no directory link sits where
-/// the walk would follow it.
-fn glob_within_budget(pattern: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('/').collect();
-    let Some(first_wild) = parts.iter().position(|part| has_glob(part)) else {
-        return true;
-    };
-    let prefix = parts[..first_wild].join("/");
-    let root = if prefix.is_empty() {
-        if pattern.starts_with('/') {
-            PathBuf::from("/")
-        } else {
-            PathBuf::from(".")
-        }
-    } else {
-        PathBuf::from(prefix)
-    };
-    let depth = if pattern.contains("**") {
-        usize::MAX
-    } else {
-        parts.len() - first_wild - 1
-    };
-    let mut seen = 0usize;
-    let mut stack = vec![(root, 0usize)];
-    while let Some((dir, level)) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            seen += 1;
-            if seen > GLOB_LIMIT {
-                return false;
-            }
-            if level >= depth {
-                continue;
-            }
-            let Ok(kind) = entry.file_type() else {
-                return false;
-            };
-            if kind.is_symlink() && entry.path().is_dir() {
-                return false;
-            }
-            if kind.is_dir() {
-                stack.push((entry.path(), level + 1));
-            }
-        }
-    }
-    true
 }
 
 /// The class entry a native edit targets, for edit-guard.

@@ -1888,7 +1888,7 @@ impl WordGlob {
     fn expand(&self) -> Result<Vec<PathBuf>, GlobStop> {
         let mut read = 0;
         if !self.conservative {
-            return expand_components(&self.pattern, self.literal, false, &mut read);
+            return expand_components(&self.pattern, self.literal, false, false, &mut read);
         }
         let prefix = self.prefix();
         let mut found = every_path_below(&prefix, &mut read)?;
@@ -1901,6 +1901,7 @@ impl WordGlob {
             found.extend(expand_components(
                 &self.pattern,
                 self.literal,
+                true,
                 true,
                 &mut read,
             )?);
@@ -1940,6 +1941,16 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
     Ok(found)
 }
 
+/// Expand a startup target's glob using the shell reader's bounded listing.
+/// This only expands named targets; it never inspects a copier's source tree.
+pub(crate) fn startup_glob_paths(pattern: &Path, match_hidden: bool) -> Option<Vec<PathBuf>> {
+    let literal = pattern
+        .components()
+        .take_while(|c| !has_glob(&c.as_os_str().to_string_lossy()))
+        .count();
+    expand_components(pattern, literal, false, match_hidden, &mut 0).ok()
+}
+
 /// [`WordGlob::expand`] one component at a time; the first `literal`
 /// components are never wild. `**` is zero or more directories. With
 /// `every_name`, each wild component matches every name, names that start
@@ -1948,6 +1959,7 @@ fn expand_components(
     pattern: &Path,
     literal: usize,
     every_name: bool,
+    match_hidden: bool,
     read: &mut usize,
 ) -> Result<Vec<PathBuf>, GlobStop> {
     let options = glob::MatchOptions {
@@ -1982,7 +1994,10 @@ fn expand_components(
                         return Err(GlobStop::TooManyEntries);
                     }
                     let name = entry.file_name();
-                    if !every_name && name.to_str().is_some_and(|n| n.starts_with('.')) {
+                    if !every_name
+                        && !match_hidden
+                        && name.to_str().is_some_and(|n| n.starts_with('.'))
+                    {
                         continue;
                     }
                     let path = dir.join(&name);
@@ -1996,7 +2011,7 @@ fn expand_components(
             continue;
         }
         let matcher = shell_pattern(&text);
-        let dotted = every_name || text.starts_with('.');
+        let dotted = every_name || match_hidden || text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
             let Ok(entries) = std::fs::read_dir(dir) else {

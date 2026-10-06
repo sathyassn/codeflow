@@ -547,9 +547,8 @@ fn review_round_two_forms_refuse() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// Review round three: an attached target directory, a relative link text
-/// read from the link's own directory, GNU sed's `e`, and a relative
-/// `ZDOTDIR`.
+/// Review round three: an attached target directory, GNU sed's `e`,
+/// and a relative `ZDOTDIR`. Landing-relative link text is a residual.
 #[test]
 fn review_round_three_forms_refuse() {
     let f = Fixture::new();
@@ -560,9 +559,6 @@ fn review_round_three_forms_refuse() {
         "cp -tH/ fixtures/.zshrc",
         "cp -ftH/ fixtures/.zshrc",
         "mv -tH/ fixtures/.bashrc",
-        "ln -s ../../../.zshrc out/rc",
-        "ln -s ../../../.zshrc out/rc; echo relative >> out/rc",
-        "ln -st out ../../../.zshrc",
         "sed -n '1e echo x >> sub/.envrc' notes",
         "sed -n 's/a/b/e' ~/.zshrc",
         "sed -n -e 1p -e 'w /tmp/x' ~/.zshrc",
@@ -605,157 +601,79 @@ fn review_round_three_forms_refuse() {
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// Review rounds four and five: the link modes of every copier, long
-/// option prefixes, dereference order, and a source that is a link copied
-/// as the link, judged where it lands.
+/// Named link sources and destinations remain in the class. Copier
+/// preservation, dereference order and landing-relative text are residuals.
 #[test]
-fn review_round_four_link_modes_refuse() {
+fn named_copy_and_link_paths() {
     let f = Fixture::new();
     std::fs::create_dir_all(f.project.join("out")).unwrap();
-    let mut wrong = Vec::new();
-    // Review round four: link modes of the copiers, and a source that is a
-    // link copied as the link.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("rclink")).unwrap();
-    // A dangling relative link whose text reaches the profile from `out/`
-    // (review round five).
-    #[cfg(unix)]
-    std::os::unix::fs::symlink("../../../.zshrc", f.project.join("relative-link")).unwrap();
-    std::fs::write(f.project.join("notes.txt"), "x\n").unwrap();
-    let mut refuse = vec![
+    for command in [
         "cp -s ~/.zshrc envlink; echo copied >> envlink",
         "cp -s sub/.envrc envlink",
         "cp --symbolic-link ~/.zshrc rc",
         "cp -as ~/.zshrc rc",
         "cp -l ~/.bashrc rc",
-        "install -l s ~/.zshrc rc5; echo installed >> rc5",
-        "install -ls ~/.zshrc rc5",
-        // Long option prefixes GNU accepts (builder sweep, round five).
-        "cp --sym ~/.zshrc rc",
-        "cp --li ~/.bashrc rc",
-    ];
-    if cfg!(unix) {
-        refuse.extend([
-            "cp -P rclink out/copy",
-            "cp -a rclink out/copy",
-            "rsync -l rclink out/copy",
-            "cp --no-d rclink out/copy",
-            "cp --preserve=mode,links rclink out/copy",
-            "rsync --li rclink out/copy",
-            "cp -LP rclink out/copy",
-            "cp -L -P rclink out/copy; echo x >> out/copy",
-            "cp -P relative-link out/copy; echo x >> out/copy",
-            "mv relative-link out/copy",
-            "cp --sym ~/.zshrc abbrev; echo x >> abbrev",
-            "cp -L -a rclink out/copy",
-        ]);
-    }
-    for command in refuse {
-        if !refused(&f.judge(command)) {
-            wrong.push(format!("allowed: {command}"));
-        }
+        "cp --link ~/.bashrc rc",
+        "ln -s ~/.zshrc rc",
+        "ln ~/.bashrc rc",
+        "mv ~/.bashrc rc",
+        "cp --target-directory=$HOME fixtures/.zshrc",
+        "cp --target-directory H/ fixtures/.zshrc",
+        "mv --target-directory H/ fixtures/.bashrc",
+        "cp -s notes.txt ~/.zshrc",
+        "ln notes.txt ~/.bashrc",
+    ] {
+        assert!(refused(&f.judge(command)), "allowed: {command}");
     }
     for command in [
         "cp ~/.zshrc backup",
         "cp -a ~/.bashrc backup",
-        "cp rclink out/copy",
-        "cp -L -r rclink out/copy",
-        "cp -P -L rclink out/copy",
         "cp -s notes.txt out/note-link",
         "install -m 644 notes.txt out/",
         "cp --preserve=mode notes.txt out/",
         "cp --remove-destination notes.txt out/",
+        "cp -r dir ~/",
+        "cp --target-directory=H/ notes.txt",
     ] {
-        let found = f.judge(command);
-        if refused(&found) {
-            wrong.push(format!("refused: {command}: {}", found[0].message));
-        }
+        assert!(!refused(&f.judge(command)), "refused: {command}");
     }
-    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// Review round six: a globbed source of links copied as links, and an
-/// abbreviated target directory.
+/// A startup file backed by a dotfile-manager link can still be backed up.
+#[cfg(unix)]
 #[test]
-fn review_round_six_forms_refuse() {
+fn copying_a_named_startup_link_only_reads_it() {
     let f = Fixture::new();
-    for dir in ["out", "links", "nested-links", "plain", "fixtures", "sub"] {
-        std::fs::create_dir_all(f.project.join(dir)).unwrap();
-    }
-    std::fs::write(f.project.join("plain/a.txt"), "x\n").unwrap();
-    std::fs::write(f.project.join("sub/.envrc"), "x\n").unwrap();
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
-        std::os::unix::fs::symlink("../sub/.envrc", f.project.join("nested-links/one")).unwrap();
-    }
-    let mut wrong = Vec::new();
-    let mut refuse = vec![
-        "cp --target-dir=\"$HOME\" fixtures/.zshrc",
-        "cp --target-dir H/ fixtures/.zshrc",
-        "mv --target=H/ fixtures/.bashrc",
-    ];
-    if cfg!(unix) {
-        refuse.extend([
-            "cp -P links/* out/; echo glob >> out/one",
-            "cp -a links/{one,two} out/",
-            "mv links/* out/",
-            "cp -P nested-links/* out/; echo glob >> out/one",
-            "rsync -a links/ out/",
-        ]);
-    }
-    for command in refuse {
-        if !refused(&f.judge(command)) {
-            wrong.push(format!("allowed: {command}"));
-        }
+    let backing = f.project.join("zshrc");
+    std::fs::write(&backing, "# fixture\n").unwrap();
+    std::fs::remove_file(f.home.join(".zshrc")).unwrap();
+    std::os::unix::fs::symlink(&backing, f.home.join(".zshrc")).unwrap();
+    for command in [
+        "cp ~/.zshrc backup",
+        "cp -a ~/.zshrc backup",
+        "cp -P ~/.zshrc backup",
+    ] {
+        assert!(!refused(&f.judge(command)), "refused: {command}");
     }
     for command in [
-        "cp -P plain/* out/",
-        "cp links/* out/",
-        "cp --target-dir=out notes.txt",
-        "cp --target-dir=H/ notes.txt",
+        "ln -s ~/.zshrc rc",
+        "cp -s ~/.zshrc rc",
+        "cp -l ~/.zshrc rc",
     ] {
-        let found = f.judge(command);
-        if refused(&found) {
-            wrong.push(format!("refused: {command}: {}", found[0].message));
-        }
+        assert!(refused(&f.judge(command)), "allowed: {command}");
     }
-    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 
-/// Review round seven: partial dereferencing keeps links, and declarations
-/// write no file.
+/// Declarations write no file, but their redirects and startup variables
+/// still receive the ordinary checks.
 #[test]
-fn review_round_seven_forms() {
+fn declarations_keep_their_write_checks() {
     let f = Fixture::new();
-    for dir in ["out", "out2", "links", "safe-links"] {
-        std::fs::create_dir_all(f.project.join(dir)).unwrap();
-    }
-    std::fs::write(f.project.join("safe-links/.envrc"), "x\n").unwrap();
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
-        std::os::unix::fs::symlink(".envrc", f.project.join("safe-links/one")).unwrap();
-    }
-    let mut wrong = Vec::new();
-    let mut refuse = vec![
+    for command in [
         "export X=notes > ~/.zshrc",
         "export BASH_ENV=notes; bash -c true",
-    ];
-    if cfg!(unix) {
-        refuse.extend([
-            "cp -RH links out/; echo tree >> out/links/one",
-            // A later `-H` cancels an earlier `-L` (review round eight).
-            "cp -R -L -H links out/",
-            "cp -RLH links out/",
-            "cp -R --dereference --dereference-command-line links out/",
-            "rsync -l --copy-unsafe-links safe-links/one out2/copy; echo rsync >> out2/copy",
-        ]);
-    }
-    for command in refuse {
-        if !refused(&f.judge(command)) {
-            wrong.push(format!("allowed: {command}"));
-        }
+    ] {
+        assert!(refused(&f.judge(command)), "allowed: {command}");
     }
     for command in [
         "export PATH=$PATH:./bin",
@@ -763,80 +681,9 @@ fn review_round_seven_forms() {
         "readonly CACHE=\"$CACHE\"",
         "declare -x EDITOR=vim",
     ] {
-        let found = f.judge_in(command, &f.home, &f.env());
-        if refused(&found) {
-            wrong.push(format!(
-                "refused from the home: {command}: {}",
-                found[0].message
-            ));
-        }
-    }
-    for command in [
-        "cp -RL links out/",
-        "rsync -aL links/ out/",
-        "cp -R -H -L links out/",
-    ] {
-        let found = f.judge(command);
-        if refused(&found) {
-            wrong.push(format!("refused: {command}: {}", found[0].message));
-        }
-    }
-    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
-}
-
-/// Security review F-7: a directory link inside a copied tree, or named
-/// itself, is followed, so a startup link behind it is seen.
-#[cfg(unix)]
-#[test]
-fn directory_links_in_copied_trees_are_followed() {
-    let f = Fixture::new();
-    for dir in ["out", "tree", "elsewhere/dl"] {
-        std::fs::create_dir_all(f.project.join(dir)).unwrap();
-    }
-    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("elsewhere/dl/one")).unwrap();
-    std::os::unix::fs::symlink(f.project.join("elsewhere"), f.project.join("tree/dirlink"))
-        .unwrap();
-    std::os::unix::fs::symlink(f.project.join("elsewhere"), f.project.join("dirlink")).unwrap();
-    for command in [
-        "cp -r tree out/; echo x >> out/tree/dirlink/dl/one",
-        "cp -P dirlink out/",
-        "rsync -a tree/ out/",
-    ] {
-        assert!(refused(&f.judge(command)), "allowed: {command}");
-    }
-    assert!(!refused(&f.judge("cp -rL tree out/")));
-    std::os::unix::fs::symlink(&f.home, f.project.join("homelink")).unwrap();
-    assert!(refused(&f.judge("cp -P homelink out/")));
-    assert!(!refused(&f.judge("cp -L -r homelink/work out/")));
-}
-
-/// Review round nine: rsync's option values and its `-t` are read by its
-/// own table, so a value never reads as a dereference flag.
-#[cfg(unix)]
-#[test]
-fn rsync_option_values_are_not_flags() {
-    let f = Fixture::new();
-    for dir in ["out", "links", "nested-links", "sub"] {
-        std::fs::create_dir_all(f.project.join(dir)).unwrap();
-    }
-    std::fs::write(f.project.join("sub/.envrc"), "x\n").unwrap();
-    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
-    std::os::unix::fs::symlink("../sub/.envrc", f.project.join("nested-links/one")).unwrap();
-    for command in [
-        "rsync -al -eL links/ out/",
-        "rsync -al -e L links/ out/",
-        "rsync -al --rsh=L links/ out/",
-        "rsync -aleL nested-links/ out/",
-        "rsync -a -t links/ out-time/",
-        "rsync -a -fL links/ out/",
-    ] {
-        assert!(refused(&f.judge(command)), "allowed: {command}");
-    }
-    for command in [
-        "rsync -aL links/ out/",
-        "rsync -a -e ssh notes.txt out/",
-        "rsync -at notes.txt out/",
-    ] {
-        assert!(!refused(&f.judge(command)), "refused: {command}");
+        assert!(
+            !refused(&f.judge_in(command, &f.home, &f.env())),
+            "refused: {command}"
+        );
     }
 }

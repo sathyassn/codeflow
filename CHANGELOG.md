@@ -294,11 +294,15 @@ erratum below, never an edit of the section.
   that run a program. A new doctor check, `startup-files`, reports a
   project whose settings lack the class and the files the home's startup
   files source from outside it, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`,
-  and a Codex config that selects another profile. A path built at run
-  time, a script written and then run, a relocated startup directory under
-  Claude's file tools and a nested `.envrc` under Codex are beyond what
-  ships; the residuals are listed per harness in the enforcement planes
-  page.
+  and a Codex config that selects another profile. The text backstop does
+  not inspect a link inside a copied or moved tree, judge link text from
+  where it lands, emulate dereference and preserve option semantics, or
+  recognize long-option prefixes beyond exact names. Everything built at
+  run time remains outside it. The sandboxes on all three harnesses hold
+  writes into the unwritable home; an unsandboxed seat stays open.
+  Relocated startup directories and nested `.envrc` files have the limits
+  listed per harness in the enforcement planes page. For reviewers, a new
+  copier option is a residual, not a new member of the startup class.
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with

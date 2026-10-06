@@ -320,42 +320,35 @@ level:
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
   `--no-rcs` and carries no `+` option, `-o` or other long option;
-- a link of a file of the class, made under any name and by any program
-  (`ln`, `cp -s`, `cp -l`, BSD `install -l`), since a later write through
-  the link reaches the file, and a copy or move that keeps a source link
-  to one, or whose text reaches one from where the copy lands (`cp -P`,
-  `cp -a`, `rsync -l`, `mv`); long options are read with the prefixes GNU
-  accepts (`cp --sym`), and `-L`, `-H` and `-P` in the order cp reads
-  them, the last one deciding;
-  `-H` and rsync's `--copy-unsafe-links` keep some links, so they do not
-  relax the check; a copied link to the home or another directory that
-  holds startup files refuses too;
+- `ln`, `cp -s` or `cp -l` whose named source or destination is a class
+  file, resolved from the command's working directory through the ordinary
+  path check; the guard does not interpret link text from its landing place;
+- a copy into a target directory spelled `-t DIR`, `-tDIR` or the exact
+  `--target-directory`, when the named file lands in the class;
 - `rg` without `--no-config`, since its configuration file can name a
   `--pre` program, and `sed` unless its options change no file and its
-  script is only addressed print commands (GNU sed's `e` and `w` run a
-  command or write a file);
-- a copy into a target directory spelled `-t DIR`, `-tDIR`,
-  `--target-directory` or any prefix of it GNU accepts, and a symbolic link whose text, read from the
-  link's own directory, reaches a startup file.
+  script is only addressed print commands.
+
+The backstop reads text, not a parse of copier behavior. For reviewers, a
+new copier option is a residual, not a new member of the startup class.
 
 git-guard refuses a user- or system-scope git key that runs a program, such
 as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
 
 What stays open, by harness and platform:
 
-- **Every harness.** The guards cannot see a path built at run time, a
-  script written in one call and run in another, or a compiled program
-  that writes the file; only a sandbox holds those, so on a seat without
-  one they stay open. An interpreter call whose code names a startup file
+- **Every harness.** The text guard does not inspect links inside a copied
+  or moved tree, judge link text from where it lands, emulate dereference
+  and preserve option semantics, or recognize long-option prefixes beyond
+  exact names. Everything built at run time remains outside it, including
+  a path assembled by a program and a script written in one call and run
+  in another. It does not read archive contents. The sandboxes on all three
+  harnesses hold writes into the unwritable home; an unsandboxed seat stays
+  open. Relocated startup files and writable workspace paths have the
+  limits listed below. An interpreter call whose code names a startup file
   is refused even when it only reads; read with `cat` or `grep` instead.
-  A tree copied or moved with its links kept is walked up to 4096
-  entries, following links to directories; in a larger one, a link to a
-  startup file past that point is copied unseen, and a write through the
-  copy in the same call is not refused, since the copy does not exist
-  when the call is judged. The guards do not read archive contents, so an archive
-  extracted outside the home can carry such a link in the same way. A home whose startup files are
-  themselves links, as dotfile managers make them, sees `cp -a ~/.zshrc
-  backup` refused; `cp ~/.zshrc backup` follows the link and passes.
+  A dotfile-manager symlink can be backed up with `cp -a ~/.zshrc backup`;
+  its preservation semantics are left to the sandbox.
 - **Claude Code.** The generated denies name the default locations. A
   `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
   Claude's file tools do not run edit-guard, so a native `Write` there is

@@ -523,15 +523,20 @@ while the guards judge each command by the name it spells.
    `cf-builder` extends. Grok's `workspace` sandbox already leaves the home
    unwritable; a nested `.envrc` has no Grok rule, since a Grok deny also
    blocks reads.
-3. **The guards are the backstop, with no relief.** exec-guard and
-   edit-guard refuse the visible writes under `security.shell_startup`,
+3. **The guards are a bounded text backstop, with no relief.** exec-guard
+   and edit-guard refuse visible writes under `security.shell_startup`,
    which has no policy key and holds at every integrity level: the operator
-   edits their own startup files. git-guard refuses user- and system-scope
-   git keys that run a program. The guards cannot stop a path built at run
-   time, a script written then run, or a compiled program that writes the
-   file; on a seat without a sandbox those stay open. The residuals per
-   harness and platform are listed in
-   `docs/architecture/enforcement-planes.md`.
+   edits their own startup files. Named sources and destinations of `ln`,
+   `cp -s` and `cp -l` use the ordinary path check. git-guard refuses user-
+   and system-scope git keys that run a program. The guard does not inspect
+   a link inside a copied or moved tree, judge link text from where it
+   lands, emulate dereference and preserve option semantics, or recognize
+   long-option prefixes beyond exact names. Everything built at run time
+   remains outside it. The sandboxes on all three harnesses hold writes
+   into the unwritable home; an unsandboxed seat stays open. The limits for
+   relocated startup files and writable workspace paths are listed in
+   `docs/architecture/enforcement-planes.md`. For reviewers, a new copier
+   option is a residual, not a new member of the startup class.
 4. **No run-time source following.** The guards do not read what a startup
    file sources. `codeflow doctor --check startup-files` lists the files the
    home's startup files source from outside the class.
