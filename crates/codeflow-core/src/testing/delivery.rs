@@ -152,25 +152,38 @@ pub fn matches(patterns: &[String], path: &str) -> bool {
     })
 }
 
-fn green_base(root: &Path, home: Option<&Path>, base: &str, config_digest: &str) -> bool {
+fn green_base(
+    root: &Path,
+    home: Option<&Path>,
+    base: &str,
+    config_digest: &str,
+) -> Result<bool, String> {
     let Some(home) = home else {
-        return false;
+        return Ok(false);
     };
-    let Ok(entries) = std::fs::read_dir(durable_root(root, home)) else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        let artifact = std::fs::read(entry.path().join("run.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-        artifact.is_some_and(|a| {
-            a["passed"] == true
-                && a["complete"] == true
-                && a["clean"] == true
-                && a["revision"] == base
-                && a["config_digest"] == config_digest
-        })
-    })
+    let directory = durable_root(root, home);
+    if !directory
+        .try_exists()
+        .map_err(|error| format!("cannot inspect green-base evidence: {error}"))?
+    {
+        return Ok(false);
+    }
+    let mut green = false;
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("cannot read green-base evidence: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("cannot read green-base entry: {error}"))?;
+        let bytes = std::fs::read(entry.path().join("run.json"))
+            .map_err(|error| format!("cannot read green-base run: {error}"))?;
+        let a: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot parse green-base run: {error}"))?;
+        green |= a["passed"] == true
+            && a["complete"] == true
+            && a["clean"] == true
+            && a["revision"] == base
+            && a["config_digest"] == config_digest;
+    }
+    Ok(green)
 }
 
 /// Select conservatively from the whole delta, then include producer closure.
@@ -208,21 +221,24 @@ pub fn select(
     let Some(base) = &options.since else {
         return all("no proven comparison base");
     };
-    let Some(base_sha) = git_output(
+    let base_sha = match git_output(
         root,
         &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
-    ) else {
-        return all("unproven base");
+    ) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
     let base_sha = base_sha.strip_suffix('\n').unwrap_or(&base_sha);
-    if !green_base(root, home, base_sha, config_digest) {
-        return all("base has no green run with the same config digest");
+    match green_base(root, home, base_sha, config_digest) {
+        Ok(true) => {}
+        Ok(false) => return all("base has no green run with the same config digest"),
+        Err(error) => return all(&error),
     }
-    if git_output(root, &["merge-base", "--is-ancestor", base_sha, "HEAD"]).is_none() {
-        return all("base is not a candidate ancestor");
+    if let Err(error) = git_output(root, &["merge-base", "--is-ancestor", base_sha, "HEAD"]) {
+        return all(&error);
     }
     // Include staged and unstaged edits as well as the committed range.
-    let Some(delta) = git_output(
+    let delta = match git_output(
         root,
         &[
             "diff",
@@ -232,12 +248,13 @@ pub fn select(
             base_sha,
             "--",
         ],
-    ) else {
-        return all("delta unavailable");
+    ) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
-    let Some(untracked) = git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"])
-    else {
-        return all("untracked inputs unavailable");
+    let untracked = match git_output(root, &["ls-files", "--others", "--exclude-standard", "-z"]) {
+        Ok(value) => value,
+        Err(error) => return all(&error),
     };
     let mut paths = Vec::new();
     let mut fields = delta.split('\0').filter(|f| !f.is_empty());
@@ -333,11 +350,11 @@ pub fn check_only(
 /// Git's text output, or `None` when it failed or is not valid UTF-8.
 ///
 /// OS text rule (issue 79, `docs/architecture.md`): kept strict on purpose.
-/// The output decides which targets a run may skip, and `None` makes every
+/// The output decides which targets a run may skip, and an error makes every
 /// caller select every target, so a path that is not valid UTF-8 widens the
 /// run and never narrows it. A lossy path could match a `narrow` pattern the
 /// real bytes do not and drop a check the change owes.
-fn git_output(root: &Path, args: &[&str]) -> Option<String> {
+fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
     let output = crate::git::command()
         .args(args)
         .current_dir(root)
@@ -345,12 +362,15 @@ fn git_output(root: &Path, args: &[&str]) -> Option<String> {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
         .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
+        .map_err(|error| format!("cannot read Git comparison: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot read Git comparison: Git exited {}",
+            output.status
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("cannot read Git comparison as UTF-8: {error}"))
 }
 
 /// Probe writable temporary storage and the tools actually named by selected commands.
@@ -578,8 +598,8 @@ mod tests {
     #[test]
     fn git_output_that_is_not_utf8_selects_every_target() {
         let dir = repository_with_a_non_utf8_path();
-        assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_none());
-        assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_some());
+        assert!(git_output(dir.path(), &["ls-tree", "-r", "--name-only", "-z", "HEAD"]).is_err());
+        assert!(git_output(dir.path(), &["rev-parse", "HEAD"]).is_ok());
     }
 
     /// Review finding: two link targets that differ only in invalid bytes must

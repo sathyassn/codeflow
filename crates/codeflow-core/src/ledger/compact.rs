@@ -56,9 +56,9 @@ pub fn compact_ledger_type(
     })?;
 
     // Find compactable fragments.
-    let completed_sessions = find_completed_sessions(ledger_dir);
+    let completed_sessions = find_completed_sessions(ledger_dir)?;
     let fragments =
-        compactable_fragments(&subdir, type_name, &completed_sessions, current_session_id);
+        compactable_fragments(&subdir, type_name, &completed_sessions, current_session_id)?;
 
     if fragments.is_empty() {
         drop(lock_file);
@@ -71,7 +71,7 @@ pub fn compact_ledger_type(
                 type_name,
                 &completed_sessions,
                 current_session_id,
-            ),
+            )?,
         });
     }
 
@@ -89,7 +89,7 @@ pub fn compact_ledger_type(
                 type_name,
                 &completed_sessions,
                 current_session_id,
-            ),
+            )?,
         });
     };
 
@@ -151,7 +151,7 @@ pub fn compact_ledger_type(
             type_name,
             &completed_sessions,
             current_session_id,
-        ),
+        )?,
     })
 }
 
@@ -194,131 +194,103 @@ pub fn compact_all(
 }
 
 /// Find session IDs that have a `session_end` event in the sessions type.
-fn find_completed_sessions(ledger_dir: &Path) -> std::collections::HashSet<String> {
+fn find_completed_sessions(
+    ledger_dir: &Path,
+) -> Result<std::collections::HashSet<String>, LedgerError> {
     let mut completed = std::collections::HashSet::new();
     let sessions_dir = ledger_dir.join("sessions");
-    if !sessions_dir.is_dir() {
-        return completed;
+    if !sessions_dir.try_exists()? {
+        return Ok(completed);
     }
-
-    // Check base file.
     let base = sessions_dir.join("sessions.jsonl");
-    scan_for_session_ends(&base, &mut completed);
-
-    // Check all fragment files.
-    if let Ok(entries) = fs::read_dir(&sessions_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            if name.as_encoded_bytes().starts_with(b"sessions-ses-")
-                && path
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
-            {
-                scan_for_session_ends(&path, &mut completed);
-            }
+    if base.try_exists()? {
+        scan_for_session_ends(&base, &mut completed)?;
+    }
+    for entry in fs::read_dir(&sessions_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.as_encoded_bytes().starts_with(b"sessions-ses-")
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        {
+            scan_for_session_ends(&path, &mut completed)?;
         }
     }
-
-    completed
+    Ok(completed)
 }
-
-/// Scan a JSONL file for `session_end` events and record their session IDs.
-fn scan_for_session_ends(path: &Path, completed: &mut std::collections::HashSet<String>) {
-    let Ok(content) = fs::read_to_string(path) else {
-        return;
-    };
-    for line in content.split_terminator('\n') {
-        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Ok(event) = serde_json::from_str::<Event>(trimmed) {
-            if event.event_type == "session_end" {
-                if let Some(sid) = &event.session_id {
-                    completed.insert(sid.clone());
-                }
+fn scan_for_session_ends(
+    path: &Path,
+    completed: &mut std::collections::HashSet<String>,
+) -> Result<(), LedgerError> {
+    let mut events = Vec::new();
+    read_events_from_file(path, &mut events)?;
+    for event in events {
+        if event.event_type == "session_end" {
+            if let Some(sid) = event.session_id {
+                completed.insert(sid);
             }
         }
     }
+    Ok(())
 }
 
 /// Find fragment files that can be compacted (their session is completed).
+fn fragment_sessions(
+    subdir: &Path,
+    type_name: &str,
+) -> Result<Vec<(PathBuf, String)>, LedgerError> {
+    let prefix = format!("{type_name}-");
+    let mut fragments = Vec::new();
+    for entry in fs::read_dir(subdir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let filename = entry.file_name();
+        if !filename.as_encoded_bytes().starts_with(prefix.as_bytes())
+            || !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        {
+            continue;
+        }
+        let name = filename.to_str().ok_or_else(|| {
+            LedgerError::Corrupt("cannot read fragment session identity as UTF-8".into())
+        })?;
+        let sid = name
+            .strip_prefix(&prefix)
+            .and_then(|name| name.strip_suffix(".jsonl"))
+            .ok_or_else(|| LedgerError::Corrupt("cannot read fragment filename framing".into()))?;
+        fragments.push((path, sid.to_string()));
+    }
+    Ok(fragments)
+}
 fn compactable_fragments(
     subdir: &Path,
     type_name: &str,
     completed_sessions: &std::collections::HashSet<String>,
     current_session_id: Option<&str>,
-) -> Vec<PathBuf> {
-    let mut fragments = Vec::new();
-    let prefix = format!("{type_name}-");
-
-    if let Ok(entries) = fs::read_dir(subdir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with(&prefix)
-                || !super::is_jsonl_file(name)
-                || super::is_lock_file(name)
-            {
-                continue;
-            }
-
-            // Extract session ID from filename: {type}-{session_id}.jsonl
-            let sid = name
-                .strip_prefix(&prefix)
-                .and_then(|s| s.strip_suffix(".jsonl"));
-            if let Some(sid) = sid {
-                // Skip current session.
-                if current_session_id == Some(sid) {
-                    continue;
-                }
-                // Only compact if session is completed.
-                if completed_sessions.contains(sid) {
-                    fragments.push(path);
-                }
-            }
-        }
-    }
-
-    fragments
+) -> Result<Vec<PathBuf>, LedgerError> {
+    Ok(fragment_sessions(subdir, type_name)?
+        .into_iter()
+        .filter(|(_, sid)| {
+            current_session_id != Some(sid.as_str()) && completed_sessions.contains(sid)
+        })
+        .map(|(path, _)| path)
+        .collect())
 }
-
-/// Count fragments that were skipped (active sessions).
 fn count_active_fragments(
     subdir: &Path,
     type_name: &str,
     completed_sessions: &std::collections::HashSet<String>,
     current_session_id: Option<&str>,
-) -> usize {
-    let prefix = format!("{type_name}-");
-    let mut count = 0;
-
-    if let Ok(entries) = fs::read_dir(subdir) {
-        for entry in entries.flatten() {
-            let filename = entry.file_name();
-            let Some(name) = filename.to_str() else {
-                count += 1;
-                continue;
-            };
-            if !name.starts_with(&prefix)
-                || !super::is_jsonl_file(name)
-                || super::is_lock_file(name)
-            {
-                continue;
-            }
-            let sid = name
-                .strip_prefix(&prefix)
-                .and_then(|s| s.strip_suffix(".jsonl"));
-            if let Some(sid) = sid {
-                if current_session_id == Some(sid) || !completed_sessions.contains(sid) {
-                    count += 1;
-                }
-            }
-        }
-    }
-
-    count
+) -> Result<usize, LedgerError> {
+    Ok(fragment_sessions(subdir, type_name)?
+        .into_iter()
+        .filter(|(_, sid)| {
+            current_session_id == Some(sid.as_str()) || !completed_sessions.contains(sid)
+        })
+        .count())
 }
 
 /// Try to acquire the writer lock for the base file and every fragment (each

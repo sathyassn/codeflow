@@ -65,27 +65,38 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// The files Grok reads project hooks from, in a stable order.
-fn hook_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(root.join(".grok").join("hooks"))
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| {
-                    path.extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+fn hook_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    let dir = root.join(".grok/hooks");
+    if dir
+        .try_exists()
+        .map_err(|error| format!("cannot inspect hooks directory: {error}"))?
+    {
+        for entry in std::fs::read_dir(&dir)
+            .map_err(|error| format!("cannot read hooks directory: {error}"))?
+        {
+            let path = entry
+                .map_err(|error| format!("cannot read hook entry: {error}"))?
+                .path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     for name in ["settings.json", "settings.local.json"] {
         let path = root.join(".claude").join(name);
-        if path.is_file() {
+        if path
+            .try_exists()
+            .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?
+        {
             files.push(path);
         }
     }
-    files
+    Ok(files)
 }
 
 /// Every `CodeFlow` command in a hooks value, with the event it is bound to.
@@ -124,26 +135,24 @@ fn collect(value: &Value, event: &str, out: &mut Vec<(String, String)>) {
 /// The parsed `hooks` object of each hook file Grok reads, with its path
 /// relative to `root`. A file that does not parse is left to the checks
 /// that own its format.
-fn parsed(root: &Path) -> Vec<(String, Value)> {
-    hook_files(root)
-        .into_iter()
-        .filter_map(|path| {
-            let text = std::fs::read_to_string(&path).ok()?;
-            let value: Value = serde_json::from_str(&text).ok()?;
-            let hooks = value.get("hooks")?.clone();
-            // Shown to a person (OS text rule, issue 79).
+fn parsed(root: &Path) -> Result<Vec<(String, Value)>, String> {
+    let mut parsed = Vec::new();
+    for path in hook_files(root)? {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        if let Some(hooks) = value.get("hooks") {
             let shown = crate::git::display_key(&crate::portable_path::slashed(
                 path.strip_prefix(root).unwrap_or(&path),
             ));
-            Some((shown, hooks))
-        })
-        .collect()
+            parsed.push((shown, hooks.clone()));
+        }
+    }
+    Ok(parsed)
 }
-
-/// The hook files holding a `CodeFlow` command Grok would skip because it
-/// carries a `$`.
-pub(super) fn templated(root: &Path) -> Vec<String> {
-    parsed(root)
+pub(super) fn templated(root: &Path) -> Result<Vec<String>, String> {
+    Ok(parsed(root)?
         .into_iter()
         .filter(|(_, hooks)| {
             codeflow_commands(hooks)
@@ -151,7 +160,7 @@ pub(super) fn templated(root: &Path) -> Vec<String> {
                 .any(|(_, command)| command.contains('$'))
         })
         .map(|(path, _)| path)
-        .collect()
+        .collect())
 }
 
 /// Grok's shell tool.
@@ -204,7 +213,7 @@ impl Handler {
 fn shipped_exec_guard_handlers() -> Vec<Handler> {
     SHIPPED_HOOK_FILES
         .iter()
-        .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+        .map(|text| serde_json::from_str::<Value>(text).expect("shipped hook JSON must parse"))
         .flat_map(|value| shell_guard_handlers(value.get("hooks").unwrap_or(&Value::Null)))
         .collect()
 }
@@ -263,6 +272,8 @@ fn shell_guard_handlers(hooks: &Value) -> Vec<Handler> {
 /// without running anything from the repository.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ShellGuard {
+    /// Hook inventory or content could not be read, so no guard is proven.
+    Unproven(String),
     /// A shipped exec-guard handler, its command, timeout and environment
     /// as shipped, is bound where the shell tool hits it.
     Shipped,
@@ -279,7 +290,11 @@ pub(super) enum ShellGuard {
 pub(super) fn shell_guard(root: &Path) -> ShellGuard {
     let shipped = shipped_exec_guard_handlers();
     let mut customised = Vec::new();
-    for (path, hooks) in parsed(root) {
+    let parsed = match parsed(root) {
+        Ok(parsed) => parsed,
+        Err(error) => return ShellGuard::Unproven(error),
+    };
+    for (path, hooks) in parsed {
         let handlers = shell_guard_handlers(&hooks);
         if handlers.iter().any(|handler| shipped.contains(handler)) {
             return ShellGuard::Shipped;
@@ -317,8 +332,12 @@ pub(super) fn binds_shipped_guard(text: &str) -> bool {
 pub(super) fn proposes_shipped_guard(text: &str) -> bool {
     binds_shipped_guard(text)
         || shipped_exec_guard_handlers().iter().any(|handler| {
-            serde_json::to_string(&handler.command)
-                .is_ok_and(|quoted| text.contains(quoted.trim_matches('"')))
+            serde_json::to_string(&handler.command).is_ok_and(|quoted| {
+                quoted
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .is_some_and(|value| text.contains(value))
+            })
         })
 }
 
@@ -395,7 +414,7 @@ mod tests {
     #[test]
     fn the_shipped_grok_hooks_carry_no_template_and_bind_the_shell_guard() {
         let dir = project(&[(".grok/hooks/codeflow.json", SHIPPED)]);
-        assert!(templated(dir.path()).is_empty());
+        assert!(templated(dir.path()).unwrap().is_empty());
         assert_eq!(shell_guard(dir.path()), ShellGuard::Shipped);
     }
 
@@ -597,7 +616,7 @@ mod tests {
             (".claude/settings.local.json", TEMPLATED),
         ]);
         assert_eq!(
-            templated(dir.path()),
+            templated(dir.path()).unwrap(),
             [
                 ".grok/hooks/codeflow.json",
                 ".claude/settings.json",
@@ -613,7 +632,7 @@ mod tests {
             (".grok/hooks/codeflow.json", SHIPPED),
             (".claude/settings.json", other),
         ]);
-        assert!(templated(dir.path()).is_empty());
+        assert!(templated(dir.path()).unwrap().is_empty());
     }
 
     #[test]

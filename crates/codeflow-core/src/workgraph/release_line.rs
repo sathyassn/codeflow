@@ -392,7 +392,9 @@ pub fn pull_request_merge(repo_root: &Path, base: &str, head: &str) -> Result<Oi
         let paths: BTreeSet<crate::git::GitName> = index
             .conflicts()
             .map_err(error)?
-            .filter_map(Result::ok)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(error)?
+            .into_iter()
             .filter_map(|conflict| conflict.our.or(conflict.their))
             .map(|entry| crate::git::GitName::from_bytes(&entry.path))
             .collect();
@@ -938,7 +940,7 @@ fn own_line_position(
     let Some((_, parent)) = newest else {
         return Ok(None);
     };
-    let same = record_at(repo, parent, path).is_some_and(|there| {
+    let same = record_at(repo, parent, path)?.is_some_and(|there| {
         there.criteria.signature() == now.criteria.signature()
             && active_block(&there) == active_block(now)
             && there.superseded_blocks() == now.superseded_blocks()
@@ -976,22 +978,33 @@ fn first_parent_path(
 /// completion this range makes (compared with `start`, the commit before
 /// the path). A cancelled holder and a completion from before the range
 /// own nothing.
-fn owners<'g>(repo: &Repository, graph: &'g Graph, start: Option<Oid>) -> Vec<&'g RecordView> {
-    graph
+fn owners<'g>(
+    repo: &Repository,
+    graph: &'g Graph,
+    start: Option<Oid>,
+) -> Result<Vec<&'g RecordView>, String> {
+    let mut owners = Vec::new();
+    for task in graph
         .records
         .values()
         .filter(|task| task.kind == RecordKind::Task && task.role.as_deref() == Some(RELEASE_ROLE))
-        .filter(|task| match task.status.as_str() {
-            "complete" => completion_changed(
-                start
-                    .and_then(|start| record_at(repo, start, &task.path))
-                    .as_ref(),
-                task,
-            ),
+    {
+        let eligible = match task.status.as_str() {
+            "complete" => {
+                let before = start
+                    .map(|start| record_at(repo, start, &task.path))
+                    .transpose()?
+                    .flatten();
+                completion_changed(before.as_ref(), task)
+            }
             "cancelled" => false,
             _ => true,
-        })
-        .collect()
+        };
+        if eligible {
+            owners.push(task);
+        }
+    }
+    Ok(owners)
 }
 
 /// The one task the release checks select as the owner of direct release
@@ -1029,28 +1042,34 @@ pub fn release_owner(
         .ok()
         .and_then(|commit| commit.parent_id(0).ok());
     let graph = Graph::from_revision(&repo, &head_oid.to_string())?;
-    Ok(match owners(&repo, &graph, start).as_slice() {
+    Ok(match owners(&repo, &graph, start)?.as_slice() {
         [owner] => Some(owner.id.clone()),
         _ => None,
     })
 }
 
 /// A task record at `commit`, when the path holds one that parses.
-fn record_at(repo: &Repository, commit: Oid, path: &str) -> Option<RecordView> {
-    blob_at(repo, commit, path)
-        .and_then(|content| RecordView::parse(RecordKind::Task, path, &content).ok())
+fn record_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<RecordView>, String> {
+    blob_at(repo, commit, path)?
+        .map(|content| RecordView::parse(RecordKind::Task, path, &content))
+        .transpose()
 }
 
-/// A task record from a tree entry.
-fn record_of(repo: &Repository, entry: Option<&Entry>, path: &str) -> Option<RecordView> {
-    let (id, _) = entry?;
-    let blob = repo.find_blob(*id).ok()?;
-    RecordView::parse(
-        RecordKind::Task,
-        path,
-        &String::from_utf8_lossy(blob.content()),
-    )
-    .ok()
+/// A task record from a tree entry; a missing entry is distinct from an unreadable blob.
+fn record_of(
+    repo: &Repository,
+    entry: Option<&Entry>,
+    path: &str,
+) -> Result<Option<RecordView>, String> {
+    let Some((id, _)) = entry else {
+        return Ok(None);
+    };
+    let blob = repo
+        .find_blob(*id)
+        .map_err(|error| format!("cannot read record {path}: {error}"))?;
+    let text = std::str::from_utf8(blob.content())
+        .map_err(|error| format!("cannot decode record {path}: {error}"))?;
+    RecordView::parse(RecordKind::Task, path, text).map(Some)
 }
 
 /// Whether `after` completes a task or changes its active block, compared
@@ -1258,27 +1277,28 @@ fn judge(
                 if record_kind_for_tree_path(path).is_none() || resolutions.contains(&path) {
                     continue;
                 }
-                if let Some(source) = commit
-                    .parent_ids()
-                    .skip(1)
-                    .find(|parent| entry_at(&repo, *parent, path) == after.get(path).copied())
-                {
-                    record_sources.insert(path.clone(), source);
+                for parent in commit.parent_ids().skip(1) {
+                    if entry_at(&repo, parent, path)? == after.get(path).copied() {
+                        record_sources.insert(path.clone(), parent);
+                        break;
+                    }
                 }
             }
             for path in &resolutions {
                 if record_kind_for_tree_path(path) != Some(RecordKind::Task) {
                     continue;
                 }
-                let then = record_of(&repo, expected.get(*path), path);
-                let now = record_of(&repo, after.get(*path), path);
+                let then = record_of(&repo, expected.get(*path), path)?;
+                let now = record_of(&repo, after.get(*path), path)?;
                 // The resolution may keep a `uid` one side holds (one line's
                 // backfill), but never drop the release side's `uid` nor
                 // bring one that neither side held.
                 let ours = commit
-                    .parent_id(0)
-                    .ok()
-                    .and_then(|parent| record_at(&repo, parent, path))
+                    .parent_ids()
+                    .next()
+                    .map(|parent| record_at(&repo, parent, path))
+                    .transpose()?
+                    .flatten()
                     .as_ref()
                     .and_then(uid_of);
                 let theirs = then.as_ref().and_then(uid_of);
@@ -1312,16 +1332,20 @@ fn judge(
                 })
                 .collect();
             for path in brought {
-                let then = record_of(&repo, changed[path].0.as_ref(), path);
-                let Some(now) = record_of(&repo, after.get(path), path) else {
+                let then = record_of(&repo, changed[path].0.as_ref(), path)?;
+                let Some(now) = record_of(&repo, after.get(path), path)? else {
                     continue;
                 };
-                let source = commit.parent_ids().skip(1).find(|parent| {
-                    record_at(&repo, *parent, path).is_some_and(|there| {
+                let mut source = None;
+                for parent in commit.parent_ids().skip(1) {
+                    if record_at(&repo, parent, path)?.is_some_and(|there| {
                         there.criteria.signature() == now.criteria.signature()
                             && active_block(&there) == active_block(&now)
-                    })
-                });
+                    }) {
+                        source = Some(parent);
+                        break;
+                    }
+                }
                 if criteria_changed(then.as_ref(), Some(&now)) {
                     match source {
                         Some(source) => match landed_criteria(&repo, &now, path, source) {
@@ -1389,7 +1413,7 @@ fn judge(
                 if completion_changed(then.as_ref(), &now) {
                     match (source, active_block(&now)) {
                         (Some(source), Some(block)) => {
-                            let introduced = introduced_at(&repo, &now, &block, source);
+                            let introduced = introduced_at(&repo, &now, &block, source)?;
                             let bound = bind_completion(
                                 &repo,
                                 &now,
@@ -1463,8 +1487,8 @@ fn judge(
             if record_kind_for_tree_path(path) != Some(RecordKind::Task) {
                 continue;
             }
-            let then = record_of(&repo, then.as_ref(), path);
-            let now = record_of(&repo, now.as_ref(), path);
+            let then = record_of(&repo, then.as_ref(), path)?;
+            let now = record_of(&repo, now.as_ref(), path)?;
             if direct_criteria_changed(then.as_ref(), now.as_ref()) {
                 findings.push(frozen(now.as_ref().or(then.as_ref()), path, &at));
             }
@@ -1533,7 +1557,7 @@ fn judge(
     // Direct work other than planning records belongs to the one task that
     // owns release integration, completed inside the range at the head.
     if !work.is_empty() {
-        match owners(&repo, &graph, start).as_slice() {
+        match owners(&repo, &graph, start)?.as_slice() {
             [] => {
                 let closed: Vec<&str> = graph
                     .records
@@ -1608,7 +1632,7 @@ fn judge(
     let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
     findings.extend(super::acceptance::epic_completions_in_range(
         &repo, &at_anchor, &graph, head_oid, true,
-    ));
+    )?);
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
     record_sources.retain(|path, _| !direct_records.contains(path));
@@ -1620,7 +1644,7 @@ fn judge(
         anchor,
         head_oid,
         &record_sources,
-    );
+    )?;
     Ok(Judgement {
         findings,
         path: report,
@@ -1630,31 +1654,35 @@ fn judge(
 }
 
 /// A path's full tree entry at `commit`, when it has one.
-fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<Entry> {
-    let entry = repo
+fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<Entry>, String> {
+    let tree = repo
         .find_commit(commit)
-        .ok()?
-        .tree()
-        .ok()?
-        .get_path(Path::new(path))
-        .ok()?;
-    Some((entry.id(), entry.filemode().cast_unsigned()))
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    match tree.get_path(Path::new(path)) {
+        Ok(entry) => Ok(Some((entry.id(), entry.filemode().cast_unsigned()))),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
-/// Where a brought change landed on its line: walking `source`'s
-/// first-parent chain, the first commit whose first parent no longer
-/// `holds` it.
-fn landing_on_line(repo: &Repository, source: Oid, holds: &dyn Fn(Oid) -> bool) -> Oid {
+/// Walk the first-parent chain until a parent no longer holds the value.
+fn landing_on_line(
+    repo: &Repository,
+    source: Oid,
+    holds: &dyn Fn(Oid) -> Result<bool, String>,
+) -> Result<Oid, String> {
     let mut at = source;
-    while let Some(parent) = repo
-        .find_commit(at)
-        .ok()
-        .and_then(|commit| commit.parent_id(0).ok())
-        .filter(|parent| holds(*parent))
-    {
+    loop {
+        let commit = repo.find_commit(at).map_err(|error| error.to_string())?;
+        let Some(parent) = commit.parent_ids().next() else {
+            return Ok(at);
+        };
+        if !holds(parent)? {
+            return Ok(at);
+        }
         at = parent;
     }
-    at
 }
 
 /// The records the range brings wholly from verified lines (every change
@@ -1670,17 +1698,24 @@ fn brought_records(
     anchor: Oid,
     head: Oid,
     sources: &BTreeMap<String, Oid>,
-) -> Brought {
+) -> Result<Brought, String> {
     let mut brought = Brought::default();
     for (path, source) in sources {
         let Some(kind) = record_kind_for_tree_path(path) else {
             continue;
         };
-        let parse = |content: &str| RecordView::parse(kind, path, content).ok();
-        let Some(now) = blob_at(repo, head, path).as_deref().and_then(parse) else {
+        let parse = |content: &str| RecordView::parse(kind, path, content);
+        let Some(now) = blob_at(repo, head, path)?
+            .as_deref()
+            .map(parse)
+            .transpose()?
+        else {
             continue;
         };
-        let then = blob_at(repo, anchor, path).as_deref().and_then(parse);
+        let then = blob_at(repo, anchor, path)?
+            .as_deref()
+            .map(parse)
+            .transpose()?;
         if then.as_ref().is_some_and(|then| {
             super::lifecycle::without_backfilled_uid(&now.content).as_deref()
                 == Some(then.content.as_str())
@@ -1688,24 +1723,23 @@ fn brought_records(
             brought.backfills.insert(now.id.clone());
             continue;
         }
-        let status_at = |oid: Oid| {
-            blob_at(repo, oid, path)
+        let status_at = |oid: Oid| -> Result<Option<String>, String> {
+            Ok(blob_at(repo, oid, path)?
                 .as_deref()
-                .and_then(parse)
-                .map(|record| record.status)
+                .map(parse)
+                .transpose()?
+                .map(|record| record.status))
         };
         if kind == RecordKind::Spec
             && matches!(now.status.as_str(), "approved" | "superseded")
             && then.as_ref().is_none_or(|then| then.status != now.status)
         {
             let landing = landing_on_line(repo, *source, &|oid| {
-                status_at(oid).as_deref() == Some(now.status.as_str())
-            });
+                Ok(status_at(oid)?.as_deref() == Some(now.status.as_str()))
+            })?;
             let problem = match super::acceptance::non_planning_change(
                 repo,
-                repo.find_commit(landing)
-                    .ok()
-                    .and_then(|commit| commit.parent_id(0).ok()),
+                repo.find_commit(landing).map_err(|error| error.to_string())?.parent_ids().next(),
                 landing,
             ) {
                 Ok(None) => None,
@@ -1737,8 +1771,9 @@ fn brought_records(
             let Some(cutoff) = cutoffs.get(line) else {
                 continue;
             };
-            let blob = blob_at(repo, head, path);
-            let landing = landing_on_line(repo, *source, &|oid| blob_at(repo, oid, path) == blob);
+            let blob = blob_at(repo, head, path)?;
+            let landing =
+                landing_on_line(repo, *source, &|oid| Ok(blob_at(repo, oid, path)? == blob))?;
             if lines.uncovered(line, *cutoff, landing).is_none() {
                 brought.legacy.insert(
                     now.id.clone(),
@@ -1752,7 +1787,7 @@ fn brought_records(
             }
         }
     }
-    brought
+    Ok(brought)
 }
 
 /// A criteria change made directly on the release line.
@@ -1792,7 +1827,8 @@ enum Landed {
 fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid) -> Landed {
     let signature = now.criteria.signature();
     let carries = |oid: Oid| {
-        record_at(repo, oid, path).is_some_and(|there| there.criteria.signature() == signature)
+        record_at(repo, oid, path)
+            .map(|record| record.is_some_and(|there| there.criteria.signature() == signature))
     };
     let mut at = source;
     let landing = loop {
@@ -1806,9 +1842,13 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
                 ),
             ));
         };
-        match commit.parent_id(0).ok() {
-            Some(parent) if carries(parent) => at = parent,
-            _ => break commit,
+        let Some(parent) = commit.parent_ids().next() else {
+            break commit;
+        };
+        match carries(parent) {
+            Ok(true) => at = parent,
+            Ok(false) => break commit,
+            Err(error) => return Landed::Unreadable(finding(FROZEN_RULE, error)),
         }
     };
     // Resolution 43: a reopened task keeps its criteria. Judged first, as
@@ -1872,56 +1912,67 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
 /// merge being the clean re-merge of its parents. Any other landing that
 /// changed a criterion with code stays frozen.
 fn own_task_landing(repo: &Repository, path: &str, landing: &git2::Commit<'_>) -> bool {
+    // landed_criteria grants the exemption only on a proven successful read.
+    own_task_landing_read(repo, path, landing).unwrap_or(false)
+}
+
+fn own_task_landing_read(
+    repo: &Repository,
+    path: &str,
+    landing: &git2::Commit<'_>,
+) -> Result<bool, String> {
     if landing.parent_count() != 2 {
-        return false;
+        return Ok(false);
     }
     let (Ok(first), Ok(second)) = (landing.parent_id(0), landing.parent_id(1)) else {
-        return false;
+        return Ok(false);
     };
     let Ok(changed) = changes(repo, Some(first), landing.id()) else {
-        return false;
+        return Ok(false);
     };
-    let mut amended = changed
-        .iter()
-        .filter_map(|(changed_path, (before, after))| {
-            (record_kind_for_tree_path(changed_path) == Some(RecordKind::Task)
-                && direct_criteria_changed(
-                    record_of(repo, before.as_ref(), changed_path).as_ref(),
-                    record_of(repo, after.as_ref(), changed_path).as_ref(),
-                ))
-            .then_some(changed_path.as_str())
-        });
+    let mut amended_paths = Vec::new();
+    for (changed_path, (before, after)) in &changed {
+        if record_kind_for_tree_path(changed_path) == Some(RecordKind::Task)
+            && direct_criteria_changed(
+                record_of(repo, before.as_ref(), changed_path)?.as_ref(),
+                record_of(repo, after.as_ref(), changed_path)?.as_ref(),
+            )
+        {
+            amended_paths.push(changed_path.as_str());
+        }
+    }
+    let mut amended = amended_paths.into_iter();
     if amended.next() != Some(path) || amended.next().is_some() {
-        return false;
+        return Ok(false);
     }
-    if record_at(repo, first, path).is_some_and(|before| before.status == "complete") {
-        return false;
+    if record_at(repo, first, path)?.is_some_and(|before| before.status == "complete") {
+        return Ok(false);
     }
-    let Some(at_merge) = record_at(repo, landing.id(), path) else {
-        return false;
+    let Some(at_merge) = record_at(repo, landing.id(), path)? else {
+        return Ok(false);
     };
     if at_merge.status != "complete" {
-        return false;
+        return Ok(false);
     }
     let Some(block) = active_block(&at_merge) else {
-        return false;
+        return Ok(false);
     };
     let Some(reviewed) = commit_of(repo, &block.reviewed) else {
-        return false;
+        return Ok(false);
     };
     // The review saw these criteria: a change after the reviewed commit is
     // unreviewed, whatever the binding rule says of it.
-    if record_at(repo, reviewed, path)
+    if record_at(repo, reviewed, path)?
         .is_none_or(|at_review| at_review.criteria.signature() != at_merge.criteria.signature())
     {
-        return false;
+        return Ok(false);
     }
     let reaches =
         |from: Oid| from == reviewed || repo.graph_descendant_of(from, reviewed).unwrap_or(false);
     if !reaches(second) || reaches(first) {
-        return false;
+        return Ok(false);
     }
-    is_clean_remerge(repo, landing).unwrap_or(false)
+    is_clean_remerge(repo, landing).map_err(|error| error.to_string())
 }
 
 /// What a commit's project config says of [`MARKER_KEY`]. Only config
@@ -2012,7 +2063,9 @@ fn config_at(
     let blob = repo
         .find_blob(entry.id())
         .map_err(|error| unavailable(".codeflow/project.toml", entry.id(), &error))?;
-    let config = match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
+    let text = std::str::from_utf8(blob.content())
+        .map_err(|error| format!("cannot decode .codeflow/project.toml at {commit}: {error}"))?;
+    let config = match text.parse::<toml::Value>() {
         Err(error) => Config {
             present: true,
             marker: Marker::Invalid(format!("not valid TOML: {error}")),

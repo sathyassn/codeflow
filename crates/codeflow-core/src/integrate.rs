@@ -199,7 +199,7 @@ pub fn integrate(
 
     // Canonical policy (git.protected_branches with glob support), not the
     // obsolete flat SecurityPolicy — so a custom protected target is honored.
-    let (policy, _) = Policy::load_effective(repo_root);
+    let (policy, _) = Policy::load_effective(repo_root).map_err(IntegrateError::Preflight)?;
     let target_protected = policy.git.branch_is_protected(target);
 
     let original = checked_out_branch(&repo, target)?;
@@ -492,7 +492,16 @@ fn refresh_target_worktrees(
     // it comes from git's own files as exact bytes. A text listing could end a
     // path at a newline or spell it lossily, and then name another checkout.
     let target_ref = format!("refs/heads/{target}");
-    for (path, head) in crate::git::checkout_heads(&repo) {
+    let heads = match crate::git::checkout_heads(&repo) {
+        Ok(heads) => heads,
+        Err(error) => {
+            warnings.push(format!(
+                "cannot read linked worktrees after landing: {error}"
+            ));
+            return warnings;
+        }
+    };
+    for (path, head) in heads {
         if head.as_ref().map(crate::git::GitName::bytes) != Some(target_ref.as_bytes()) {
             continue;
         }

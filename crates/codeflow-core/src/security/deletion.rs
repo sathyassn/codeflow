@@ -3811,7 +3811,7 @@ impl Reader<'_> {
         let mut out = Values::new();
         let mut may_fail = false;
         for cwd in &st.cwd {
-            let dir = resolve(cwd, target);
+            let dir = resolve(cwd, target).unwrap_or_else(|reason| taint(&reason));
             if let Some(reason) = unproven(&dir) {
                 out.insert(taint(reason));
                 may_fail = true;
@@ -4271,7 +4271,11 @@ impl Reader<'_> {
             st.set(name, [value.clone()].into());
         }
         if let Some(dir) = &run.cwd {
-            let cwd = st.cwd.iter().map(|cwd| resolve(cwd, dir)).collect();
+            let cwd = st
+                .cwd
+                .iter()
+                .map(|cwd| resolve(cwd, dir).unwrap_or_else(|reason| taint(&reason)))
+                .collect();
             st.set_cwd(cwd);
         }
         let argv = run.argv;
@@ -4573,7 +4577,13 @@ impl Reader<'_> {
                     continue;
                 }
             }
-            let path = resolve(cwd, operand);
+            let path = match resolve(cwd, operand) {
+                Ok(path) => path,
+                Err(reason) => {
+                    pending.get_or_insert(Unproven { reason, cwd: false });
+                    continue;
+                }
+            };
             if self.rooted_unplaced && path.starts_with('/') {
                 // Its spelling, or a name its glob may match, can still
                 // be protected; where it lands cannot be proven.
@@ -7042,28 +7052,28 @@ fn display_dir(cwd: &str) -> String {
 
 /// `path` as the line reaches it from `cwd`: absolute, from `~`, or
 /// relative to where the line started.
-fn resolve(cwd: &str, path: &str) -> String {
+fn resolve(cwd: &str, path: &str) -> Result<String, String> {
     if let Some(rest) = path.strip_prefix('~') {
         if rest.is_empty() || rest.starts_with('/') {
             return from_home(rest);
         }
     }
     if path.starts_with('/') || path.starts_with('$') {
-        return path.to_string();
+        return Ok(path.to_string());
     }
     if cwd.is_empty() {
-        return path.to_string();
+        return Ok(path.to_string());
     }
     if let Some(rest) = cwd.strip_prefix('~') {
         return from_home(&format!("{rest}/{path}"));
     }
     if cwd.starts_with('/') {
-        return normalize_path(&format!("{cwd}/{path}"));
+        return Ok(normalize_path(&format!("{cwd}/{path}")));
     }
     if cwd.starts_with('$') {
-        return format!("{cwd}/{path}");
+        return Ok(format!("{cwd}/{path}"));
     }
-    relative_join(cwd, path)
+    Ok(relative_join(cwd, path))
 }
 
 /// Join two project-relative paths, keeping any leading `..`.
@@ -7087,24 +7097,28 @@ fn relative_join(base: &str, path: &str) -> String {
 
 /// A path below `~` with its `.` and `..` resolved; leaving the home
 /// directory resolves from `HOME` instead.
-fn from_home(rest: &str) -> String {
+fn from_home(rest: &str) -> Result<String, String> {
     let mut parts: Vec<&str> = Vec::new();
     for part in rest.split('/') {
         match part {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-                    return normalize_path(&format!("{home}/{rest}"));
+                    let home =
+                        std::env::var_os("HOME").ok_or_else(|| "cannot read HOME".to_string())?;
+                    let home = home
+                        .to_str()
+                        .ok_or_else(|| "cannot read HOME as UTF-8".to_string())?;
+                    return Ok(normalize_path(&format!("{home}/{rest}")));
                 }
             }
             _ => parts.push(part),
         }
     }
     if parts.is_empty() {
-        "~".to_string()
+        Ok("~".to_string())
     } else {
-        format!("~/{}", parts.join("/"))
+        Ok(format!("~/{}", parts.join("/")))
     }
 }
 

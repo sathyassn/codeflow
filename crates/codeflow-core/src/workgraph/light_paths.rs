@@ -113,7 +113,7 @@ pub fn create_follow_up_with(
     allocate: Option<&mut Allocator<'_>>,
 ) -> Result<NewRecord, StoreError> {
     let pm_root = repo_root.join("project-management");
-    let source = crate::workgraph::layout::task_record_files(&pm_root)
+    let source = crate::workgraph::layout::task_record_files(&pm_root)?
         .into_iter()
         .find(|path| path.file_stem().and_then(|stem| stem.to_str()) == Some(source_id))
         .ok_or_else(|| StoreError::NotFound(format!("task:{source_id}")))?;
@@ -220,6 +220,7 @@ pub fn create_integration_branch(
     title: &str,
 ) -> Result<IntegrationBranch, String> {
     let from = crate::workgraph::default_work_target(repo_root)
+        .map_err(|error| error.to_string())?
         .ok_or("no main or master branch (local or origin) to cut the integration branch from")?;
     let name = format!("integration/{epic_id}-{}", slug(title));
     git(repo_root, &["branch", &name, &from])?;
@@ -238,20 +239,31 @@ pub fn create_integration_branch(
 }
 
 /// The next `ADR-NNNN` after the highest one in `docs/decisions/`.
-#[must_use]
-pub fn next_adr_id(repo_root: &Path) -> String {
-    let highest = fs::read_dir(repo_root.join("docs/decisions"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            // ADR files are named by this tool in ASCII (OS text rule, issue 79).
-            let name = entry.file_name().into_string().ok()?;
-            name.strip_prefix("ADR-")?.get(..4)?.parse::<u32>().ok()
-        })
-        .max()
-        .unwrap_or(0);
-    format!("ADR-{:04}", highest + 1)
+///
+/// # Errors
+///
+/// Returns an error if the ADR directory or an entry cannot be read.
+pub fn next_adr_id(repo_root: &Path) -> Result<String, StoreError> {
+    let entries = match fs::read_dir(repo_root.join("docs/decisions")) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("ADR-0001".into()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut highest = 0;
+    for entry in entries {
+        let entry = entry?;
+        // Non-ASCII/non-ID names are not ADR identities, but directory I/O errors refuse allocation.
+        if let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.strip_prefix("ADR-"))
+            .and_then(|rest| rest.get(..4))
+            .and_then(|digits| digits.parse::<u32>().ok())
+        {
+            highest = highest.max(number);
+        }
+    }
+    Ok(format!("ADR-{:04}", highest + 1))
 }
 
 /// Write the next ADR from `template` with `status: proposed` (R-36),
@@ -264,7 +276,7 @@ pub fn next_adr_id(repo_root: &Path) -> String {
 /// overwritten).
 pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRecord, StoreError> {
     create_adr_with(repo_root, template, title, &mut |_| {
-        Ok((next_adr_id(repo_root), crate::ids::new_uid()))
+        Ok((next_adr_id(repo_root)?, crate::ids::new_uid()))
     })
 }
 
@@ -290,7 +302,7 @@ pub fn create_adr_with(
     }
     let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(
         &repo_root.join("project-management"),
-    ))?;
+    )?)?;
     let date = crate::workgraph::now_rfc3339()[..10].to_string();
     // The frontmatter title is a YAML scalar; the heading keeps the text.
     let encoded =
@@ -418,7 +430,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let decisions = dir.path().join("docs/decisions");
         fs::create_dir_all(&decisions).unwrap();
-        assert_eq!(next_adr_id(dir.path()), "ADR-0001");
+        assert_eq!(next_adr_id(dir.path()).unwrap(), "ADR-0001");
         fs::write(decisions.join("ADR-0007-old.md"), "x").unwrap();
         fs::write(decisions.join("template.md"), "x").unwrap();
         let template = "---\nid: ADR-NNNN\ntitle: <short decision title>\ndate: YYYY-MM-DD\nstatus: accepted          # proposed | accepted | superseded\n---\n\n# ADR-NNNN: <short decision title>\n";

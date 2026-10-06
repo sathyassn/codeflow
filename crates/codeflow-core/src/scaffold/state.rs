@@ -285,11 +285,12 @@ impl Baseline {
         format!("{BASELINE_DIR}/{dest}")
     }
 
-    #[must_use]
-    pub fn read(root: &Path, dest: &str) -> Option<String> {
-        // A symlinked baseline path resolves to `None` (treated as absent),
-        // exactly like a missing baseline — never a read that follows the link.
-        read_beneath_root(root, &Self::rel(dest)).ok().flatten()
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the baseline cannot be read safely or decoded.
+    pub fn read(root: &Path, dest: &str) -> Result<Option<String>, ScaffoldError> {
+        read_beneath_root(root, &Self::rel(dest))
     }
 
     /// # Errors

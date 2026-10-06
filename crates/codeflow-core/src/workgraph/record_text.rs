@@ -8,6 +8,14 @@
 
 use std::fmt;
 
+/// Remove one physical Markdown line ending from a raw split-inclusive line.
+/// Callers pass source lines, never a value already parsed from a line.
+pub(crate) fn without_line_ending(line: &str) -> &str {
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(line)
+}
+
 /// One acceptance criterion of a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Criterion {
@@ -177,17 +185,13 @@ fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
 pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
     use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-    let lines: Vec<&str> = lines
-        .iter()
-        .map(|line| line.trim_end_matches('\r'))
-        .collect();
     if lines.is_empty() {
         return Vec::new();
     }
     let text = lines.join("\n");
     let mut starts = Vec::with_capacity(lines.len());
     let mut offset = 0;
-    for line in &lines {
+    for line in lines {
         starts.push(offset);
         offset += line.len() + 1;
     }
@@ -281,18 +285,15 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
 /// The number of lines the frontmatter takes, fences included (0 without
 /// a closed frontmatter).
 pub(crate) fn frontmatter_len(lines: &[&str]) -> usize {
-    (lines
-        .first()
-        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
-        == Some("---"))
-    .then(|| {
-        lines
-            .iter()
-            .skip(1)
-            .position(|line| line.trim_end_matches([' ', '\t', '\r']) == "---")
-    })
-    .flatten()
-    .map_or(0, |index| index + 2)
+    (lines.first().map(|line| line.trim_end_matches([' ', '\t'])) == Some("---"))
+        .then(|| {
+            lines
+                .iter()
+                .skip(1)
+                .position(|line| line.trim_end_matches([' ', '\t']) == "---")
+        })
+        .flatten()
+        .map_or(0, |index| index + 2)
 }
 
 /// [`scan`] for a whole record: the frontmatter is hidden and never parsed
@@ -379,7 +380,7 @@ fn section_markdown(body: &str, heading: &str) -> Option<String> {
                 if scanned[index].kind == LineKind::Hidden {
                     ""
                 } else {
-                    lines[index].trim_end_matches('\r')
+                    lines[index]
                 }
             })
             .collect::<Vec<_>>()
@@ -998,10 +999,15 @@ fn parse_key_line(number: usize, line: &str) -> Result<(&'static str, &str), Acc
 ///
 /// Returns the first structural problem with its 1-based line number.
 pub fn parse_acceptance(text: &str) -> Result<AcceptanceBlock, AcceptanceError> {
-    let mut lines = text
-        .lines()
+    parse_acceptance_lines(text.lines())
+}
+
+fn parse_acceptance_lines<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Result<AcceptanceBlock, AcceptanceError> {
+    let mut lines = lines
         .enumerate()
-        .map(|(index, line)| (index + 1, line.trim_end_matches('\r')))
+        .map(|(index, line)| (index + 1, line))
         .filter(|(_, line)| !line.trim_matches([' ', '\t']).is_empty());
     let (first_line, header) = lines
         .next()
@@ -1124,15 +1130,13 @@ pub struct FencedAcceptance {
 }
 
 impl FencedAcceptance {
-    /// Whether the block is (or, when malformed, is headed as) superseded.
+    /// Whether a valid block is superseded. Malformed blocks remain active so
+    /// the lifecycle validator refuses their parse error.
     #[must_use]
     pub fn is_superseded(&self) -> bool {
         match &self.parsed {
             Ok(block) => block.superseded,
-            Err(_) => self
-                .inner
-                .trim_start_matches([' ', '\t', '\r', '\n'])
-                .starts_with("acceptance_superseded:"),
+            Err(_) => false,
         }
     }
 }
@@ -1161,7 +1165,8 @@ pub fn acceptance_blocks(body: &str) -> Vec<FencedAcceptance> {
                 let inner = current.take().unwrap_or_default().join("\n");
                 let head = inner.trim_start_matches([' ', '\t', '\r', '\n']);
                 if head.starts_with("acceptance:") || head.starts_with("acceptance_superseded:") {
-                    let parsed = parse_acceptance(&inner);
+                    // section already removed physical CRLF framing; a content CR remains content.
+                    let parsed = parse_acceptance_lines(inner.split('\n'));
                     blocks.push(FencedAcceptance { inner, parsed });
                 }
             }
@@ -1756,5 +1761,17 @@ their sources, or the `init_e2e` case that renders them (journey).";
             let rendered = render_acceptance(&original);
             assert_eq!(parse_acceptance(&rendered), Ok(original), "{rendered}");
         }
+    }
+    #[test]
+    fn r16_line_framing_is_removed_once() {
+        assert_eq!(without_line_ending("value\r\n"), "value");
+        assert_eq!(without_line_ending("value\n\n"), "value\n");
+        assert_eq!(without_line_ending("value\r\r\n"), "value\r");
+        let lines: Vec<_> = "---\r\r\nid: TSK-001\r\n---\r\n".lines().collect();
+        assert_eq!(
+            frontmatter_len(&lines),
+            0,
+            "a content CR is not another line delimiter"
+        );
     }
 }

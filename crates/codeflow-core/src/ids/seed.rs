@@ -378,7 +378,10 @@ fn insert_after(text: &str, after: &str, line: &str) -> Option<String> {
     let mut in_front = false;
     for (index, current) in text.split_inclusive('\n').enumerate() {
         out.push_str(current);
-        let bare = current.trim_end_matches(['\r', '\n']);
+        let bare = current
+            .strip_suffix("\r\n")
+            .or_else(|| current.strip_suffix('\n'))
+            .unwrap_or(current);
         if index == 0 {
             in_front = bare == "---";
             continue;

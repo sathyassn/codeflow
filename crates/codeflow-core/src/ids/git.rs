@@ -430,33 +430,48 @@ fn checked_bytes(args: &[&str], output: Output) -> Result<Vec<u8>, IdsError> {
 /// a name git would quote (non-ASCII, a quote, a tab) is never altered. A
 /// name that is not valid UTF-8 reads as its storage key (OS text rule,
 /// issue 79): it keeps its exact bytes, differs from every text name, and no
-/// record or registry path matches it. Leading newlines that `log -z` puts
-/// between a header and its first path are dropped, and so is the empty
-/// tail.
+/// record or registry path matches it. Only NUL field framing is removed;
+/// every byte in a nonempty field, including leading LF, is preserved.
 #[must_use]
 pub fn z_fields(bytes: &[u8]) -> Vec<String> {
     bytes
         .split(|byte| *byte == 0)
-        .map(|field| {
-            let start = field
-                .iter()
-                .position(|byte| *byte != b'\n')
-                .unwrap_or(field.len());
-            &field[start..]
-        })
         .filter(|field| !field.is_empty())
         .map(|field| crate::git::GitName::from_bytes(field).storage_key())
         .collect()
 }
-
-/// The records of `log --format=%x1e...` output, each as its [`z_fields`].
+/// Raw-log record reader. RS belongs only to header fields; LF belongs only
+/// to raw metadata framing, and neither delimiter is removed from path fields.
 #[must_use]
 pub fn z_records(bytes: &[u8]) -> Vec<Vec<String>> {
-    bytes
-        .split(|byte| *byte == 0x1e)
-        .filter(|record| !record.iter().all(u8::is_ascii_whitespace))
-        .map(z_fields)
-        .collect()
+    let mut records = Vec::new();
+    let mut record = Vec::new();
+    let mut path_next = false;
+    for field in bytes
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+    {
+        if path_next {
+            record.push(crate::git::GitName::from_bytes(field).storage_key());
+            path_next = false;
+        } else if let Some(header) = field.strip_prefix(&[0x1e]) {
+            if !record.is_empty() {
+                records.push(std::mem::take(&mut record));
+            }
+            record.push(crate::git::GitName::from_bytes(header).storage_key());
+        } else {
+            let meta = field
+                .strip_prefix(b"\n")
+                .filter(|meta| meta.starts_with(b":"))
+                .unwrap_or(field);
+            path_next = meta.starts_with(b":");
+            record.push(crate::git::GitName::from_bytes(meta).storage_key());
+        }
+    }
+    if !record.is_empty() {
+        records.push(record);
+    }
+    records
 }
 
 #[cfg(test)]
@@ -472,8 +487,8 @@ mod tests {
         assert_ne!(fields[0], fields[1]);
         assert_eq!(fields[1], "docs/caf\u{fffd}.md");
         assert_eq!(crate::git::display_key(&fields[0]), "docs/caf\\xe9.md");
-        assert_eq!(fields[2], ":meta");
-        assert_eq!(z_records(b"\x1eabc\0x\0\x1e  \x1edef\0").len(), 2);
+        assert_eq!(fields[2], "\n:meta");
+        assert_eq!(z_records(b"\x1eabc\0x\0\x1edef\0").len(), 2);
     }
 
     #[test]
@@ -588,5 +603,18 @@ mod tests {
             .write_all("[user]\n\temail = \"owner@example.test\u{a0}\"\n".as_bytes())
             .unwrap();
         assert_eq!(git.user_email().unwrap(), "owner@example.test\u{a0}");
+    }
+}
+
+#[cfg(test)]
+mod r16_core_regressions {
+    #[test]
+    fn r16_git_raw_paths_keep_lf_and_record_separator() {
+        assert_eq!(super::z_fields(b"\nfile\0")[0], "\nfile");
+        let records = super::z_records(b"\x1esha\0\n:meta\0\x1efile\0:meta\0\nfile\0");
+        assert_eq!(
+            records,
+            vec![vec!["sha", ":meta", "\x1efile", ":meta", "\nfile"]]
+        );
     }
 }

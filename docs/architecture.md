@@ -210,17 +210,30 @@ The rule:
 - **The hook plane keeps branch text.** A branch that is not valid UTF-8 reads
   as one sentinel name that is always protected, so a guard fails closed, and
   the exact name is kept for display.
-- **File content is not covered.** JSON, TOML, Markdown and blobs are a format
-  contract, and a decode failure there names the file.
+- **Decision inputs must be obtained successfully.** File, environment, Git,
+  metadata and parse errors refuse, or produce a named unproven result that
+  the caller consumes as refusal. They cannot become absent, empty, default,
+  skipped or fallback values. The same rule applies when a size or capability
+  limit prevents reading an input. Genuine optional absence remains distinct
+  from a failed read. JSON, TOML, Markdown and blobs retain their format
+  contracts; a read or parse failure names the input and refuses its decision.
+- **The grammar's reader removes framing once.** Downstream consumers retain
+  already-decoded quote, backslash, LF and NUL content. Idempotent separator
+  rules remain separate from delimiter removal. Native environment bytes
+  remain `OsString` until a consumer requires text or constructs a path.
 
 A source scan (`crates/codeflow-core/tests/name_decode_scan.rs`) parses every
 production source with `syn` and fails on a new `from_utf8_lossy`,
 `to_string_lossy` or git2 text accessor (`shorthand`, `symbolic_target`,
 `name()` in a file that uses git2) outside the layer, unless it is listed with
 the reason it never feeds a decision. The list is keyed by file, enclosing
-item and call, with a count, and a stale entry fails. The scan sees only those
-calls, so each site also has its own test (a collision, a refusal or a
-whole-path fixture).
+item and call, with a count, and a stale entry fails. Its decision-input pass
+also covers obtaining-to-absent chains, discarded errors, Unicode whitespace
+and framing removal. Closed reason tags distinguish separator grammars from
+framing readers; `FRAMING_OWNERS` names the latter. An `unproven` row names the
+caller that refuses its result. The scan does not resolve types or prove data
+flow, so wrapper return types and errors carried through local variables need
+a caller audit and site regressions (a collision, refusal or whole-path fixture).
 
 The pre-push and reference-transaction stdin reads are strict by an earlier
 decision that the `remedy_clearing` tests pin.

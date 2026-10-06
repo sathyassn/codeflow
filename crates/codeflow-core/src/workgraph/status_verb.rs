@@ -130,7 +130,7 @@ pub fn set_status(
     if !written && !judged_only(kind, &change.target) {
         return Err(vocabulary_error());
     }
-    let graph = Graph::from_worktree(repo_root);
+    let graph = Graph::from_worktree(repo_root).map_err(|error| VerbError::Refused(vec![error]))?;
     let record = graph
         .records
         .get(id)
@@ -152,7 +152,8 @@ pub fn set_status(
     if !refused.is_empty() {
         return Err(VerbError::Refused(refused));
     }
-    let (base, paths) = working_context(repo_root);
+    let (base, paths) =
+        working_context(repo_root).map_err(|error| VerbError::Refused(vec![error]))?;
     let verdict = judge_change(
         Some(record),
         &after,
@@ -200,6 +201,7 @@ fn bind_completion_of(
             .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
         let target =
             super::work_start::resolve_work_target(repo_root, after.integration_target.as_deref())
+                .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
                 .ok_or_else(|| {
                     VerbError::Refused(vec![
                         "cannot resolve the task target for reopen criteria".into()
@@ -258,7 +260,8 @@ fn gate_binding(
     if findings.is_empty() {
         return Ok(());
     }
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)
+        .map_err(|error| VerbError::Refused(vec![error]))?;
     if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
         let mut refused = findings;
         refused.push(tail.to_string());
@@ -325,10 +328,13 @@ fn own_range_base(
                 .map(str::to_string)
         })
         .filter(|branch| {
-            super::task_id_from_branch(repo_root, branch).as_deref() == Some(task.id.as_str())
+            super::task_id_from_branch(repo_root, branch)
+                .is_ok_and(|id| id.as_deref() == Some(task.id.as_str()))
         })
         .and_then(|_| {
             super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+                .ok()
+                .flatten()
         })
         .and_then(|target| repo.revparse_single(&target).ok())
         .and_then(|object| object.peel_to_commit().ok())
@@ -358,7 +364,11 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         )];
     };
     // A task without a declared target belongs to the default one.
-    let default_target = super::work_start::resolve_work_target(repo_root, None)
+    let default_name = match super::work_start::resolve_work_target(repo_root, None) {
+        Ok(name) => name,
+        Err(error) => return vec![error.to_string()],
+    };
+    let default_target = default_name
         .and_then(|target| repo.revparse_single(&target).ok())
         .and_then(|object| object.peel_to_commit().ok())
         .map(|commit| commit.id());
@@ -409,7 +419,10 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             // The binder withholds it from a range that reopens the task,
             // as it does for CI.
             let own_range_base = own_range_base(repo_root, &repo, task, head);
-            let run = verb_authorities(repo_root, &repo, task, default_target);
+            let run = match verb_authorities(repo_root, &repo, task, default_target) {
+                Ok(run) => run,
+                Err(error) => return vec![error],
+            };
             shown(super::acceptance::bind_completion_with_amendment(
                 &repo,
                 task,
@@ -445,15 +458,16 @@ fn verb_authorities(
     repo: &git2::Repository,
     task: &RecordView,
     default_target: Option<git2::Oid>,
-) -> super::acceptance::RunBases {
-    super::acceptance::RunBases::new(
+) -> Result<super::acceptance::RunBases, String> {
+    Ok(super::acceptance::RunBases::new(
         super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+            .map_err(|error| error.to_string())?
             .and_then(|target| repo.revparse_single(&target).ok())
             .and_then(|object| object.peel_to_commit().ok())
             .map(|commit| commit.id())
             .into_iter()
             .chain(default_target),
-    )
+    ))
 }
 
 /// Replace `path` with `content` only when its bytes still hash to

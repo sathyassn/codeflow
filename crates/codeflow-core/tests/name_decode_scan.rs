@@ -35,6 +35,12 @@
 //! `format!("{:?}")`, regex `\s`, `matches!(c, ' ' | '\u{a0}')`, serde-side
 //! trimming, `eq_ignore_ascii_case`, or proc-macro output. It does not prove
 //! data flow or resolve types; site regressions remain the primary proof.
+//! Obtaining errors include IO, environment, metadata and deserialization.
+//! Wrapper return types and errors carried through a local variable before a
+//! match require an explicit audit; a syntactic call inventory cannot prove
+//! their consumer behavior. `unproven` rows name the refusing consumer.
+//! Separator grammars use `grammar:`; delimiter removal uses `framing:` and
+//! must occur in the reader registered in `FRAMING_OWNERS`, never downstream.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,13 +63,34 @@ const UNICODE_WHITESPACE: &[&str] = &[
     "split_terminator",
 ];
 const PREDICATE_TRIM: &[&str] = &["trim_matches", "trim_start_matches", "trim_end_matches"];
-const DECODE: &[&str] = &["as_str", "to_str", "from_utf8", "utf8_to_str"];
+const OBTAIN: &[&str] = &[
+    "read_to_string",
+    "read",
+    "read_line",
+    "read_to_end",
+    "metadata",
+    "var",
+    "var_os",
+    "from_utf8",
+    "to_str",
+    "as_str",
+    "utf8_to_str",
+    "from_str",
+    "from_slice",
+    "from_reader",
+];
 const ABSENT: &[&str] = &[
     "ok",
     "unwrap_or",
     "unwrap_or_default",
     "unwrap_or_else",
     "map_or",
+    "map_or_else",
+    "or",
+    "or_else",
+    "is_ok",
+    "is_err",
+    "flatten",
 ];
 const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 
@@ -71,6 +98,14 @@ const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 /// only reaches a person or is not a git or OS name: (file, enclosing item,
 /// call, how many, closed reason tag); the comment states the precise contract.
 const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    // Failed Git stderr is displayed inside Err. Successful ignore-rule stdout remains exact bytes.
+    (
+        "codeflow-core/src/root_checkout.rs",
+        "git_stdin",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // process output shown to a person, never compared
     (
         "codeflow-cli/examples/release_integration.rs",
@@ -279,14 +314,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:shell-glob",
     ),
-    // a NUL list scanned for fixed ASCII enforcement/worktree substrings; replacement characters cannot erase those bytes and any added word boundary only adds a refusal
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
-        "find_action_violation",
-        "from_utf8_lossy",
-        1,
-        "schema-reject-only",
-    ),
     // a find -name pattern matched against a candidate name: a candidate that is not UTF-8 stays when the pattern has a single-character wildcard, so the lossy spelling decides only literal and `*` patterns, which it answers as the bytes would, except that a literal U+FFFD in the pattern also matches such a name, which only adds a candidate or a refusal
     (
         "codeflow-core/src/hooks/git_guard.rs",
@@ -318,14 +345,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "display",
-    ),
-    // script content scanned for fixed ASCII enforcement substrings; replacement characters are non-name boundaries, so the decode can only add matches, never remove an ASCII needle
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
-        "sed_text_violation",
-        "from_utf8_lossy",
-        1,
-        "schema-reject-only",
     ),
     // file or blob content, a format contract and not a name (an added line scanned for secrets)
     (
@@ -674,23 +693,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // file or blob content, a format contract and not a name
     (
         "codeflow-core/src/workgraph/acceptance.rs",
-        "blob_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/acceptance.rs",
         "presence_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/lifecycle.rs",
-        "Graph::from_revision",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -706,23 +709,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // file or blob content, a format contract and not a name
     (
         "codeflow-core/src/workgraph/lifecycle.rs",
-        "implemented_at_a_commit",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/lifecycle.rs",
         "landing_paths",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/lifecycle.rs",
-        "reopened_in_range",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -732,7 +719,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "codeflow-core/src/workgraph/lifecycle.rs",
         "shipped_in_history",
         "from_utf8_lossy",
-        2,
+        1,
         "display",
     ),
     // Git stderr diagnostic only; stdout now uses strict decoding.
@@ -758,22 +745,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "display",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/release_line.rs",
-        "config_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/release_line.rs",
-        "record_of",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
     ),
     // Windows only: PowerShell output arrives as U+FFFD for an invalid unit, so refuse_ambiguous_identity_text stops the one case where the lossy text could equal the expected profile path, and the instance argument is a random UUID, exact either way
     (
@@ -1041,13 +1012,32 @@ impl<'ast> Visit<'ast> for Sites {
         if self.flagged(&name, call.args.len())
             || (self.whitespace
                 && PREDICATE_TRIM.contains(&name.as_str())
-                && call.args.first().is_some_and(|arg| !literal_pattern(arg)))
+                && call
+                    .args
+                    .first()
+                    .is_some_and(|arg| !literal_pattern(arg) || framing_pattern(arg)))
         {
             self.note(call.method.span(), &name);
         }
         if self.whitespace && ABSENT.contains(&name.as_str()) {
-            if let Some((span, name)) = decode_in_chain(&call.receiver) {
-                self.note(span, &format!("decode-absent:{name}"));
+            if let Some((span, name)) = obtain_in_chain(&call.receiver) {
+                self.note(span, &format!("obtain-absent:{name}"));
+            }
+        }
+        if self.whitespace && matches!(name.as_str(), "filter_map" | "flat_map") {
+            for argument in &call.args {
+                if let syn::Expr::Path(path) = argument {
+                    let segments: Vec<_> = path.path.segments.iter().collect();
+                    if segments.len() >= 2
+                        && segments[segments.len() - 2].ident == "Result"
+                        && segments[segments.len() - 1].ident == "ok"
+                    {
+                        self.note(
+                            segments[segments.len() - 1].ident.span(),
+                            "obtain-absent:Result::ok",
+                        );
+                    }
+                }
             }
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -1061,7 +1051,10 @@ impl<'ast> Visit<'ast> for Sites {
                     .segments
                     .last()
                     .is_some_and(|s| PREDICATE_TRIM.contains(&s.ident.to_string().as_str()))
-                    && call.args.last().is_some_and(literal_pattern)
+                    && call
+                        .args
+                        .last()
+                        .is_some_and(|arg| literal_pattern(arg) && !framing_pattern(arg))
                 {
                     for argument in &call.args {
                         self.visit_expr(argument);
@@ -1075,11 +1068,49 @@ impl<'ast> Visit<'ast> for Sites {
 
     fn visit_expr_try(&mut self, expr: &'ast syn::ExprTry) {
         if self.whitespace && self.option_return.last() == Some(&true) {
-            if let Some((span, name)) = decode_in_chain(&expr.expr) {
-                self.note(span, &format!("decode-absent:{name}"));
+            if let Some((span, name)) = obtain_in_chain(&expr.expr) {
+                self.note(span, &format!("obtain-absent:{name}"));
             }
         }
         syn::visit::visit_expr_try(self, expr);
+    }
+
+    fn visit_expr_if(&mut self, expr: &'ast syn::ExprIf) {
+        if self.whitespace {
+            if let syn::Expr::Let(binding) = &*expr.cond {
+                if variant_pattern(&binding.pat, "Ok", false) {
+                    if let Some((span, name)) = obtain_in_chain(&binding.expr) {
+                        self.note(span, &format!("obtain-absent:{name}"));
+                    }
+                }
+            }
+        }
+        syn::visit::visit_expr_if(self, expr);
+    }
+
+    fn visit_expr_match(&mut self, expr: &'ast syn::ExprMatch) {
+        if self.whitespace
+            && expr
+                .arms
+                .iter()
+                .any(|arm| variant_pattern(&arm.pat, "Err", true))
+        {
+            if let Some((span, name)) = obtain_in_chain(&expr.expr) {
+                self.note(span, &format!("obtain-absent:{name}"));
+            }
+        }
+        syn::visit::visit_expr_match(self, expr);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if self.whitespace && matches!(local.pat, syn::Pat::Wild(_)) {
+            if let Some(init) = &local.init {
+                if let Some((span, name)) = obtain_in_chain(&init.expr) {
+                    self.note(span, &format!("obtain-absent:{name}"));
+                }
+            }
+        }
+        syn::visit::visit_local(self, local);
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
@@ -1130,27 +1161,64 @@ fn literal_pattern(expr: &syn::Expr) -> bool {
     }
 }
 
-fn decode_in_chain(expr: &syn::Expr) -> Option<(proc_macro2::Span, String)> {
+fn framing_pattern(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Lit(lit) => match &lit.lit {
+            syn::Lit::Char(c) => matches!(c.value(), '\'' | '"' | '\\' | '\n'),
+            syn::Lit::Str(s) => s.value().contains(['\'', '"', '\\', '\n']),
+            _ => false,
+        },
+        syn::Expr::Array(array) => array.elems.iter().any(framing_pattern),
+        syn::Expr::Reference(expr) => framing_pattern(&expr.expr),
+        syn::Expr::Paren(expr) => framing_pattern(&expr.expr),
+        _ => false,
+    }
+}
+
+fn variant_pattern(pattern: &syn::Pat, variant: &str, wildcard: bool) -> bool {
+    match pattern {
+        syn::Pat::TupleStruct(pattern) => {
+            pattern
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == variant)
+                && (!wildcard
+                    || pattern
+                        .elems
+                        .iter()
+                        .any(|p| matches!(p, syn::Pat::Wild(_) | syn::Pat::Rest(_))))
+        }
+        syn::Pat::Or(pattern) => pattern
+            .cases
+            .iter()
+            .any(|p| variant_pattern(p, variant, wildcard)),
+        syn::Pat::Paren(pattern) => variant_pattern(&pattern.pat, variant, wildcard),
+        _ => false,
+    }
+}
+
+fn obtain_in_chain(expr: &syn::Expr) -> Option<(proc_macro2::Span, String)> {
     match expr {
         syn::Expr::MethodCall(call) => {
             let name = call.method.unraw().to_string();
-            if DECODE.contains(&name.as_str()) {
+            if OBTAIN.contains(&name.as_str()) {
                 Some((call.method.span(), name))
             } else {
-                decode_in_chain(&call.receiver)
+                obtain_in_chain(&call.receiver)
             }
         }
         syn::Expr::Call(call) => match &*call.func {
             syn::Expr::Path(path) => path.path.segments.last().and_then(|segment| {
                 let name = segment.ident.unraw().to_string();
-                DECODE
+                OBTAIN
                     .contains(&name.as_str())
                     .then(|| (segment.ident.span(), name))
             }),
             _ => None,
         },
-        syn::Expr::Paren(expr) => decode_in_chain(&expr.expr),
-        syn::Expr::Try(expr) => decode_in_chain(&expr.expr),
+        syn::Expr::Paren(expr) => obtain_in_chain(&expr.expr),
+        syn::Expr::Try(expr) => obtain_in_chain(&expr.expr),
         _ => None,
     }
 }
@@ -1158,10 +1226,18 @@ fn decode_in_chain(expr: &syn::Expr) -> Option<(proc_macro2::Span, String)> {
 fn valid_reason(reason: &str) -> bool {
     matches!(
         reason,
-        "display" | "prose" | "schema-reject-only" | "format-contract" | "ascii-marker"
-    ) || reason.strip_prefix("grammar:").is_some_and(|name| {
-        !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    })
+        "display"
+            | "prose"
+            | "schema-reject-only"
+            | "format-contract"
+            | "ascii-marker"
+            | "unproven"
+    ) || reason
+        .strip_prefix("grammar:")
+        .or_else(|| reason.strip_prefix("framing:"))
+        .is_some_and(|name| {
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
 }
 
 /// Every site in `source`, as ((item, call), lines). `file` only decides
@@ -1424,13 +1500,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Conventional Commit subject/footer markers accept prose LF/CRLF lines, not path/ref delimiters.
+    // Reads conventional commit subject/footer line boundaries.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
         "breaking_marker",
         "lines",
         2,
-        "grammar:commit-message",
+        "framing:commit-marker-lines",
     ),
     // Formats Git stderr after command failure, never as an operand or authority.
     (
@@ -1440,13 +1516,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Finds unfilled Markdown template text and empty cells. Broad whitespace increases rejection without normalizing retained identifiers.
+    // Reads rendered PR template lines before rejecting unresolved placeholders.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
         "find_placeholders",
         "lines",
         1,
-        "schema-reject-only",
+        "framing:template-placeholder-lines",
     ),
     // Finds unfilled Markdown template text and empty cells. Broad whitespace increases rejection without normalizing retained identifiers.
     (
@@ -1488,21 +1564,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Decodes exactly three octal escape digits. Invalid text makes quoting unproven, and diff_path retains raw path text rather than omitting the path.
+    // Octal escape bytes that cannot decode make unquote_git_path return unproven None; diff_path returns cannot-read Err, propagated by added_lines/conflict_markers to CI refusal.
     (
         "crates/codeflow-cli/src/cmd/ci.rs",
         "unquote_git_path",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Existing Task: prose prevents profile injection and leaves the original body for strict classification.
+    // Reads Markdown Task declaration line boundaries once before rejecting an existing declaration.
     (
         "crates/codeflow-cli/src/cmd/ci/adopter.rs",
         "supply_task",
         "lines",
         1,
-        "schema-reject-only",
+        "framing:pr-task-lines",
     ),
     // Existing Task: prose prevents profile injection and leaves the original body for strict classification.
     (
@@ -1512,13 +1588,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Unreadable metadata or path marks the inventory unproven. Classification treats unknown inventory as code, never the lighter docs class.
+    // parse_raw returns unproven None for unreadable raw metadata/path; range_inventory converts None to cannot-read Err and ci::run refuses.
     (
         "crates/codeflow-cli/src/cmd/ci/change_class.rs",
         "parse_raw",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         2,
-        "schema-reject-only",
+        "unproven",
     ),
     // Formats Git stderr only after command failure.
     (
@@ -1528,21 +1604,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // JSON as_str is a schema type check. Missing/non-string root_branch grants no root exemption in classify, integration_line_eligible or acceptance.
-    (
-        "crates/codeflow-cli/src/cmd/ci/classification.rs",
-        "root_branch_at",
-        "decode-absent:as_str",
-        1,
-        "schema-reject-only",
-    ),
-    // PR Task fields use Markdown LF/CRLF line framing. Field identities now strip only explicit ASCII blanks.
+    // Reads Markdown Task declaration line boundaries; returned identities keep explicit token text.
     (
         "crates/codeflow-cli/src/cmd/ci/classification.rs",
         "task_lines",
         "lines",
         1,
-        "grammar:markdown-lines",
+        "framing:classification-task-lines",
+    ),
+    // HTML container parser removes the explicit HTML ASCII whitespace set before reading a trailing slash marker.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "HtmlContainers::observe",
+        "trim_end_matches",
+        1,
+        "grammar:html-whitespace",
     ),
     // Counts reader-visible natural-language words for the advisory body word limit, not identifiers or command tokens.
     (
@@ -1559,6 +1635,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "split_whitespace",
         1,
         "prose",
+    ),
+    // Rendered Markdown heading and field values allow explicit ASCII space/tab/CR/LF separators, preserving non-ASCII text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "Section::matches",
+        "trim_matches",
+        1,
+        "grammar:markdown-ascii-space",
     ),
     // Rejects whitespace-only rendered Markdown/HTML. The original body remains unchanged.
     (
@@ -1584,29 +1668,53 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:html-character-reference",
     ),
-    // Reads rendered Markdown LF/CRLF lines for an advisory Not tested marker.
+    // Reads rendered Markdown lines for the Not tested declaration.
     (
         "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
         "presentation",
         "lines",
         1,
-        "grammar:markdown-lines",
+        "framing:presentation-marker-lines",
     ),
-    // Reads Markdown review table rows or release fields with LF/CRLF framing. Identity fields now strip only explicit ASCII blanks.
+    // Rendered Markdown heading and field values allow explicit ASCII space/tab/CR/LF separators, preserving non-ASCII text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "presentation",
+        "trim_matches",
+        1,
+        "grammar:markdown-ascii-space",
+    ),
+    // Reads rendered Markdown release field lines before ASCII field separator parsing.
     (
         "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
         "release_fields_under",
         "lines",
         1,
-        "grammar:markdown-lines",
+        "framing:release-field-lines",
     ),
-    // Reads Markdown review table rows or release fields with LF/CRLF framing. Identity fields now strip only explicit ASCII blanks.
+    // Rendered Markdown heading and field values allow explicit ASCII space/tab/CR/LF separators, preserving non-ASCII text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "release_fields_under",
+        "trim_matches",
+        3,
+        "grammar:markdown-ascii-space",
+    ),
+    // Reads rendered Markdown table rows; exact revision comparison follows.
     (
         "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
         "review_names_revision",
         "lines",
         1,
-        "grammar:markdown-lines",
+        "framing:review-row-lines",
+    ),
+    // Rendered Markdown heading and field values allow explicit ASCII space/tab/CR/LF separators, preserving non-ASCII text.
+    (
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "review_names_revision",
+        "trim_matches",
+        1,
+        "grammar:markdown-ascii-space",
     ),
     // Rejects whitespace-only rendered Markdown/HTML. The original body remains unchanged.
     (
@@ -1616,21 +1724,37 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "schema-reject-only",
     ),
-    // Literal NUL separates git config -z entries. Entry text is unchanged, with decoding errors propagated as refusal.
+    // Reads literal NUL-delimited config entries once, passing retained entry bytes onward.
     (
         "crates/codeflow-cli/src/cmd/git_hook.rs",
         "git_config_values",
         "split_terminator",
         1,
-        "grammar:git-config-z",
+        "framing:cli-git-config-z",
     ),
-    // Unreadable gh base is unproven. Exec-guard requires an affirmative resolved nonprotected base to exempt a merge.
+    // base_from_answer leaves an unreadable gh base unproven; git_guard::check_gh refuses an unresolved base for protected-merge checks.
     (
         "crates/codeflow-cli/src/cmd/hook.rs",
         "base_from_answer",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
+    ),
+    // var_os has no decoding error: HOME/USERPROFILE are raw OsString paths; or_else applies only to genuinely unset HOME.
+    (
+        "crates/codeflow-cli/src/cmd/hook.rs",
+        "edit_guard",
+        "obtain-absent:var_os",
+        1,
+        "format-contract",
+    ),
+    // This handler runs after the blocking guard verdict; malformed already-produced JSON chooses the textual denial message, retaining nonzero exit/refusal.
+    (
+        "crates/codeflow-cli/src/cmd/hook.rs",
+        "grok_deny",
+        "obtain-absent:from_str",
+        1,
+        "display",
     ),
     // Rejects whitespace-only model identities. Catalog comparisons retain original pinned and actual strings.
     (
@@ -1640,13 +1764,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "schema-reject-only",
     ),
-    // Invalid embedded template text makes record creation refuse instead of emitting a default template.
+    // Lenient second read displays any readable invalid values; validate_policy and Policy::source independently preserve read/parse failure and nonzero exit.
     (
-        "crates/codeflow-cli/src/cmd/new.rs",
-        "load_template",
-        "decode-absent:from_utf8",
+        "crates/codeflow-cli/src/cmd/policy.rs",
+        "show",
+        "obtain-absent:read_to_string",
         1,
-        "schema-reject-only",
+        "display",
     ),
     // Wraps policy help prose into terminal columns only.
     (
@@ -1656,37 +1780,45 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Literal LF separates refusal-ledger IDs, then fixed ASCII rule-ID validation applies. No path or ref is parsed.
+    // RulesOut only adds rule identifiers to a child command failure already recorded as a violation; missing ledger never turns child failure into success.
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "RulesOut::read",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // RulesOut only adds rule identifiers to a child command failure already recorded as a violation; missing ledger never turns child failure into success.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "RulesOut::read",
         "split_terminator",
         1,
-        "grammar:rule-id-lines",
+        "display",
     ),
-    // ls-remote rows split on literal LF/tab, preserving names with ASCII-hex ID validation. cat-file output uses literal LF.
+    // Reads ls-remote LF rows and cat-file LF responses once; tab separates fields and names remain exact.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "advertised_commits",
         "split_terminator",
         3,
-        "grammar:git-advertisement",
+        "framing:push-advertisement-lines",
     ),
-    // Literal LF separates rev-list boundary IDs without rewriting fields.
+    // Reads rev-list boundary LF records once; callers receive bare object IDs.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "boundary",
         "split_terminator",
         1,
-        "grammar:git-object-id-lines",
+        "framing:push-boundary-lines",
     ),
-    // Literal LF separates rev-list boundary IDs without rewriting fields.
+    // Reads rev-list boundary LF records once before ancestor queries.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "bounded_by",
         "split_terminator",
         1,
-        "grammar:git-object-id-lines",
+        "framing:push-bounded-lines",
     ),
     // Trims stderr only to explain why the commit inventory is unknown.
     (
@@ -1696,7 +1828,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Formats numeric counts in rewrite notices. The trimmed count never selects policy or a range.
+    // Trims the already-read rev-list numeric count only in the rewrite notice; range and authority selection use unchanged IDs.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "existing_base",
@@ -1704,29 +1836,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Undecodable output is an unproven lookup. Authority becomes Judged::Unverified, ranges become unresolved, and tree checks require affirmative proof. There is no decoded-name fallback.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "git",
-        "decode-absent:from_utf8",
-        1,
-        "schema-reject-only",
-    ),
-    // Undecodable output is an unproven lookup. Authority becomes Judged::Unverified, ranges become unresolved, and tree checks require affirmative proof. There is no decoded-name fallback.
-    (
-        "crates/codeflow-cli/src/cmd/push_set.rs",
-        "git_input",
-        "decode-absent:from_utf8",
-        1,
-        "schema-reject-only",
-    ),
-    // Literal LF separates status rows. Whitespace splitting extracts a displayed path only. The unchanged first status byte decides incompleteness.
+    // Reads submodule status LF records; the unmodified status byte decides incompleteness.
     (
         "crates/codeflow-cli/src/cmd/push_set.rs",
         "incomplete_checkout",
         "split_terminator",
         1,
-        "grammar:git-submodule-status",
+        "framing:submodule-status-lines",
     ),
     // Literal LF separates status rows. Whitespace splitting extracts a displayed path only. The unchanged first status byte decides incompleteness.
     (
@@ -1760,6 +1876,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // target_policy maps unreadable/invalid policy to Malformed, judged_by maps that to Invalid, and run_ci_ranges always refuses Invalid.
+    (
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "target_policy",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // Trims captured test output only when printing failure reports.
     (
         "crates/codeflow-cli/src/cmd/test.rs",
@@ -1767,14 +1891,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         2,
         "display",
-    ),
-    // JSON body type failure produces empty review evidence. review_names_revision returns false, never approval.
-    (
-        "crates/codeflow-cli/src/cmd/work.rs",
-        "reviewed",
-        "decode-absent:as_str",
-        1,
-        "schema-reject-only",
     ),
     // Formats clap help prose into documentation cells, never runtime option values.
     (
@@ -1792,13 +1908,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Unreadable embedded template refuses setup. The list-only caller may omit its display description.
+    // Interactive accept/refuse/custom tokens permit explicit ASCII space/tab/CR/LF separators; no filesystem identity is parsed.
     (
-        "crates/codeflow-cli/src/embedded.rs",
-        "read_test_template",
-        "decode-absent:from_utf8",
+        "crates/codeflow-cli/src/prompts.rs",
+        "decide_pr_template",
+        "trim_matches",
         1,
-        "schema-reject-only",
+        "grammar:prompt-answer",
     ),
     // CRLF/LF Markdown fence records contain YAML; ASCII indentation is explicit and YAML parses scalar identity unchanged.
     (
@@ -1806,7 +1922,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "parse_capabilities",
         "lines",
         1,
-        "grammar:markdown-yaml",
+        "framing:capability-parse-capabilities-records",
     ),
     // Frontmatter and Markdown sections are physical CRLF/LF records; key and section indentation use explicit ASCII blanks.
     (
@@ -1814,7 +1930,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "regions",
         "lines",
         1,
-        "grammar:markdown-yaml",
+        "framing:ceremony-history-regions-records",
+    ),
+    // Earliest author timestamp is optional timeline metadata; MergedPr identity and acceptance use the exact merge OID independently.
+    (
+        "crates/codeflow-core/src/ceremony/history.rs",
+        "started",
+        "obtain-absent:Result::ok",
+        1,
+        "display",
     ),
     // Only formats the error reason after gh has failed; status/JSON detection does not use the trimmed diagnostic.
     (
@@ -1832,6 +1956,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
+    // Removes a displayed gh error prefix after gh failed; command success and JSON use unmodified output.
+    (
+        "crates/codeflow-core/src/ceremony/host.rs",
+        "gh",
+        "trim_start_matches",
+        1,
+        "display",
+    ),
+    // Malformed hook JSON returns false only after cmd::hook::delegate_turn has received handle_hook Err; both branches return nonzero (1 or 2), never success.
+    (
+        "crates/codeflow-core/src/delegate.rs",
+        "is_prompt_submission",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
     // Rejects whitespace-only model/effort provenance; accepted labels are now stored exactly so trailing Unicode whitespace cannot alias another identity.
     (
         "crates/codeflow-core/src/delegate.rs",
@@ -1846,13 +1986,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "session_entries",
         "lines",
         1,
-        "grammar:jsonl",
+        "framing:delegate-continuation-session-entries-records",
     ),
     // The missing origin kind placeholder occurs only inside an error returned after native-origin verification has already failed.
     (
         "crates/codeflow-core/src/delegate/continuation.rs",
         "verify_notice_origin",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
         "display",
     ),
@@ -1862,7 +2002,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "recognized",
         "lines",
         1,
-        "grammar:yaml-ci-lines",
+        "framing:doctor-ci-pin-recognized-records",
     ),
     // Shipped CI template records permit CRLF/LF; indentation comparison now uses literal space/tab and exact remaining shell line bytes.
     (
@@ -1870,7 +2010,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "span",
         "lines",
         1,
-        "grammar:yaml-ci-lines",
+        "framing:doctor-ci-pin-span-records",
     ),
     // A whitespace-only refusal reason rejects the deny response; JSON is parsed without trimming and the reason text is never rewritten.
     (
@@ -1944,14 +2084,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // curl write-out produces only an ASCII numeric HTTP status, optionally shell single-quote framing; parsed code determines network probe status.
-    (
-        "crates/codeflow-core/src/doctor/mod.rs",
-        "http_status",
-        "trim",
-        1,
-        "format-contract",
-    ),
     // Only the diagnostic branch trims the displayed observed version; the comparison removes one terminal LF and preserves other characters.
     (
         "crates/codeflow-core/src/doctor/mod.rs",
@@ -1959,6 +2091,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "display",
+    ),
+    // var_os returns native bytes and has no decoding error; None proves HOME/USERPROFILE unset and PathBuf retains present non-UTF8 bytes.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "user_home",
+        "obtain-absent:var_os",
+        1,
+        "format-contract",
+    ),
+    // Invalid JSON adds its path to invalid; check_config converts any such entry into Status::Fail.
+    (
+        "crates/codeflow-core/src/doctor/mod.rs",
+        "walk_json_files_inner",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
+    ),
+    // JSON parse failure adds invalid_json finding and returns ForecastReport; its valid predicate requires zero findings and estimate check exits nonzero.
+    (
+        "crates/codeflow-core/src/estimate/mod.rs",
+        "check_forecast",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
     ),
     // Rejects empty/whitespace-only bounded explanation text while retaining the original accepted string.
     (
@@ -1968,13 +2124,37 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // A non-string epic_id makes the task record unproven and immediately adds source_record finding; it never substitutes a parent or default.
+    // Reader::read returns None only after adding source_read or unsafe_source_path finding; check_forecast returns invalid ForecastReport and estimate check refuses it.
+    (
+        "crates/codeflow-core/src/estimate/sources.rs",
+        "Reader::pin",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // Read/decode failure records source_read or source_record finding; check_forecast cannot return a valid ForecastReport when any finding is present.
+    (
+        "crates/codeflow-core/src/estimate/sources.rs",
+        "Reader::record",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // Read/decode failure records source_read or source_record finding; check_forecast cannot return a valid ForecastReport when any finding is present.
+    (
+        "crates/codeflow-core/src/estimate/sources.rs",
+        "Reader::record",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
+    // A non-string epic_id makes the task record unproven and immediately adds source_record finding; it never substitutes a parent or default. check_forecast refuses a ForecastReport containing the source_record finding.
     (
         "crates/codeflow-core/src/estimate/sources.rs",
         "task",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Trims gh stderr for an error message; no queried branch or repository identity is changed.
     (
@@ -1988,7 +2168,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/git/name.rs",
         "GitName::from_storage_key",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
+        1,
+        "format-contract",
+    ),
+    // UTF-8 selects the reversible storage-key representation; the other branch hex-encodes every byte, never loses or omits a name.
+    (
+        "crates/codeflow-core/src/git/name.rs",
+        "GitName::storage_key",
+        "obtain-absent:from_utf8",
         1,
         "format-contract",
     ),
@@ -2008,13 +2196,29 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Predicate removes only literal single/double quote characters in the lexical cd target, never whitespace.
+    // var_os preserves native bytes; None is a genuinely unset optional environment key. HOME/USERPROFILE and XDG defaults follow their documented lookup precedence.
+    (
+        "crates/codeflow-core/src/hooks/edit_guard.rs",
+        "global_git_config_target",
+        "obtain-absent:var_os",
+        2,
+        "grammar:environment",
+    ),
+    // var_os preserves native HOME/USERPROFILE bytes for interpreter path checks; fallback occurs only for a genuinely unset variable, not a decoding failure.
+    (
+        "crates/codeflow-core/src/hooks/exec_guard.rs",
+        "evaluate_in",
+        "obtain-absent:var_os",
+        1,
+        "grammar:environment",
+    ),
+    // Space, tab and newline are idempotent shell separators between command segments; no quote or path framing is removed.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
-        "cd_target",
+        "Line::end_segment",
         "trim_matches",
         1,
-        "grammar:shell-quotes",
+        "grammar:posix-shell",
     ),
     // shell_blank explicitly accepts only space, tab and newline, matching the shell reader.
     (
@@ -2032,6 +2236,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:posix-shell",
     ),
+    // Native HOME bytes are retained in PathBuf; absent HOME is an unset expansion, never failed Unicode decoding.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "reach_dirs",
+        "obtain-absent:var_os",
+        1,
+        "grammar:environment",
+    ),
+    // The invalid-byte branch returns AliasAnswer::Unreadable; expand_alias refuses execution of the unresolved alias.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "read_alias",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // Only subprocess stderr is trimmed for a refusal message; identity stdout is strict and separately framed.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
@@ -2039,6 +2259,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "display",
+    ),
+    // An unreadable branch becomes NON_UTF8_BRANCH, which GitPolicy::branch_is_protected treats as protected; BranchTracker refuses protected mutations.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "read_branch_name",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
     ),
     // Only subprocess stderr is trimmed for a refusal message; identity stdout is strict and separately framed.
     (
@@ -2048,6 +2276,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // RootCheckout::read errors make the entire TargetLookup answer None; resolve_target passes None to judge_target, which marks the repository unresolved and judges mutations against a protected branch.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "read_target",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
     // Predicate consumes ASCII digits only to identify an explicit file-descriptor prefix.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
@@ -2055,6 +2291,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_start_matches",
         1,
         "grammar:shell-redirection",
+    ),
+    // environment_value returns native OsString bytes; an unrepresentable expansion is unresolved. worktree_delete_check and integrity checks refuse unresolved destructive targets when enforcement/worktree reach is possible.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "resolve_targets",
+        "obtain-absent:to_str",
+        1,
+        "unproven",
     ),
     // shell_blank explicitly accepts only space, tab and newline, matching the shell reader.
     (
@@ -2072,13 +2316,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:enforcement-needle",
     ),
-    // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
+    // Owns physical text-line framing for this complete message/document reader. Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_from",
         "lines",
         1,
-        "grammar:git-commit-message",
+        "framing:git-commit-message-lines",
     ),
     // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
@@ -2088,13 +2332,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-commit-message",
     ),
-    // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
+    // Owns physical text-line framing for this complete message/document reader. Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "commit_msg_with_files",
         "lines",
         1,
-        "grammar:git-commit-message",
+        "framing:git-commit-message-lines",
     ),
     // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
@@ -2104,13 +2348,37 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-commit-message",
     ),
-    // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
+    // An unreadable binary digest is explicitly printed unavailable in the report; it is not used to authorize a command.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "judging_identity",
+        "obtain-absent:read",
+        1,
+        "display",
+    ),
+    // Unreadable loose or packed refs cannot prove a no-op. reference_transaction applies protected-ref mutation refusal instead of granting the keeps-value exception.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "keeps_value",
+        "obtain-absent:read_to_string",
+        2,
+        "unproven",
+    ),
+    // Unreadable upstream identity returns false; reference_transaction refuses the protected-branch update without the proven remote-sync exception.
+    (
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "new_matches_remote_head",
+        "obtain-absent:as_str",
+        1,
+        "unproven",
+    ),
+    // Owns physical text-line framing for this complete message/document reader. Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "policy_character_violation",
         "lines",
         1,
-        "grammar:git-commit-message",
+        "framing:git-commit-message-lines",
     ),
     // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
@@ -2120,13 +2388,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-commit-message",
     ),
-    // Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
+    // Owns physical text-line framing for this complete message/document reader. Commit message subject, comment or location parsing uses textual message lines; no ref/path identity is derived from this text.
     (
         "crates/codeflow-core/src/hooks/git_hook.rs",
         "strip_commit_comments",
         "lines",
         1,
-        "grammar:git-commit-message",
+        "framing:git-commit-message-lines",
     ),
     // shell_blank is exactly space, tab and newline; the predicate cannot erase Unicode operand characters.
     (
@@ -2136,13 +2404,29 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:posix-shell",
     ),
-    // TOML Value::as_str is a typed field accessor, not decoding OS bytes; a non-string tier omits only session guidance, never enforcement.
+    // Selects advisory orientation/guidance prose only; malformed optional harness payload does not grant execution authority.
     (
         "crates/codeflow-core/src/hooks/guidance.rs",
-        "project_tier",
-        "decode-absent:as_str",
+        "payload_event",
+        "obtain-absent:from_str",
         1,
-        "format-contract",
+        "display",
+    ),
+    // Extracts prompt prose only for advisory guidance; no command, path or policy authority is selected.
+    (
+        "crates/codeflow-core/src/hooks/guidance.rs",
+        "payload_prompt",
+        "obtain-absent:from_str",
+        1,
+        "display",
+    ),
+    // Selects the advisory resume message only; no command or policy authority is selected.
+    (
+        "crates/codeflow-core/src/hooks/guidance.rs",
+        "payload_source",
+        "obtain-absent:from_str",
+        1,
+        "display",
     ),
     // Normalizes natural-language request keywords using explicit punctuation; output chooses advisory guidance text, not command/ref/path authority.
     (
@@ -2151,6 +2435,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_matches",
         1,
         "grammar:guidance-words",
+    ),
+    // read returns Result<Option<String>> and ? propagates every obtaining error before map_or_else; only a genuinely absent optional policy file selects the schema default.
+    (
+        "crates/codeflow-core/src/hooks/landed_policy.rs",
+        "at",
+        "obtain-absent:read",
+        1,
+        "format-contract",
+    ),
+    // Optional orientation summary only; unreadable input cannot authorize or route a command.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "capabilities_line",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // Optional hook-installation display only; actual hook enforcement obtains its own inputs.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "gates_line",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
     ),
     // Formats or bounds orientation prose (product summary or ADR titles); no command or filesystem routing uses the normalized text.
     (
@@ -2176,6 +2484,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "display",
     ),
+    // Product title prose for orientation only; normalization never reaches an identity lookup.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "product_one_liner",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
     // Formats or bounds orientation prose (product summary or ADR titles); no command or filesystem routing uses the normalized text.
     (
         "crates/codeflow-core/src/hooks/orient.rs",
@@ -2184,11 +2500,51 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         6,
         "display",
     ),
+    // Product title prose for orientation only; normalization never reaches an identity lookup.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "product_one_liner",
+        "trim_matches",
+        1,
+        "display",
+    ),
     // Formats or bounds orientation prose (product summary or ADR titles); no command or filesystem routing uses the normalized text.
     (
         "crates/codeflow-core/src/hooks/orient.rs",
         "recent_adrs",
         "lines",
+        1,
+        "display",
+    ),
+    // ADR title listing for orientation only; missing display entries do not change enforcement or configuration.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "recent_adrs",
+        "obtain-absent:Result::ok",
+        1,
+        "display",
+    ),
+    // ADR title listing for orientation only; missing display entries do not change enforcement or configuration.
+    (
+        "crates/codeflow-core/src/hooks/orient.rs",
+        "recent_adrs",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // Invalid JSON is PolicySource::MalformedFile; policy show reports invalid and effective policy loading refuses through Policy::load_file.
+    (
+        "crates/codeflow-core/src/hooks/policy.rs",
+        "Policy::source",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // The policy-show reader returns None to display invalid JSON; enforcement uses strict Policy::load_file instead.
+    (
+        "crates/codeflow-core/src/hooks/policy_schema.rs",
+        "parse_lenient",
+        "obtain-absent:from_str",
         1,
         "display",
     ),
@@ -2216,13 +2572,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // Unreadable relevant values retain the UNREADABLE_VALUE marker; update_remotes/fetch cannot resolve that group or boolean as an allowed remote. Unrelated config values are not decision inputs.
+    (
+        "crates/codeflow-core/src/hooks/ref_authority.rs",
+        "config_entries",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // UTF-8 failure maps to true in the refusal condition; the remote URL mapping remains unproven and fetch is refused.
     (
         "crates/codeflow-core/src/hooks/ref_authority.rs",
         "fetch",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Consumes non-ASCII-alphanumeric prefix characters only when recognizing the existing literal placeholder-value grammar; no ref/path is selected.
     (
@@ -2232,19 +2596,27 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:secret-placeholder",
     ),
-    // Reads added textual lines for secret detection and line labels; no filename is resolved from a normalized hunk line.
+    // Owns physical text-line framing for this complete message/document reader. Reads added textual lines for secret detection and line labels; no filename is resolved from a normalized hunk line.
     (
         "crates/codeflow-core/src/hooks/scan.rs",
         "scan_diff",
         "lines",
         1,
-        "grammar:unified-diff",
+        "framing:unified-diff-lines",
     ),
     // Path text only labels a secret finding; detection examines the added content rather than looking up this label.
     (
         "crates/codeflow-core/src/hooks/scan.rs",
         "scan_diff",
         "trim",
+        1,
+        "display",
+    ),
+    // Session telemetry payload only; fallback null retains a session event with unavailable optional labels, never an enforcement or path-selection input.
+    (
+        "crates/codeflow-core/src/hooks/session_summary.rs",
+        "record",
+        "obtain-absent:from_str",
         1,
         "display",
     ),
@@ -2260,7 +2632,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/hooks/source_identity.rs",
         "revision",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
         "display",
     ),
@@ -2272,21 +2644,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "breaking_marker_present",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "check_breaking_footer",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2296,13 +2668,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:conventional-commits",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "check_commit_body",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2328,13 +2700,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:conventional-commits",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "check_commit_ticket",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2344,13 +2716,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:conventional-commits",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "check_required_footers",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2360,13 +2732,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:conventional-commits",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "check_subject_separator",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2384,13 +2756,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:conventional-commits",
     ),
-    // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
+    // Owns physical text-line framing for this complete message/document reader. Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
         "crates/codeflow-core/src/hooks/standards.rs",
         "find_policy_character",
         "lines",
         1,
-        "grammar:conventional-commits",
+        "framing:conventional-commits-lines",
     ),
     // Commit message content and trailer syntax use the existing conventional-commit whitespace contract; these operations do not normalize a Git ref or filesystem operand.
     (
@@ -2414,7 +2786,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "frontmatter_value",
         "lines",
         1,
-        "grammar:yaml-frontmatter",
+        "framing:ids-entry-frontmatter-value-records",
     ),
     // Explicit LF record separator preserves CR and Unicode in ref fields; Git for-each-ref format uses literal spaces between its fields.
     (
@@ -2422,7 +2794,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "Git::branch_refs",
         "split_terminator",
         1,
-        "grammar:git-ref-records",
+        "framing:ids-git-git-branch-refs-records",
     ),
     // Trims only Git stderr in an error value after nonzero exit; successful decision answers decode strictly.
     (
@@ -2446,7 +2818,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "lifetime_start",
         "split_terminator",
         1,
-        "grammar:git-rev-list",
+        "framing:ids-inventory-lifetime-start-records",
     ),
     // Builds the human-readable reason separately from diagnostics() used to classify the failed push.
     (
@@ -2470,7 +2842,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "diagnostics",
         "lines",
         1,
-        "grammar:git-push-porcelain",
+        "framing:ids-issue-diagnostics-records",
     ),
     // Stderr text is the failed fetch explanation; exit status already decides failure and trimming cannot turn it into success.
     (
@@ -2486,7 +2858,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "pending_entries",
         "split_terminator",
         1,
-        "grammar:git-rev-list",
+        "framing:ids-issue-pending-entries-records",
     ),
     // Explicit LF records contain Git-generated commit OIDs for the range; no ref-name whitespace normalization occurs.
     (
@@ -2494,7 +2866,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "Ledger::range_violations",
         "split_terminator",
         1,
-        "grammar:git-rev-list",
+        "framing:ids-ledger-ledger-range-violations-records",
     ),
     // Edits YAML physical CRLF/LF lines when adding former_ids; identifiers are retained, and flow-list padding uses explicit ASCII blanks.
     (
@@ -2502,7 +2874,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "add_former_id",
         "lines",
         1,
-        "grammar:yaml-frontmatter",
+        "framing:ids-seed-add-former-id-records",
     ),
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
@@ -2548,7 +2920,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/integrate.rs",
         "short_id",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
         "display",
     ),
@@ -2558,15 +2930,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "read_events_from_file",
         "split_terminator",
         1,
-        "grammar:jsonl",
+        "framing:ledger-compact-read-events-from-file-records",
     ),
-    // Explicit LF record framing and literal JSON space/tab/CR/LF padding preserve all JSON string identities.
+    // Space, tab, CR and LF are JSON whitespace between physical LF records; JSON string bytes are retained and malformed records return LedgerError.
     (
         "crates/codeflow-core/src/ledger/compact.rs",
-        "scan_for_session_ends",
-        "split_terminator",
+        "read_events_from_file",
+        "trim_matches",
         1,
-        "grammar:jsonl",
+        "grammar:json-whitespace",
     ),
     // Explicit LF record framing and literal JSON space/tab/CR/LF padding preserve all JSON string identities.
     (
@@ -2574,7 +2946,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "read_events_from_file",
         "split_terminator",
         1,
-        "grammar:jsonl",
+        "framing:ledger-rebuild-read-events-from-file-records",
     ),
     // Rejects whitespace-only observed identity fields; accepted model and harness IDs are retained exactly.
     (
@@ -2584,13 +2956,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "schema-reject-only",
     ),
+    // Second JSON parse only chooses the explanatory text inside Catalog::parse map_err; it cannot convert the catalog error into success.
+    (
+        "crates/codeflow-core/src/model_catalog/inputs.rs",
+        "load_catalog",
+        "obtain-absent:from_slice",
+        1,
+        "display",
+    ),
     // Markdown execution-contract records are CRLF/LF framed; literal ASCII padding is removed from keyed override fields, preserving Unicode identity characters.
     (
         "crates/codeflow-core/src/model_catalog/operator.rs",
         "anchored_override",
         "lines",
         1,
-        "grammar:markdown-operator-record",
+        "framing:model-catalog-operator-anchored-override-records",
     ),
     // Whitespace-only observed model IDs cannot become drift candidates; accepted IDs are compared exactly and never trimmed.
     (
@@ -2606,7 +2986,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "scan",
         "lines",
         1,
-        "grammar:markdown-lines",
+        "framing:model-catalog-scan-scan-records",
     ),
     // Rejects whitespace-only schema strings; accepted catalog identity strings remain byte-for-byte unchanged.
     (
@@ -2632,13 +3012,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "schema-reject-only",
     ),
-    // Regex captures are already valid text; a failed decimal component parse becomes RFC3339 validation Err, not a timestamp default.
+    // Regex captures are already valid text; a failed decimal component parse becomes RFC3339 validation Err, not a timestamp default. validate_qualification propagates the returned RFC3339 Err.
     (
         "crates/codeflow-core/src/model_qualification.rs",
         "validate_rfc3339",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Operates on Markdown table visible text and spacing when recognizing the Read column and narrative trigger; link destinations remain separate exact values.
     (
@@ -2702,7 +3082,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "index_file",
         "lines",
         1,
-        "grammar:jsonl-search",
+        "framing:recall-index-file-records",
+    ),
+    // JSON parse is used solely for a search title; the full original event text and exact reversible source path are still indexed.
+    (
+        "crates/codeflow-core/src/recall.rs",
+        "index_file",
+        "obtain-absent:from_str",
+        1,
+        "display",
     ),
     // Builds search documents per JSONL physical line, skipping blank lines; indexed content and path keys are retained and this index grants no authority.
     (
@@ -2728,6 +3116,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
+    // var_os has no decode-error variant: only genuine HOME/USERPROFILE absence selects the next native path; present OS bytes are preserved.
+    (
+        "crates/codeflow-core/src/registry.rs",
+        "codeflow_home",
+        "obtain-absent:var_os",
+        1,
+        "format-contract",
+    ),
     // Chooses and formats an error explanation only after local release preflight failed; JSON success is parsed directly from bytes.
     (
         "crates/codeflow-core/src/release_local.rs",
@@ -2751,14 +3147,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "display",
-    ),
-    // Git --bool stdout is the fixed ASCII true/false marker; no path or branch spelling is normalized.
-    (
-        "crates/codeflow-core/src/root_checkout.rs",
-        "effective_ignore_case",
-        "trim",
-        1,
-        "ascii-marker",
     ),
     // Trims subprocess stderr for a workspace-operation error.
     (
@@ -2792,6 +3180,30 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // Trims literal JSON whitespace around an object insertion point, not a JSON string or key; verified reparses and compares the complete expected value.
+    (
+        "crates/codeflow-core/src/scaffold/json_edit.rs",
+        "insert_member",
+        "trim_start_matches",
+        1,
+        "grammar:json-whitespace",
+    ),
+    // Only removes JSON whitespace around a member delimiter; verified reparses the result and rejects any semantic change beyond the expected object.
+    (
+        "crates/codeflow-core/src/scaffold/json_edit.rs",
+        "remove_member_line",
+        "trim_start_matches",
+        1,
+        "grammar:json-whitespace",
+    ),
+    // Parses newly generated JSON solely to prove it equals the already parsed expected Value. PR mapping callers refuse None; preserving_edit falls back to serializing that exact expected Value, so no obtained input error or identity is discarded.
+    (
+        "crates/codeflow-core/src/scaffold/json_edit.rs",
+        "verified",
+        "obtain-absent:from_str",
+        1,
+        "format-contract",
+    ),
     // Rejects blank generator/version metadata; accepted state identities and file paths remain exact.
     (
         "crates/codeflow-core/src/scaffold/portal/state.rs",
@@ -2814,7 +3226,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "headings",
         "lines",
         1,
-        "grammar:markdown-headings",
+        "framing:scaffold-pr-template-headings-records",
     ),
     // Managed Markdown/hash-comment regions explicitly normalize CRLF/LF for block comparison and restore destination EOL style; marker indentation uses ASCII blanks.
     (
@@ -2822,7 +3234,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "block_interior",
         "lines",
         1,
-        "grammar:managed-text-lines",
+        "framing:scaffold-region-block-interior-records",
     ),
     // Managed Markdown/hash-comment regions explicitly normalize CRLF/LF for block comparison and restore destination EOL style; marker indentation uses ASCII blanks.
     (
@@ -2830,7 +3242,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "extract_block",
         "lines",
         1,
-        "grammar:managed-text-lines",
+        "framing:scaffold-region-extract-block-records",
+    ),
+    // Normalizes trailing blank lines when composing a managed prose region; destination identity and the existing managed-span search are independent of the removed blank spacing.
+    (
+        "crates/codeflow-core/src/scaffold/region.rs",
+        "upsert_block",
+        "trim_end_matches",
+        1,
+        "prose",
     ),
     // Managed Markdown/hash-comment regions explicitly normalize CRLF/LF for block comparison and restore destination EOL style; marker indentation uses ASCII blanks.
     (
@@ -2838,7 +3258,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "with_eol",
         "lines",
         1,
-        "grammar:managed-text-lines",
+        "framing:scaffold-region-with-eol-records",
+    ),
+    // Formats trailing blank lines around generated managed prose before markers; it does not parse or choose paths, commands or identities.
+    (
+        "crates/codeflow-core/src/scaffold/region.rs",
+        "wrap_block",
+        "trim_end_matches",
+        1,
+        "prose",
+    ),
+    // Composes authored instruction paragraphs with one blank separator; block selection already used tier fields, not trimmed paragraph content.
+    (
+        "crates/codeflow-core/src/scaffold/rule_map.rs",
+        "Kernel::render_blocks",
+        "trim_matches",
+        1,
+        "prose",
     ),
     // The first trimmed run line is only a label in the warning identifying an already-classified workflow step.
     (
@@ -2860,9 +3296,9 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/security/dangerous.rs",
         "canonical_operand",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Fallback also parses raw PowerShell, whose separators include Unicode whitespace; POSIX composed deletion has its own exact reader.
     (
@@ -2872,29 +3308,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:powershell",
     ),
-    // Predicate strips only literal quote/comma/semicolon delimiters in the multi-language Windows catastrophic-command recognizer.
+    // Trailing backslash is an idempotent Windows path separator; quotes are already removed by command_tokens and are preserved here.
     (
         "crates/codeflow-core/src/security/dangerous.rs",
         "dangerous_windows_target",
-        "trim_matches",
+        "trim_end_matches",
         1,
-        "grammar:windows-command",
+        "grammar:windows-path",
     ),
-    // Predicate strips only literal quote/comma/semicolon delimiters in the multi-language Windows catastrophic-command recognizer.
+    // var_os retains native HOME bytes in PathBuf; None denotes genuinely unset HOME, not an obtaining or decoding error.
     (
-        "crates/codeflow-core/src/security/dangerous.rs",
-        "is_windows_drive_designator",
-        "trim_matches",
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::absolute",
+        "obtain-absent:var_os",
         1,
-        "grammar:windows-command",
-    ),
-    // Predicate strips only literal quote/comma/semicolon delimiters in the multi-language Windows catastrophic-command recognizer.
-    (
-        "crates/codeflow-core/src/security/dangerous.rs",
-        "program_name",
-        "trim_matches",
-        1,
-        "grammar:windows-command",
+        "grammar:environment",
     ),
     // Arithmetic blank predicate is the explicit space/tab/newline set; Unicode identifier characters remain intact.
     (
@@ -2908,9 +3336,25 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/security/deletion.rs",
         "Reader::glob_paths",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "schema-reject-only",
+        "unproven",
+    ),
+    // Owns the outer shell command-substitution output framing after producer bytes are assembled; the shell removes all trailing LF exactly at this boundary.
+    (
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::producer_values",
+        "trim_end_matches",
+        1,
+        "framing:shell-producer-substitution",
+    ),
+    // Owns evaluated command-substitution output framing; the shell removes all trailing LF at this boundary.
+    (
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::substitution",
+        "trim_end_matches",
+        1,
+        "framing:shell-command-substitution",
     ),
     // Arithmetic blank predicate is the explicit space/tab/newline set; Unicode identifier characters remain intact.
     (
@@ -2944,13 +3388,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default.
+    // A non-string schema_version becomes unsupported version Err; the empty placeholder is never an accepted default. run_gate propagates UnsupportedSchemaVersion as TestingError.
     (
         "crates/codeflow-core/src/testing/config/mod.rs",
         "load_test_config",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Explicit LF records with one optional protocol CR retain the filename; numeric metadata splits on literal ASCII spaces.
     (
@@ -2958,7 +3402,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "parse_go_cover_str",
         "split_terminator",
         1,
-        "grammar:go-cover",
+        "framing:testing-coverage-go-cover-parse-go-cover-str-records",
     ),
     // Explicit LF records with one optional protocol CR retain SF filenames; remaining trim only detects an entirely blank report for parse-error reporting.
     (
@@ -2966,7 +3410,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "parse_lcov_str",
         "split_terminator",
         1,
-        "grammar:lcov",
+        "framing:testing-coverage-lcov-parse-lcov-str-records",
     ),
     // Explicit LF records with one optional protocol CR retain SF filenames; remaining trim only detects an entirely blank report for parse-error reporting.
     (
@@ -2975,14 +3419,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "grammar:lcov",
-    ),
-    // Strict decode failure marks the delta/base unproven; every caller widens selection to all tests and never skips a target.
-    (
-        "crates/codeflow-core/src/testing/delivery.rs",
-        "git_output",
-        "decode-absent:from_utf8",
-        1,
-        "schema-reject-only",
     ),
     // Formats probe stdout/stderr as an evidence observation; process exit status determines probe success.
     (
@@ -2991,6 +3427,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         3,
         "display",
+    ),
+    // var_os returns OS bytes or genuine unset; present CARGO_TARGET_DIR bytes become the native PathBuf without decoding or normalization.
+    (
+        "crates/codeflow-core/src/testing/delivery.rs",
+        "target_dir",
+        "obtain-absent:var_os",
+        1,
+        "format-contract",
     ),
     // Produces a short human-readable gate failure message, not test selection or command operands.
     (
@@ -3046,13 +3490,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "live_groups",
         "split_terminator",
         1,
-        "grammar:gate-lock-record",
+        "framing:testing-gate-guard-live-groups-records",
     ),
     // Splits captured output only to render progress notifications; it neither changes the subprocess output buffer nor gate results.
     (
         "crates/codeflow-core/src/testing/runner/mod.rs",
         "spawn_reader_with_progress",
         "lines",
+        1,
+        "display",
+    ),
+    // Strips quote characters only from the displayed serialized runner enum label; target configuration and execution retain the typed Runner value.
+    (
+        "crates/codeflow-core/src/testing/setup/wizard.rs",
+        "run_wizard",
+        "trim_matches",
         1,
         "display",
     ),
@@ -3086,7 +3538,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "landed_pull_requests",
         "lines",
         1,
-        "grammar:git-merge-subjects",
+        "framing:validate-mod-landed-pull-requests-records",
     ),
     // Normalizes open-question prose for reports, without selecting refs, paths, commands, or config keys.
     (
@@ -3104,21 +3556,29 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         3,
         "schema-reject-only",
     ),
+    // This duplicate-ID prepass skips unreadable bytes, but the same path is always passed to validate_epic/validate_task/validate_spec immediately afterwards; their read Err adds a ValidationReport issue, which rejects the check.
+    (
+        "crates/codeflow-core/src/validate/mod.rs",
+        "validate_workgraph",
+        "obtain-absent:read",
+        1,
+        "unproven",
+    ),
     // The entire pointer object is validated as string-valued first; failure adds a records-pointer issue before these proven as_str conversions.
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "configured_records",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         2,
         "schema-reject-only",
     ),
-    // Undecodable percent-encoded URL returns None, and fragment verification records an invalid-link finding instead of resolving another target.
+    // Undecodable percent-encoded URL returns None, and fragment verification records an invalid-link finding instead of resolving another target. verify_portal_fragments adds a finding for unreadable path or fragment encoding and validate_portal_with returns a non-clean report.
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "decode_percent",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Trims error details only after a failed Git status, returning Err regardless of diagnostic contents.
     (
@@ -3128,13 +3588,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
-    // Non-UTF8 path components fail the portable-path proof; the caller reports the artifact path as unsafe rather than substituting a filename.
+    // Non-UTF8 path components fail the portable-path proof; the caller reports the artifact path as unsafe rather than substituting a filename. collect_reserved_public_files and source/artifact enumeration add unsafe-path findings to PortalValidationReport, which validate_portal_with rejects.
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "portable_relative_path",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // YAML line endings are normalized explicitly before recovering IDs from malformed documents; key/value separation uses only literal space/tab.
     (
@@ -3142,15 +3602,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "recover_unavailable_ids",
         "lines",
         1,
-        "grammar:yaml-record-recovery",
+        "framing:validate-portal-recover-unavailable-ids-records",
     ),
-    // Non-UTF8 path decoding selects a backslash sentinel that the immediately following condition rejects; no fallback path is joined.
+    // Non-UTF8 path decoding selects a backslash sentinel that the immediately following condition rejects; no fallback path is joined. safe_join adds an unsafe path issue before returning None; validate_portal_with rejects the report.
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "safe_join",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Any Unicode whitespace rejects a repository URL; accepted URLs are preserved exactly.
     (
@@ -3159,6 +3619,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "is_whitespace",
         1,
         "schema-reject-only",
+    ),
+    // Authoritative config bytes were parsed by verify_config_contract earlier; malformed bytes already add a PortalValidationReport issue. This second parse cannot remove that issue or produce a clean report.
+    (
+        "crates/codeflow-core/src/validate/portal.rs",
+        "validate_portal_with",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
     ),
     // Remaining trims reject blank page titles/status metadata; commit comparison removes exactly one LF and retains other bytes.
     (
@@ -3172,7 +3640,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "verify_config_contract",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         2,
         "schema-reject-only",
     ),
@@ -3184,29 +3652,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // An unreadable source now records a fragment-source validation issue before skipping link extraction; verification cannot silently pass.
-    (
-        "crates/codeflow-core/src/validate/portal.rs",
-        "verify_portal_fragments",
-        "decode-absent:from_utf8",
-        1,
-        "schema-reject-only",
-    ),
     // Rendered Markdown provenance markers are whole CRLF/LF comment records; snippet-source decode failure emits an explicit issue before any range comparison.
     (
         "crates/codeflow-core/src/validate/portal.rs",
         "verify_rendered_claims",
         "lines",
         1,
-        "grammar:rendered-markdown-marker",
-    ),
-    // Rendered Markdown provenance markers are whole CRLF/LF comment records; snippet-source decode failure emits an explicit issue before any range comparison.
-    (
-        "crates/codeflow-core/src/validate/portal.rs",
-        "verify_snippets",
-        "decode-absent:from_utf8",
-        1,
-        "grammar:rendered-markdown-marker",
+        "framing:validate-portal-verify-rendered-claims-records",
     ),
     // Rendered Markdown provenance markers are whole CRLF/LF comment records; snippet-source decode failure emits an explicit issue before any range comparison.
     (
@@ -3214,7 +3666,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "verify_snippets",
         "lines",
         1,
-        "grammar:rendered-markdown-marker",
+        "framing:validate-portal-verify-snippets-records",
+    ),
+    // Rendered Markdown provenance markers are whole CRLF/LF comment records; snippet-source decode failure emits an explicit issue before any range comparison. validate_portal_with rejects its non-clean PortalValidationReport.
+    (
+        "crates/codeflow-core/src/validate/portal.rs",
+        "verify_snippets",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
     ),
     // Whitespace-only optional explanatory notes are invalid; accepted declaration paths and placement identifiers are unchanged.
     (
@@ -3280,37 +3740,45 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:markdown-heading-identity",
     ),
-    // Unreadable derived JSON produces a source-does-not-resolve issue and no verified binding; it never substitutes a model.
+    // UTF8/JSON failure adds a derived-source-does-not-resolve issue; validate_portal_with returns a non-clean PortalValidationReport and portal validation refuses it.
     (
         "crates/codeflow-core/src/validate/portal/figures.rs",
         "verify_derived_binding",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Unreadable source yields no derived row count and fails the valid lookup condition, which requires Some(rows).
+    // UTF8/JSON failure adds a derived-source-does-not-resolve issue; validate_portal_with returns a non-clean PortalValidationReport and portal validation refuses it.
+    (
+        "crates/codeflow-core/src/validate/portal/figures.rs",
+        "verify_derived_binding",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // Unreadable source yields no derived row count and fails the valid lookup condition, which requires Some(rows). validate_portal_with rejects the PortalValidationReport lookup finding.
     (
         "crates/codeflow-core/src/validate/portal/figures.rs",
         "verify_lookup",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Unreadable source adds a page-class-source issue before any class/binding checks; no missing-source exemption remains.
+    // Unreadable source adds a page-class-source issue before any class/binding checks; no missing-source exemption remains. validate_portal_with rejects the PortalValidationReport source finding.
     (
         "crates/codeflow-core/src/validate/portal/figures.rs",
         "verify_page_class",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Unreadable source immediately returns a failed source-region finding.
+    // Unreadable source immediately returns a failed source-region finding. validate_portal_with rejects the returned source-region finding.
     (
         "crates/codeflow-core/src/validate/portal/figures.rs",
         "verify_source_region",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Recognizes HTML comment marker text emitted by Markdown events; only marker scaffolding is inspected, not source or artifact path operands.
     (
@@ -3340,7 +3808,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/validate/portal/figures/render.rs",
         "draw_item",
-        "decode-absent:as_str",
+        "obtain-absent:as_str",
         1,
         "schema-reject-only",
     ),
@@ -3351,6 +3819,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "is_whitespace",
         1,
         "grammar:ecmascript-svg",
+    ),
+    // String JSON values display as text and non-strings use js_stringify; this is deliberate polymorphic table rendering, not failed decoding or defaulted identity.
+    (
+        "crates/codeflow-core/src/validate/portal/figures/render.rs",
+        "twin_table",
+        "obtain-absent:as_str",
+        1,
+        "display",
     ),
     // Folds descriptive prose to one escaped Markdown table cell; source keys and destinations are separately retained.
     (
@@ -3366,7 +3842,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "hook_stage_names",
         "lines",
         1,
-        "grammar:markdown-table",
+        "framing:validate-portal-lookups-hook-stage-names-records",
     ),
     // Extracts hook stage labels from an authored Markdown table; table-cell and code-span padding define these displayed lookup labels.
     (
@@ -3376,13 +3852,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:markdown-table",
     ),
-    // Unreadable embedded skill text immediately becomes an Err naming that skill; no missing-asset fallback is accepted.
+    // Unreadable embedded skill text immediately becomes an Err naming that skill; no missing-asset fallback is accepted. verify_lookup_page propagates the skill source Err.
     (
         "crates/codeflow-core/src/validate/portal/lookups.rs",
         "skill_catalog",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
+    ),
+    // Frontmatter parse failure returns None to skill_catalog, which returns Err naming the missing readable description; lookup verification propagates refusal.
+    (
+        "crates/codeflow-core/src/validate/portal/lookups.rs",
+        "skill_description",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
     ),
     // Only permits whitespace after the generated catalog region; any extra nonblank prose causes Err and generated identifiers are untouched.
     (
@@ -3392,7 +3876,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Checks whether the natural-language explanation after the journey outcome contains substantive prose; it selects no path or reference.
+    // Invalid UTF-8 in origin/HEAD returns Err; target_record converts the error to Presence::Unreadable, preventing target-based criteria relaxation.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance.rs",
+        "default_target_name",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // Whitespace-only narrative journey reasons are rejected; retained reason text never names a revision, branch, path or identity.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "leaf_journey",
@@ -3400,15 +3892,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // The reviewed record comparison treats LF and CRLF as the same Markdown line ending, matching the work-record Markdown parser; no Git output or raw path list is read here.
+    // This reader consumes raw record physical LF/CRLF lines once before comparing reviewed content; downstream scan_record/frontmatter_len do not remove CR again.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "reviewed_part",
         "lines",
         1,
-        "grammar:CommonMark",
+        "framing:reviewed-record-lines",
     ),
-    // These seven calls format the already-refused waiver evidence into explanatory diagnostics; the commit lookup now receives the exact untrimmed value.
+    // Only interpolated refusal messages trim the evidence; commit lookup and amendment matching use the original exact evidence.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
         "waiver_problem",
@@ -3416,15 +3908,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         7,
         "display",
     ),
-    // Both operations check whether the standalone rationale contains substantive prose; integration_target is checked and stored exactly without trimming.
+    // Normalizes human-authored standalone explanation and rejects an empty narrative; task identity and integration target are separate exact fields.
     (
         "crates/codeflow-core/src/workgraph/allocate.rs",
         "create_task_with",
         "trim",
         2,
-        "schema-reject-only",
+        "prose",
     ),
-    // Normalizes the operator-provided record title before rendering prose; identifier allocation is independent of that title.
+    // Normalizes a human-authored one-line title, not the allocated record id or target identity.
     (
         "crates/codeflow-core/src/workgraph/allocate.rs",
         "record_title",
@@ -3432,7 +3924,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Trims only failed git log stderr for the returned diagnostic; successful raw log fields use literal space, LF and NUL framing.
+    // Invalid UTF-8 returns the entry problem; range_problem treats that returned problem as a planning-only refusal.
+    (
+        "crates/codeflow-core/src/workgraph/amendment.rs",
+        "entry_problem",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
+    // An invalid full OID joins refused reasons and yields Baseline::Refused; judge_records and range judges surface baseline_refusal and deny the migration allowance.
+    (
+        "crates/codeflow-core/src/workgraph/lifecycle.rs",
+        "Baseline::from_entries",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Only failed Git stderr is trimmed in the returned error; history stdout records use strict bytes and exact framing.
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
         "shipped_in_history",
@@ -3440,7 +3948,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Normalizes the ADR title supplied as natural-language prose before rendering; the numbered ADR identifier is allocated separately.
+    // Normalizes the human ADR title before rendering heading/YAML; numeric ADR allocation uses separate directory identities.
     (
         "crates/codeflow-core/src/workgraph/light_paths.rs",
         "create_adr_with",
@@ -3448,7 +3956,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Trims only Git stderr on unsuccessful commands; successful stdout is decoded strictly and loses one terminal LF only.
+    // Trims stderr only after unsuccessful Git exit; successful stdout is decoded strictly and returned without trim.
     (
         "crates/codeflow-core/src/workgraph/light_paths.rs",
         "git",
@@ -3456,7 +3964,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Trims only failed Git stderr in the error returned to the operator; stdout is strict UTF-8 with one terminal LF removed.
+    // FETCH_HEAD metadata supplies only the snapshot timestamp rendered by Backlog::snapshot_line; missing timestamp never changes target tips, readiness or claims.
+    (
+        "crates/codeflow-core/src/workgraph/readiness.rs",
+        "fetched_at",
+        "obtain-absent:metadata",
+        1,
+        "display",
+    ),
+    // Trims stderr only for a failed Git command, never the successful decision output.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "git",
@@ -3464,7 +3980,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Formats Git stderr as a diagnostic after unsuccessful status; successful stdout remains exact bytes.
+    // Trims failed-command stderr for its error message; successful command stdout remains exact bytes.
     (
         "crates/codeflow-core/src/workgraph/readiness.rs",
         "git_bytes",
@@ -3472,7 +3988,15 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Rejects whitespace-only owner, window or follow-up field values after syntactic splitting; any returned nonempty value is retained unchanged.
+    // ASCII spaces, tabs, CR and LF select the first nonblank block header; these are leading YAML/Markdown separators, not a delimiter removal. Exact header/schema parsing still refuses malformed content.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "acceptance_blocks",
+        "trim_start_matches",
+        1,
+        "grammar:acceptance-leading-separators",
+    ),
+    // Whitespace-only owner/window/follow-up values are rejected; an accepted follow-up is validated as the unchanged exact task id.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "after_release_problems",
@@ -3480,7 +4004,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Checks that the explanation following none: in follow_ups is substantive prose; task IDs are parsed separately with literal space/tab separators.
+    // Whitespace-only prose explanation for no follow-ups is rejected; referenced task identifiers use explicit ASCII grammar elsewhere.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "check_block",
@@ -3488,7 +4012,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Rejects empty or placeholder-only rationale prose without altering any accepted value; Unicode whitespace cannot create a substantive required field.
+    // Trimming only classifies an empty narrative/template placeholder as blank and thus rejects missing evidence.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "is_blank_value",
@@ -3496,7 +4020,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Tokenizes natural-language Deliverables prose to detect empty placeholder-only descriptions; words are never resolved or compared as filesystem identities.
+    // Words and punctuation are inspected only to distinguish narrative deliverable text from placeholder text; no word becomes a filesystem or task identity.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "is_entry",
@@ -3504,7 +4028,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Strips punctuation around words only for the advisory placeholder-prose check; no filename, ref or configuration value is normalized.
+    // Words and punctuation are inspected only to distinguish narrative deliverable text from placeholder text; no word becomes a filesystem or task identity.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "is_entry",
@@ -3512,7 +4036,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Advisory description check asks whether free-form prose plausibly mentions an output path; it never resolves, authorizes or compares a named filesystem path.
+    // Removes surrounding prose punctuation while recognizing whether narrative mentions a path-shaped deliverable; this does not resolve, access, compare or authorize the extracted path.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "is_path",
+        "trim_end_matches",
+        1,
+        "prose",
+    ),
+    // Removes surrounding prose punctuation while recognizing whether narrative mentions a path-shaped deliverable; this does not resolve, access, compare or authorize the extracted path.
+    (
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "is_path",
+        "trim_start_matches",
+        1,
+        "prose",
+    ),
+    // Splits a narrative description into words to recognize a path-shaped deliverable mention; words are never used as actual filesystem paths.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "names_path",
@@ -3520,31 +4060,39 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Acceptance blocks explicitly accept LF and CRLF document lines; fields are subsequently parsed with literal ASCII syntactic separators.
+    // Public raw acceptance-text reader removes LF/CRLF once. acceptance_blocks passes already-framed lines directly to parse_acceptance_lines so content CR is never stripped again.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "parse_acceptance",
         "lines",
         1,
-        "grammar:acceptance-record",
+        "framing:acceptance-input-lines",
     ),
-    // Splits Markdown document lines using accepted LF or CRLF line endings before the CommonMark context parser; no Git stream framing is involved.
+    // Raw Markdown body physical-line reader owns LF/CRLF removal. scan receives framed lines and no longer strips CR; acceptance_blocks uses parse_acceptance_lines on its assembled framed lines.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "section",
         "lines",
         1,
-        "grammar:CommonMark",
+        "framing:record-section-lines",
     ),
-    // Uses Markdown LF/CRLF line endings to locate a section and preserve its visible Markdown; document line-ending spelling is not a record identity.
+    // Raw Markdown body reader owns LF/CRLF removal; both scan and returned selected lines preserve remaining CR content.
     (
         "crates/codeflow-core/src/workgraph/record_text.rs",
         "section_markdown",
         "lines",
         1,
-        "grammar:CommonMark",
+        "framing:record-section-markdown-lines",
     ),
-    // Rejects a whitespace-only release-branch glob; accepted patterns are passed unchanged to glob parsing and matching.
+    // OID parse failure becomes the table error through ok_or_else; table_on_chain/bridge propagate it and release_findings refuses the release transition.
+    (
+        "crates/codeflow-core/src/workgraph/release_line.rs",
+        "parse_table",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // Only rejects an empty/whitespace-only declared pattern; nonempty glob/path text is returned unchanged for exact policy interpretation.
     (
         "crates/codeflow-core/src/workgraph/release_line.rs",
         "pattern_problem",
@@ -3552,7 +4100,31 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Rejects whitespace-only required status-change fields; returns the original nonempty string, so a superseded_by identifier is never rewritten.
+    // Markdown output construction removes trailing blank-line spacing and writes a fixed section separation; this is rendering, not consuming a Git or name delimiter.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "append_to_section",
+        "trim_end_matches",
+        3,
+        "format-contract",
+    ),
+    // Markdown renderer joins complete section documents with fixed blank-line spacing; no parsed identity or authority is trimmed.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "insert_section_before",
+        "trim_end_matches",
+        3,
+        "format-contract",
+    ),
+    // Generated acceptance block text has its trailing render newline removed before insertion in a new Markdown fence; fields were validated separately.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "propose",
+        "trim_end_matches",
+        1,
+        "format-contract",
+    ),
+    // Rejects missing/whitespace-only single-line required form fields and returns accepted text unchanged.
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
         "required",
@@ -3560,7 +4132,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Requires substantive standalone_reason prose in the task record; no identity is transformed.
+    // Rejects a standalone task with no nonblank human reason; it does not normalize task identity, refs or paths.
     (
         "crates/codeflow-core/src/workgraph/work_start.rs",
         "standalone_at_head",
@@ -3568,7 +4140,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Selects an explanatory fallback only for an already-blocked task with an empty blocker reason; the refusal is unconditional before this display choice.
+    // Trimming formats the already-blocked task narrative reason in the refusal, and cannot convert refusal to allow.
     (
         "crates/codeflow-core/src/workgraph/work_start.rs",
         "start_gate",
@@ -3576,7 +4148,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Requires substantive standalone_reason prose; integration-target presence and comparison now use the exact field.
+    // Rejects a standalone task with only whitespace in its human explanation; exact identifiers and configured targets are separate fields.
     (
         "crates/codeflow-core/src/workgraph/work_start.rs",
         "validate_task_structure",
@@ -3584,13 +4156,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // PID decoding and u32 parsing failures become BrowserUnavailable via ok_or_else. An owned candidate is never silently omitted.
+    // Unreadable PID returns BrowserUnavailable in macos_inventory_candidates; owned_process_candidates propagates it so process ownership cannot be certified.
     (
         "crates/codeflow-present/src/browser.rs",
         "macos_inventory_candidates",
-        "decode-absent:from_utf8",
+        "obtain-absent:from_utf8",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
     // Rejects whitespace-only alternative text. Accepted image identity configuration stays unchanged.
     (
@@ -3608,13 +4180,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // Builds canonical reader-visible review text from prose/diff lines. This is the presentation selection model, not Git or shell parsing.
+    // Reads presentation code/diff text lines to construct the human selection text model.
     (
         "crates/codeflow-present/src/document.rs",
         "Block::canonical_review_text",
         "lines",
         1,
-        "prose",
+        "framing:canonical-review-lines",
     ),
     // Builds canonical reader-visible review text from prose/diff lines. This is the presentation selection model, not Git or shell parsing.
     (
@@ -3624,13 +4196,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "prose",
     ),
-    // Builds canonical reader-visible review text from prose/diff lines. This is the presentation selection model, not Git or shell parsing.
+    // Reads legacy presentation diff text lines for stored selection compatibility.
     (
         "crates/codeflow-present/src/document.rs",
         "Block::legacy_diff_review_text",
         "lines",
         1,
-        "prose",
+        "framing:legacy-review-lines",
     ),
     // Rejects whitespace-only summary, label or framing prose. Accepted fields are retained unchanged.
     (
@@ -3639,6 +4211,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
+    ),
+    // Removes trailing output LF while constructing canonical human Markdown text; original source/IDs are unchanged.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "markdown_text",
+        "trim_end_matches",
+        2,
+        "prose",
     ),
     // Collapses and truncates navigation labels only. Document and block identifiers remain exact.
     (
@@ -3688,6 +4268,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // CSS property tokens accept only CSS space/tab/CR/LF/form-feed; stripping these separators is idempotent and preserves property identity.
+    (
+        "crates/codeflow-present/src/entity.rs",
+        "declares_geometry",
+        "trim_matches",
+        1,
+        "grammar:css-whitespace",
+    ),
     // Collapses human-readable labels only. Entity IDs are independently compared unchanged.
     (
         "crates/codeflow-present/src/entity.rs",
@@ -3696,14 +4284,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // JSON path-field type failure marks geometry extent unproven. It cannot certify interactive geometry.
-    (
-        "crates/codeflow-present/src/entity.rs",
-        "mark_extent",
-        "decode-absent:as_str",
-        1,
-        "schema-reject-only",
-    ),
     // Collapses human-readable labels only. Entity IDs are independently compared unchanged.
     (
         "crates/codeflow-present/src/entity.rs",
@@ -3711,6 +4291,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "split_whitespace",
         1,
         "display",
+    ),
+    // SVG/CSS length reader allows explicit ASCII space/tab/CR/LF around its number and optional px suffix.
+    (
+        "crates/codeflow-present/src/entity.rs",
+        "parse_length",
+        "trim_matches",
+        1,
+        "grammar:svg-length",
     ),
     // Rejects whitespace-only form prose or rationale. Accepted labels and values remain unchanged.
     (
@@ -3760,13 +4348,13 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:prose-anchor",
     ),
-    // Renders accessible diff rows using the presentation text model, not repository diff parsing.
+    // Reads presentation diff lines to produce accessible rendered rows.
     (
         "crates/codeflow-present/src/render.rs",
         "render_block",
         "lines",
         1,
-        "display",
+        "framing:render-diff-lines",
     ),
     // Rejects whitespace-only ledger reply text. Stored text stays exact.
     (
@@ -3783,6 +4371,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
+    ),
+    // HTML href fragment grammar permits only leading/trailing HTML ASCII whitespace before the exact fragment validation.
+    (
+        "crates/codeflow-present/src/safe_html.rs",
+        "allowed_fragment_reference",
+        "trim_matches",
+        1,
+        "grammar:html-url-space",
     ),
     // Broad whitespace splitting only adds refusals for runtime-reserved cf- HTML identities. All browser separators are covered and original attributes are unchanged.
     (
@@ -3808,29 +4404,53 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Unreadable Cookie, Origin, marker or Content-Type cannot match required exact values and causes HTTP refusal.
+    // CSS selector token slices are surrounded by the CSS ASCII whitespace set; selectors retain all non-separator characters.
+    (
+        "crates/codeflow-present/src/scoped_css.rs",
+        "ScopedRules::parse_prelude",
+        "trim_matches",
+        1,
+        "grammar:css-whitespace",
+    ),
+    // Unreadable Cookie/Origin/marker/Content-Type values produce an HTTP refusal from require_application_request; every endpoint caller returns that refusal before state access.
     (
         "crates/codeflow-present/src/service.rs",
         "require_application_request",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         4,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Unreadable Host cannot equal the session authority and causes HTTP 421.
+    // Unreadable Host returns HTTP 421; require_application_request and bootstrap endpoint callers return that refusal.
     (
         "crates/codeflow-present/src/service.rs",
         "require_host",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "schema-reject-only",
+        "unproven",
     ),
-    // Unreadable Accept-Encoding never selects compression. The identity representation is the same resource, with no authority decision.
+    // Invalid output HeaderValue returns empty HTTP 500; secure_html/plain propagate the refusal instead of content with missing headers.
+    (
+        "crates/codeflow-present/src/service.rs",
+        "response_with_headers",
+        "obtain-absent:from_str",
+        1,
+        "unproven",
+    ),
+    // service_encoding cannot decode any present Accept-Encoding value returns unproven None; asset returns HTTP 406 for None.
     (
         "crates/codeflow-present/src/service.rs",
         "service_encoding",
-        "decode-absent:to_str",
+        "obtain-absent:to_str",
         1,
-        "format-contract",
+        "unproven",
+    ),
+    // The alternate UniqueKeys parse preserves the original typed parse error; SessionStore revision readers propagate Err and refuse loading the record.
+    (
+        "crates/codeflow-present/src/state.rs",
+        "read_revision_record",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
     ),
     // Rejects whitespace-only selectors, labels, actors, instructions or notes. Original strings remain exact for identity comparisons.
     (
@@ -3882,6 +4502,337 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ),
 ];
 
+/// A framing exception belongs only to its named reader; consumers do not
+/// remove the delimiter again. Entries are (grammar, file, enclosing item).
+const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
+    (
+        "acceptance-input-lines",
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "parse_acceptance",
+    ),
+    (
+        "canonical-review-lines",
+        "crates/codeflow-present/src/document.rs",
+        "Block::canonical_review_text",
+    ),
+    (
+        "capability-parse-capabilities-records",
+        "crates/codeflow-core/src/capability.rs",
+        "parse_capabilities",
+    ),
+    (
+        "ceremony-history-regions-records",
+        "crates/codeflow-core/src/ceremony/history.rs",
+        "regions",
+    ),
+    (
+        "classification-task-lines",
+        "crates/codeflow-cli/src/cmd/ci/classification.rs",
+        "task_lines",
+    ),
+    (
+        "cli-git-config-z",
+        "crates/codeflow-cli/src/cmd/git_hook.rs",
+        "git_config_values",
+    ),
+    (
+        "commit-marker-lines",
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "breaking_marker",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "breaking_marker_present",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "check_breaking_footer",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "check_commit_body",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "check_commit_ticket",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "check_required_footers",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "check_subject_separator",
+    ),
+    (
+        "conventional-commits-lines",
+        "crates/codeflow-core/src/hooks/standards.rs",
+        "find_policy_character",
+    ),
+    (
+        "delegate-continuation-session-entries-records",
+        "crates/codeflow-core/src/delegate/continuation.rs",
+        "session_entries",
+    ),
+    (
+        "doctor-ci-pin-recognized-records",
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "recognized",
+    ),
+    (
+        "doctor-ci-pin-span-records",
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "span",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "commit_msg_from",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "commit_msg_with_files",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "policy_character_violation",
+    ),
+    (
+        "git-commit-message-lines",
+        "crates/codeflow-core/src/hooks/git_hook.rs",
+        "strip_commit_comments",
+    ),
+    (
+        "git-quoted-diff",
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "unquote_git_path",
+    ),
+    (
+        "ids-entry-frontmatter-value-records",
+        "crates/codeflow-core/src/ids/entry.rs",
+        "frontmatter_value",
+    ),
+    (
+        "ids-git-git-branch-refs-records",
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::branch_refs",
+    ),
+    (
+        "ids-inventory-lifetime-start-records",
+        "crates/codeflow-core/src/ids/inventory.rs",
+        "lifetime_start",
+    ),
+    (
+        "ids-issue-diagnostics-records",
+        "crates/codeflow-core/src/ids/issue.rs",
+        "diagnostics",
+    ),
+    (
+        "ids-issue-pending-entries-records",
+        "crates/codeflow-core/src/ids/issue.rs",
+        "pending_entries",
+    ),
+    (
+        "ids-ledger-ledger-range-violations-records",
+        "crates/codeflow-core/src/ids/ledger.rs",
+        "Ledger::range_violations",
+    ),
+    (
+        "ids-seed-add-former-id-records",
+        "crates/codeflow-core/src/ids/seed.rs",
+        "add_former_id",
+    ),
+    (
+        "ledger-compact-read-events-from-file-records",
+        "crates/codeflow-core/src/ledger/compact.rs",
+        "read_events_from_file",
+    ),
+    (
+        "ledger-rebuild-read-events-from-file-records",
+        "crates/codeflow-core/src/ledger/rebuild.rs",
+        "read_events_from_file",
+    ),
+    (
+        "legacy-review-lines",
+        "crates/codeflow-present/src/document.rs",
+        "Block::legacy_diff_review_text",
+    ),
+    (
+        "model-catalog-operator-anchored-override-records",
+        "crates/codeflow-core/src/model_catalog/operator.rs",
+        "anchored_override",
+    ),
+    (
+        "model-catalog-scan-scan-records",
+        "crates/codeflow-core/src/model_catalog/scan.rs",
+        "scan",
+    ),
+    (
+        "pr-task-lines",
+        "crates/codeflow-cli/src/cmd/ci/adopter.rs",
+        "supply_task",
+    ),
+    (
+        "presentation-marker-lines",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "presentation",
+    ),
+    (
+        "push-advertisement-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "advertised_commits",
+    ),
+    (
+        "push-boundary-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "boundary",
+    ),
+    (
+        "push-bounded-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "bounded_by",
+    ),
+    (
+        "recall-index-file-records",
+        "crates/codeflow-core/src/recall.rs",
+        "index_file",
+    ),
+    (
+        "record-section-lines",
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "section",
+    ),
+    (
+        "record-section-markdown-lines",
+        "crates/codeflow-core/src/workgraph/record_text.rs",
+        "section_markdown",
+    ),
+    (
+        "release-field-lines",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "release_fields_under",
+    ),
+    (
+        "render-diff-lines",
+        "crates/codeflow-present/src/render.rs",
+        "render_block",
+    ),
+    (
+        "review-row-lines",
+        "crates/codeflow-cli/src/cmd/ci/pr_body.rs",
+        "review_names_revision",
+    ),
+    (
+        "reviewed-record-lines",
+        "crates/codeflow-core/src/workgraph/acceptance.rs",
+        "reviewed_part",
+    ),
+    (
+        "scaffold-pr-template-headings-records",
+        "crates/codeflow-core/src/scaffold/pr_template.rs",
+        "headings",
+    ),
+    (
+        "scaffold-region-block-interior-records",
+        "crates/codeflow-core/src/scaffold/region.rs",
+        "block_interior",
+    ),
+    (
+        "scaffold-region-extract-block-records",
+        "crates/codeflow-core/src/scaffold/region.rs",
+        "extract_block",
+    ),
+    (
+        "scaffold-region-with-eol-records",
+        "crates/codeflow-core/src/scaffold/region.rs",
+        "with_eol",
+    ),
+    (
+        "shell-command-substitution",
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::substitution",
+    ),
+    (
+        "shell-producer-substitution",
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::producer_values",
+    ),
+    (
+        "shell-quotes",
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "shell_words",
+    ),
+    (
+        "submodule-status-lines",
+        "crates/codeflow-cli/src/cmd/push_set.rs",
+        "incomplete_checkout",
+    ),
+    (
+        "template-placeholder-lines",
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "find_placeholders",
+    ),
+    (
+        "testing-coverage-go-cover-parse-go-cover-str-records",
+        "crates/codeflow-core/src/testing/coverage/go_cover.rs",
+        "parse_go_cover_str",
+    ),
+    (
+        "testing-coverage-lcov-parse-lcov-str-records",
+        "crates/codeflow-core/src/testing/coverage/lcov.rs",
+        "parse_lcov_str",
+    ),
+    (
+        "testing-gate-guard-live-groups-records",
+        "crates/codeflow-core/src/testing/gate_guard.rs",
+        "live_groups",
+    ),
+    (
+        "unified-diff-lines",
+        "crates/codeflow-core/src/hooks/scan.rs",
+        "scan_diff",
+    ),
+    (
+        "validate-mod-landed-pull-requests-records",
+        "crates/codeflow-core/src/validate/mod.rs",
+        "landed_pull_requests",
+    ),
+    (
+        "validate-portal-lookups-hook-stage-names-records",
+        "crates/codeflow-core/src/validate/portal/lookups.rs",
+        "hook_stage_names",
+    ),
+    (
+        "validate-portal-recover-unavailable-ids-records",
+        "crates/codeflow-core/src/validate/portal.rs",
+        "recover_unavailable_ids",
+    ),
+    (
+        "validate-portal-verify-rendered-claims-records",
+        "crates/codeflow-core/src/validate/portal.rs",
+        "verify_rendered_claims",
+    ),
+    (
+        "validate-portal-verify-snippets-records",
+        "crates/codeflow-core/src/validate/portal.rs",
+        "verify_snippets",
+    ),
+];
+
+fn valid_framing_owner(reason: &str, file: &str, item: &str) -> bool {
+    reason
+        .strip_prefix("framing:")
+        .is_none_or(|grammar| FRAMING_OWNERS.contains(&(grammar, file, item)))
+}
+
 #[test]
 fn guard_whitespace_uses_explicit_separator_rules() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -3898,6 +4849,10 @@ fn guard_whitespace_uses_explicit_separator_rules() {
     }
     let mut allowed = BTreeMap::new();
     for (file, item, call, count, reason) in WHITESPACE_EXCEPTIONS {
+        assert!(
+            valid_framing_owner(reason, file, item),
+            "{file} {item}: framing is outside its owner"
+        );
         assert!(
             valid_reason(reason),
             "{file} {item} {call}: invalid reason {reason}"
@@ -3983,7 +4938,7 @@ fn decision_scan_detects_framing_predicates_and_decode_to_absent() {
     for source in [
         "fn f() { let lines = text; lines.iter(); consume(lines); }",
         "fn f() { str::trim_matches(text, [' ', '\\t']); }",
-        "fn f() { text.trim_matches([' ', '\\t']); text.trim_start_matches(' '); text.trim_end_matches(\"\\n\"); }",
+        "fn f() { text.trim_matches([' ', '\\t']); text.trim_start_matches(' '); }",
         "fn f() -> Result<(), E> { std::str::from_utf8(bytes)?; Ok(()) }",
         "fn f() { buf.as_str(); path.to_str(); }",
         "#[cfg(test)] fn f() { bytes.as_str().ok(); }",
@@ -4008,6 +4963,8 @@ fn decision_exception_reasons_are_closed() {
         "format-contract",
         "ascii-marker",
         "grammar:posix-shell",
+        "framing:git-quoted-diff",
+        "unproven",
     ] {
         assert!(valid_reason(reason));
     }
@@ -4020,4 +4977,46 @@ fn decision_exception_reasons_are_closed() {
     ] {
         assert!(!valid_reason(reason));
     }
+}
+
+#[test]
+fn obtaining_scan_covers_every_operation_consumer_and_discard_shape() {
+    for operation in OBTAIN {
+        let source = format!("fn f() {{ source.{operation}().ok(); }}");
+        assert!(!sites_in_mode(&source, true).is_empty(), "{source}");
+    }
+    for consumer in ABSENT {
+        let source = format!("fn f() {{ std::fs::read(path).{consumer}(); }}");
+        assert!(!sites_in_mode(&source, true).is_empty(), "{source}");
+    }
+    for source in [
+        "fn f() { if let Ok(text) = std::fs::read_to_string(p) {} }",
+        "fn f() { if let Ok(text) = std::fs::read_to_string(p) {} else { refuse(); } }",
+        "fn f() { match std::fs::metadata(p) { Ok(m) => m, Err(_) => fallback() } }",
+        "fn f() { match std::fs::metadata(p) { Ok(m) => m, Err(..) => fallback() } }",
+        "fn f() { let _ = std::fs::read(p); }",
+        "fn f() { std::fs::read(p).ok(); }",
+        "fn f() { iter.filter_map(Result::ok); }",
+        "fn f() { iter.flat_map(Result::ok); }",
+        "fn f() { text.trim_matches('\\\''); }",
+        "fn f() { text.trim_matches('\\n'); }",
+        "fn f() { text.trim_matches('\\\\'); }",
+    ] {
+        assert!(!sites_in_mode(source, true).is_empty(), "{source}");
+    }
+    assert!(sites_in_mode(
+        "fn f() { match std::fs::read(p) { Ok(v) => v, Err(error) => return Err(error) } }",
+        true
+    )
+    .is_empty());
+    assert!(valid_framing_owner(
+        "framing:shell-quotes",
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "shell_words"
+    ));
+    assert!(!valid_framing_owner(
+        "framing:shell-quotes",
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "evaluate"
+    ));
 }

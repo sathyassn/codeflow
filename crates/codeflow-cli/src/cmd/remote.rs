@@ -51,7 +51,10 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
             policy_path.display()
         );
     }
-    let mut plan = ProtectionPlan::from_policy_file(&policy_path);
+    let mut plan = match ProtectionPlan::from_policy_file(&policy_path) {
+        Ok(plan) => plan,
+        Err(error) => return Err(anyhow::Error::msg(error)),
+    };
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
     // durable work is tracked; the rules of every other branch are unchanged.
     let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root).unwrap_or(false);

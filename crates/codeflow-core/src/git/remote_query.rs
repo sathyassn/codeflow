@@ -145,33 +145,11 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
 
 /// The answer as text, one line per advertised ref.
 ///
-/// OS text rule (issue 79): the advertised names are matched against declared
-/// targets and release patterns, which need text, and a lossy decode would let
-/// one name stand for another. A ref whose name is not valid UTF-8 is left out
-/// of the answer: it can be neither a declared target nor a release or epic
-/// line, so leaving it out only narrows what a caller can verify. The one name
-/// that cannot be left out is the default branch (`ref: ... HEAD`), whose
-/// answer is then a refusal, never another branch.
+/// Every advertised ref must decode; otherwise callers cannot prove the
+/// destination's complete ref set and the query refuses.
 fn text_answer(bytes: &[u8]) -> Result<String, Failure> {
-    let mut text = String::new();
-    for line in bytes
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
-    {
-        match std::str::from_utf8(line) {
-            Ok(valid) => {
-                text.push_str(valid);
-                text.push('\n');
-            }
-            Err(_) if line.starts_with(b"ref: ") => {
-                return Err(Failure::Other(
-                    "the destination's default branch name is not valid UTF-8".to_string(),
-                ));
-            }
-            Err(_) => {}
-        }
-    }
-    Ok(text)
+    String::from_utf8(bytes.to_vec())
+        .map_err(|error| Failure::Other(format!("advertised refs are not valid UTF-8: {error}")))
 }
 
 /// The SSH command git would use, with password and host-key prompts off.
@@ -256,18 +234,16 @@ mod tests {
 
     /// Review finding on issue 79: advertised ref names were decoded lossily,
     /// so a valid `caf` plus U+FFFD resolved to the tip of the distinct branch
-    /// whose last byte is invalid. A name that is not valid UTF-8 is left out.
+    /// whose last byte is invalid. An unreadable advertised set now refuses.
     #[test]
-    fn an_advertised_name_that_is_not_utf8_is_left_out_and_never_aliased() {
+    fn an_advertised_name_that_is_not_utf8_refuses_the_query() {
         let dir = tempfile::tempdir().unwrap();
         let repo = crate::git::repo_with_refs(
             dir.path(),
             &[b"refs/heads/caf\xe9", "refs/heads/caf\u{fffd}".as_bytes()],
         );
         let path = repo.workdir().unwrap().to_path_buf();
-        let listed = ls_remote(&path, &["--heads", path.to_str().unwrap()]).unwrap();
-        assert!(listed.contains("refs/heads/caf\u{fffd}\n"), "{listed}");
-        assert_eq!(listed.matches("refs/heads/caf").count(), 1, "{listed}");
+        assert!(ls_remote(&path, &["--heads", path.to_str().unwrap()]).is_err());
     }
 
     #[test]

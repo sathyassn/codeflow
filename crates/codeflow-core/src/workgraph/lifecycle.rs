@@ -148,8 +148,11 @@ pub struct Graph {
 
 impl Graph {
     /// Read the checked-out records under `project-management/`.
-    #[must_use]
-    pub fn from_worktree(repo_root: &Path) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an inventory or record cannot be read, decoded or parsed.
+    pub fn from_worktree(repo_root: &Path) -> Result<Self, String> {
         let pm = repo_root.join("project-management");
         let mut graph = Self::default();
         for (kind, files) in [
@@ -157,16 +160,15 @@ impl Graph {
             (RecordKind::Spec, super::layout::spec_record_files(&pm)),
             (RecordKind::Task, super::layout::task_record_files(&pm)),
         ] {
-            for path in files {
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
+            for path in files.map_err(|error| error.to_string())? {
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
                 let relative =
                     crate::portable_path::slashed(path.strip_prefix(repo_root).unwrap_or(&path));
-                graph.insert(kind, &relative, &content);
+                graph.insert(kind, &relative, &content)?;
             }
         }
-        graph
+        Ok(graph)
     }
 
     /// Read the records of a commit's tree.
@@ -194,8 +196,16 @@ impl Graph {
             };
             match repo.find_blob(entry.id()) {
                 Ok(blob) => {
-                    graph.insert(kind, path, &String::from_utf8_lossy(blob.content()));
-                    crate::git::Walk::Continue
+                    let loaded = std::str::from_utf8(blob.content())
+                        .map_err(|error| error.to_string())
+                        .and_then(|content| graph.insert(kind, path, content));
+                    match loaded {
+                        Ok(()) => crate::git::Walk::Continue,
+                        Err(error) => {
+                            failure = Some(format!("{path}: {error}"));
+                            crate::git::Walk::Stop
+                        }
+                    }
                 }
                 Err(error) => {
                     failure = Some(format!("{path}: {}", error.message()));
@@ -210,12 +220,15 @@ impl Graph {
         }
     }
 
-    /// Unparseable records and duplicate ids are left to the structural
-    /// validator, which reports them.
-    fn insert(&mut self, kind: RecordKind, path: &str, content: &str) {
-        if let Ok(record) = RecordView::parse(kind, path, content) {
-            self.records.entry(record.id.clone()).or_insert(record);
+    /// Every discovered record must be readable and have an unambiguous identity.
+    fn insert(&mut self, kind: RecordKind, path: &str, content: &str) -> Result<(), String> {
+        let record =
+            RecordView::parse(kind, path, content).map_err(|error| format!("{path}: {error}"))?;
+        if self.records.contains_key(&record.id) {
+            return Err(format!("{path}: duplicate work id {}", record.id));
         }
+        self.records.insert(record.id.clone(), record);
+        Ok(())
     }
 
     fn get(&self, id: &str, kind: RecordKind) -> Option<&RecordView> {
@@ -482,14 +495,15 @@ impl Baseline {
 pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     let mut lines = content.split_inclusive('\n');
     let first = lines.next()?;
-    if first.trim_end_matches([' ', '\t', '\r', '\n']) != "---" {
+    if super::record_text::without_line_ending(first).trim_end_matches([' ', '\t']) != "---" {
         return None;
     }
     let mut out = String::from(first);
     let (mut removed, mut closed) = (false, false);
     for line in lines {
         if !closed {
-            if line.trim_end_matches([' ', '\t', '\r', '\n']) == "---" {
+            if super::record_text::without_line_ending(line).trim_end_matches([' ', '\t']) == "---"
+            {
                 closed = true;
             } else if !removed && line.starts_with("uid:") {
                 removed = true;
@@ -1595,10 +1609,9 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
     let mut fields = output.stdout.split(|byte| *byte == 0);
     while let Some(field) = fields.next() {
         // Header fields are git's own ASCII (hashes, modes, status).
-        let Ok(field) = std::str::from_utf8(field) else {
-            continue;
-        };
-        let field = field.trim_start_matches('\n');
+        let field = std::str::from_utf8(field)
+            .map_err(|error| format!("cannot decode git log metadata: {error}"))?;
+        let field = field.strip_prefix('\n').unwrap_or(field);
         if let Some(hash) = field.strip_prefix("commit ") {
             commits.push((
                 git2::Oid::from_str(hash.strip_suffix('\n').unwrap_or(hash)).map_err(message)?,
@@ -1624,23 +1637,23 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
         if let Some((_, paths)) = commits.last_mut() {
             paths.push(path.to_string());
         }
-        let Some(blob) = meta
-            .split(' ')
-            .nth(3)
-            .and_then(|hash| git2::Oid::from_str(hash).ok())
-            .filter(|oid| !oid.is_zero())
-        else {
+        let hash = meta.split(' ').nth(3).ok_or("git log omitted a blob id")?;
+        let blob = git2::Oid::from_str(hash).map_err(message)?;
+        if blob.is_zero() {
             continue;
+        }
+        let names_spec = if let Some(names_spec) = names.get(&blob) {
+            *names_spec
+        } else {
+            let object = repo.find_blob(blob).map_err(message)?;
+            let content =
+                std::str::from_utf8(object.content()).map_err(|error| error.to_string())?;
+            let record = RecordView::parse(kind, path, content)?;
+            let names_spec =
+                record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id);
+            names.insert(blob, names_spec);
+            names_spec
         };
-        let names_spec = *names.entry(blob).or_insert_with(|| {
-            repo.find_blob(blob).ok().is_some_and(|blob| {
-                RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).is_ok_and(
-                    |record| {
-                        record.id == spec_id || record.specs.iter().any(|spec| spec == spec_id)
-                    },
-                )
-            })
-        });
         if names_spec {
             relevant.insert(path.to_string());
         }
@@ -1658,7 +1671,7 @@ fn implemented_at_a_commit(
     spec_id: &str,
 ) -> Result<bool, String> {
     let message = |error: git2::Error| error.message().to_string();
-    let mut parsed: HashMap<git2::Oid, Option<RecordView>> = HashMap::new();
+    let mut parsed: HashMap<git2::Oid, RecordView> = HashMap::new();
     for (oid, paths) in commits {
         if !paths.iter().any(|path| relevant.contains(path)) {
             continue;
@@ -1669,23 +1682,27 @@ fn implemented_at_a_commit(
             .map_err(message)?;
         let mut graph = Graph::default();
         for path in relevant {
-            let (Ok(entry), Some(kind)) = (
-                tree.get_path(Path::new(path)),
-                record_kind_for_tree_path(path),
-            ) else {
+            let Some(kind) = record_kind_for_tree_path(path) else {
                 continue;
             };
-            let view = parsed.entry(entry.id()).or_insert_with(|| {
-                repo.find_blob(entry.id()).ok().and_then(|blob| {
-                    RecordView::parse(kind, path, &String::from_utf8_lossy(blob.content())).ok()
-                })
-            });
-            if let Some(view) = view {
-                graph
-                    .records
-                    .entry(view.id.clone())
-                    .or_insert_with(|| view.clone());
-            }
+            let entry = match tree.get_path(Path::new(path)) {
+                Ok(entry) => entry,
+                Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+                Err(error) => return Err(message(error)),
+            };
+            let view = match parsed.entry(entry.id()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(cached) => {
+                    let blob = repo.find_blob(entry.id()).map_err(message)?;
+                    let content =
+                        std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+                    cached.insert(RecordView::parse(kind, path, content)?)
+                }
+            };
+            graph
+                .records
+                .entry(view.id.clone())
+                .or_insert_with(|| view.clone());
         }
         if graph
             .get(spec_id, RecordKind::Spec)
@@ -1850,7 +1867,7 @@ fn judge_range_against(
     let base_graph = Graph::from_revision(&repo, base)?;
     let after = match head {
         Some(head) => Graph::from_revision(&repo, head)?,
-        None => Graph::from_worktree(repo_root),
+        None => Graph::from_worktree(repo_root)?,
     };
     // The tree before the change, with each record the base lacks taken
     // from a baseline copy, for the rules that read the surrounding records.
@@ -1863,7 +1880,7 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
-    let reopened = reopened_in_range(&repo, base, head, &after);
+    let reopened = reopened_in_range(&repo, base, head, &after)?;
     let (shipped, history_problems) = shipped_specs(&repo, base, &before, &after);
     let context = ChangeContext {
         base: Some(&before),
@@ -1988,7 +2005,7 @@ pub(super) fn reopened_in_range(
     base: &str,
     head: Option<&str>,
     after: &Graph,
-) -> BTreeSet<String> {
+) -> Result<BTreeSet<String>, String> {
     let candidates: Vec<&RecordView> = after
         .records
         .values()
@@ -1996,61 +2013,42 @@ pub(super) fn reopened_in_range(
         .collect();
     let mut reopened = BTreeSet::new();
     if candidates.is_empty() {
-        return reopened;
+        return Ok(reopened);
     }
-    let (Some(base), Some(tip)) = (
-        resolve_commit(repo, base),
-        resolve_commit(repo, head.unwrap_or("HEAD")),
-    ) else {
-        return reopened;
+    let resolve = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+            .map_err(|error| format!("cannot read reopen history at {revision}: {error}"))
     };
-    let Ok(mut walk) = repo.revwalk() else {
-        return reopened;
-    };
-    if walk.push(tip).is_err() || walk.hide(base).is_err() {
-        return reopened;
-    }
-    // A record's blob repeats across most commits, so each is parsed once.
-    let mut statuses: HashMap<(git2::Oid, &str), Option<String>> = HashMap::new();
-    for oid in walk.flatten() {
-        let Ok(tree) = repo.find_commit(oid).and_then(|commit| commit.tree()) else {
-            continue;
-        };
+    let base = resolve(base)?;
+    let tip = resolve(head.unwrap_or("HEAD"))?;
+    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    walk.push(tip)
+        .and_then(|()| walk.hide(base))
+        .map_err(|error| error.to_string())?;
+    for oid in walk {
+        let oid = oid.map_err(|error| error.to_string())?;
+        let commit = repo.find_commit(oid).map_err(|error| error.to_string())?;
         for record in &candidates {
-            let Ok(entry) = tree.get_path(Path::new(&record.path)) else {
+            let Some(content) = super::acceptance::blob_at(repo, oid, &record.path)? else {
                 continue;
             };
-            let status = statuses
-                .entry((entry.id(), record.path.as_str()))
-                .or_insert_with(|| {
-                    entry
-                        .to_object(repo)
-                        .ok()
-                        .and_then(|object| object.into_blob().ok())
-                        .and_then(|blob| {
-                            let text = String::from_utf8_lossy(blob.content()).into_owned();
-                            RecordView::parse(record.kind, &record.path, &text).ok()
-                        })
-                        .map(|view| view.status)
-                });
-            if status.as_deref().is_some_and(|status| status != "complete") {
-                // A task branch can merge a line that completed another
-                // task meanwhile. Its earlier todo snapshots are not a
-                // reopen: require the actual first-parent status edge.
-                let was_complete = repo
-                    .find_commit(oid)
-                    .ok()
-                    .and_then(|commit| commit.parent_id(0).ok())
-                    .and_then(|parent| super::acceptance::blob_at(repo, parent, &record.path))
-                    .and_then(|content| RecordView::parse(record.kind, &record.path, &content).ok())
-                    .is_some_and(|before| before.status == "complete");
-                if was_complete {
-                    reopened.insert(record.id.clone());
+            let status = RecordView::parse(record.kind, &record.path, &content)?.status;
+            if status != "complete" {
+                if let Some(parent) = commit.parent_ids().next() {
+                    if let Some(content) = super::acceptance::blob_at(repo, parent, &record.path)? {
+                        if RecordView::parse(record.kind, &record.path, &content)?.status
+                            == "complete"
+                        {
+                            reopened.insert(record.id.clone());
+                        }
+                    }
                 }
             }
         }
     }
-    reopened
+    Ok(reopened)
 }
 
 /// Every path a change touches, from `base` to `head` (a revision), or to
@@ -2094,30 +2092,31 @@ pub fn changed_paths(
 /// uncommitted work (the verb cannot know the pull request's base; CI and
 /// `validate --since` judge the whole range) and the tree at the merge-base
 /// of `HEAD` and the default work target, when one resolves.
-#[must_use]
-pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>) {
-    let Ok(repo) = Repository::discover(repo_root) else {
-        return (None, None);
+///
+/// # Errors
+///
+/// Returns an error if changed paths, target history or contextual records cannot be read.
+pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<String>>), String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let paths = changed_paths(&repo, "HEAD", None)?;
+    let base = match super::work_start::default_work_target(repo_root)
+        .map_err(|error| error.to_string())?
+    {
+        Some(target) => {
+            let resolve = |name: &str| {
+                repo.revparse_single(name)
+                    .and_then(|object| object.peel_to_commit())
+                    .map(|commit| commit.id())
+                    .map_err(|error| error.to_string())
+            };
+            let anchor = repo
+                .merge_base(resolve("HEAD")?, resolve(&target)?)
+                .map_err(|error| error.to_string())?;
+            Some(Graph::from_revision(&repo, &anchor.to_string())?)
+        }
+        None => None,
     };
-    let paths = changed_paths(&repo, "HEAD", None).ok();
-    let base = super::work_start::default_work_target(repo_root)
-        .and_then(|target| {
-            let head = repo
-                .revparse_single("HEAD")
-                .ok()?
-                .peel_to_commit()
-                .ok()?
-                .id();
-            let target = repo
-                .revparse_single(&target)
-                .ok()?
-                .peel_to_commit()
-                .ok()?
-                .id();
-            repo.merge_base(head, target).ok()
-        })
-        .and_then(|anchor| Graph::from_revision(&repo, &anchor.to_string()).ok());
-    (base, paths)
+    Ok((base, Some(paths)))
 }
 
 /// Judge a pull request: the records changed from the merge-base of `base`
@@ -2233,7 +2232,15 @@ pub fn judge_release_range(
 /// the stale-word warnings of R-28 and R-80.
 #[must_use]
 pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
-    let graph = Graph::from_worktree(repo_root);
+    let graph = match Graph::from_worktree(repo_root) {
+        Ok(graph) => graph,
+        Err(error) => {
+            return Verdict {
+                errors: vec![error],
+                ..Verdict::default()
+            }
+        }
+    };
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
     verdict.warnings.extend(baseline.warning());
@@ -2270,10 +2277,15 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
 fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<Finding> {
     let mut warnings = Vec::new();
     let repo = Repository::discover(repo_root).ok();
-    let prefixes = crate::hooks::policy::Policy::load_effective(repo_root)
-        .0
-        .git
-        .branch_prefixes;
+    let prefixes = match crate::hooks::policy::Policy::load_effective(repo_root) {
+        Ok((policy, _)) => policy.git.branch_prefixes,
+        Err(error) => {
+            return vec![Finding::new(
+                format!("cannot read work policy: {error}"),
+                remedy::BASELINE_REVIEW.remedy(),
+            )]
+        }
+    };
     for record in graph.records.values() {
         match record.kind {
             RecordKind::Epic if matches!(record.status.as_str(), "draft" | "planning") => {
@@ -2363,6 +2375,8 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
         .as_deref()
         .and_then(|target| {
             super::resolve_work_target(repo.workdir().unwrap_or_else(|| repo.path()), Some(target))
+                .ok()
+                .flatten()
         })
         .and_then(|target| {
             ["refs/heads/", "refs/remotes/"]

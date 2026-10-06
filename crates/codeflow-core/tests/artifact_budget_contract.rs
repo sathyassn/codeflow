@@ -1595,7 +1595,7 @@ fn skill_trees() -> SkillFiles {
     let base = repo_root().join("assets/base");
     let mut files = SkillFiles::new();
     for tree in ["agents/skills", "claude/skills"] {
-        reading::load_skill_tree(&base.join(tree), &mut files);
+        reading::load_skill_tree(&base.join(tree), &mut files).unwrap();
     }
     files
 }

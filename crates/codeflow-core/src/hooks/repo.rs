@@ -19,7 +19,7 @@ pub struct RepoInfo {
     /// The common git directory (`.git` of the main checkout).
     pub common_dir: PathBuf,
     /// Current branch name as the hook plane matches it: empty when detached
-    /// or unreadable, [`NON_UTF8_BRANCH`] when the name is not valid UTF-8.
+    /// only; [`NON_UTF8_BRANCH`] when the name is not valid UTF-8.
     pub branch: String,
     /// The same branch, exact, for output.
     pub branch_name: Option<GitName>,
@@ -30,21 +30,28 @@ pub struct RepoInfo {
 impl RepoInfo {
     /// Discover the repository containing `start`, walking parents.
     /// Returns `None` when `start` is not inside a git repository.
-    #[must_use]
-    pub fn discover(start: &Path) -> Option<Self> {
-        let repo = Repository::discover(start).ok()?;
-        let root = repo.workdir()?.to_path_buf();
+    ///
+    /// # Errors
+    /// Repository discovery or HEAD cannot be read, or the repository has no worktree.
+    pub fn discover(start: &Path) -> Result<Option<Self>, String> {
+        let Some(repo) = open(start)? else {
+            return Ok(None);
+        };
+        let root = repo
+            .workdir()
+            .ok_or("repository has no worktree")?
+            .to_path_buf();
         let common_dir = repo.commondir().to_path_buf();
-        let branch = current_branch(&repo);
-        let branch_name = current_branch_name(&repo);
+        let branch_name = current_branch_name(&repo)?;
+        let branch = branch_rule_text(branch_name.as_ref());
         let is_worktree = repo.is_worktree();
-        Some(Self {
+        Ok(Some(Self {
             root,
             common_dir,
             branch,
             branch_name,
             is_worktree,
-        })
+        }))
     }
 
     /// Runtime state directory, shared across worktrees: `<common>/codeflow`.
@@ -60,46 +67,69 @@ impl RepoInfo {
     }
 }
 
-/// The checked-out branch of an open repository, exactly: `None` when HEAD is
-/// detached or unreadable.
+/// The checked-out branch exactly, or `None` only for a proven detached HEAD.
+/// Unborn branches keep their symbolic name so protection applies before a commit.
 ///
-/// Handles the unborn-HEAD case (fresh repo before the first commit) by
-/// reading the symbolic target, so branch protection applies from minute one.
-#[must_use]
-pub fn current_branch_name(repo: &Repository) -> Option<GitName> {
-    if let Ok(head) = repo.head() {
-        let name = crate::git::name::reference_shorthand(&head);
-        if name.bytes() != b"HEAD" && !name.is_empty() {
-            return Some(name);
+/// # Errors
+/// HEAD or its target cannot be read or is malformed.
+pub fn current_branch_name(repo: &Repository) -> Result<Option<GitName>, String> {
+    match crate::root_checkout::head(repo)? {
+        crate::root_checkout::Head::Branch(name) => Ok(Some(name)),
+        crate::root_checkout::Head::Detached(_) => Ok(None),
+    }
+}
+
+/// Current branch rule text, empty only for a proven detached HEAD.
+/// A non-UTF8 branch remains [`NON_UTF8_BRANCH`], which every branch rule
+/// treats as protected; [`current_branch_name`] preserves its exact bytes.
+///
+/// # Errors
+/// HEAD or its target cannot be read or is malformed.
+pub fn current_branch(repo: &Repository) -> Result<String, String> {
+    Ok(branch_rule_text(current_branch_name(repo)?.as_ref()))
+}
+
+fn branch_rule_text(name: Option<&GitName>) -> String {
+    name.map_or_else(String::new, |name| {
+        name.rule_text()
+            .map_or_else(|_| NON_UTF8_BRANCH.to_string(), str::to_string)
+    })
+}
+
+/// Open the repository at or above `start`; only a proven non-repository is absent.
+///
+/// # Errors
+/// Discovery fails, including an existing repository marker with malformed metadata.
+pub fn open(start: &Path) -> Result<Option<Repository>, String> {
+    match Repository::discover(start) {
+        Ok(repo) => Ok(Some(repo)),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            // libgit2 also reports NotFound for an existing .git with an invalid
+            // HEAD. Such a repository must never look like ordinary non-repo input.
+            for ancestor in start.ancestors() {
+                match std::fs::symlink_metadata(ancestor.join(".git")) {
+                    Ok(_) => return Err(format!("cannot discover existing repository: {error}")),
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(failure) => {
+                        return Err(format!("cannot inspect repository marker: {failure}"))
+                    }
+                }
+                if ancestor
+                    .join("HEAD")
+                    .try_exists()
+                    .map_err(|failure| failure.to_string())?
+                    && ancestor
+                        .join("objects")
+                        .try_exists()
+                        .map_err(|failure| failure.to_string())?
+                {
+                    return Err(format!("cannot discover existing bare repository: {error}"));
+                }
+            }
+            Ok(None)
         }
-        return None; // detached
+        Err(error) => Err(format!("cannot discover repository: {error}")),
     }
-    // Unborn branch: HEAD exists as a symbolic ref with no target commit.
-    let head_ref = repo.find_reference("HEAD").ok()?;
-    crate::git::name::symbolic_target(&head_ref)?.strip_prefix(b"refs/heads/")
-}
-
-/// Current branch name for the hook plane: its text, empty on a detached HEAD.
-///
-/// OS text rule (issue 79, `docs/architecture.md`): the name is matched
-/// against protected-branch globs, which need text. A name that is not valid
-/// UTF-8 cannot be matched, and reading it as detached or empty would drop a
-/// protected-branch refusal, so it reads as [`NON_UTF8_BRANCH`], which every
-/// branch rule treats as protected. Use [`current_branch_name`] to show it.
-#[must_use]
-pub fn current_branch(repo: &Repository) -> String {
-    match current_branch_name(repo) {
-        None => String::new(),
-        Some(name) => name
-            .rule_text()
-            .map_or_else(|_| NON_UTF8_BRANCH.to_string(), str::to_string),
-    }
-}
-
-/// Open the repository at (or above) `start` for direct git2 queries.
-#[must_use]
-pub fn open(start: &Path) -> Option<Repository> {
-    Repository::discover(start).ok()
 }
 
 #[cfg(test)]
@@ -137,14 +167,14 @@ mod tests {
     #[test]
     fn test_discover_none_outside_repo() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(RepoInfo::discover(dir.path()).is_none());
+        assert!(RepoInfo::discover(dir.path()).unwrap().is_none());
     }
 
     #[test]
     fn test_discover_basic_repo() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
-        let info = RepoInfo::discover(dir.path()).unwrap();
+        let info = RepoInfo::discover(dir.path()).unwrap().unwrap();
         assert_eq!(info.branch, "main");
         assert!(!info.is_worktree);
         assert!(info.state_dir().ends_with("codeflow"));
@@ -157,7 +187,7 @@ mod tests {
         init_repo(dir.path());
         let sub = dir.path().join("src/deep");
         std::fs::create_dir_all(&sub).unwrap();
-        let info = RepoInfo::discover(&sub).unwrap();
+        let info = RepoInfo::discover(&sub).unwrap().unwrap();
         assert_eq!(
             info.root.canonicalize().unwrap(),
             dir.path().canonicalize().unwrap()
@@ -168,7 +198,7 @@ mod tests {
     fn test_discover_unborn_head_reports_branch() {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
-        let info = RepoInfo::discover(dir.path()).unwrap();
+        let info = RepoInfo::discover(dir.path()).unwrap().unwrap();
         assert_eq!(info.branch, "main");
     }
 
@@ -195,7 +225,7 @@ mod tests {
         std::fs::write(git_dir.join("packed-refs"), packed).unwrap();
         std::fs::write(git_dir.join("HEAD"), b"ref: refs/heads/release/caf\xe9\n").unwrap();
         let repo = Repository::open(dir.path()).unwrap();
-        let name = current_branch(&repo);
+        let name = current_branch(&repo).unwrap();
         assert_eq!(name, NON_UTF8_BRANCH);
         let policy = crate::hooks::policy::GitPolicy {
             protected_branches: vec!["main".to_string()],
@@ -203,12 +233,19 @@ mod tests {
         };
         assert!(policy.branch_is_protected(&name));
         assert_eq!(
-            current_branch_name(&repo).unwrap().display().to_string(),
+            current_branch_name(&repo)
+                .unwrap()
+                .unwrap()
+                .display()
+                .to_string(),
             "release/caf\\xe9"
         );
         // The unborn case reads the symbolic target the same way.
         std::fs::write(git_dir.join("packed-refs"), b"").unwrap();
-        assert_eq!(current_branch(&Repository::open(dir.path()).unwrap()), name);
+        assert_eq!(
+            current_branch(&Repository::open(dir.path()).unwrap()).unwrap(),
+            name
+        );
     }
 
     #[test]
@@ -222,10 +259,10 @@ mod tests {
             &main,
             &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/x"],
         );
-        let info = RepoInfo::discover(&wt).unwrap();
+        let info = RepoInfo::discover(&wt).unwrap().unwrap();
         assert_eq!(info.branch, "feat/x");
         assert!(info.is_worktree);
-        let main_info = RepoInfo::discover(&main).unwrap();
+        let main_info = RepoInfo::discover(&main).unwrap().unwrap();
         // State dirs resolve to the same place: shared across worktrees.
         assert_eq!(
             info.state_dir().parent().unwrap().canonicalize().unwrap(),
@@ -236,5 +273,27 @@ mod tests {
                 .canonicalize()
                 .unwrap(),
         );
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+    #[test]
+    fn r16_invalid_existing_head_is_not_detached_or_nonrepo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join(".git/HEAD"), b"invalid HEAD\n").unwrap();
+        assert!(super::current_branch_name(&repo).is_err());
+        assert!(super::current_branch(&repo).is_err());
+        assert!(super::RepoInfo::discover(dir.path()).is_err());
+        // libgit2 may still open a repository handle with malformed HEAD.
+        // It must never become absent; the head consumer must still refuse.
+        match super::open(dir.path()) {
+            Ok(Some(reopened)) => assert!(super::current_branch_name(&reopened).is_err()),
+            Err(_) => {}
+            Ok(None) => panic!("an existing repository was discarded as absent"),
+        }
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        assert!(super::open(dir.path()).is_err());
     }
 }

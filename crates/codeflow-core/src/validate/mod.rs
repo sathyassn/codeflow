@@ -143,6 +143,15 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         ),
     ];
     for (files, validator, valid_identity) in record_sets {
+        let files = match files {
+            Ok(files) => files,
+            Err(error) => {
+                report
+                    .issues
+                    .push(format!("cannot read work record inventory: {error}"));
+                continue;
+            }
+        };
         for path in files {
             report.checked_records += 1;
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);

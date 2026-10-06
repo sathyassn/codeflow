@@ -231,7 +231,8 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
             Ok(()) => {}
             Err(error) if os_lock::is_contended(&error) => {
                 return Err(LockHeld {
-                    holder: read_record(&mut file),
+                    holder: read_record(&mut file)
+                        .unwrap_or_else(|error| format!("cannot read gate lock record: {error}")),
                     path,
                     running_groups: Vec::new(),
                 });
@@ -244,7 +245,11 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 });
             }
         }
-        let previous = read_record(&mut file);
+        let previous = read_record(&mut file).map_err(|error| LockHeld {
+            holder: format!("cannot read gate lock record: {error}"),
+            path: path.clone(),
+            running_groups: Vec::new(),
+        })?;
         let running_groups = live_groups(&previous);
         if !running_groups.is_empty() {
             // The gate that wrote this record is gone but its targets are
@@ -441,12 +446,14 @@ fn open_lock_file(path: &Path) -> std::io::Result<File> {
         .open(path)
 }
 
-fn read_record(file: &mut File) -> String {
+fn read_record(file: &mut File) -> std::io::Result<String> {
+    file.seek(SeekFrom::Start(0))?;
     let mut text = String::new();
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = file.take(4096).read_to_string(&mut text);
+    file.take(4097).read_to_string(&mut text)?;
+    if text.len() > 4096 {
+        return Err(std::io::Error::other("gate lock record exceeds 4096 bytes"));
     }
-    text
+    Ok(text)
 }
 
 fn holder_record(project_dir: &Path) -> String {

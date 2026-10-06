@@ -82,7 +82,6 @@ pub(super) fn program_name(token: &str) -> String {
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or(token)
-        .trim_matches(|c: char| matches!(c, '"' | '\''))
         .to_ascii_lowercase()
 }
 
@@ -567,7 +566,7 @@ fn canonical_operand(path: &str) -> Option<String> {
 /// the profile itself (or its whole-tree glob) is protected here.
 fn dangerous_windows_target(op: &str) -> Option<&'static str> {
     let normalized = op
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'))
+        .trim_matches([',', ';'])
         .replace('/', "\\")
         .to_ascii_lowercase();
     let path = normalized.strip_suffix("\\*").unwrap_or(&normalized);
@@ -624,7 +623,7 @@ fn dangerous_windows_target(op: &str) -> Option<&'static str> {
 }
 
 fn is_windows_drive_designator(op: &str) -> bool {
-    let op = op.trim_matches(|c: char| matches!(c, '"' | '\'' | ',' | ';'));
+    let op = op.trim_matches([',', ';']);
     let bytes = op.as_bytes();
     bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }

@@ -100,6 +100,8 @@ pub fn update(
 /// (TSK-215).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
+    /// The update input could not be obtained; no repair is proven.
+    Unproven(String),
     /// The file already is what update would leave.
     Current,
     /// Update writes the file: it installs or replaces it, merges it
@@ -125,18 +127,21 @@ pub enum Decision {
 /// shipped entry for `dest` applies to the project's tier and permission
 /// preset with managed ownership, whole or by region. A record in the
 /// installed manifest alone never counts.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns an error when an input to the update decision cannot be read or parsed.
 pub fn decide(
     source: &dyn super::AssetSource,
     root: &Path,
     dest: &str,
     binary_version: &str,
-) -> Option<Decision> {
-    let state = ProjectState::load(root).ok()?;
-    let ignore = ScaffoldConfig::load(root).ok()?;
-    let manifest = ScaffoldManifest::load(source).ok()?;
-    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version).ok()?;
-    let entry = manifest
+) -> Result<Option<Decision>, ScaffoldError> {
+    let state = ProjectState::load(root)?;
+    let ignore = ScaffoldConfig::load(root)?;
+    let manifest = ScaffoldManifest::load(source)?;
+    let installed = InstalledManifest::load_or_default(root, &state.scaffold_version)?;
+    let Some(entry) = manifest
         .entries
         .iter()
         .find(|entry| entry.dest == dest && entry.applies(state.tier, &state.permission_preset))
@@ -145,35 +150,40 @@ pub fn decide(
                 entry.ownership,
                 Ownership::Managed | Ownership::ManagedRegion
             )
-        })?;
-    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
-        .ok()?
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
-    if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref()).ok()? {
-        return Some(Decision::Skipped(note));
+        })
+    else {
+        return Ok(None);
+    };
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
+    if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref())? {
+        return Ok(Some(Decision::Skipped(note)));
     }
-    if let Err(ScaffoldError::UnsafeSymlink { path }) = guard_beneath_root(root, Path::new(dest)) {
-        let link = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
-        return Some(Decision::Skipped(format!(
-            "{link} is a symlink, and update never writes through one"
-        )));
+    match guard_beneath_root(root, Path::new(dest)) {
+        Err(ScaffoldError::UnsafeSymlink { path }) => {
+            let link = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            return Ok(Some(Decision::Skipped(format!(
+                "{link} is a symlink, and update never writes through one"
+            ))));
+        }
+        Err(error) => return Err(error),
+        Ok(_) => {}
     }
     let ctx = update_context(root, &state, binary_version);
     let mut scratch = Report::new(String::new());
-    let rendered = render_entry(source, entry, &ctx, &mut scratch).ok()??;
-    let dest_path = root.join(dest);
-    let current = if dest_path.exists() {
-        Some(std::fs::read_to_string(&dest_path).ok()?)
-    } else {
-        None
+    let Some(rendered) = render_entry(source, entry, &ctx, &mut scratch)? else {
+        return Ok(None);
     };
+    let current = super::state::read_beneath_root(root, dest)?;
     if entry.ownership == Ownership::Managed {
         let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
-        let base = Baseline::read(root, dest);
+        let base = Baseline::read(root, dest)?;
         let step = managed_step(
             current.as_deref(),
             &rendered,
@@ -181,7 +191,7 @@ pub fn decide(
             base.as_deref(),
             false,
         );
-        return Some(match step {
+        return Ok(Some(match step {
             ManagedStep::Add | ManagedStep::Replace | ManagedStep::Force => {
                 Decision::Rewrite(rendered)
             }
@@ -190,21 +200,20 @@ pub fn decide(
             ManagedStep::NoBaseline => Decision::ConflictProposal(rendered),
             ManagedStep::Conflict(proposal) => Decision::ConflictProposal(proposal),
             ManagedStep::Kept => Decision::KeptUserModification,
-        });
+        }));
     }
     let format = entry.region.unwrap_or(RegionFormat::Markdown);
     let next = match (format, &current) {
         (RegionFormat::Json, None) => rendered.clone(),
         (RegionFormat::Json, Some(current)) => {
-            let previous = Baseline::read(root, dest);
+            let previous = Baseline::read(root, dest)?;
             merge_json_region(
                 entry,
                 current,
                 previous.as_deref(),
                 &rendered,
                 &mut Vec::new(),
-            )
-            .ok()?
+            )?
         }
         (format @ (RegionFormat::Markdown | RegionFormat::Hash), current) => {
             let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
@@ -219,11 +228,11 @@ pub fn decide(
             }
         }
     };
-    Some(match current {
+    Ok(Some(match current {
         Some(current) if next == current && current == rendered => Decision::Current,
         Some(current) if next == current => Decision::KeptUserModification,
         _ => Decision::Rewrite(next),
-    })
+    }))
 }
 
 /// Why update skips `entry` before reading it (`[scaffold] ignore`, the
@@ -306,7 +315,9 @@ fn update_writes(
     ));
     let mut diffs = String::new();
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
 
     for entry in &manifest.entries {
         if !entry.applies(state.tier, &state.permission_preset) {
@@ -501,16 +512,37 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
     if !recorded_baseline(root)
         .map_err(ScaffoldError::Git)?
         .is_empty()
-        || Graph::from_worktree(root).records.is_empty()
+        || Graph::from_worktree(root)
+            .map_err(ScaffoldError::Git)?
+            .records
+            .is_empty()
     {
         return Ok(None);
     }
-    let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {
-        let id = repo.head().ok()?.peel_to_commit().ok()?.id();
-        Some(id.to_string())
-    }) else {
-        return Ok(None);
+    let repo = git2::Repository::discover(root).map_err(|error| {
+        ScaffoldError::Git(format!("cannot read migration repository: {error}"))
+    })?;
+    let head = match repo.head() {
+        Ok(head) => head,
+        Err(error)
+            if matches!(
+                error.code(),
+                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
+            ) =>
+        {
+            return Ok(None)
+        }
+        Err(error) => {
+            return Err(ScaffoldError::Git(format!(
+                "cannot read migration HEAD: {error}"
+            )))
+        }
     };
+    let head = head
+        .peel_to_commit()
+        .map_err(|error| ScaffoldError::Git(format!("cannot read migration commit: {error}")))?
+        .id()
+        .to_string();
     let path = ProjectState::path(root);
     let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
     let mut table: toml::Table =
@@ -707,7 +739,7 @@ fn update_entry(
             };
             let old = current.as_deref().unwrap_or_default();
             let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
-            let base = Baseline::read(root, &entry.dest);
+            let base = Baseline::read(root, &entry.dest)?;
             match managed_step(
                 current.as_deref(),
                 &rendered,
@@ -816,7 +848,7 @@ fn update_entry(
                 }
                 let current = std::fs::read_to_string(&dest_path)
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
-                let previous = Baseline::read(root, &entry.dest);
+                let previous = Baseline::read(root, &entry.dest)?;
                 let mut lines = vec![];
                 let merged =
                     merge_json_region(entry, &current, previous.as_deref(), &rendered, &mut lines)?;
@@ -894,7 +926,7 @@ fn update_entry(
             } else {
                 let mut notes = vec!["user-owned: never mutated by update".to_string()];
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
-                let baseline_missing = Baseline::read(root, &entry.dest).is_none();
+                let baseline_missing = Baseline::read(root, &entry.dest)?.is_none();
                 if is_new_entry || baseline_missing {
                     Baseline::write(root, &entry.dest, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
@@ -930,8 +962,9 @@ fn sync_user_owned_json(
         std::fs::read_to_string(&dest_path).map_err(|e| ScaffoldError::io(&dest_path, e))?;
     let mut user: serde_json::Value = serde_json::from_str(&current_text)?;
     let new_default: serde_json::Value = serde_json::from_str(rendered)?;
-    let old_default: Option<serde_json::Value> =
-        Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
+    let old_default: Option<serde_json::Value> = Baseline::read(root, &entry.dest)?
+        .map(|t| serde_json::from_str(&t))
+        .transpose()?;
 
     let mut added: Vec<String> = vec![];
     let mut moved: Vec<MovedDefault> = vec![];
@@ -943,8 +976,8 @@ fn sync_user_owned_json(
         prior_release::policies(&entry.src)
             .into_iter()
             .flatten()
-            .filter_map(|text| serde_json::from_str(text).ok())
-            .collect()
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()?
     } else {
         vec![]
     };

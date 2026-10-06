@@ -2336,7 +2336,10 @@ pub(crate) fn parse_launch_recovery_name(name: &str, path: &Path) -> Result<Opti
 fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<FeedbackEvent>> {
     let mut events = Vec::new();
     for (index, line) in raw.split_inclusive('\n').enumerate() {
-        let value = line.strip_suffix('\n').unwrap_or(line);
+        // LF commits an append record. Never parse an uncommitted tail.
+        let Some(value) = line.strip_suffix('\n') else {
+            break;
+        };
         if value.is_empty() {
             continue;
         }
@@ -2358,7 +2361,6 @@ fn parse_event_log(path: &Path, raw: &str, max_events: usize) -> Result<Vec<Feed
                 }
                 events.push(event);
             }
-            Err(_) if !line.ends_with('\n') => break,
             Err(error) => {
                 return Err(PresentError::CorruptState(format!(
                     "{} line {}: {error}",
@@ -3940,7 +3942,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Resul
 /// Read one stored revision. A record that fails typed parsing only because
 /// its document holds diagram blocks in their pre-removal shape loads as the
 /// read-only retired kind; the file is never rewritten, and any other failure
-/// keeps its own error.
+/// keeps its own error. The unproven alternate parse returns the original
+/// error to `SessionStore::revision` and its sibling revision readers, which refuse.
 fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
     let bytes = read_state_bytes(path, limits::MAX_REVISION_STATE_BYTES)?;
     let error = match serde_json::from_slice::<RevisionRecord>(&bytes) {

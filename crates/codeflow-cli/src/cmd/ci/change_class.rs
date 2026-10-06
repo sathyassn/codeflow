@@ -50,9 +50,13 @@ impl ChangeClass {
 
 /// Every path the range changes, from the merge-base of `base` and `head` to
 /// `head`: one raw tree diff, NUL-delimited and unquoted, without rename
-/// detection so a rename is its deletion and its addition. Any failure is
-/// `None`, which the caller reads as unknown, never as an empty range.
-pub(super) fn range_inventory(root: &Path, base: &str, head: &str) -> Option<Vec<RangeEntry>> {
+/// detection so a rename is its deletion and its addition. Obtaining failures
+/// return a cannot-read error that the CI entry point refuses.
+pub(super) fn range_inventory(
+    root: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<RangeEntry>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -68,16 +72,17 @@ pub(super) fn range_inventory(root: &Path, base: &str, head: &str) -> Option<Vec
             &format!("{base}...{head}"),
         ])
         .output()
-        .ok()?;
+        .map_err(|error| format!("cannot read changed paths: {error}"))?;
     if !out.status.success() {
-        return None;
+        return Err(format!("cannot read changed paths: {}", out.status));
     }
-    parse_raw(&out.stdout)
+    parse_raw(&out.stdout).ok_or_else(|| "cannot read raw changed-path inventory".to_string())
 }
 
 /// Parse `git diff --raw -z --no-renames`: each change is a
 /// `:<old mode> <new mode> <old id> <new id> <status>` field followed by one
-/// path field. Anything else is malformed and yields `None`.
+/// path field. Anything else is unproven: `range_inventory` maps None to a
+/// cannot-read error, which `ci::run` refuses.
 fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
     let mut fields = stdout.split(|byte| *byte == 0);
     let mut entries = Vec::new();
@@ -97,7 +102,7 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
         // and prefixes, which need text, and a lossy spelling can match a
         // pattern the real bytes do not (`docs/caf[!x].md`), which would
         // lighten the checks. A path that is not valid UTF-8 makes the
-        // inventory unknown, which reads as code, the conservative direction.
+        // inventory unproven; range_inventory returns an error and `ci::run` refuses.
         let path = std::str::from_utf8(path).ok()?;
         entries.push(RangeEntry {
             path: path.to_string(),
@@ -112,16 +117,14 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
 /// policy (or its stack default), widened by the target side's own
 /// `git.product_paths` and `git.breaking_watch_paths` at `base`, so neither
 /// side can narrow the surfaces the other names.
-pub(super) fn project_paths(root: &Path, base: &str) -> ProjectPaths {
-    let mut project = ProjectPaths::load(root);
-    let target = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["show", &format!("{base}:.codeflow/policy.json")])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok());
+pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, String> {
+    let mut project = ProjectPaths::load(root)?;
+    let target = codeflow_core::hooks::landed_policy::policy_text_at(root, base)?
+        .map(|text| {
+            serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|error| format!("cannot read target path policy: {error}"))
+        })
+        .transpose()?;
     if let Some(policy) = target {
         let list = |key: &str| -> Vec<String> {
             policy["git"][key]
@@ -137,7 +140,7 @@ pub(super) fn project_paths(root: &Path, base: &str) -> ProjectPaths {
         project.product.extend(list("product_paths"));
         project.watched.extend(list("breaking_watch_paths"));
     }
-    project
+    Ok(project)
 }
 
 /// The class of a range from its inventory. `None` (unlisted) and an empty

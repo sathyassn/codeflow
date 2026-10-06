@@ -96,11 +96,43 @@ fn is_ancestor_or_same(repo: &Repository, ancestor: Oid, of: Oid) -> bool {
     ancestor == of || repo.graph_descendant_of(of, ancestor).unwrap_or(false)
 }
 
-pub(super) fn blob_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
-    let tree = repo.find_commit(commit).ok()?.tree().ok()?;
-    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
-    let blob = repo.find_blob(entry.id()).ok()?;
-    Some(String::from_utf8_lossy(blob.content()).into_owned())
+pub(super) fn blob_at(
+    repo: &Repository,
+    commit: Oid,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let tree = repo
+        .find_commit(commit)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| format!("cannot read {path} at {commit}: {error}"))?;
+    let entry = match tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {path} at {commit}: {error}")),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| format!("cannot read {path} at {commit}: {error}"))?;
+    let text = std::str::from_utf8(blob.content())
+        .map_err(|error| format!("cannot decode {path} at {commit}: {error}"))?;
+    Ok(Some(text.to_string()))
+}
+
+fn record_at(
+    repo: &Repository,
+    commit: Oid,
+    record: &RecordView,
+) -> Result<Option<RecordView>, String> {
+    blob_at(repo, commit, &record.path)?
+        .map(|content| RecordView::parse(record.kind, &record.path, &content))
+        .transpose()
+}
+
+fn first_parent(repo: &Repository, at: Oid) -> Result<Option<Oid>, String> {
+    let commit = repo
+        .find_commit(at)
+        .map_err(|error| format!("cannot read commit {at}: {error}"))?;
+    Ok(commit.parent_ids().next())
 }
 
 /// A record's text without its frontmatter `status:` field and its
@@ -113,7 +145,7 @@ fn reviewed_part(content: &str) -> String {
     let frontmatter = frontmatter_len(&lines);
     let scanned = scan_record(&lines);
     let closeout = section_span(&scanned, "## Closeout");
-    lines
+    let mut reviewed: Vec<_> = lines
         .iter()
         .enumerate()
         .filter(|(index, line)| {
@@ -122,10 +154,14 @@ fn reviewed_part(content: &str) -> String {
             !status_field && !in_closeout
         })
         .map(|(_, line)| *line)
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end_matches('\n')
-        .to_string()
+        .collect();
+    // Empty logical lines are Markdown section spacing, including the blank
+    // separator inserted before Closeout. Physical LF/CRLF was removed above;
+    // a remaining CR or any other content byte is never removed here.
+    while reviewed.last().is_some_and(|line| line.is_empty()) {
+        reviewed.pop();
+    }
+    reviewed.join("\n")
 }
 
 /// Where a completion lands: the commit that introduced the active block,
@@ -284,6 +320,23 @@ fn head_is_declared_target(repo: &Repository, task: &RecordView) -> bool {
     })
 }
 
+fn task_reopen_history(
+    repo: &Repository,
+    task: &RecordView,
+    landing: Landing<'_>,
+    anchor: Option<Oid>,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    match anchor {
+        Some(anchor) => super::lifecycle::reopened_in_range(
+            repo,
+            &anchor.to_string(),
+            Some(&landing.commit().to_string()),
+            &Graph::default().with(task.clone()),
+        ),
+        None => Ok(std::collections::BTreeSet::new()),
+    }
+}
+
 /// [`bind_completion`] with the own-task waiver allowance (TSK-184): in the
 /// task's own pull request, before the task was ever complete on its
 /// target, a waiver may also name a record-only amendment commit of this
@@ -314,7 +367,10 @@ pub(crate) fn bind_completion_with_amendment(
     let Some(block) = active_block(task) else {
         return Vec::new();
     };
-    let target = task_target(repo, task, default_target);
+    let target = match task_target(repo, task, default_target) {
+        Ok(target) => target,
+        Err(error) => return vec![finding(BINDING_RULE, error)],
+    };
     // On the target itself there is no PR range to anchor. The status verb
     // still checks the transition and reviewed span, including uncommitted
     // changes; a named fix branch must instead review inside its range.
@@ -329,6 +385,14 @@ pub(crate) fn bind_completion_with_amendment(
     // does not reopen the task, and the fix lands as any task does, so a
     // task landing may carry its review. Otherwise this range completed and
     // reopened the task itself.
+    let reopened_history = match task_reopen_history(repo, task, landing, anchor) {
+        Ok(history) => history,
+        Err(error) => return vec![finding(BINDING_RULE, error)],
+    };
+    let recovery = match recovered_completion(repo, task, &block, landing, anchor, criteria) {
+        Ok(recovery) => recovery,
+        Err(error) => return vec![finding(BINDING_RULE, error)],
+    };
     let mut recovered = false;
     let mut unreadable = None;
     let reopen = (!on_target)
@@ -347,18 +411,11 @@ pub(crate) fn bind_completion_with_amendment(
             let reopened = old.status == "complete"
                 && (matches!(landing, Landing::Worktree { .. })
                     || super::lifecycle::is_recompletion(Some(&old), task)
-                    || super::lifecycle::reopened_in_range(
-                        repo,
-                        &anchor.to_string(),
-                        Some(&landing.commit().to_string()),
-                        &Graph::default().with(task.clone()),
-                    )
-                    .contains(&task.id));
+                    || reopened_history.contains(&task.id));
             reopened.then_some((anchor, *old))
         })
         .or_else(|| {
-            let (at, old, note) =
-                recovered_completion(repo, task, &block, landing, anchor, criteria)?;
+            let (at, old, note) = recovery?;
             unreadable = note;
             recovered = true;
             Some((at, old))
@@ -369,7 +426,6 @@ pub(crate) fn bind_completion_with_amendment(
     let reopens_range = reopen
         .as_ref()
         .is_some_and(|(at, _)| !recovered || !before_range(*at));
-    let own_range_base = own_range_base.filter(|_| !reopens_range);
     let mut findings = Vec::new();
     findings.extend(unreadable.map(|message| finding(BINDING_RULE, message)));
     if let Some((_, old)) = &reopen {
@@ -419,8 +475,8 @@ pub(crate) fn bind_completion_with_amendment(
                 id,
                 &result.evidence,
                 landing,
-                task_target(repo, task, default_target),
-                own_range_base,
+                target,
+                own_range_base.filter(|_| !reopens_range),
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
@@ -516,8 +572,11 @@ fn epic_waiver_problem(
         Err(_) => return Some(format!("names {named}, whose change cannot be read")),
     }
     let criterion = |oid: Option<Oid>| {
-        oid.and_then(|oid| blob_at(repo, oid, &epic.path))
-            .and_then(|content| RecordView::parse(epic.kind, &epic.path, &content).ok())
+        oid.map(|oid| record_at(repo, oid, epic))
+            .transpose()
+            .ok()
+            .flatten()
+            .flatten()
             .and_then(|record| {
                 record
                     .criteria
@@ -546,7 +605,7 @@ pub(super) fn epic_completions_in_range(
     after: &Graph,
     head: Oid,
     amendable: bool,
-) -> Vec<Finding> {
+) -> Result<Vec<Finding>, String> {
     let mut findings = Vec::new();
     for epic in after
         .records
@@ -563,13 +622,13 @@ pub(super) fn epic_completions_in_range(
             continue;
         }
         let origin = if amendable {
-            introduced_at(repo, epic, &block, head)
+            introduced_at(repo, epic, &block, head)?
         } else {
             head
         };
         findings.extend(bind_epic_completion(repo, epic, Landing::Commit(origin)));
     }
-    findings
+    Ok(findings)
 }
 
 /// Find the prior completed record when a range or target checkout starts
@@ -580,35 +639,38 @@ fn previous_completion(
     task: &RecordView,
     block: &AcceptanceBlock,
     landing: Landing<'_>,
-) -> Option<(Oid, RecordView)> {
+) -> Result<Option<(Oid, RecordView)>, String> {
     let mut at = landing.commit();
-    match landing {
-        Landing::Commit(head) => {
-            let introduced = introduced_at(repo, task, block, head);
-            at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
-        }
+    let inherited = match landing {
+        Landing::Commit(_) => true,
         Landing::Worktree { head, .. } => {
-            let current = blob_at(repo, head, &task.path)
-                .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok());
-            if current.as_ref().is_some_and(|record| {
+            record_at(repo, head, task)?.as_ref().is_some_and(|record| {
                 record.status == "complete"
                     && active_block(record).as_ref() == Some(block)
                     && record.superseded_blocks() == task.superseded_blocks()
-            }) {
-                let introduced = introduced_at(repo, task, block, head);
-                at = repo.find_commit(introduced).ok()?.parent_id(0).ok()?;
-            }
+            })
         }
+    };
+    if inherited {
+        let introduced = introduced_at(repo, task, block, at)?;
+        let Some(parent) = first_parent(repo, introduced)? else {
+            return Ok(None);
+        };
+        at = parent;
     }
     let mut crossed_reopen = false;
     loop {
-        let content = blob_at(repo, at, &task.path)?;
-        let record = RecordView::parse(RecordKind::Task, &task.path, &content).ok()?;
+        let Some(record) = record_at(repo, at, task)? else {
+            return Ok(None);
+        };
         if record.status == "complete" {
-            return crossed_reopen.then_some((at, record));
+            return Ok(crossed_reopen.then_some((at, record)));
         }
         crossed_reopen = true;
-        at = repo.find_commit(at).ok()?.parent_id(0).ok()?;
+        let Some(parent) = first_parent(repo, at)? else {
+            return Ok(None);
+        };
+        at = parent;
     }
 }
 
@@ -703,10 +765,13 @@ fn reviewed_span_problem(
     // The record as the completion wrote it: a later planning amendment on
     // the line is not part of this completion.
     let completed = match landing {
-        Landing::Commit(oid) => blob_at(repo, oid, &task.path),
-        Landing::Worktree { .. } => None,
-    }
-    .unwrap_or_else(|| task.content.clone());
+        Landing::Commit(oid) => match blob_at(repo, oid, &task.path) {
+            Ok(Some(content)) => content,
+            Ok(None) => return Some(format!("{} is missing at completion {oid}", task.path)),
+            Err(error) => return Some(error),
+        },
+        Landing::Worktree { .. } => task.content.clone(),
+    };
     if !is_ancestor_or_same(repo, reviewed, at) {
         return Some(format!(
             "reviewed commit {reviewed} is not the head or an ancestor of it; review the result that lands"
@@ -723,7 +788,7 @@ fn reviewed_span_problem(
     };
     match stack {
         Stacked::Clean => {
-            let Some(then) = blob_at(repo, reviewed, &task.path) else {
+            let Ok(Some(then)) = blob_at(repo, reviewed, &task.path) else {
                 return Some(format!(
                     "{} is not in the reviewed commit, so its scope was never reviewed",
                     task.path
@@ -842,8 +907,9 @@ fn stacked(
         match commit.parent_count() {
             1 => {
                 let changed = match blob_at(repo, cursor, &task.path) {
-                    None => Some(format!("{} was removed", task.path)),
-                    Some(content) => later_change(repo, &task.path, &content, parent, cursor),
+                    Ok(None) => Some(format!("{} was removed", task.path)),
+                    Err(error) => Some(error),
+                    Ok(Some(content)) => later_change(repo, &task.path, &content, parent, cursor),
                 };
                 if let Some(changed) = changed {
                     return Stacked::No(Some(Stop::Commit {
@@ -1035,7 +1101,7 @@ fn later_change(
     if let Some(changed) = other.first() {
         return Some(format!("{changed} changed"));
     }
-    let Some(then) = blob_at(repo, reviewed, path) else {
+    let Ok(Some(then)) = blob_at(repo, reviewed, path) else {
         return Some(format!(
             "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
         ));
@@ -1047,14 +1113,20 @@ fn later_change(
 /// The tip of the line `task` belongs to: its declared integration target
 /// as a local or remote-tracking branch, or `default_target` when it
 /// declares none. A declared target that does not resolve is `None`.
-fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>) -> Option<Oid> {
+fn task_target(
+    repo: &Repository,
+    task: &RecordView,
+    default_target: Option<Oid>,
+) -> Result<Option<Oid>, String> {
     match task
         .integration_target
         .as_deref()
         .filter(|target| !target.is_empty())
     {
-        Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
-        None => default_target,
+        Some(target) => super::work_start::target_reference(repo, target)
+            .map(|commit| commit.map(|commit| commit.id()))
+            .map_err(|error| error.to_string()),
+        None => Ok(default_target),
     }
 }
 
@@ -1079,8 +1151,10 @@ fn recovered_completion(
     landing: Landing<'_>,
     anchor: Option<Oid>,
     criteria: &CriteriaBases,
-) -> Option<(Oid, RecordView, Option<String>)> {
-    let (at, mut old) = previous_completion(repo, task, block, landing)?;
+) -> Result<Option<(Oid, RecordView, Option<String>)>, String> {
+    let Some((at, mut old)) = previous_completion(repo, task, block, landing)? else {
+        return Ok(None);
+    };
     let mut refusal = None;
     if let Some(anchor) = anchor {
         let range = Range {
@@ -1116,7 +1190,7 @@ fn recovered_completion(
             }
         }
     }
-    Some((at, old, refusal))
+    Ok(Some((at, old, refusal)))
 }
 
 /// The commits a completion is judged over: those `head` reaches and
@@ -1214,7 +1288,10 @@ fn target_record(
         }
     }
     for name in &targets {
-        let found = target_tips(repo, name);
+        let found = match target_tips(repo, name) {
+            Ok(found) => found,
+            Err(error) => return Presence::Unreadable(error),
+        };
         if found.is_empty() {
             return Presence::Unreadable(format!(
                 "the target `{name}`, which this task's record names, does not resolve here; fetch it (`git fetch origin {name}`)"
@@ -1224,7 +1301,10 @@ fn target_record(
     }
     match default_target_name(repo) {
         Ok(name) => {
-            let found = target_tips(repo, &name.name);
+            let found = match target_tips(repo, &name.name) {
+                Ok(found) => found,
+                Err(error) => return Presence::Unreadable(error),
+            };
             if found.is_empty() {
                 return Presence::Unreadable(format!(
                     "the default target `{0}`{1} does not resolve here; fetch it (`git fetch origin {0}`)",
@@ -1497,7 +1577,8 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
                 .strip_prefix(b"refs/remotes/origin/")
                 .and_then(|name| name.rule_text().ok().map(str::to_string))
         }),
-        Err(_) => None,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+        Err(error) => return Err(format!("cannot read origin/HEAD: {error}")),
     };
     if let Some(name) = origin_head {
         return Ok(DefaultName {
@@ -1506,7 +1587,7 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
         });
     }
     repo.workdir()
-        .and_then(super::work_start::default_work_target)
+        .map(super::work_start::default_work_target).transpose().map_err(|error| error.to_string())?.flatten()
         .map(|name| DefaultName {
             name: name.strip_prefix("origin/").unwrap_or(&name).to_string(),
             from_origin_head: false,
@@ -1523,25 +1604,32 @@ fn default_target_name(repo: &Repository) -> Result<DefaultName, String> {
 /// that names it: the configured upstream of its local branch (on any
 /// remote), its `origin` tracking ref, and the local branch, in that
 /// order. Empty when none resolves.
-pub(super) fn target_tips(repo: &Repository, name: &str) -> Vec<(String, Oid)> {
+pub(super) fn target_tips(repo: &Repository, name: &str) -> Result<Vec<(String, Oid)>, String> {
     let mut names = Vec::new();
-    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{name}")) {
-        if let Ok(upstream) = upstream.as_str() {
-            names.push(upstream.to_string());
-        }
+    match repo.branch_upstream_name(&format!("refs/heads/{name}")) {
+        Ok(upstream) => names.push(
+            upstream
+                .as_str()
+                .map_err(|error| format!("cannot decode configured upstream: {error}"))?
+                .to_string(),
+        ),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(error.to_string()),
     }
     let mut candidates = super::work_start::target_reference_names(name).unwrap_or_default();
     candidates.reverse();
     names.extend(candidates);
-    names
-        .iter()
-        .filter_map(|reference| {
-            repo.find_reference(reference)
-                .and_then(|found| found.peel_to_commit())
-                .ok()
-                .map(|commit| (reference.clone(), commit.id()))
-        })
-        .collect()
+    let mut tips = Vec::new();
+    for reference in names {
+        let found = match repo.find_reference(&reference) {
+            Ok(found) => found,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let commit = found.peel_to_commit().map_err(|error| error.to_string())?;
+        tips.push((reference, commit.id()));
+    }
+    Ok(tips)
 }
 
 /// The task records in the tree at `at`, as path and blob, read only in the
@@ -1758,8 +1846,11 @@ fn waiver_problem(
         }
     }
     let criterion = |oid: Option<Oid>| {
-        oid.and_then(|oid| blob_at(repo, oid, &task.path))
-            .and_then(|content| RecordView::parse(task.kind, &task.path, &content).ok())
+        oid.map(|oid| record_at(repo, oid, task))
+            .transpose()
+            .ok()
+            .flatten()
+            .flatten()
             .map(|record| {
                 record
                     .criteria
@@ -2024,17 +2115,18 @@ pub(super) fn reopened_ids(
     for oid in walk {
         let oid = oid.map_err(|e| e.to_string())?;
         for record in &candidates {
-            if let Some(content) = blob_at(repo, oid, &record.path) {
+            if let Some(content) = blob_at(repo, oid, &record.path)? {
                 let then = RecordView::parse(RecordKind::Task, &record.path, &content)?;
                 if then.status != "complete" {
                     let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
-                    let transitioned = commit.parent_ids().any(|parent| {
-                        blob_at(repo, parent, &record.path)
-                            .and_then(|text| {
-                                RecordView::parse(RecordKind::Task, &record.path, &text).ok()
-                            })
+                    let mut transitioned = false;
+                    for parent in commit.parent_ids() {
+                        if record_at(repo, parent, record)?
                             .is_some_and(|prior| prior.status == "complete")
-                    });
+                        {
+                            transitioned = true;
+                        }
+                    }
                     if transitioned {
                         reopened.insert(record.id.clone());
                     }
@@ -2087,7 +2179,7 @@ pub fn completions_in_range(
     let before = Graph::from_revision(repo, &anchor.to_string())?;
     let after = Graph::from_revision(repo, &head_oid.to_string())?;
     let reopened_in_history =
-        super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after);
+        super::lifecycle::reopened_in_range(repo, &anchor.to_string(), Some(head), &after)?;
 
     let mut findings = Vec::new();
     for task in after
@@ -2107,9 +2199,10 @@ pub fn completions_in_range(
             // carries each completion from its introduction on that line.
             // Recompletion owns the entire fix range even if its block is
             // byte-identical to an earlier review.
-            let introduced = block
-                .as_ref()
-                .map_or(head_oid, |block| introduced_at(repo, task, block, head_oid));
+            let introduced = match block.as_ref() {
+                Some(block) => introduced_at(repo, task, block, head_oid)?,
+                None => head_oid,
+            };
             let source_base = amendable
                 .then(|| source_landing_base(repo, head_oid, introduced))
                 .flatten();
@@ -2142,7 +2235,7 @@ pub fn completions_in_range(
     }
     findings.extend(epic_completions_in_range(
         repo, &before, &after, head_oid, amendable,
-    ));
+    )?);
     Ok(findings)
 }
 
@@ -2200,25 +2293,28 @@ pub(super) fn introduced_at(
     task: &RecordView,
     block: &AcceptanceBlock,
     head: Oid,
-) -> Oid {
-    let holds = |oid: Oid| {
-        blob_at(repo, oid, &task.path)
-            .and_then(|content| RecordView::parse(task.kind, &task.path, &content).ok())
-            .is_some_and(|record| {
+) -> Result<Oid, String> {
+    let mut at = head;
+    loop {
+        let commit = repo
+            .find_commit(at)
+            .map_err(|error| format!("cannot read completion history at {at}: {error}"))?;
+        let mut previous = None;
+        for parent in commit.parent_ids().take(2) {
+            if record_at(repo, parent, task)?.is_some_and(|record| {
                 record.status == "complete"
                     && active_block(&record).as_ref() == Some(block)
                     && record.superseded_blocks() == task.superseded_blocks()
-            })
-    };
-    let mut at = head;
-    while let Some(parent) = repo
-        .find_commit(at)
-        .ok()
-        .and_then(|commit| commit.parent_ids().take(2).find(|parent| holds(*parent)))
-    {
-        at = parent;
+            }) {
+                previous = Some(parent);
+                break;
+            }
+        }
+        match previous {
+            Some(parent) => at = parent,
+            None => return Ok(at),
+        }
     }
-    at
 }
 
 /// [`journey_requirement`] for the task as the `head` revision has it.
@@ -2715,5 +2811,26 @@ mod tests {
         let paths = crate::git::diff_paths(&diff);
         assert_eq!(paths.len(), 2);
         assert_ne!(paths[0], paths[1]);
+    }
+    #[test]
+    fn r16_blob_read_distinguishes_absence_from_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"record.md", b"bad\xff")]);
+        assert!(blob_at(&repo, oid, "record.md").is_err());
+        assert!(blob_at(&repo, git2::Oid::ZERO_SHA1, "missing.md").is_err());
+        assert!(blob_at(&repo, oid, "missing.md").unwrap().is_none());
+    }
+    #[test]
+    fn r16_reviewed_part_ignores_closeout_spacing_but_keeps_content_cr() {
+        let before = "---\nstatus: planning\n---\n# Epic\n\nOutcome.\n";
+        let done = format!(
+            "{}\n## Closeout\n\nEvidence.\n",
+            before.replace("status: planning", "status: complete")
+        );
+        assert_eq!(reviewed_part(before), reviewed_part(&done));
+        assert_ne!(
+            reviewed_part(before),
+            reviewed_part(&before.replace("Outcome.\n", "Outcome.\r\r\n"))
+        );
     }
 }

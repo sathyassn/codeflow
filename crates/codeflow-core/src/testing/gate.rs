@@ -191,7 +191,7 @@ fn run_gate_resolved(
         let effective = resolve(&config.targets);
         (config.targets, config.execution, effective)
     } else {
-        let detected = detect_stacks(project_dir);
+        let detected = detect_stacks(project_dir)?;
         if detected.is_empty() {
             return Ok(GateOutcome::NoTargets {
                 reason: format!("no {TEST_CONFIG_PATH} and no test stack detected"),
@@ -535,10 +535,10 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
             Err(_) => return false,
         }
     } else {
-        detect_stacks(project_dir)
-            .into_iter()
-            .map(|d| d.config)
-            .collect()
+        let Ok(detected) = detect_stacks(project_dir) else {
+            return false;
+        };
+        detected.into_iter().map(|d| d.config).collect()
     };
     let effective = resolve_mode(mode, &targets);
     targets

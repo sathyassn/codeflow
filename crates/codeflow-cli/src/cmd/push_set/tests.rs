@@ -21,7 +21,10 @@ impl History {
         history.git(&["config", "user.name", "Test"]);
         history.git(&["config", "user.email", "test@example.invalid"]);
         history.commit("base.txt", "base", "chore: base");
-        command(history.remote.path(), &["init", "--bare", "-q"]);
+        command(
+            history.remote.path(),
+            &["init", "--bare", "-q", "-b", "main"],
+        );
         history.advertise("main", "main");
         history
     }
@@ -60,6 +63,10 @@ impl History {
     }
 
     fn range(&self, branch: &str, head: &str, old: &str) -> SelectedRange {
+        self.try_range(branch, head, old).unwrap()
+    }
+
+    fn try_range(&self, branch: &str, head: &str, old: &str) -> Result<SelectedRange, String> {
         let listing = OnceCell::new();
         let advertised = OnceCell::new();
         let answer = OnceCell::new();
@@ -84,12 +91,13 @@ impl History {
         };
         let mut notices = Vec::new();
         let RangeBase { base, note } =
-            range_base(self.local.path(), &pushed, &destination, &mut notices).unwrap();
-        SelectedRange {
+            range_base(self.local.path(), &pushed, &destination, &mut notices)?
+                .ok_or("no range")?;
+        Ok(SelectedRange {
             base,
             note,
             notices,
-        }
+        })
     }
 }
 
@@ -313,7 +321,7 @@ fn push_set_task_target_ignores_unrelated_malformed_records() {
 }
 
 #[test]
-fn push_set_unreadable_task_target_keeps_advertised_history_fallback() {
+fn r16_push_set_unreadable_task_target_refuses() {
     let h = History::new();
     h.git(&["checkout", "-q", "-b", "task/TSK-001-change"]);
     let old = h.commit("old", "old", "feat: first push");
@@ -323,9 +331,7 @@ fn push_set_unreadable_task_target_keeps_advertised_history_fallback() {
         "malformed",
         "docs: unreadable target",
     );
-    let range = h.range("task/TSK-001-change", &head, &old);
-    assert_eq!(range.base, old);
-    assert!(range.note.is_none());
+    assert!(h.try_range("task/TSK-001-change", &head, &old).is_err());
 }
 
 #[test]
@@ -394,7 +400,7 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         .any(|text| text.contains("declared target 'integration/line'")
             && text.contains(&tip)
             && text.contains("not fetched here")));
-    assert!(!is_commit(h.local.path(), &tip));
+    assert!(!is_commit(h.local.path(), &tip).unwrap());
 
     // With no usable advertised tip, the range stays unresolved but its
     // missing-target notice must still reach the caller.
@@ -404,6 +410,11 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
             &["update-ref", "-d", &format!("refs/heads/{branch}")],
         );
     }
+    // Keep the advertisement well formed while its only commit is unfetched.
+    command(
+        h.remote.path(),
+        &["symbolic-ref", "HEAD", "refs/heads/integration/line"],
+    );
     let listing = OnceCell::new();
     let advertised = OnceCell::new();
     let answer = OnceCell::new();
@@ -427,11 +438,15 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         remote_sha: NEW.into(),
     };
     let mut notices = Vec::new();
-    assert!(range_base(h.local.path(), &pushed, &destination, &mut notices).is_none());
+    assert!(
+        range_base(h.local.path(), &pushed, &destination, &mut notices)
+            .unwrap()
+            .is_none()
+    );
     assert!(notices
         .iter()
         .any(|text| text.contains(&tip) && text.contains("not fetched here")));
-    assert!(!is_commit(h.local.path(), &tip));
+    assert!(!is_commit(h.local.path(), &tip).unwrap());
 }
 
 #[test]
@@ -442,5 +457,8 @@ fn r15_tracking_namespace_preserves_config_bytes() {
         "remote.fixture.fetch",
         "+refs/heads/*:refs/remotes/fixture/*\u{a0}",
     ]);
-    assert_eq!(tracking_namespace(history.local.path(), "fixture"), None);
+    assert_eq!(
+        tracking_namespace(history.local.path(), "fixture").unwrap(),
+        None
+    );
 }

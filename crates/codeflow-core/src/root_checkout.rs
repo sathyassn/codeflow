@@ -12,6 +12,7 @@
 //! so git-guard, the git hooks, `doctor` and `init` say the same thing.
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -75,12 +76,12 @@ pub const DEFAULT_WORKTREE_LOCATIONS: [&str; 5] = [
 ];
 
 /// A read of one environment variable; tests pass their own.
-pub type EnvLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+pub type EnvLookup<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
 /// The process environment, for production callers.
 #[must_use]
-pub fn process_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+pub fn process_env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ pub enum Actor {
 /// Decide the actor from the environment.
 #[must_use]
 pub fn actor(env: EnvLookup<'_>) -> Actor {
-    if env(HUMAN_OVERRIDE_ENV).is_some_and(|v| v == "1") {
+    if env(HUMAN_OVERRIDE_ENV).is_some_and(|v| v.as_encoded_bytes() == b"1") {
         return Actor::HumanOverride;
     }
     AGENT_MARKERS
@@ -210,49 +211,57 @@ pub struct RootBranch {
 
 /// The repository's default branch: `origin/HEAD`, then the first protected
 /// branch that exists locally, then `main`.
-#[must_use]
-pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch {
-    if let Some(name) = repo
-        .find_reference("refs/remotes/origin/HEAD")
-        .ok()
-        // OS text rule (issue 79): the name is exact bytes, compared with the
-        // checked-out branch byte for byte, so a root branch that is not valid
-        // UTF-8 is still recognised and no other branch takes its place.
-        .and_then(|r| crate::git::name::symbolic_target(&r))
-        .and_then(|t| t.strip_prefix(b"refs/remotes/origin/"))
-    {
-        return RootBranch {
-            name,
-            source: RootBranchSource::OriginHead,
-        };
+///
+/// # Errors
+/// A present default-branch reference cannot be read or has an invalid target.
+pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> Result<RootBranch, String> {
+    match repo.find_reference("refs/remotes/origin/HEAD") {
+        Ok(reference) => {
+            let name = crate::git::name::symbolic_target(&reference)
+                .and_then(|target| target.strip_prefix(b"refs/remotes/origin/"))
+                .ok_or_else(|| "cannot read the branch named by origin/HEAD".to_string())?;
+            return Ok(RootBranch {
+                name,
+                source: RootBranchSource::OriginHead,
+            });
+        }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(format!("cannot read origin/HEAD: {error}")),
     }
     for pattern in &policy.protected_branches {
-        if is_valid_branch_name(pattern)
-            && repo.find_branch(pattern, git2::BranchType::Local).is_ok()
-        {
-            return RootBranch {
-                name: GitName::from_text(pattern),
-                source: RootBranchSource::ProtectedList,
-            };
+        if !is_valid_branch_name(pattern) {
+            continue;
+        }
+        match repo.find_branch(pattern, git2::BranchType::Local) {
+            Ok(_) => {
+                return Ok(RootBranch {
+                    name: GitName::from_text(pattern),
+                    source: RootBranchSource::ProtectedList,
+                })
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+            Err(error) => return Err(format!("cannot read protected branch {pattern}: {error}")),
         }
     }
-    RootBranch {
+    Ok(RootBranch {
         name: GitName::from_text("main"),
         source: RootBranchSource::Fallback,
-    }
+    })
 }
 
 /// The root branch: `git.root_branch` when set, else the default branch.
-#[must_use]
-pub fn root_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch {
+///
+/// # Errors
+/// The default-branch references cannot be read.
+pub fn root_branch(repo: &git2::Repository, policy: &GitPolicy) -> Result<RootBranch, String> {
     let configured = policy.root_branch.as_str();
     if configured.is_empty() {
         default_branch(repo, policy)
     } else {
-        RootBranch {
+        Ok(RootBranch {
             name: GitName::from_text(configured),
             source: RootBranchSource::Policy,
-        }
+        })
     }
 }
 
@@ -279,24 +288,31 @@ impl Head {
 }
 
 /// Read HEAD, including an unborn branch.
-#[must_use]
-pub fn head(repo: &git2::Repository) -> Option<Head> {
+///
+/// # Errors
+/// HEAD is unreadable or has no valid branch or commit target.
+pub fn head(repo: &git2::Repository) -> Result<Head, String> {
     match repo.head() {
+        Ok(reference) if reference.is_branch() => Ok(Head::Branch(
+            crate::git::name::reference_shorthand(&reference),
+        )),
         Ok(reference) => {
-            if reference.is_branch() {
-                // OS text rule (issue 79): a branch name that is not valid
-                // UTF-8 stays a branch, exact.
-                Some(Head::Branch(crate::git::name::reference_shorthand(
-                    &reference,
-                )))
-            } else {
-                let id = reference.target()?.to_string();
-                Some(Head::Detached(id.chars().take(9).collect()))
-            }
+            let id = reference
+                .target()
+                .ok_or_else(|| "cannot read detached HEAD target".to_string())?
+                .to_string();
+            Ok(Head::Detached(id.chars().take(9).collect()))
         }
-        Err(_) => crate::git::name::symbolic_target(&repo.find_reference("HEAD").ok()?)?
-            .strip_prefix(b"refs/heads/")
-            .map(Head::Branch),
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+            let reference = repo
+                .find_reference("HEAD")
+                .map_err(|error| format!("cannot read HEAD: {error}"))?;
+            crate::git::name::symbolic_target(&reference)
+                .and_then(|name| name.strip_prefix(b"refs/heads/"))
+                .map(Head::Branch)
+                .ok_or_else(|| "cannot read unborn HEAD branch".to_string())
+        }
+        Err(error) => Err(format!("cannot read HEAD: {error}")),
     }
 }
 
@@ -385,23 +401,32 @@ impl RootCheckout {
     /// The facts for `repo` under `policy` (the root checkout's own), or
     /// `None` when `repo` is a linked worktree, bare, or has no working
     /// tree.
-    #[must_use]
-    pub fn read(repo: &git2::Repository, policy: &GitPolicy) -> Option<Self> {
+    ///
+    /// # Errors
+    /// The root checkout branch or HEAD cannot be read.
+    pub fn read(repo: &git2::Repository, policy: &GitPolicy) -> Result<Option<Self>, String> {
         if !is_root_checkout(repo) {
-            return None;
+            return Ok(None);
         }
-        Some(Self {
-            repo: label(&canonical(repo.workdir()?)),
-            root_branch: root_branch(repo, policy),
-            head: head(repo),
-        })
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| "cannot read root checkout working directory".to_string())?;
+        Ok(Some(Self {
+            repo: label(&canonical(workdir)),
+            root_branch: root_branch(repo, policy)?,
+            head: Some(head(repo)?),
+        }))
     }
 
-    /// The facts for the repository that holds `path`, when `path` is in
-    /// its root checkout.
-    #[must_use]
-    pub fn at(path: &Path, policy: &GitPolicy) -> Option<Self> {
-        Self::read(&git2::Repository::discover(path).ok()?, policy)
+    /// The root checkout facts, or genuine non-repository/linked-worktree absence.
+    ///
+    /// # Errors
+    /// Repository discovery or the root checkout state cannot be read.
+    pub fn at(path: &Path, policy: &GitPolicy) -> Result<Option<Self>, String> {
+        match crate::hooks::repo::open(path)? {
+            Some(repo) => Self::read(&repo, policy),
+            None => Ok(None),
+        }
     }
 
     /// The finding for a commit made here on `branch`, where an empty name
@@ -478,7 +503,19 @@ pub fn hook_violation(path: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Op
     if !level.is_active() {
         return None;
     }
-    let finding = commit_finding(path, policy)?;
+    let finding = match commit_finding(path, policy) {
+        Ok(finding) => finding?,
+        Err(error) => {
+            return Some(Violation::new(
+                COMMIT_RULE,
+                PolicyLevel::Block,
+                error,
+                crate::remedy::Remedy::sanctioned(
+                    "restore readable repository state before committing",
+                ),
+            ))
+        }
+    };
     let who = actor(env);
     Some(finding.violation("a commit", hook_level(level, who), Some(&actor_note(who))))
 }
@@ -486,23 +523,39 @@ pub fn hook_violation(path: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Op
 /// Judge a commit in the working tree at `path`: a finding when `path` is
 /// a root checkout whose HEAD is not its root branch. `None` in a linked
 /// worktree, on the root branch, or when `path` is not a repository.
-#[must_use]
-pub fn commit_finding(path: &Path, policy: &GitPolicy) -> Option<CommitFinding> {
-    let repo = git2::Repository::discover(path).ok()?;
-    let root = RootCheckout::read(&repo, policy)?;
-    match root.head.clone()? {
+///
+/// # Errors
+/// The repository state needed to judge the commit cannot be read.
+pub fn commit_finding(path: &Path, policy: &GitPolicy) -> Result<Option<CommitFinding>, String> {
+    let Some(root) = RootCheckout::at(path, policy)? else {
+        return Ok(None);
+    };
+    let state = root
+        .head
+        .clone()
+        .ok_or_else(|| "cannot read root checkout HEAD".to_string())?;
+    Ok(match state {
         Head::Branch(branch) => root.commit_on_name(Some(&branch)),
         detached @ Head::Detached(_) => Some(CommitFinding {
             repo: root.repo,
             head: detached,
             root_branch: root.root_branch,
         }),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Findings for doctor and init
 // ---------------------------------------------------------------------------
+
+fn cannot_read_finding(message: String) -> Finding {
+    Finding {
+        severity: Severity::Warn,
+        rule: ROOT_BRANCH_KEY,
+        message,
+        next_step: "restore readable repository state and rerun the check".to_string(),
+    }
+}
 
 /// How serious a report line is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,22 +650,26 @@ fn escape_ignore_path(path: &str) -> String {
 /// Run git in `root` with `input` on stdin; stdout on success. Stdin is
 /// written while stdout is drained, so output larger than a pipe cannot
 /// deadlock the exchange ([`crate::git::output_with_input`]).
-fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
+fn git_stdin(root: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
     let mut command = crate::git::command();
     command.arg("-C").arg(root).args(args);
-    let out = crate::git::output_with_input(&mut command, input).ok()?;
+    let out = crate::git::output_with_input(&mut command, input)
+        .map_err(|error| format!("cannot read Git ignore rules: {error}"))?;
     // check-ignore exits 1 when nothing matched, which is still an answer.
     if out.status.success() || out.status.code() == Some(1) {
-        Some(out.stdout)
+        Ok(out.stdout)
     } else {
-        None
+        Err(format!(
+            "cannot read Git ignore rules: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))
     }
 }
 
 /// For each relative directory path, the ignore file that matches it, if
 /// any, from one `git check-ignore -v -n` call.
-fn ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
-    check_ignore(root, &[], dirs).unwrap_or_else(|| vec![None; dirs.len()])
+fn ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String>>, String> {
+    check_ignore(root, &[], dirs)
 }
 
 /// A throwaway repository with an empty exclude file, removed on drop.
@@ -652,53 +709,68 @@ impl Drop for ScratchRepo {
 /// as git does in this repository (`core.ignoreCase`, runtime overrides
 /// included), not as a fresh repository on this file system would. Falls
 /// back to [`ignore_sources`] when no scratch repository can be made.
-fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Vec<Option<String>> {
-    let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root));
-    let scratch = ScratchRepo::new();
-    let git_dir = scratch
-        .as_ref()
-        .and_then(|s| s.0.join(".git").to_str().map(str::to_string));
-    let work_tree = root.to_str();
-    match (git_dir, work_tree) {
-        (Some(git_dir), Some(work_tree)) => check_ignore(
-            root,
-            &[
-                "--git-dir",
-                &git_dir,
-                "--work-tree",
-                work_tree,
-                "-c",
-                "core.excludesFile=",
-                "-c",
-                &ignore_case,
-            ],
-            dirs,
-        )
-        .unwrap_or_else(|| ignore_sources(root, dirs)),
-        _ => ignore_sources(root, dirs),
-    }
+fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String>>, String> {
+    let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root)?);
+    let scratch =
+        ScratchRepo::new().ok_or("cannot create scratch repository to read shared ignore rules")?;
+    let git_dir = scratch.0.join(".git");
+    let git_dir = git_dir
+        .to_str()
+        .ok_or("scratch Git directory cannot be represented as text")?;
+    let work_tree = root
+        .to_str()
+        .ok_or("worktree path cannot be represented as text for ignore rules")?;
+    check_ignore(
+        root,
+        &[
+            "--git-dir",
+            git_dir,
+            "--work-tree",
+            work_tree,
+            "-c",
+            "core.excludesFile=",
+            "-c",
+            &ignore_case,
+        ],
+        dirs,
+    )
 }
 
 /// `core.ignoreCase` as git itself resolves it in `root`, runtime overrides
 /// (`git -c`, `GIT_CONFIG_COUNT`) included; git's default, false, when it
-/// is unset or unreadable.
-fn effective_ignore_case(root: &Path) -> bool {
-    crate::git::command()
+/// is unset. Unreadable configured values refuse.
+fn effective_ignore_case(root: &Path) -> Result<bool, String> {
+    let out = crate::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "--get", "--type=bool", "core.ignoreCase"])
-        .stderr(Stdio::null())
         .output()
-        .ok()
-        .filter(|out| out.status.success())
-        .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "true")
+        .map_err(|error| format!("cannot read core.ignoreCase: {error}"))?;
+    if out.status.code() == Some(1) {
+        return Ok(false);
+    }
+    if !out.status.success() {
+        return Err(format!(
+            "cannot read core.ignoreCase: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    match out.stdout.as_slice() {
+        b"true\n" => Ok(true),
+        b"false\n" => Ok(false),
+        _ => Err("cannot read core.ignoreCase: unexpected Git boolean output".into()),
+    }
 }
 
 /// One `git <prefix> check-ignore -v -n` call over `dirs`: for each, the
 /// ignore file whose positive rule decides it. `None` when git fails.
-fn check_ignore(root: &Path, prefix: &[&str], dirs: &[String]) -> Option<Vec<Option<String>>> {
+fn check_ignore(
+    root: &Path,
+    prefix: &[&str],
+    dirs: &[String],
+) -> Result<Vec<Option<String>>, String> {
     if dirs.is_empty() {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     let mut input = Vec::new();
     for dir in dirs {
@@ -708,74 +780,82 @@ fn check_ignore(root: &Path, prefix: &[&str], dirs: &[String]) -> Option<Vec<Opt
     let mut args = prefix.to_vec();
     args.extend(["check-ignore", "-v", "-n", "--no-index", "--stdin", "-z"]);
     let out = git_stdin(root, &args, &input)?;
-    // Records of four NUL-terminated fields: source, line, pattern, path.
-    let fields: Vec<&[u8]> = out.split(|b| *b == 0).collect();
-    let mut by_path = std::collections::HashMap::new();
-    for record in fields.chunks(4) {
-        if record.len() < 4 {
-            continue;
-        }
-        // OS text rule (issue 79): the paths asked about are valid text, so
-        // an answer for a path that is not valid UTF-8 is not one of them and
-        // is dropped, never read as a lookalike. A source that is not valid
-        // text cannot be classified, so that directory reads as not ignored,
-        // which only adds a warning.
-        let (Ok(source), Ok(pattern), Ok(path)) = (
-            std::str::from_utf8(record[0]),
-            std::str::from_utf8(record[2]),
-            std::str::from_utf8(record[3]),
-        ) else {
-            continue;
-        };
-        let source = source.to_string();
-        let path = path.to_string();
-        // A negated pattern (`!x`) matched but un-ignores the path.
-        let ignored = !source.is_empty() && !pattern.starts_with('!');
-        by_path.insert(path, ignored.then_some(source));
+    // Git owns one NUL terminator per field, including the final field.
+    let payload = out
+        .strip_suffix(&[0])
+        .ok_or("cannot read ignore output: missing NUL terminator")?;
+    let fields: Vec<&[u8]> = payload.split(|byte| *byte == 0).collect();
+    if fields.len() != dirs.len() * 4 {
+        return Err("cannot read ignore output: incomplete records".into());
     }
-    Some(
-        dirs.iter()
-            .map(|d| by_path.get(d).cloned().flatten())
-            .collect(),
-    )
+    let mut by_path = std::collections::HashMap::new();
+    for record in fields.chunks_exact(4) {
+        let text = |bytes| {
+            std::str::from_utf8(bytes)
+                .map_err(|error| format!("cannot decode ignore output: {error}"))
+        };
+        let source = text(record[0])?;
+        let pattern = text(record[2])?;
+        let path = text(record[3])?;
+        if by_path
+            .insert(
+                path.to_string(),
+                (!source.is_empty() && !pattern.starts_with('!')).then(|| source.to_string()),
+            )
+            .is_some()
+        {
+            return Err("cannot read ignore output: duplicate path".into());
+        }
+    }
+    dirs.iter()
+        .map(|dir| {
+            by_path
+                .remove(dir)
+                .ok_or_else(|| format!("cannot read ignore answer for {dir}"))
+        })
+        .collect()
 }
 
 /// Classify an ignore source: a tracked `.gitignore` in the tree, or a
 /// source other clones do not share.
-fn classify_source(repo: &git2::Repository, source: Option<&str>) -> IgnoreState {
+fn classify_source(repo: &git2::Repository, source: Option<&str>) -> Result<IgnoreState, String> {
     let Some(source) = source else {
-        return IgnoreState::NotIgnored;
+        return Ok(IgnoreState::NotIgnored);
     };
     let relative = Path::new(source);
     let tracked = !relative.is_absolute()
         && !source.starts_with(".git/")
         && repo
             .index()
-            .ok()
-            .is_some_and(|index| index.get_path(relative, 0).is_some());
-    if tracked {
+            .map_err(|error| format!("cannot read index for ignore source: {error}"))?
+            .get_path(relative, 0)
+            .is_some();
+    Ok(if tracked {
         IgnoreState::Tracked
     } else {
         IgnoreState::LocalOnly(source.to_string())
-    }
+    })
 }
 
 /// The `.git` entry of `dir`, when it holds one (a directory or a gitdir
 /// file).
-fn git_marker(dir: &Path) -> Option<PathBuf> {
+fn git_marker(dir: &Path) -> Result<Option<(PathBuf, bool)>, String> {
     let marker = dir.join(".git");
-    let meta = std::fs::symlink_metadata(&marker).ok()?;
-    (meta.is_dir() || meta.is_file()).then_some(marker)
+    let meta = match std::fs::symlink_metadata(&marker) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", marker.display())),
+    };
+    Ok((meta.is_dir() || meta.is_file()).then_some((marker, meta.is_file())))
 }
 
 /// Whether the `.git` file at `marker` points into `common_dir/worktrees/`:
 /// a linked worktree of this repository, not a nested repository.
-fn is_own_worktree(marker: &Path, common_dir: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(marker) else {
-        return false;
-    };
+fn is_own_worktree(marker: &Path, common_dir: &Path) -> Result<bool, String> {
+    let bytes = std::fs::read(marker)
+        .map_err(|error| format!("cannot read {}: {error}", marker.display()))?;
     let Some(target) = crate::git::gitfile_dir(&bytes) else {
-        return false;
+        return Ok(false);
     };
     let target = if target.is_absolute() {
         target
@@ -783,30 +863,35 @@ fn is_own_worktree(marker: &Path, common_dir: &Path) -> bool {
         marker.parent().unwrap_or(marker).join(target)
     };
     let worktrees = common_dir.join("worktrees");
-    match (target.canonicalize(), worktrees.canonicalize()) {
-        (Ok(t), Ok(w)) => t.starts_with(w),
-        _ => false,
-    }
+    let target = target
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve gitfile target: {error}"))?;
+    let worktrees = match worktrees.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot resolve common worktree directory: {error}")),
+    };
+    Ok(target.starts_with(worktrees))
 }
 
 /// The paths `.gitmodules` registers as submodules. Read from the file
 /// itself: libgit2's submodule list also includes index gitlinks that
 /// `.gitmodules` does not register.
-fn submodule_paths(repo: &git2::Repository) -> BTreeSet<GitName> {
+fn submodule_paths(repo: &git2::Repository) -> Result<BTreeSet<GitName>, String> {
     let Some(file) = repo.workdir().map(|w| w.join(".gitmodules")) else {
-        return BTreeSet::new();
+        return Ok(BTreeSet::new());
     };
-    if !file.is_file() {
-        return BTreeSet::new();
-    }
-    let Ok(config) = git2::Config::open(&file) else {
-        return BTreeSet::new();
+    let config = match git2::Config::open(&file) {
+        Ok(config) => config,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(format!("cannot read .gitmodules: {error}")),
     };
-    let Ok(mut entries) = config.entries(Some(r"submodule\..*\.path")) else {
-        return BTreeSet::new();
-    };
+    let mut entries = config
+        .entries(Some(r"submodule\..*\.path"))
+        .map_err(|error| format!("cannot read .gitmodules paths: {error}"))?;
     let mut paths = BTreeSet::new();
-    while let Some(Ok(entry)) = entries.next() {
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|error| format!("cannot read submodule path: {error}"))?;
         // OS text rule (issue 79): a registered path is kept as its exact
         // bytes, so it is compared with an index path byte for byte.
         {
@@ -821,7 +906,7 @@ fn submodule_paths(repo: &git2::Repository) -> BTreeSet<GitName> {
             paths.insert(GitName::from_vec(value));
         }
     }
-    paths
+    Ok(paths)
 }
 
 /// Gitlinks in the index that `.gitmodules` does not register.
@@ -843,31 +928,46 @@ fn stray_gitlinks(repo: &git2::Repository, submodules: &BTreeSet<GitName>) -> Ve
 /// registered submodules, symbolic links and folders a tracked ignore rule covers,
 /// and does not descend into a nested repository once found. Linked
 /// worktrees of this repository are not nested repositories.
-#[must_use]
-pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
+///
+/// # Errors
+///
+/// Returns an error if repository inventory or ignore rules cannot be read, or a
+/// nested path cannot be represented safely as a single `.gitignore` line.
+pub fn nested_repositories(repo: &git2::Repository) -> Result<Vec<NestedRepo>, String> {
     let Some(root) = repo.workdir().map(Path::to_path_buf) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let common_dir = repo.commondir().to_path_buf();
-    let submodules = submodule_paths(repo);
+    let submodules = submodule_paths(repo)?;
     let mut found = Vec::new();
     let mut level = vec![String::new()];
     while !level.is_empty() {
         let mut candidates = Vec::new();
         for dir in &level {
-            let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
-                continue;
-            };
-            let mut names: Vec<String> = entries
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-                // OS text rule (issue 79): a folder whose name is not valid
-                // UTF-8 cannot be named in a path of text, and a lossy
-                // spelling would read another folder, so it is not walked.
-                // This only reports nested repositories (advice), so one under
-                // such a name is not reported.
-                .filter_map(|e| e.file_name().into_string().ok())
-                .collect();
+            let entries = std::fs::read_dir(root.join(dir))
+                .map_err(|error| format!("cannot read nested repositories in {dir}: {error}"))?;
+            let mut names = Vec::new();
+            for entry in entries {
+                let entry = entry
+                    .map_err(|error| format!("cannot read nested directory entry: {error}"))?;
+                let kind = entry
+                    .file_type()
+                    .map_err(|error| format!("cannot read nested directory type: {error}"))?;
+                if !kind.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().into_string().map_err(|_| {
+                    format!(
+                        "cannot represent a nested directory under {dir} in .gitignore as UTF-8"
+                    )
+                })?;
+                if name.contains(['\r', '\n']) {
+                    return Err(format!(
+                        "cannot represent a nested directory under {dir} as one .gitignore line"
+                    ));
+                }
+                names.push(name);
+            }
             names.sort();
             for name in names {
                 if name == ".git" || (dir.is_empty() && name == ".worktrees") {
@@ -883,13 +983,13 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
                 }
             }
         }
-        let sources = ignore_sources(&root, &candidates);
+        let sources = ignore_sources(&root, &candidates)?;
         let mut next = Vec::new();
         for (rel, source) in candidates.into_iter().zip(sources) {
             let abs = root.join(&rel);
-            let ignore = classify_source(repo, source.as_deref());
-            if let Some(marker) = git_marker(&abs) {
-                if marker.is_file() && is_own_worktree(&marker, &common_dir) {
+            let ignore = classify_source(repo, source.as_deref())?;
+            if let Some((marker, is_file)) = git_marker(&abs)? {
+                if is_file && is_own_worktree(&marker, &common_dir)? {
                     continue;
                 }
                 let kind = if abs.join(".codeflow").is_dir() {
@@ -911,27 +1011,32 @@ pub fn nested_repositories(repo: &git2::Repository) -> Vec<NestedRepo> {
         }
         level = next;
     }
-    prefer_shared_rules(repo, &root, &mut found);
-    found
+    prefer_shared_rules(repo, &root, &mut found)?;
+    Ok(found)
 }
 
 /// Classify each found repository by the working tree's own `.gitignore`
 /// files first: a local rule on a parent folder hides from git the shared
 /// rule that a clone would apply, so the shared one decides when it
 /// exists, and the local rule only when no shared rule matches.
-fn prefer_shared_rules(repo: &git2::Repository, root: &Path, found: &mut [NestedRepo]) {
+fn prefer_shared_rules(
+    repo: &git2::Repository,
+    root: &Path,
+    found: &mut [NestedRepo],
+) -> Result<(), String> {
     let pending: Vec<usize> = (0..found.len())
         .filter(|i| found[*i].ignore != IgnoreState::Tracked)
         .collect();
     if pending.is_empty() {
-        return;
+        return Ok(());
     }
     let paths: Vec<String> = pending.iter().map(|i| found[*i].path.clone()).collect();
-    for (i, source) in pending.into_iter().zip(tree_ignore_sources(root, &paths)) {
+    for (i, source) in pending.into_iter().zip(tree_ignore_sources(root, &paths)?) {
         if source.is_some() {
-            found[i].ignore = classify_source(repo, source.as_deref());
+            found[i].ignore = classify_source(repo, source.as_deref())?;
         }
     }
+    Ok(())
 }
 
 /// Doctor's findings for nested repositories.
@@ -1065,7 +1170,18 @@ pub fn worktree_findings(
         .map(|p| canonical(&p))
         .collect();
     let mut out = Vec::new();
-    for worktree in crate::git::linked_worktrees(repo) {
+    let worktrees = match crate::git::linked_worktrees(repo) {
+        Ok(worktrees) => worktrees,
+        Err(error) => {
+            return vec![Finding {
+                severity: Severity::Warn,
+                rule: LOCATIONS_KEY,
+                message: format!("cannot read linked worktrees: {error}"),
+                next_step: "repair the worktree registration, then rerun doctor".into(),
+            }]
+        }
+    };
+    for worktree in worktrees {
         let path = canonical(&worktree.path);
         if !path.exists() {
             continue;
@@ -1094,11 +1210,17 @@ pub fn worktree_findings(
             // character on Unix), then a name that is not text is escaped.
             let key = crate::portable_path::slashed(rel);
             let ignored = crate::git::key_is_text(&key)
-                && ignore_sources(&root, std::slice::from_ref(&key))
-                    .into_iter()
-                    .next()
-                    .flatten()
-                    .is_some();
+                && match ignore_sources(&root, std::slice::from_ref(&key)) {
+                    Ok(sources) => sources,
+                    Err(error) => {
+                        out.push(cannot_read_finding(error));
+                        continue;
+                    }
+                }
+                .into_iter()
+                .next()
+                .flatten()
+                .is_some();
             let rel = crate::git::display_key(&key);
             if !ignored {
                 out.push(Finding {
@@ -1177,16 +1299,29 @@ pub fn doctor_lines(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> (Vec
 /// root branch (info); the rest are findings.
 #[must_use]
 pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec<Finding> {
-    let Some(repo) = main_checkout(root) else {
-        return Vec::new();
+    let repo = match main_checkout(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return Vec::new(),
+        Err(error) => return vec![cannot_read_finding(error)],
     };
     let Some(workdir) = repo.workdir().map(canonical) else {
-        return Vec::new();
+        return vec![cannot_read_finding(
+            "cannot read main checkout workdir".into(),
+        )];
     };
     let repo_label = label(&workdir);
-    let root_branch = root_branch(&repo, policy);
-    let nested = nested_repositories(&repo);
-    let submodules = submodule_paths(&repo);
+    let root_branch = match root_branch(&repo, policy) {
+        Ok(branch) => branch,
+        Err(error) => return vec![cannot_read_finding(error)],
+    };
+    let nested = match nested_repositories(&repo) {
+        Ok(nested) => nested,
+        Err(error) => return vec![cannot_read_finding(error)],
+    };
+    let submodules = match submodule_paths(&repo) {
+        Ok(paths) => paths,
+        Err(error) => return vec![cannot_read_finding(error)],
+    };
     let gitlinks = stray_gitlinks(&repo, &submodules);
     let workspace = !policy.root_branch.is_empty() && !nested.is_empty();
 
@@ -1224,16 +1359,22 @@ pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec
 /// The root checkout of the repository that holds `path`: the repository
 /// itself, or the main working tree when `path` is in a linked worktree.
 /// `None` for a bare repository or outside one.
-fn main_checkout(path: &Path) -> Option<git2::Repository> {
-    let repo = git2::Repository::discover(path).ok()?;
+fn main_checkout(path: &Path) -> Result<Option<git2::Repository>, String> {
+    let Some(repo) = crate::hooks::repo::open(path)? else {
+        return Ok(None);
+    };
     if is_root_checkout(&repo) {
-        return Some(repo);
+        return Ok(Some(repo));
     }
     if repo.is_worktree() {
-        let main = git2::Repository::open(repo.commondir()).ok()?;
-        return (is_root_checkout(&main) && main.workdir().is_some()).then_some(main);
+        let main = git2::Repository::open(repo.commondir())
+            .map_err(|error| format!("cannot read main checkout: {error}"))?;
+        if !is_root_checkout(&main) || main.workdir().is_none() {
+            return Err("cannot read main checkout workdir".into());
+        }
+        return Ok(Some(main));
     }
-    None
+    Ok(None)
 }
 
 /// The warning for a root branch the policy names but the repository lacks.
@@ -1276,7 +1417,10 @@ fn head_finding(
 ) -> Option<Finding> {
     // Advice only: a status that cannot be read adds no change to the report.
     let changes = tracked_changes(repo).unwrap_or_default();
-    match head(repo)? {
+    match match head(repo) {
+        Ok(head) => head,
+        Err(error) => return Some(cannot_read_finding(error)),
+    } {
         Head::Branch(ref b) if *b == root_branch.name => {
             (policy.branch_is_protected_name(b) && !changes.is_empty()).then(|| Finding {
                 severity: Severity::Warn,
@@ -1395,18 +1539,30 @@ pub fn workspace_hint(root: &Path, policy: &GitPolicy) -> Option<Finding> {
     if !policy.root_branch.is_empty() {
         return None;
     }
-    let repo = git2::Repository::open(root).ok()?;
+    let repo = match crate::hooks::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(error) => return Some(cannot_read_finding(error)),
+    };
     if !is_root_checkout(&repo) {
         return None;
     }
-    let nested = nested_repositories(&repo);
+    if let Err(error) = head(&repo) {
+        return Some(cannot_read_finding(error));
+    }
+    let nested = match nested_repositories(&repo) {
+        Ok(nested) => nested,
+        Err(error) => return Some(cannot_read_finding(error)),
+    };
     if nested.is_empty() {
         return None;
     }
-    Some(workspace_hint_finding(
-        &label(&canonical(repo.workdir()?)),
-        &nested,
-    ))
+    let Some(workdir) = repo.workdir() else {
+        return Some(cannot_read_finding(
+            "cannot read main checkout workdir".into(),
+        ));
+    };
+    Some(workspace_hint_finding(&label(&canonical(workdir)), &nested))
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,8 +1656,8 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
     }
     let repo_label = label(&canonical(root));
     let target = workspace_branch_name(policy);
-    let current = head(&repo);
-    if current == Some(Head::Branch(GitName::from_text(&target))) {
+    let current = head(&repo).map_err(|error| switch_failed(&repo_label, &target, &error))?;
+    if current == Head::Branch(GitName::from_text(&target)) {
         return Ok(BranchStep::AlreadyOn(target));
     }
     if repo.head().is_err() {
@@ -1519,7 +1675,7 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
         )
     })?;
     if !changes.is_empty() {
-        let found = current.map_or_else(|| "its current HEAD".to_string(), |h| h.describe());
+        let found = current.describe();
         return Err(stop(
             format!(
                 "codeflow init --workspace would switch the root checkout of {repo_label} from {found} to \
@@ -1539,7 +1695,9 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
             .map_err(|e| switch_failed(&repo_label, &target, &e))?;
         BranchStep::Reused(target)
     } else {
-        let from = default_branch(&repo, policy).name;
+        let from = default_branch(&repo, policy)
+            .map_err(|error| switch_failed(&repo_label, &target, &error))?
+            .name;
         // OS text rule (issue 79): git cannot be given a default branch whose
         // name is not valid UTF-8 as text, so the new branch cannot start from
         // it. Say so instead of passing git a name that resolves to nothing.
@@ -1723,10 +1881,20 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
         )
     })?;
     let (already_ignored, ignored): (Vec<_>, Vec<_>) = nested_repositories(&repo)
+        .map_err(|error| {
+            stop(
+                error,
+                "resolve the unreadable nested repository state, then retry".into(),
+            )
+        })?
         .into_iter()
         .partition(shared_ignore);
     let gitignore = root.join(".gitignore");
-    let current = std::fs::read_to_string(&gitignore).unwrap_or_default();
+    let current = match std::fs::read_to_string(&gitignore) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(io("read .gitignore", error)),
+    };
     if let Some(updated) = gitignore_with_nested(&current, &ignored) {
         std::fs::write(&gitignore, updated).map_err(|e| io("write .gitignore", e))?;
         verify_ignored(root, &ignored)?;
@@ -1746,7 +1914,12 @@ fn verify_ignored(root: &Path, nested: &[NestedRepo]) -> Result<(), WorkspaceErr
     let paths: Vec<String> = nested.iter().map(|n| n.path.clone()).collect();
     let still: Vec<&str> = paths
         .iter()
-        .zip(tree_ignore_sources(root, &paths))
+        .zip(tree_ignore_sources(root, &paths).map_err(|error| {
+            stop(
+                error,
+                "resolve the unreadable ignore rules, then retry".into(),
+            )
+        })?)
         .filter(|(_, source)| source.as_deref() != Some(".gitignore"))
         .map(|(path, _)| path.as_str())
         .collect();

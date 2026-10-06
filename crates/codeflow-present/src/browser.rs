@@ -667,6 +667,8 @@ fn owned_process_candidates(instance_id: Uuid, profile_dir: &Path) -> Result<Vec
 
 /// The owned browser processes in a `ps -axww -o pid= -o command=` listing.
 #[cfg(any(target_os = "macos", test))]
+// An unreadable candidate PID is unproven: owned_process_candidates propagates
+// BrowserUnavailable, so browser ownership cannot be certified.
 fn macos_inventory_candidates(
     output: &[u8],
     instance_id: Uuid,

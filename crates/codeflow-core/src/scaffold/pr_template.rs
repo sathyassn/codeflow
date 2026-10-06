@@ -44,73 +44,102 @@ pub struct KeptTemplate {
 /// Every PR template location GitHub reads: `.github/`, the root and
 /// `docs/` (any case), and each Markdown file in
 /// `.github/PULL_REQUEST_TEMPLATE/`.
-fn candidates(root: &Path) -> Vec<String> {
+fn candidates(root: &Path) -> Result<Vec<String>, ScaffoldError> {
     let mut found = Vec::new();
+    let mut subtemplates = Vec::new();
     for dir in [".github", "", "docs"] {
-        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+        let directory = root.join(dir);
+        if !directory
+            .try_exists()
+            .map_err(|error| ScaffoldError::io(&directory, error))?
+        {
             continue;
-        };
-        let mut names: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            // A template is found by an ASCII name, so a name that is not
-            // valid UTF-8 is not one (OS text rule, issue 79).
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| n.eq_ignore_ascii_case("pull_request_template.md"))
-            .collect();
-        names.sort();
-        for name in names {
-            found.push(if dir.is_empty() {
-                name
-            } else {
-                format!("{dir}/{name}")
-            });
         }
-    }
-    if let Ok(entries) = std::fs::read_dir(root.join(".github")) {
-        for entry in entries.filter_map(Result::ok) {
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-            if !name.eq_ignore_ascii_case("pull_request_template")
-                || !entry.file_type().is_ok_and(|t| t.is_dir())
+        let mut names = Vec::new();
+        for entry in
+            std::fs::read_dir(&directory).map_err(|error| ScaffoldError::io(&directory, error))?
+        {
+            let entry = entry.map_err(|error| ScaffoldError::io(&directory, error))?;
+            let name = entry.file_name();
+            let kind = entry
+                .file_type()
+                .map_err(|error| ScaffoldError::io(entry.path(), error))?;
+            if kind.is_file() && name.eq_ignore_ascii_case("pull_request_template.md") {
+                let name = name
+                    .into_string()
+                    .map_err(|_| ScaffoldError::InvalidState {
+                        what: "PR template".into(),
+                        detail: "path is not valid UTF-8".into(),
+                    })?;
+                names.push(if dir.is_empty() {
+                    name
+                } else {
+                    format!("{dir}/{name}")
+                });
+            } else if dir == ".github"
+                && kind.is_dir()
+                && name.eq_ignore_ascii_case("pull_request_template")
             {
-                continue;
+                let mut children = Vec::new();
+                for child in std::fs::read_dir(entry.path())
+                    .map_err(|error| ScaffoldError::io(entry.path(), error))?
+                {
+                    let child = child.map_err(|error| ScaffoldError::io(entry.path(), error))?;
+                    if child
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    {
+                        let path = child
+                            .path()
+                            .strip_prefix(root)
+                            .map_err(|error| ScaffoldError::InvalidState {
+                                what: "PR template".into(),
+                                detail: error.to_string(),
+                            })?
+                            .to_path_buf();
+                        let text = path.to_str().ok_or_else(|| ScaffoldError::InvalidState {
+                            what: "PR template".into(),
+                            detail: "path is not valid UTF-8".into(),
+                        })?;
+                        children.push(text.replace('\\', "/"));
+                    }
+                }
+                children.sort();
+                subtemplates.extend(children);
             }
-            let mut files: Vec<String> = std::fs::read_dir(entry.path())
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.to_ascii_lowercase().ends_with(".md"))
-                .collect();
-            files.sort();
-            found.extend(files.into_iter().map(|f| format!(".github/{name}/{f}")));
         }
+        names.sort();
+        found.extend(names);
     }
-    found
+    found.extend(subtemplates);
+    Ok(found)
 }
-
-/// The project's own PR template, if it has one: the first template found
-/// that is not `CodeFlow`'s (its bytes differ from `shipped` and `CodeFlow` has
-/// no install record for it).
-#[must_use]
+/// Read the first project-owned PR template; unreadable candidates refuse the decision.
+///
+/// # Errors
+///
+/// Returns an error when a template inventory or candidate cannot be read safely.
 pub fn find_kept(
     root: &Path,
     shipped: &str,
     installed: &InstalledManifest,
-) -> Option<KeptTemplate> {
-    candidates(root).into_iter().find_map(|path| {
-        // Never through a symlink (a linked `.github` or template): the
-        // template must be the repository's own file (TSK-107 review F1).
-        let text = read_beneath_root(root, &path).ok().flatten()?;
+) -> Result<Option<KeptTemplate>, ScaffoldError> {
+    for path in candidates(root)? {
+        let text = read_beneath_root(root, &path)?.ok_or_else(|| ScaffoldError::InvalidState {
+            what: path.clone(),
+            detail: "template disappeared during reading".into(),
+        })?;
         let ours = text == shipped
             || (path == MANAGED_TEMPLATE && installed.files.contains_key(MANAGED_TEMPLATE));
-        (!ours).then(|| KeptTemplate {
-            headings: headings(&text),
-            path,
-        })
-    })
+        if !ours {
+            return Ok(Some(KeptTemplate {
+                headings: headings(&text),
+                path,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// The `##` and `###` headings of a Markdown template, outside HTML comments.
@@ -372,7 +401,11 @@ fn read_policy(root: &Path) -> Result<(String, Value, Policy), ScaffoldError> {
         what: POLICY.to_string(),
         detail: e.to_string(),
     })?;
-    let policy: Policy = serde_json::from_str(&text).unwrap_or_default();
+    let policy: Policy =
+        serde_json::from_str(&text).map_err(|error| ScaffoldError::InvalidState {
+            what: POLICY.into(),
+            detail: error.to_string(),
+        })?;
     Ok((text, original, policy))
 }
 
@@ -570,24 +603,35 @@ mod tests {
     fn finds_templates_in_every_github_location() {
         let dir = tempfile::tempdir().unwrap();
         let installed = InstalledManifest::new("0");
-        assert!(find_kept(dir.path(), "shipped", &installed).is_none());
+        assert!(find_kept(dir.path(), "shipped", &installed)
+            .unwrap()
+            .is_none());
         write(
             dir.path(),
             ".github/PULL_REQUEST_TEMPLATE/feature.md",
             "## What\n",
         );
         assert_eq!(
-            find_kept(dir.path(), "shipped", &installed).unwrap().path,
+            find_kept(dir.path(), "shipped", &installed)
+                .unwrap()
+                .unwrap()
+                .path,
             ".github/PULL_REQUEST_TEMPLATE/feature.md"
         );
         write(dir.path(), "docs/PULL_REQUEST_TEMPLATE.md", "## What\n");
         assert_eq!(
-            find_kept(dir.path(), "shipped", &installed).unwrap().path,
+            find_kept(dir.path(), "shipped", &installed)
+                .unwrap()
+                .unwrap()
+                .path,
             "docs/PULL_REQUEST_TEMPLATE.md"
         );
         write(dir.path(), ".github/pull_request_template.md", "shipped");
         assert_eq!(
-            find_kept(dir.path(), "shipped", &installed).unwrap().path,
+            find_kept(dir.path(), "shipped", &installed)
+                .unwrap()
+                .unwrap()
+                .path,
             "docs/PULL_REQUEST_TEMPLATE.md",
             "the shipped template is never a kept one"
         );
@@ -676,7 +720,7 @@ mod tests {
         .unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
         std::fs::remove_file(dir.path().join(MANAGED_TEMPLATE)).unwrap();
-        assert!(find_kept(dir.path(), "shipped", &InstalledManifest::new("0")).is_none());
+        assert!(find_kept(dir.path(), "shipped", &InstalledManifest::new("0")).is_err());
 
         let linked = KeptTemplate {
             path: "docs/PULL_REQUEST_TEMPLATE.md".into(),
@@ -737,5 +781,31 @@ mod tests {
             }
             assert!(record_decision(dir.path(), &kept, decision, "2026-09-26").is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod r16_core_regressions {
+    #[test]
+    fn r16_invalid_typed_policy_is_not_default() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            root.path().join(".codeflow/policy.json"),
+            r#"{"git":{"push_to_protected":"not-a-level"}}"#,
+        )
+        .unwrap();
+        assert!(super::read_policy(root.path()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_template_inventory_error_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".github"), "not a directory").unwrap();
+        assert!(super::candidates(dir.path()).is_err());
     }
 }

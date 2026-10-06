@@ -32,30 +32,36 @@ pub(super) struct Adoption {
 /// with the reason.
 pub(super) fn trusted_actor(
     flag: &str,
-    env: &dyn Fn(&str) -> Option<String>,
-) -> (String, Option<String>) {
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<(String, Option<String>), String> {
     if flag.is_empty() || flag == UNKNOWN_ACTOR {
-        return (UNKNOWN_ACTOR.to_string(), None);
+        return Ok((UNKNOWN_ACTOR.to_string(), None));
     }
     let untrusted = |why: String| {
-        (
+        Ok((
             UNKNOWN_ACTOR.to_string(),
             Some(format!("--actor '{flag}' is not trusted: {why}")),
-        )
+        ))
     };
-    if env("GITHUB_ACTIONS").as_deref() != Some("true") {
+    let text = |key: &str| {
+        env(key)
+            .map(std::ffi::OsString::into_string)
+            .transpose()
+            .map_err(|_| format!("cannot read {key} as UTF-8"))
+    };
+    if text("GITHUB_ACTIONS")?.as_deref() != Some("true") {
         return untrusted("not a GitHub Actions run, so there is no event identity".to_string());
     }
-    let event = env("GITHUB_EVENT_NAME").unwrap_or_default();
+    let event = text("GITHUB_EVENT_NAME")?.unwrap_or_default();
     if event != "pull_request_target" && event != "pull_request" {
         return untrusted(format!("the '{event}' event is not a pull request event"));
     }
-    let payload: Option<serde_json::Value> = env("GITHUB_EVENT_PATH")
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str(&text).ok());
-    let Some(payload) = payload else {
-        return untrusted("the event payload cannot be read".to_string());
-    };
+    let path =
+        env("GITHUB_EVENT_PATH").ok_or("cannot read GitHub event: GITHUB_EVENT_PATH is absent")?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("cannot read GitHub event: {error}"))?;
+    let payload: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot read GitHub event JSON: {error}"))?;
     let repo = |side: &str| {
         payload
             .pointer(&format!("/pull_request/{side}/repo/full_name"))
@@ -66,10 +72,10 @@ pub(super) fn trusted_actor(
         (Some(head), Some(base)) if head == base => {}
         _ => return untrusted("a fork pull request carries no trusted identity".to_string()),
     }
-    if env("GITHUB_ACTOR").as_deref() != Some(flag) {
+    if text("GITHUB_ACTOR")?.as_deref() != Some(flag) {
         return untrusted("it is not the event's actor".to_string());
     }
-    (flag.to_string(), None)
+    Ok((flag.to_string(), None))
 }
 
 /// Resolve adopter fit for this run and print what applies: the actor, any
@@ -82,7 +88,7 @@ pub(super) fn resolve(
     actor: &str,
     branch: &str,
     has_body: bool,
-) -> Adoption {
+) -> Result<Adoption, String> {
     let mut effective = git.clone();
     let pr_sections = adoption::pr_sections_effective(raw, git);
     effective.pr_sections = pr_sections.level;
@@ -91,7 +97,7 @@ pub(super) fn resolve(
     effective.pr_required_sections = adoption::mapped_sections(git, &git.pr_required_sections);
     effective.pr_code_sections = adoption::mapped_sections(git, &git.pr_code_sections);
 
-    let (actor, why) = trusted_actor(actor, &|key| std::env::var(key).ok());
+    let (actor, why) = trusted_actor(actor, &|key| std::env::var_os(key))?;
     let actor = actor.as_str();
     println!("codeflow ci: actor '{actor}'");
     if let Some(why) = why {
@@ -144,11 +150,11 @@ pub(super) fn resolve(
             "set `[release] backend` in .codeflow/project.toml to none, external or codeflow",
         )),
     }
-    Adoption {
+    Ok(Adoption {
         git: effective,
         profile,
         violations,
-    }
+    })
 }
 
 /// Put the unit name a matched profile supplies on a `Task:` line when the
@@ -347,6 +353,23 @@ fn print_levels(
 mod tests {
 
     #[test]
+    fn r16_unreadable_actor_event_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = dir.path().join("event.json");
+        std::fs::write(&event, b"\xff").unwrap();
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_EVENT_PATH" => Some(event.as_os_str().to_owned()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        assert!(super::trusted_actor("automation", &env)
+            .unwrap_err()
+            .contains("GitHub event"));
+    }
+
+    #[test]
     fn r15_actor_requires_exact_identity() {
         let temp = tempfile::tempdir().unwrap();
         let event = temp.path().join("event.json");
@@ -358,7 +381,7 @@ mod tests {
             "GITHUB_ACTOR" => Some("automation".into()),
             _ => None,
         };
-        let (actor, why) = super::trusted_actor("automation\u{a0}", &env);
+        let (actor, why) = super::trusted_actor("automation\u{a0}", &env).unwrap();
         assert_eq!(actor, "unknown");
         assert!(why.is_some());
     }
@@ -381,24 +404,27 @@ mod tests {
         let ci = |path: &std::path::Path, actor: &'static str| {
             let path = path.display().to_string();
             move |key: &str| match key {
-                "GITHUB_ACTIONS" => Some("true".to_string()),
-                "GITHUB_EVENT_NAME" => Some("pull_request_target".to_string()),
-                "GITHUB_EVENT_PATH" => Some(path.clone()),
-                "GITHUB_ACTOR" => Some(actor.to_string()),
+                "GITHUB_ACTIONS" => Some("true".into()),
+                "GITHUB_EVENT_NAME" => Some("pull_request_target".into()),
+                "GITHUB_EVENT_PATH" => Some(path.clone().into()),
+                "GITHUB_ACTOR" => Some(actor.into()),
                 _ => None,
             }
         };
         // A local run: the flag alone is never an identity.
-        let (actor, why) = trusted_actor(bot, &|_| None);
+        let (actor, why) = trusted_actor(bot, &|_| None).unwrap();
         assert_eq!(actor, "unknown");
         assert!(why.unwrap().contains("not a GitHub Actions run"));
         // The trusted path: same repository, the event's own actor.
-        assert_eq!(trusted_actor(bot, &ci(&same, bot)), (bot.to_string(), None));
+        assert_eq!(
+            trusted_actor(bot, &ci(&same, bot)).unwrap(),
+            (bot.to_string(), None)
+        );
         // A fork, and a flag that is not the event's actor.
-        let (actor, why) = trusted_actor(bot, &ci(&fork, bot));
+        let (actor, why) = trusted_actor(bot, &ci(&fork, bot)).unwrap();
         assert_eq!(actor, "unknown");
         assert!(why.unwrap().contains("fork"));
-        let (actor, _) = trusted_actor(bot, &ci(&same, "mallory"));
+        let (actor, _) = trusted_actor(bot, &ci(&same, "mallory")).unwrap();
         assert_eq!(actor, "unknown");
         let _ = std::fs::remove_dir_all(&dir);
     }

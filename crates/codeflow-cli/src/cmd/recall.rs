@@ -73,7 +73,10 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
             );
         };
         let root = std::fs::canonicalize(&root).unwrap_or(root);
-        let info = registry::read_project_info(&root);
+        let info = match registry::read_project_info(&root) {
+            Ok(info) => info,
+            Err(error) => return Err(anyhow::Error::msg(error)),
+        };
         let others = registered
             .iter()
             .filter(|r| std::path::Path::new(&r.path) != root)

@@ -16,7 +16,11 @@ pub trait AssetSource {
     /// exist. A missing asset is not an engine error: manifest entries whose
     /// asset is absent are skipped with a warning so the asset-authoring
     /// workstream and this engine can land independently.
-    fn read(&self, path: &str) -> Option<Vec<u8>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when obtaining an asset fails; only genuine source absence is `Ok(None)`.
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>>;
 }
 
 /// Filesystem-backed asset source (tests, and any "scaffold from a directory"
@@ -33,8 +37,12 @@ impl DirSource {
 }
 
 impl AssetSource for DirSource {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.root.join(path)).ok()
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let path = self.root.join(path);
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        std::fs::read(path).map(Some)
     }
 }
 
@@ -45,6 +53,10 @@ pub(crate) fn read_text(
 ) -> Result<Option<String>, super::ScaffoldError> {
     source
         .read(path)
+        .map_err(|error| super::ScaffoldError::InvalidState {
+            what: format!("asset {path}"),
+            detail: error.to_string(),
+        })?
         .map(|bytes| {
             String::from_utf8(bytes).map_err(|_| super::ScaffoldError::InvalidState {
                 what: format!("asset {path}"),
@@ -60,10 +72,21 @@ mod r15_text_regressions {
     fn r15_invalid_asset_text_is_an_error_not_missing() {
         struct Bad;
         impl super::AssetSource for Bad {
-            fn read(&self, _: &str) -> Option<Vec<u8>> {
-                Some(vec![0xff])
+            fn read(&self, _: &str) -> std::io::Result<Option<Vec<u8>>> {
+                Ok(Some(vec![0xff]))
             }
         }
         assert!(super::read_text(&Bad, "base/bad").is_err());
+    }
+}
+
+#[cfg(test)]
+mod r16_core_regressions {
+    #[test]
+    fn r16_asset_read_error_is_not_absence() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("asset")).unwrap();
+        let source = super::DirSource::new(root.path());
+        assert!(super::read_text(&source, "asset").is_err());
     }
 }

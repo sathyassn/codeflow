@@ -2078,7 +2078,7 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         .join(".claude/skills/cf-model-orchestrator/resources/quality/findings.md")
         .is_file());
     let mut installed = SkillFiles::new();
-    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed);
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed).unwrap();
     let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
     assert!(chain.errors.is_empty(), "{:?}", chain.errors);
     assert!(!chain

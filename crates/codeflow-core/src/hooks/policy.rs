@@ -10,12 +10,10 @@
 //! force-push / delete / push intents; and CI reads `dep_audit` and
 //! `security_review` (the umbrella gate for the `security-review` job) and,
 //! through `codeflow ci`, the commit and branch rules. Every field is a default
-//! the user may flip per repo; missing or malformed files fall back to the strict
-//! charter defaults so enforcement never silently disables itself. That fallback
-//! is fail-safe, not consumer-friendly — a present-but-invalid file is caught
-//! loudly by the [`policy_schema`](super::policy_schema) strict validator at the
-//! commit-msg hook, `codeflow ci`, and `codeflow validate`, and the whole key
-//! schema is renderable from the binary via `codeflow policy explain`.
+//! the user may flip per repo. A genuinely absent optional policy file uses
+//! charter defaults; an unreadable or malformed file refuses loading. The
+//! [`policy_schema`](super::policy_schema) validator reports invalid keys,
+//! and `codeflow policy explain` renders the complete schema.
 
 use std::fmt;
 use std::path::Path;
@@ -755,52 +753,48 @@ pub struct Policy {
 }
 
 /// Where [`Policy::load`] sources the effective policy from — for callers that
-/// report which ruleset is actually enforced (e.g. `codeflow ci`). The loader
-/// itself stays silently fail-safe; this only makes the fallback legible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// report which ruleset is enforced (e.g. `codeflow ci`) or why loading refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicySource {
     /// `.codeflow/policy.json` exists and parses — the project's own rules.
     ProjectFile,
-    /// The file exists but does not parse — built-in charter defaults apply.
+    /// The file exists but does not parse; loading refuses.
     MalformedFile,
     /// No policy file — built-in charter defaults apply.
     Absent,
+    /// Existing policy could not be read; enforcement must refuse.
+    UnreadableFile(String),
 }
 
 impl Policy {
-    /// Load policy from `<root>/.codeflow/policy.json`.
-    ///
-    /// Missing or malformed files return the strict charter defaults
-    /// (fail-safe direction, same convention as [`SecurityPolicy::load`]).
-    #[must_use]
-    pub fn load(root: &Path) -> Self {
+    /// Read optional project policy, refusing unreadable or malformed input.
+    /// # Errors
+    /// An existing policy cannot be read or decoded.
+    pub fn load(root: &Path) -> Result<Self, String> {
         Self::load_file(&root.join(".codeflow").join("policy.json"))
     }
 
-    /// Report where [`Policy::load`] sources the policy for `root`, so callers
-    /// can state honestly whether the project file or the built-in defaults
-    /// are being enforced. Mirrors [`Policy::load_file`]'s fallback rules
-    /// without changing them.
+    /// Describe the source without converting unreadable input into absence.
     #[must_use]
     pub fn source(root: &Path) -> PolicySource {
-        match std::fs::read_to_string(root.join(".codeflow").join("policy.json")) {
-            Ok(data) => {
-                if serde_json::from_str::<Self>(&data).is_ok() {
-                    PolicySource::ProjectFile
-                } else {
-                    PolicySource::MalformedFile
-                }
-            }
-            Err(_) => PolicySource::Absent,
+        match optional_text(&root.join(".codeflow/policy.json")) {
+            Ok(None) => PolicySource::Absent,
+            Ok(Some(data)) => match serde_json::from_str::<Self>(&data) {
+                Ok(_) => PolicySource::ProjectFile,
+                Err(_) => PolicySource::MalformedFile,
+            },
+            Err(error) => PolicySource::UnreadableFile(error),
         }
     }
 
-    /// Load policy from an explicit file path with the same fallback rules.
-    #[must_use]
-    pub fn load_file(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-            Err(_) => Self::default(),
+    /// Read a policy file; only genuine absence selects built-in policy.
+    /// # Errors
+    /// An existing policy cannot be read or decoded.
+    pub fn load_file(path: &Path) -> Result<Self, String> {
+        match optional_text(path)? {
+            Some(data) => serde_json::from_str(&data)
+                .map_err(|error| format!("cannot parse policy {}: {error}", path.display())),
+            None => Ok(Self::default()),
         }
     }
 
@@ -814,14 +808,15 @@ impl Policy {
     /// so `policy_armed = false` is not a persistent, agent-flippable
     /// off-switch (ADR-0009). Secrets are never graced (charter §6.3). Returns
     /// the effective policy and whether the policy is armed.
-    #[must_use]
-    pub fn load_effective(root: &Path) -> (Self, bool) {
-        let mut policy = Self::load(root);
-        let armed = effective_armed(root);
+    /// # Errors
+    /// Policy or project configuration cannot be read.
+    pub fn load_effective(root: &Path) -> Result<(Self, bool), String> {
+        let mut policy = Self::load(root)?;
+        let armed = effective_armed(root)?;
         if !armed {
             policy.git.suspend_for_bootstrap();
         }
-        (policy, armed)
+        Ok((policy, armed))
     }
 }
 
@@ -835,25 +830,24 @@ impl Policy {
 /// (ADR-0009). The complementary `git.hook_integrity` write-block stops an
 /// agent flipping the flag via Bash; this makes the flip inert however it is
 /// written (e.g. via a non-Bash editor the git-guard never sees).
-#[must_use]
-fn effective_armed(root: &Path) -> bool {
-    policy_armed(root) || repo_has_commit(root)
+fn effective_armed(root: &Path) -> Result<bool, String> {
+    Ok(policy_armed(root)? || repo_has_commit(root)?)
 }
 
 /// `true` when the repository containing `root` has at least one commit.
 /// A fresh repo with an unborn HEAD (the scaffold-commit window) has none;
-/// a non-repository has none. Any error resolving HEAD is treated as "no
-/// commit" — that only ever *widens* grace in the harmless no-history case,
-/// never narrows enforcement on a real repo.
-#[must_use]
-fn repo_has_commit(root: &Path) -> bool {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return false;
+/// a proven non-repository has none. Unreadable existing repository metadata
+/// refuses instead of enabling bootstrap grace.
+fn repo_has_commit(root: &Path) -> Result<bool, String> {
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(false);
     };
-    // `head()` errs on an unborn HEAD (the pre-scaffold-commit window); a
-    // resolved HEAD carries the tip commit's oid. `target()` yields a `Copy`
-    // oid, so no borrow of `repo` escapes.
-    repo.head().ok().and_then(|head| head.target()).is_some()
+    let result = match repo.head() {
+        Ok(head) => Ok(head.target().is_some()),
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => Ok(false),
+        Err(error) => Err(format!("cannot read repository HEAD: {error}")),
+    };
+    result
 }
 
 impl GitPolicy {
@@ -899,19 +893,41 @@ impl GitPolicy {
 /// use `effective_armed` (via [`Policy::load_effective`]), which additionally
 /// ignores a disarmed flag once the repo has a commit (ADR-0009); this raw
 /// reader is the on-disk value only.
-#[must_use]
-pub fn policy_armed(root: &Path) -> bool {
-    read_project_toml(root)
-        .and_then(|v| v.get("policy_armed").and_then(toml::Value::as_bool))
-        .unwrap_or(true)
+/// # Errors
+/// Existing project settings or an explicitly supplied flag are invalid.
+pub fn policy_armed(root: &Path) -> Result<bool, String> {
+    let project = read_project_toml(root)?;
+    match project.as_ref().and_then(|value| value.get("policy_armed")) {
+        None => Ok(true),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "policy_armed must be a boolean".into()),
+    }
 }
 
-/// Parse `.codeflow/project.toml` leniently (user-owned file; charter §4.3
-/// class 3). Returns `None` when absent or unparseable.
-#[must_use]
-pub fn read_project_toml(root: &Path) -> Option<toml::Value> {
-    let text = std::fs::read_to_string(root.join(".codeflow").join("project.toml")).ok()?;
-    text.parse::<toml::Value>().ok()
+/// Read an optional configuration file. `NotFound` is explicit schema absence;
+/// every other IO error, including invalid UTF-8, is an unreadable input.
+/// # Errors
+/// The file cannot be read as text.
+pub(crate) fn optional_text(path: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
+
+/// Parse optional project settings without hiding obtaining errors.
+/// # Errors
+/// Existing settings cannot be read or parsed.
+pub fn read_project_toml(root: &Path) -> Result<Option<toml::Value>, String> {
+    optional_text(&root.join(".codeflow/project.toml"))?
+        .map(|text| {
+            toml::from_str(&text).map_err(|error: toml::de::Error| {
+                format!("cannot parse project settings: {}", error.message())
+            })
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -1155,23 +1171,36 @@ mod tests {
     #[test]
     fn test_load_missing_returns_strict_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let p = Policy::load(dir.path());
+        let p = Policy::load(dir.path()).unwrap();
         assert_eq!(p.git.commit_to_protected, PolicyLevel::Block);
     }
 
     #[test]
-    fn test_load_malformed_returns_strict_defaults() {
+    fn test_load_malformed_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("policy.json"), "{ nope").unwrap();
-        let p = Policy::load(dir.path());
-        assert_eq!(p.git.push_to_protected, PolicyLevel::Block);
+        assert!(Policy::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn r16_missing_existing_head_cannot_enable_bootstrap_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::remove_file(repo.path().join("HEAD")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "policy_armed = false\n",
+        )
+        .unwrap();
+        assert!(Policy::load_effective(dir.path()).is_err());
     }
 
     #[test]
     fn test_source_reports_file_malformed_and_absent() {
-        // Mirrors the load_file fallback rules so callers can report honestly
+        // Mirrors the load_file outcomes so callers can report honestly
         // which ruleset (project file vs charter defaults) is enforced.
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Policy::source(dir.path()), PolicySource::Absent);
@@ -1193,7 +1222,7 @@ mod tests {
             r#"{"schema_version":1,"git":{"protected_branches":["main","release/*"],"commit_format":"warn"}}"#,
         )
         .unwrap();
-        let p = Policy::load(dir.path());
+        let p = Policy::load(dir.path()).unwrap();
         assert_eq!(p.git.protected_branches, vec!["main", "release/*"]);
         assert_eq!(p.git.commit_format, PolicyLevel::Warn);
         // Untouched keys keep charter defaults.
@@ -1244,7 +1273,7 @@ mod tests {
     #[test]
     fn test_policy_armed_defaults_true() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(policy_armed(dir.path()));
+        assert!(policy_armed(dir.path()).unwrap());
     }
 
     #[test]
@@ -1257,7 +1286,7 @@ mod tests {
             "schema_version = 1\npolicy_armed = false\n",
         )
         .unwrap();
-        assert!(!policy_armed(dir.path()));
+        assert!(!policy_armed(dir.path()).unwrap());
     }
 
     #[test]
@@ -1266,7 +1295,7 @@ mod tests {
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("project.toml"), "policy_armed = false\n").unwrap();
-        let (policy, armed) = Policy::load_effective(dir.path());
+        let (policy, armed) = Policy::load_effective(dir.path()).unwrap();
         assert!(!armed);
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Off);
         assert_eq!(policy.git.push_to_protected, PolicyLevel::Off);
@@ -1297,7 +1326,7 @@ mod tests {
     #[test]
     fn test_load_effective_armed_is_strict() {
         let dir = tempfile::tempdir().unwrap();
-        let (policy, armed) = Policy::load_effective(dir.path());
+        let (policy, armed) = Policy::load_effective(dir.path()).unwrap();
         assert!(armed);
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Block);
     }
@@ -1339,7 +1368,7 @@ mod tests {
         // ignored and rules stay armed.
         let dir = tempfile::tempdir().unwrap();
         committed_repo_with_armed(dir.path(), false);
-        let (policy, armed) = Policy::load_effective(dir.path());
+        let (policy, armed) = Policy::load_effective(dir.path()).unwrap();
         assert!(
             armed,
             "a committed repo is armed despite policy_armed=false"
@@ -1364,7 +1393,7 @@ mod tests {
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("project.toml"), "policy_armed = false\n").unwrap();
-        let (policy, armed) = Policy::load_effective(dir.path());
+        let (policy, armed) = Policy::load_effective(dir.path()).unwrap();
         assert!(!armed, "pre-first-commit bootstrap window is graced");
         assert_eq!(policy.git.commit_to_protected, PolicyLevel::Off);
         // Secrets are never graced, even in the bootstrap window.

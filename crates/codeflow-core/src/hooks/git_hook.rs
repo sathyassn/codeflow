@@ -104,7 +104,7 @@ pub fn pre_commit(
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
     let mut report = StageReport::default();
 
-    let branch = current_branch(&repo);
+    let branch = current_branch(&repo).map_err(HookError::Config)?;
     if policy.commit_to_protected.is_active()
         && policy.branch_is_protected(&branch)
         && !integrate_token
@@ -680,7 +680,7 @@ pub fn pre_merge_commit(
         .map_err(|e| HookError::Config(format!("not a git repository: {e}")))?;
     let mut report = StageReport::default();
 
-    let branch = current_branch(&repo);
+    let branch = current_branch(&repo).map_err(HookError::Config)?;
     if policy.merge_to_protected.is_active()
         && policy.branch_is_protected(&branch)
         && !integrate_token
@@ -870,19 +870,20 @@ fn new_matches_remote_head(repo: &Repository, branch: &str, new_oid: &str) -> bo
     let Ok(new) = git2::Oid::from_str(new_oid) else {
         return false;
     };
-    let mut candidates: Vec<String> = Vec::new();
-    if let Ok(upstream) = repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
-        if let Ok(name) = upstream.as_str() {
-            candidates.push(name.to_string());
+    let refname = match repo.branch_upstream_name(&format!("refs/heads/{branch}")) {
+        Ok(upstream) => match upstream.as_str() {
+            Ok(name) => name.to_string(),
+            Err(_) => return false,
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            format!("refs/remotes/origin/{branch}")
         }
-    }
-    candidates.push(format!("refs/remotes/origin/{branch}"));
-    candidates.iter().any(|refname| {
-        repo.find_reference(refname)
-            .ok()
-            .and_then(|r| r.target())
-            .is_some_and(|remote_oid| new == remote_oid)
-    })
+        Err(_) => return false,
+    };
+    repo.find_reference(&refname)
+        .ok()
+        .and_then(|reference| reference.target())
+        == Some(new)
 }
 
 // ---------------------------------------------------------------------------

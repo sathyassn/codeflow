@@ -129,16 +129,24 @@ const KINDS: &[&str] = &[
 /// gitfile indirection): for worktree gitdirs the common git directory is
 /// used so all worktrees share one state dir. Returns `None` when `.git`
 /// is absent entirely.
-#[must_use]
-pub fn runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
+///
+/// # Errors
+///
+/// Returns an error when repository metadata cannot be read or parsed.
+pub fn runtime_state_dir(repo_root: &Path) -> std::io::Result<Option<PathBuf>> {
     let dot_git = repo_root.join(".git");
-    if dot_git.is_dir() {
-        return Some(dot_git.join("codeflow"));
+    if !dot_git.try_exists()? {
+        return Ok(None);
     }
-    if dot_git.is_file() {
+    let metadata = fs::metadata(&dot_git)?;
+    if metadata.is_dir() {
+        return Ok(Some(dot_git.join("codeflow")));
+    }
+    if metadata.is_file() {
         // OS text rule (issue 79): the file names a folder, so its exact bytes
         // are used and only git's own framing is removed.
-        let mut gitdir = crate::git::gitfile_dir(&fs::read(&dot_git).ok()?)?;
+        let mut gitdir = crate::git::gitfile_dir(&fs::read(&dot_git)?)
+            .ok_or_else(|| std::io::Error::other("cannot parse repository gitfile"))?;
         if !gitdir.is_absolute() {
             gitdir = repo_root.join(gitdir);
         }
@@ -151,11 +159,11 @@ pub fn runtime_state_dir(repo_root: &Path) -> Option<PathBuf> {
             .collect();
         if let Some(pos) = components.iter().rposition(|c| c == "worktrees") {
             let common: PathBuf = components[..pos].iter().collect();
-            return Some(common.join("codeflow"));
+            return Ok(Some(common.join("codeflow")));
         }
-        return Some(gitdir.join("codeflow"));
+        return Ok(Some(gitdir.join("codeflow")));
     }
-    None
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,68 +180,55 @@ struct SourceFile {
     kind: &'static str,
 }
 
-fn jsonl_files_in(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && p.file_name()
-                    .is_some_and(|n| n.to_str().is_some_and(crate::ledger::is_jsonl_file))
-        })
-        .collect();
+fn files_in(dir: &Path, extension: &str) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !dir.try_exists()? {
+        return Ok(files);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_file()
+            && path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(extension))
+        {
+            files.push(path);
+        }
+    }
     files.sort();
-    files
+    Ok(files)
 }
-
-fn md_files_in(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("md")))
-        .collect();
-    files.sort();
-    files
+fn jsonl_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    files_in(dir, "jsonl")
 }
-
-/// Recursively collect markdown files under `dir` (sorted). Plan docs nest
-/// (`docs/plan/v2/…`), so a flat read would miss the charter and its siblings.
-fn md_files_under(dir: &Path) -> Vec<PathBuf> {
+fn md_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    files_in(dir, "md")
+}
+fn md_files_under(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     const MAX_DEPTH: usize = 64;
     const MAX_ENTRIES: usize = 10_000;
     let mut files = Vec::new();
+    if !dir.try_exists()? {
+        return Ok(files);
+    }
     let mut pending = vec![(dir.to_path_buf(), 0_usize)];
     let mut visited = 0_usize;
     while let Some((current, depth)) = pending.pop() {
-        if depth > MAX_DEPTH || visited >= MAX_ENTRIES {
-            continue;
+        if depth > MAX_DEPTH {
+            return Err(std::io::Error::other("recall source depth limit reached"));
         }
-        let Ok(entries) = fs::read_dir(&current) else {
-            continue;
-        };
-        for entry in entries.filter_map(Result::ok) {
-            if visited >= MAX_ENTRIES {
-                break;
-            }
+        for entry in fs::read_dir(&current)? {
+            let entry = entry?;
             visited += 1;
-            let path = entry.path();
-            let Ok(metadata) = fs::symlink_metadata(&path) else {
-                continue;
-            };
-            if metadata.file_type().is_symlink() {
-                continue;
+            if visited > MAX_ENTRIES {
+                return Err(std::io::Error::other("recall source entry limit reached"));
             }
-            if metadata.is_dir() {
-                if depth < MAX_DEPTH {
-                    pending.push((path, depth + 1));
-                }
-            } else if metadata.is_file()
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push((path, depth + 1));
+            } else if kind.is_file()
                 && path
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -243,7 +238,7 @@ fn md_files_under(dir: &Path) -> Vec<PathBuf> {
         }
     }
     files.sort();
-    files
+    Ok(files)
 }
 
 fn rel_to(root: &Path, path: &Path) -> String {
@@ -348,10 +343,10 @@ fn source_file(root: &Path, abs: PathBuf, kind: &'static str) -> SourceFile {
 }
 
 /// Enumerate all indexable source files for a repo.
-fn collect_sources(root: &Path) -> Vec<SourceFile> {
+fn collect_sources(root: &Path) -> std::io::Result<Vec<SourceFile>> {
     let mut sources = Vec::new();
 
-    if let Some(state) = runtime_state_dir(root) {
+    if let Some(state) = runtime_state_dir(root)? {
         let ledger_dir = state.join("ledger");
         for (types, kind) in [
             (
@@ -370,28 +365,28 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
             ),
         ] {
             for ty in types {
-                for abs in jsonl_files_in(&ledger_dir.join(ty)) {
+                for abs in jsonl_files_in(&ledger_dir.join(ty))? {
                     sources.push(source_file(root, abs, kind));
                 }
             }
         }
     }
 
-    for abs in md_files_in(&root.join("docs/decisions")) {
+    for abs in md_files_in(&root.join("docs/decisions"))? {
         sources.push(source_file(root, abs, "adr"));
     }
 
     let pm_root = root.join("project-management");
-    for abs in crate::workgraph::layout::epic_record_files(&pm_root)
+    for abs in crate::workgraph::layout::epic_record_files(&pm_root)?
         .into_iter()
-        .chain(crate::workgraph::layout::task_record_files(&pm_root))
-        .chain(crate::workgraph::layout::spec_record_files(&pm_root))
+        .chain(crate::workgraph::layout::task_record_files(&pm_root)?)
+        .chain(crate::workgraph::layout::spec_record_files(&pm_root)?)
     {
         sources.push(source_file(root, abs, "pm"));
     }
 
     let caps = root.join("docs/capabilities.md");
-    if caps.is_file() {
+    if caps.try_exists()? {
         sources.push(source_file(root, caps, "capability"));
     }
 
@@ -399,15 +394,15 @@ fn collect_sources(root: &Path) -> Vec<SourceFile> {
     // plan of record. Without these, product decisions (e.g. D17/D18/D22) are
     // un-findable via recall while technical whys (ADRs, capabilities) are.
     let product = root.join("docs/product.md");
-    if product.is_file() {
+    if product.try_exists()? {
         sources.push(source_file(root, product, "product"));
     }
 
-    for abs in md_files_under(&root.join("docs/plan")) {
+    for abs in md_files_under(&root.join("docs/plan"))? {
         sources.push(source_file(root, abs, "plan"));
     }
 
-    sources
+    Ok(sources)
 }
 
 // ---------------------------------------------------------------------------
@@ -436,21 +431,18 @@ fn open_db(db_path: &Path) -> Result<Connection, RecallError> {
     Ok(conn)
 }
 
-fn file_cursor(path: &Path) -> Option<(i64, i64)> {
-    let meta = fs::metadata(path).ok()?;
+fn file_cursor(path: &Path) -> std::io::Result<(i64, i64)> {
+    let meta = fs::metadata(path)?;
     let mtime = meta
-        .modified()
-        .ok()?
+        .modified()?
         .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    Some((
+        .map_err(std::io::Error::other)?;
+    Ok((
         i64::try_from(mtime.as_secs()).unwrap_or(i64::MAX),
         i64::try_from(meta.len()).unwrap_or(i64::MAX),
     ))
 }
 
-/// Extract a display title from markdown content: frontmatter `title`,
-/// else the first `#` heading, else the file stem.
 fn markdown_title(content: &str, fallback: &str) -> String {
     if let Ok((fm, _)) = crate::validate::parse_frontmatter(content.as_bytes()) {
         if let Some(serde_yaml::Value::String(t)) = fm.get("title") {
@@ -470,7 +462,7 @@ fn index_file(conn: &Connection, repo_key: &str, src: &SourceFile) -> Result<(),
         (repo_key, &src.rel),
     )?;
 
-    let content = fs::read_to_string(&src.abs).unwrap_or_default();
+    let content = fs::read_to_string(&src.abs)?;
     let mut insert = conn.prepare_cached(
         "INSERT INTO docs (repo, kind, path, title, content) VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
@@ -508,7 +500,7 @@ fn sync_repo(
     notes: &mut Vec<String>,
 ) -> Result<(), RecallError> {
     let repo_key = encode_path(&target.root);
-    let sources = collect_sources(&target.root);
+    let sources = collect_sources(&target.root)?;
 
     // Stale cursor cleanup: drop rows for files that no longer exist.
     let current: HashSet<&str> = sources.iter().map(|s| s.rel.as_str()).collect();
@@ -531,9 +523,7 @@ fn sync_repo(
 
     // Incremental per-file sync keyed on (mtime, size).
     for src in &sources {
-        let Some((mtime, size)) = file_cursor(&src.abs) else {
-            continue;
-        };
+        let (mtime, size) = file_cursor(&src.abs)?;
         let unchanged = match conn.query_row(
             "SELECT 1 FROM cursors WHERE repo = ?1 AND source = ?2 AND mtime = ?3 AND size = ?4",
             (&repo_key, &src.rel, mtime, size),
@@ -749,7 +739,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         assert_eq!(
-            runtime_state_dir(dir.path()),
+            runtime_state_dir(dir.path()).unwrap(),
             Some(dir.path().join(".git/codeflow"))
         );
     }
@@ -767,7 +757,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            runtime_state_dir(&wt),
+            runtime_state_dir(&wt).unwrap(),
             Some(main.join(".git/codeflow")),
             "worktrees must share the common runtime state dir"
         );
@@ -782,7 +772,7 @@ mod tests {
         fs::create_dir_all(&repo).unwrap();
         fs::write(repo.join(".git"), "gitdir: /x/meta\nother\n").unwrap();
         assert_eq!(
-            runtime_state_dir(&repo),
+            runtime_state_dir(&repo).unwrap(),
             Some(PathBuf::from("/x/meta\nother/codeflow"))
         );
     }
@@ -790,7 +780,7 @@ mod tests {
     #[test]
     fn test_runtime_state_dir_absent() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(runtime_state_dir(dir.path()), None);
+        assert_eq!(runtime_state_dir(dir.path()).unwrap(), None);
     }
 
     #[cfg(unix)]
@@ -803,7 +793,7 @@ mod tests {
         fs::write(plan.join("charter.md"), "# Charter\n").unwrap();
         symlink(dir.path().join("docs/plan"), plan.join("cycle")).unwrap();
 
-        let files = md_files_under(&dir.path().join("docs/plan"));
+        let files = md_files_under(&dir.path().join("docs/plan")).unwrap();
         assert_eq!(files, vec![plan.join("charter.md")]);
     }
 
@@ -1198,5 +1188,17 @@ mod tests {
         let db = home.path().join("recall.db");
         let err = recall(&db, &[], "  ?! ", &RecallOptions::default()).unwrap_err();
         assert!(matches!(err, RecallError::EmptyQuery));
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_recall_refuses_incomplete_source_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/plan"), "not a directory").unwrap();
+        assert!(super::collect_sources(dir.path()).is_err());
     }
 }

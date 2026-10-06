@@ -178,10 +178,12 @@ type Resolved = Result<Option<(String, git2::Oid)>, String>;
 fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
     let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
         .map_err(|error| error.to_string())?;
-    Ok(resolved.and_then(|resolved| {
-        let commit = super::work_start::target_reference(repo, &resolved.target)?;
-        Some((resolved.target, commit.id()))
-    }))
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+    Ok(super::work_start::target_reference(repo, &resolved.target)
+        .map_err(|error| error.to_string())?
+        .map(|commit| (resolved.target, commit.id())))
 }
 
 /// A resolved target as output shows it (`upstream/main`, not
@@ -246,21 +248,18 @@ fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
     ids: &BTreeSet<String>,
-) -> BTreeMap<String, Vec<(GitName, git2::Oid)>> {
+) -> Result<BTreeMap<String, Vec<(GitName, git2::Oid)>>, String> {
     let mut carried: BTreeMap<String, Vec<(GitName, git2::Oid)>> = BTreeMap::new();
-    let Ok(branches) = repo.branches(None) else {
-        return carried;
-    };
-    let remotes = crate::git::name::remote_names(repo).unwrap_or_default();
+    let branches = repo.branches(None).map_err(|error| error.to_string())?;
+    let remotes = crate::git::name::remote_names(repo).map_err(|error| error.to_string())?;
     let mut seen = BTreeSet::new();
-    for (branch, kind) in branches.flatten() {
+    for branch in branches {
+        let (branch, kind) = branch.map_err(|error| error.to_string())?;
         // OS text rule (issue 79, `docs/architecture.md`): the name is exact
         // bytes, matched against work prefixes and task ids by prefix. A
         // branch that is not valid UTF-8 still claims its task id, and two
         // different names are two claims.
-        let Ok(name) = crate::git::name::branch_name(&branch) else {
-            continue;
-        };
+        let name = crate::git::name::branch_name(&branch).map_err(|error| error.to_string())?;
         let (name, short) = match kind {
             BranchType::Local => (name.clone(), name),
             BranchType::Remote => {
@@ -287,9 +286,11 @@ fn visible_work_branches(
                 (shown, short)
             }
         };
-        let Some(oid) = branch.get().peel_to_commit().ok().map(|commit| commit.id()) else {
-            continue;
-        };
+        let oid = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
         let Some(suffix) = work_suffix_name(prefixes, &short) else {
             continue;
         };
@@ -300,7 +301,7 @@ fn visible_work_branches(
             carried.entry(id).or_default().push((name, oid));
         }
     }
-    carried
+    Ok(carried)
 }
 
 /// Whether a branch tip has landed on the target tip (R-27): it is an
@@ -521,24 +522,30 @@ fn fetched_at(repo: &Repository) -> Option<String> {
 
 /// The declared targets of the task records in the working tree, as
 /// written, and the default target for records that declare none.
-fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
-    // One listing; the first record of each id speaks for it, as
-    // `declared_work_target` finds it (R-103: no scan per record).
+fn declared_targets(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let mut ids = BTreeSet::new();
-    let mut targets: BTreeSet<String> =
-        crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
-            .into_iter()
-            .filter(|path| {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .is_some_and(|stem| ids.insert(stem.to_string()))
-            })
-            .filter_map(|path| super::work_start::declared_work_target_at(&path))
-            .collect();
-    if let Some(default) = super::default_work_target(repo_root) {
+    let mut targets = BTreeSet::new();
+    for path in crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
+        .map_err(|error| error.to_string())?
+    {
+        let first = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| ids.insert(stem.to_string()));
+        if first {
+            if let Some(target) = super::work_start::declared_work_target_at(&path)
+                .map_err(|error| error.to_string())?
+            {
+                targets.insert(target);
+            }
+        }
+    }
+    if let Some(default) =
+        super::default_work_target(repo_root).map_err(|error| error.to_string())?
+    {
         targets.insert(default);
     }
-    targets
+    Ok(targets)
 }
 
 /// Declared targets resolved once each, as `work start` resolves them.
@@ -625,8 +632,8 @@ fn read_tips(
 /// Returns the reason when the repository or a target tip cannot be read.
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let prefixes = work_prefixes(repo_root);
-    let default = super::default_work_target(repo_root);
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
@@ -636,7 +643,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let tips = read_tips(
         &repo,
         &mut resolved,
-        declared_targets(repo_root),
+        declared_targets(repo_root)?,
         &mut out.snapshots,
     )?;
     let mut resolve = |declared: &str| resolved.resolve(declared);
@@ -645,7 +652,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
         .iter()
         .flat_map(|(_, _, _, records)| records.keys().cloned())
         .collect();
-    let carried = visible_work_branches(&repo, &prefixes, &ids);
+    let carried = visible_work_branches(&repo, &prefixes, &ids)?;
     let mut judged = BTreeSet::new();
     for (_, reference, tip, records) in &tips {
         for record in records
@@ -902,7 +909,9 @@ impl StackHints {
 
 fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
     // A visible record owns its declaration; use the shared target resolver.
-    if let Some(target) = super::declared_work_target(root, task_id) {
+    if let Some(target) =
+        super::declared_work_target(root, task_id).map_err(|error| error.to_string())?
+    {
         return Ok(Some(target));
     }
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
@@ -910,8 +919,8 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
     for reference in repo
         .references_glob("refs/remotes/*")
         .map_err(|e| e.to_string())?
-        .flatten()
     {
+        let reference = reference.map_err(|error| error.to_string())?;
         // OS text rule (issue 79): the name is only compared with a declared
         // target, which is valid text in a record, so a name that is not valid
         // UTF-8 can never be that target and is skipped.
@@ -922,9 +931,9 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
         if name.ends_with("/HEAD") {
             continue;
         }
-        let Ok(tree) = reference.peel_to_tree() else {
-            continue;
-        };
+        let tree = reference
+            .peel_to_tree()
+            .map_err(|error| error.to_string())?;
         let records = records_from_tree(&repo, &tree).map_err(|e| e.to_string())?;
         if let Some(target) = records
             .get(task_id)
@@ -981,7 +990,10 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
             })
             .collect::<Result<_, _>>()?
     };
-    if super::declared_work_target(repo_root, task_id).is_none() {
+    if super::declared_work_target(repo_root, task_id)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
         for remote in &remotes {
             git(repo_root, &["fetch", "--prune", "--quiet", remote])?;
         }
@@ -1025,7 +1037,7 @@ fn standalone_claim_base(
         .ok()
         .map(|head| crate::git::name::reference_shorthand(&head))
         .unwrap_or_default();
-    if crate::hooks::policy::Policy::load(root)
+    if crate::hooks::policy::Policy::load(root)?
         .git
         .branch_is_protected_name(&current)
     {
@@ -1079,8 +1091,8 @@ pub fn claim_on(
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
-    let prefixes = work_prefixes(repo_root);
-    let mut carried = visible_work_branches(&repo, &prefixes, &ids)
+    let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
+    let mut carried = visible_work_branches(&repo, &prefixes, &ids)?
         .remove(task_id)
         .unwrap_or_default();
     let mut listed: Vec<&str> = Vec::new();
@@ -1199,7 +1211,10 @@ pub(crate) fn is_open_claim(
     target: git2::Oid,
 ) -> bool {
     let name = branch.strip_prefix("origin/").unwrap_or(branch);
-    let carries_task = work_suffix(&work_prefixes(repo_root), name).is_some_and(|suffix| {
+    let Ok(prefixes) = work_prefixes(repo_root) else {
+        return true; // cleanup refuses an unproven claim
+    };
+    let carries_task = work_suffix(&prefixes, name).is_some_and(|suffix| {
         let mut parts = suffix.splitn(3, '-');
         match (parts.next(), parts.next()) {
             (Some(kind), Some(number)) => {
@@ -1219,10 +1234,20 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
         return Vec::new();
     };
     let ids = BTreeSet::from([task_id.to_string()]);
-    let carried = visible_work_branches(&repo, &work_prefixes(repo_root), &ids)
-        .remove(task_id)
-        .unwrap_or_default();
-    let target_tip = super::declared_work_target(repo_root, task_id)
+    let prefixes = match work_prefixes(repo_root) {
+        Ok(prefixes) => prefixes,
+        Err(error) => return vec![format!("cannot read work prefixes: {error}")],
+    };
+    let mut branches = match visible_work_branches(&repo, &prefixes, &ids) {
+        Ok(branches) => branches,
+        Err(error) => return vec![format!("cannot read work branches: {error}")],
+    };
+    let carried = branches.remove(task_id).unwrap_or_default();
+    let declared = match super::declared_work_target(repo_root, task_id) {
+        Ok(declared) => declared,
+        Err(error) => return vec![format!("cannot read task target: {error}")],
+    };
+    let target_tip = declared
         .and_then(|target| resolve_target(repo_root, &repo, &target).ok().flatten())
         .map(|(_, oid)| oid);
     let open = match target_tip {
@@ -1289,22 +1314,25 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
     if !branch.starts_with("integration/") {
         return false;
     }
-    crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
-        .into_iter()
-        .any(|path| {
-            // An unreadable record may be the one that keeps the line live.
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                return true;
-            };
-            let Ok(record) = parse_record(&content, RecordKind::Task) else {
-                return true;
-            };
-            !matches!(record.status.as_str(), "complete" | "cancelled")
-                && record
-                    .integration_target
-                    .as_deref()
-                    .is_some_and(|target| canonical_target(target) == branch)
-        })
+    let Ok(files) =
+        crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
+    else {
+        return true; // cleanup must preserve a line whose task inventory is unproven
+    };
+    files.into_iter().any(|path| {
+        // An unreadable record may be the one that keeps the line live.
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return true;
+        };
+        let Ok(record) = parse_record(&content, RecordKind::Task) else {
+            return true;
+        };
+        !matches!(record.status.as_str(), "complete" | "cancelled")
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| canonical_target(target) == branch)
+    })
 }
 
 #[cfg(test)]
@@ -1594,13 +1622,13 @@ mod tests {
         fs::write(root.join(".git").join("packed-refs"), packed).unwrap();
         let repository = Repository::open(root).unwrap();
         let ids = BTreeSet::from(["TSK-238".to_string()]);
-        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids);
+        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids).unwrap();
         let claims = &carried["TSK-238"];
         assert_eq!(claims.len(), 1, "{carried:?}");
         assert_eq!(claims[0].0, GitName::from_bytes(b"task/TSK-238-caf\xe9"));
         // A real U+FFFD in another branch is another claim, not the same one.
         run(root, &["branch", "task/TSK-238-caf\u{fffd}"]);
-        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids);
+        let carried = visible_work_branches(&repository, &["task/".to_string()], &ids).unwrap();
         let names: BTreeSet<_> = carried["TSK-238"]
             .iter()
             .map(|(name, _)| name.clone())

@@ -156,8 +156,11 @@ pub struct ProjectInfo {
 /// `scaffold_version` at the top level, then under a `[project]` table.
 /// Missing file or keys fall back to the directory name, the default tier
 /// (`standard`), and `unknown`.
-#[must_use]
-pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
+///
+/// # Errors
+///
+/// Returns an error when existing project metadata cannot be read or parsed.
+pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
     // A label for a person (OS text rule, issue 79): the exact name, with
     // an invalid byte shown as an escape.
     let dir_name = repo_root.file_name().map_or_else(
@@ -165,25 +168,42 @@ pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
         |n| crate::git::GitName::from_os_str(n).display().to_string(),
     );
 
-    let table: Option<toml::Table> =
-        std::fs::read_to_string(repo_root.join(".codeflow/project.toml"))
-            .ok()
-            .and_then(|s| s.parse::<toml::Table>().ok());
-
-    let lookup = |key: &str| -> Option<String> {
-        let table = table.as_ref()?;
-        table
-            .get(key)
-            .or_else(|| table.get("project").and_then(|p| p.get(key)))
-            .and_then(toml::Value::as_str)
-            .map(ToString::to_string)
+    let path = repo_root.join(".codeflow/project.toml");
+    let table: Option<toml::Table> = if path
+        .try_exists()
+        .map_err(|error| format!("cannot inspect project metadata: {error}"))?
+    {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|error| format!("cannot read project metadata: {error}"))?;
+        Some(
+            toml::from_str(&text)
+                .map_err(|error| format!("cannot parse project metadata: {error}"))?,
+        )
+    } else {
+        None
     };
 
-    ProjectInfo {
-        name: lookup("name").unwrap_or(dir_name),
-        tier: lookup("tier").unwrap_or_else(|| "standard".to_string()),
-        scaffold_version: lookup("scaffold_version").unwrap_or_else(|| "unknown".to_string()),
-    }
+    let lookup = |key: &str| -> Result<Option<String>, String> {
+        let Some(table) = &table else {
+            return Ok(None);
+        };
+        let value = table
+            .get(key)
+            .or_else(|| table.get("project").and_then(|project| project.get(key)));
+        value
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("project {key} must be a string"))
+            })
+            .transpose()
+    };
+    Ok(ProjectInfo {
+        name: lookup("name")?.unwrap_or(dir_name),
+        tier: lookup("tier")?.unwrap_or_else(|| "standard".to_string()),
+        scaffold_version: lookup("scaffold_version")?.unwrap_or_else(|| "unknown".to_string()),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +233,7 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     }
     let canonical = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
-    let info = read_project_info(&canonical);
+    let info = read_project_info(&canonical)?;
     // OS text rule (issue 79): the path is the row's identity, and a lossy
     // spelling would let two repositories share one row. A path that is not
     // valid UTF-8 is not recorded (a registry write is best effort).
@@ -463,7 +483,7 @@ mod tests {
     fn test_read_project_info_lenient_defaults() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), None); // empty project.toml
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.tier, "standard");
         assert_eq!(info.scaffold_version, "unknown");
         // name falls back to directory name
@@ -474,7 +494,7 @@ mod tests {
     fn test_read_project_info_from_toml() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), Some("myproj"));
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.name, "myproj");
         assert_eq!(info.tier, "full");
         assert_eq!(info.scaffold_version, "2.0.0-dev");
@@ -489,7 +509,7 @@ mod tests {
             "[project]\nname = \"tabled\"\ntier = \"minimal\"\n",
         )
         .unwrap();
-        let info = read_project_info(dir.path());
+        let info = read_project_info(dir.path()).unwrap();
         assert_eq!(info.name, "tabled");
         assert_eq!(info.tier, "minimal");
     }
@@ -767,5 +787,20 @@ mod tests {
         init_repo(&repo, Some("odd"));
         assert_eq!(touch_registry(home.path(), &repo), Ok(false));
         assert!(list_repos(home.path()).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_registry_metadata_is_not_defaulted_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        let path = dir.path().join(".codeflow/project.toml");
+        for text in [b"name = 4".as_slice(), b"name = \"oops".as_slice(), &[0xff]] {
+            std::fs::write(&path, text).unwrap();
+            assert!(super::read_project_info(dir.path()).is_err());
+        }
     }
 }

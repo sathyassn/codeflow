@@ -180,7 +180,9 @@ fn init_writes(
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
     let policy_created = !root.join(".codeflow/policy.json").exists();
     let kept_template = read_text(source, "base/ci/pull_request_template.md")?
-        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
+        .map(|shipped| pr_template::find_kept(root, &shipped, &installed))
+        .transpose()?
+        .flatten();
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
         if !entry.applies(tier, &preset) {
@@ -516,12 +518,13 @@ fn install_entry(
                 return Ok(());
             }
             // Exists, no force: never overwrite. Report precisely why.
-            let current = std::fs::read_to_string(&dest_path).unwrap_or_default();
+            let current = std::fs::read_to_string(&dest_path)
+                .map_err(|error| ScaffoldError::io(&dest_path, error))?;
             let recorded = installed.files.get(&entry.dest);
             let note = match (entry.ownership, recorded) {
                 (Ownership::UserOwned, _) => {
                     // Make sure update has a shipped-default baseline to diff.
-                    if Baseline::read(root, &entry.dest).is_none() {
+                    if Baseline::read(root, &entry.dest)?.is_none() {
                         Baseline::write(root, &entry.dest, &rendered)?;
                     }
                     if recorded.is_none() {
@@ -550,7 +553,7 @@ fn install_entry(
                         // its creation. No baseline means a genuinely
                         // pre-existing user file: adopt it as managed.
                         let written_by_codeflow =
-                            Baseline::read(root, &entry.dest).is_some_and(|b| b == rendered);
+                            Baseline::read(root, &entry.dest)?.is_some_and(|b| b == rendered);
                         record(installed, entry, hash::sha256_hex(current.as_bytes()));
                         Baseline::write(root, &entry.dest, &rendered)?;
                         if written_by_codeflow {

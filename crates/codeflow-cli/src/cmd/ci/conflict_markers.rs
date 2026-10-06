@@ -117,7 +117,7 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
             head,
         ],
     )?;
-    let lines: Vec<super::AddedLine> = super::parse_added_lines(&diff)
+    let lines: Vec<super::AddedLine> = super::parse_added_lines(&diff)?
         .into_iter()
         .filter(|added| !gitlinks.contains(&added.path))
         .collect();

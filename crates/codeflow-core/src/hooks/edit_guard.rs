@@ -199,7 +199,7 @@ pub(crate) fn enforcement_path(
     home: Option<&Path>,
 ) -> Result<bool, String> {
     let home = home.ok_or_else(|| "cannot resolve the home for enforcement paths".to_string())?;
-    let repo = super::RepoInfo::discover(root);
+    let repo = super::RepoInfo::discover(root)?;
     let ctx = EditContext {
         cwd,
         root,
@@ -262,7 +262,8 @@ pub fn evaluate(request: &EditRequest, ctx: &EditContext<'_>) -> Result<Vec<Viol
             if (authority
                 || (ctx.level.is_active()
                     && (protected.iter().any(|pattern| covers(&text, pattern))
-                        || repository_enforcement_target(candidate, ctx.root, false))))
+                        || repository_enforcement_target(candidate, ctx.root, false)
+                            .map_err(EditError)?)))
                 && seen.insert(lexical.clone())
             {
                 violations.push(Violation::new(
@@ -565,7 +566,7 @@ pub(crate) fn repository_authority_target(target: &Path, root: &Path, ancestors:
 
 /// Every checkout sharing this repository: its own working tree, the main
 /// working tree and each registered linked worktree.
-fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
+fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
     let mut roots = Vec::new();
     if let Some(workdir) = repo.workdir() {
         roots.push(workdir.to_path_buf());
@@ -576,11 +577,11 @@ fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
         }
     }
     roots.extend(
-        crate::git::linked_worktrees(repo)
+        crate::git::linked_worktrees(repo)?
             .into_iter()
             .map(|worktree| worktree.path),
     );
-    roots
+    Ok(roots)
 }
 
 /// The enforcement paths of every checkout sharing this repository, each
@@ -589,7 +590,7 @@ fn checkout_roots(repo: &git2::Repository) -> Vec<PathBuf> {
 /// `.codeflow`), or the common git directory. A checkout nested in another
 /// checkout's `.claude` (`.claude/worktrees/<name>`) is therefore not an
 /// ancestor of its own files by lying inside the outer `.claude`.
-fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
+fn protected_paths(repo: &git2::Repository) -> Result<Vec<(PathBuf, bool, PathBuf)>, String> {
     // Reuse the action table's repository paths for every checkout; home
     // paths remain scoped to the caller's home in enforcement_patterns.
     let patterns: Vec<_> = actions::table()
@@ -606,13 +607,27 @@ fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
         })
         .collect();
     let mut protected = Vec::new();
-    for root in checkout_roots(repo) {
+    for root in checkout_roots(repo)? {
         for (relative, directory) in &patterns {
+            // A linked checkout's .git is a pointer file. Git-owned paths
+            // below it live in the shared administrative directory instead.
+            if relative.starts_with(".git/") {
+                continue;
+            }
             let base = Path::new(relative)
                 .components()
                 .next()
                 .map_or_else(|| root.clone(), |base| root.join(base));
             protected.push((root.join(relative), *directory, base));
+        }
+    }
+    for (relative, directory) in &patterns {
+        if let Some(name) = relative.strip_prefix(".git/") {
+            protected.push((
+                repo.commondir().join(name),
+                *directory,
+                repo.commondir().to_path_buf(),
+            ));
         }
     }
     for (name, directory) in [
@@ -627,7 +642,7 @@ fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
             repo.commondir().to_path_buf(),
         ));
     }
-    protected
+    Ok(protected)
 }
 
 /// One enforcement path, resolved both ways [`normalized`] reads paths
@@ -635,16 +650,18 @@ fn protected_paths(repo: &git2::Repository) -> Vec<(PathBuf, bool, PathBuf)> {
 /// a whole directory, and the base its ancestors must lie in, resolved
 /// when first needed. `None` where that reading fails.
 struct ProtectedPath {
-    path: [Option<PathBuf>; 2],
+    path: [Result<PathBuf, String>; 2],
     directory: bool,
     base: PathBuf,
-    resolved_base: [std::cell::OnceCell<Option<PathBuf>>; 2],
+    resolved_base: [std::cell::OnceCell<Result<PathBuf, String>>; 2],
 }
 
 type Protected = std::rc::Rc<Vec<ProtectedPath>>;
 
+type ProtectedCache = std::collections::HashMap<PathBuf, Result<Option<Protected>, String>>;
+
 thread_local! {
-    static PROTECTED: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Option<Protected>>>> =
+    static PROTECTED: std::cell::RefCell<Option<ProtectedCache>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -681,11 +698,18 @@ impl Drop for RepoFactsScope {
 /// The enforcement paths of the repository at `root` ([`protected_paths`]),
 /// resolved once per [`RepoFactsScope`] and otherwise on each call. `None`
 /// outside a repository.
-fn protected_at(root: &Path) -> Option<Protected> {
+fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
     let read = || {
-        let repo = git2::Repository::discover(root).ok()?;
-        let both = |path: &Path| [false, true].map(|resolve| normalized(path, resolve).ok());
-        let resolved = protected_paths(&repo)
+        let repo = match git2::Repository::discover(root) {
+            Ok(repo) => repo,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read repository enforcement paths: {error}")),
+        };
+        let both = |path: &Path| {
+            [false, true]
+                .map(|resolve| normalized(path, resolve).map_err(|error| error.to_string()))
+        };
+        let resolved = protected_paths(&repo)?
             .iter()
             .map(|(path, directory, base)| ProtectedPath {
                 path: both(path),
@@ -694,7 +718,7 @@ fn protected_at(root: &Path) -> Option<Protected> {
                 resolved_base: Default::default(),
             })
             .collect();
-        Some(std::rc::Rc::new(resolved))
+        Ok(Some(std::rc::Rc::new(resolved)))
     };
     PROTECTED.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -707,32 +731,36 @@ fn protected_at(root: &Path) -> Option<Protected> {
 
 /// Resolve enforcement paths in every checkout sharing this repository.
 /// Native edits protect files; shell writes also protect their ancestors.
-pub(crate) fn repository_enforcement_target(target: &Path, root: &Path, ancestors: bool) -> bool {
-    let Some(protected) = protected_at(root) else {
-        return false;
+pub(crate) fn repository_enforcement_target(
+    target: &Path,
+    root: &Path,
+    ancestors: bool,
+) -> Result<bool, String> {
+    let Some(protected) = protected_at(root)? else {
+        return Ok(false);
     };
     for (reading, resolve) in [false, true].into_iter().enumerate() {
-        let Ok(target) = normalized(target, resolve) else {
-            continue;
-        };
+        let target = normalized(target, resolve).map_err(|error| error.to_string())?;
         for entry in protected.iter() {
-            let Some(path) = &entry.path[reading] else {
-                continue;
-            };
+            let path = entry.path[reading].as_ref().map_err(Clone::clone)?;
             if target == *path
                 || (entry.directory && target.starts_with(path))
                 || (ancestors
                     && path.starts_with(&target)
-                    && entry.resolved_base[reading]
-                        .get_or_init(|| normalized(&entry.base, resolve).ok())
-                        .as_ref()
-                        .is_some_and(|base| target.starts_with(base)))
+                    && target.starts_with(
+                        entry.resolved_base[reading]
+                            .get_or_init(|| {
+                                normalized(&entry.base, resolve).map_err(|error| error.to_string())
+                            })
+                            .as_ref()
+                            .map_err(Clone::clone)?,
+                    ))
             {
-                return true;
+                return Ok(true);
             }
         }
     }
-    false
+    Ok(false)
 }
 
 /// How many entries a protected directory is walked for before the walk
@@ -746,28 +774,26 @@ const CANDIDATE_WALK_LIMIT: usize = 4096;
 /// when it lies inside a protected path, and the files inside a protected
 /// directory. A protected directory too large to walk is represented by
 /// `<dir>/*`, which every check reads as inside it.
-pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return Vec::new();
+pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>, String> {
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot read find repository: {error}")),
     };
-    let Ok(start) = normalized(start, true) else {
-        return Vec::new();
-    };
+    let start = normalized(start, true).map_err(|error| error.to_string())?;
     let mut out: Vec<PathBuf> = Vec::new();
     let mut push = |path: PathBuf| {
         if !out.contains(&path) {
             out.push(path);
         }
     };
-    let mut held: Vec<(PathBuf, bool)> = protected_paths(&repo)
+    let mut held: Vec<(PathBuf, bool)> = protected_paths(&repo)?
         .into_iter()
         .map(|(path, directory, _)| (path, directory))
         .collect();
-    held.extend(checkout_roots(&repo).into_iter().map(|path| (path, false)));
+    held.extend(checkout_roots(&repo)?.into_iter().map(|path| (path, false)));
     for (path, directory) in held {
-        let Ok(path) = normalized(&path, true) else {
-            continue;
-        };
+        let path = normalized(&path, true).map_err(|error| error.to_string())?;
         if start.starts_with(&path) && (directory || start == path) {
             push(start.clone());
             continue;
@@ -785,10 +811,20 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
             let mut stack = vec![path.clone()];
             let mut seen = 0;
             while let Some(dir) = stack.pop() {
-                let Ok(entries) = std::fs::read_dir(&dir) else {
-                    continue;
+                let entries = match std::fs::read_dir(&dir) {
+                    Ok(entries) => entries,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(format!(
+                            "cannot read protected directory {}: {error}",
+                            dir.display()
+                        ))
+                    }
                 };
-                for entry in entries.flatten() {
+                for entry in entries {
+                    let entry = entry.map_err(|error| {
+                        format!("cannot read protected directory entry: {error}")
+                    })?;
                     seen += 1;
                     if seen > CANDIDATE_WALK_LIMIT {
                         push(path.join("*"));
@@ -796,7 +832,11 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
                         break;
                     }
                     let entry_path = entry.path();
-                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    if entry
+                        .file_type()
+                        .map_err(|error| format!("cannot read protected file type: {error}"))?
+                        .is_dir()
+                    {
                         stack.push(entry_path.clone());
                     }
                     push(entry_path);
@@ -804,7 +844,7 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// The registered checkout of the repository at `root` that a recursive
@@ -815,28 +855,28 @@ pub(crate) fn registered_checkout_under(
     target: &Path,
     root: &Path,
     except: Option<&Path>,
-) -> Option<PathBuf> {
-    let repo = git2::Repository::discover(root).ok()?;
-    let checkouts = checkout_roots(&repo);
+) -> Result<Option<PathBuf>, String> {
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read checkout repository: {error}")),
+    };
+    let checkouts = checkout_roots(&repo)?;
     let except: Vec<PathBuf> = except
         .into_iter()
         .flat_map(|path| [normalized(path, false), normalized(path, true)])
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
     for resolve in [false, true] {
-        let Ok(target) = normalized(target, resolve) else {
-            continue;
-        };
+        let target = normalized(target, resolve).map_err(|e| e.to_string())?;
         for checkout in &checkouts {
-            let Ok(path) = normalized(checkout, resolve) else {
-                continue;
-            };
+            let path = normalized(checkout, resolve).map_err(|e| e.to_string())?;
             if path.starts_with(&target) && !except.contains(&path) {
-                return Some(checkout.clone());
+                return Ok(Some(checkout.clone()));
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Whether `target` holds an enforcement path of any checkout sharing the
@@ -844,18 +884,25 @@ pub(crate) fn registered_checkout_under(
 /// recursive change of `target` reaches that path whatever checkout base
 /// it lies in, so a linked checkout's root holds its own files (TSK-216
 /// round 3).
-pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> bool {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return false;
+pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool, String> {
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot read enforcement repository: {error}")),
     };
-    let protected = protected_paths(&repo);
-    [false, true].into_iter().any(|resolve| {
-        normalized(target, resolve).is_ok_and(|target| {
-            protected.iter().any(|(path, _, _)| {
-                normalized(path, resolve).is_ok_and(|path| path.starts_with(&target))
-            })
-        })
-    })
+    let protected = protected_paths(&repo)?;
+    for resolve in [false, true] {
+        let target = normalized(target, resolve).map_err(|e| e.to_string())?;
+        for (path, _, _) in &protected {
+            if normalized(path, resolve)
+                .map_err(|e| e.to_string())?
+                .starts_with(&target)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// The working tree of the checkout holding `dir`, when it is one.
@@ -869,15 +916,44 @@ pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
 /// Whether the checkout holding `dir` has another registered checkout
 /// inside its working tree, as a main checkout with `.worktrees/<name>`
 /// does. A command whose target cannot be resolved there may delete one.
-pub(crate) fn holds_registered_worktrees(dir: &Path) -> bool {
-    let Some(workdir) = checkout_root_of(dir) else {
-        return false;
+pub(crate) fn holds_registered_worktrees(dir: &Path) -> Result<bool, String> {
+    let repo = match git2::Repository::discover(dir) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot read registered worktrees: {error}")),
     };
-    registered_checkout_under(&workdir, dir, Some(&workdir)).is_some()
+    let Some(workdir) = repo.workdir() else {
+        return Ok(false);
+    };
+    registered_checkout_under(workdir, dir, Some(workdir)).map(|held| held.is_some())
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r16_linked_git_pointer_preserves_ordinary_and_protected_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let linked = dir.path().join("linked");
+        let admin = repo.path().join("worktrees/linked");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", linked.join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+        assert!(!repository_enforcement_target(&linked.join("out.txt"), dir.path(), true).unwrap());
+        assert!(repository_enforcement_target(&repo.path().join("config"), &linked, true).unwrap());
+    }
+
     #[test]
     fn r15_patch_paths_match_native_crlf_framing() {
         let paths =
@@ -1258,7 +1334,7 @@ mod tests {
             return;
         };
         let repo = git2::Repository::open(dir.path()).unwrap();
-        let roots = checkout_roots(&repo);
+        let roots = checkout_roots(&repo).unwrap();
         assert!(
             roots.iter().any(|root| root.ends_with("linked")),
             "{roots:?}"

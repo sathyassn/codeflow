@@ -148,7 +148,13 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
 /// Plain `init` and `update` switch nothing in a folder that holds nested
 /// repositories; they name `codeflow init --workspace` instead.
 fn print_workspace_hint(root: &std::path::Path) {
-    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    let policy = match codeflow_core::hooks::policy::Policy::load(root) {
+        Ok(policy) => policy.git,
+        Err(error) => {
+            eprintln!("codeflow: cannot read workspace policy: {error}");
+            return;
+        }
+    };
     if let Some(hint) = root_checkout::workspace_hint(root, &policy) {
         println!("{hint}");
     }
@@ -163,7 +169,9 @@ fn prepare_workspace(
     if !workspace {
         return Ok(None);
     }
-    let policy = codeflow_core::hooks::policy::Policy::load(root).git;
+    let policy = codeflow_core::hooks::policy::Policy::load(root)
+        .map_err(anyhow::Error::msg)?
+        .git;
     Ok(Some(root_checkout::prepare_branch(root, &policy)?))
 }
 

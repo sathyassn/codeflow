@@ -226,9 +226,15 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     if !line.starts_with("integration/") {
         return None;
     }
-    target_tips(repo, line).into_iter().find_map(|(name, tip)| {
-        let shared = repo.merge_base(tip, target_tip).ok()?;
-        (blob_at(repo, tip, &record.path) != blob_at(repo, shared, &record.path)).then(|| {
+    let tips = match target_tips(repo, line) {
+        Ok(tips) => tips,
+        Err(error) => return Some(format!("cannot read task target {line}: {error}")),
+    };
+    tips.into_iter().find_map(|(name, tip)| {
+        let shared = match repo.merge_base(tip, target_tip) { Ok(shared) => shared, Err(error) => return Some(format!("cannot read task target history: {error}")) };
+        let before = match blob_at(repo, shared, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
+        let after = match blob_at(repo, tip, &record.path) { Ok(value) => value, Err(error) => return Some(error) };
+        (after != before).then(|| {
             format!(
                 "{} is newer on {name} than on the target; this amendment lands on the target, so merge the target into {line} and check the record there",
                 record.id
@@ -352,10 +358,21 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
             }
         }
     }
-    let bytes = |at: Oid| entry_at(repo, at, "AGENTS.md").map(|(_, bytes)| bytes);
-    if instructions && !instructions_block_unchanged(bytes(base).as_deref(), bytes(head).as_deref())
-    {
-        return Some(MANAGED_BLOCK_CHANGED.to_string());
+    if instructions {
+        let before = match entry_at(repo, base, "AGENTS.md") {
+            Ok(entry) => entry,
+            Err(error) => return Some(error),
+        };
+        let after = match entry_at(repo, head, "AGENTS.md") {
+            Ok(entry) => entry,
+            Err(error) => return Some(error),
+        };
+        if !instructions_block_unchanged(
+            before.as_ref().map(|(_, bytes)| bytes.as_slice()),
+            after.as_ref().map(|(_, bytes)| bytes.as_slice()),
+        ) {
+            return Some(MANAGED_BLOCK_CHANGED.to_string());
+        }
     }
     None
 }
@@ -449,14 +466,20 @@ fn first_special(repo: &Repository, commit: Oid) -> Option<(&'static str, String
 }
 
 /// The mode and bytes of the entry at `path` in the tree of `commit`.
-fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Option<(i32, Vec<u8>)> {
+fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, Vec<u8>)>, String> {
     let tree = repo
         .find_commit(commit)
         .and_then(|commit| commit.tree())
-        .ok()?;
-    let entry = tree.get_path(std::path::Path::new(path)).ok()?;
-    let blob = repo.find_blob(entry.id()).ok()?;
-    Some((entry.filemode(), blob.content().to_vec()))
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    Ok(Some((entry.filemode(), blob.content().to_vec())))
 }
 
 /// The project's product and watched paths from the policy at `commit`: its
@@ -475,7 +498,7 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
             })
             .unwrap_or_default()
     };
-    let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json") {
+    let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json")? {
         Some((_, bytes)) => serde_json::from_slice(&bytes).map_err(|error| error.to_string())?,
         None => serde_json::Value::Null,
     };
@@ -483,7 +506,7 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let product = if git["product_paths"].is_array() {
         list(&git["product_paths"])
     } else {
-        let project = entry_at(repo, commit, ".codeflow/project.toml")
+        let project = entry_at(repo, commit, ".codeflow/project.toml")?
             .map(|(_, bytes)| {
                 let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
                 text.parse::<toml::Table>()

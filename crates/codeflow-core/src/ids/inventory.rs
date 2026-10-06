@@ -210,11 +210,7 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     let mut out: AddLog = BTreeMap::new();
     for record in z_records(&log) {
         let mut fields = record.iter().map(String::as_str);
-        let sha = fields
-            .next()
-            .unwrap_or_default()
-            .trim_start_matches('\n')
-            .to_string();
+        let sha = fields.next().unwrap_or_default().to_string();
         for change in raw_fields(fields) {
             if change.status != 'A' {
                 continue;

@@ -242,27 +242,29 @@ impl MarkdownStore {
         Ok((record, body.to_string()))
     }
 
-    fn scan<T: serde::de::DeserializeOwned>(paths: Vec<PathBuf>) -> Vec<(PathBuf, T)> {
+    fn scan<T: serde::de::DeserializeOwned>(
+        paths: Vec<PathBuf>,
+    ) -> Result<Vec<(PathBuf, T)>, StoreError> {
         let mut records = Vec::new();
         for path in paths {
             match Self::read_record::<T>(&path) {
                 Ok((record, _body)) => records.push((path, record)),
-                Err(e) => eprintln!("warn: store: skipping {}: {e}", path.display()),
+                Err(e) => return Err(e),
             }
         }
-        records
+        Ok(records)
     }
 
-    fn find_epic(&self, id: &str) -> Option<(PathBuf, Epic, String)> {
+    fn find_epic(&self, id: &str) -> Result<Option<(PathBuf, Epic, String)>, StoreError> {
         find_by(
-            crate::workgraph::layout::epic_record_files(&self.root),
+            crate::workgraph::layout::epic_record_files(&self.root)?,
             |e: &Epic| e.id == id,
         )
     }
 
-    fn find_task(&self, id: &str) -> Option<(PathBuf, Task, String)> {
+    fn find_task(&self, id: &str) -> Result<Option<(PathBuf, Task, String)>, StoreError> {
         find_by(
-            crate::workgraph::layout::task_record_files(&self.root),
+            crate::workgraph::layout::task_record_files(&self.root)?,
             |t: &Task| t.id == id,
         )
     }
@@ -273,18 +275,18 @@ impl MarkdownStore {
 fn find_by<T: serde::de::DeserializeOwned>(
     paths: Vec<PathBuf>,
     pred: impl Fn(&T) -> bool,
-) -> Option<(PathBuf, T, String)> {
+) -> Result<Option<(PathBuf, T, String)>, StoreError> {
     for path in paths {
         match MarkdownStore::read_record::<T>(&path) {
             Ok((record, body)) => {
                 if pred(&record) {
-                    return Some((path, record, body));
+                    return Ok(Some((path, record, body)));
                 }
             }
-            Err(e) => eprintln!("warn: store: skipping {}: {e}", path.display()),
+            Err(e) => return Err(e),
         }
     }
-    None
+    Ok(None)
 }
 
 /// Split markdown content into (frontmatter yaml, body).
@@ -299,7 +301,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
         .or_else(|| rest.strip_prefix("\r\n"))?;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == "---" {
+        if super::record_text::without_line_ending(line) == "---" {
             let yaml = &rest[..offset];
             let body = &rest[offset + line.len()..];
             return Some((yaml, body));
@@ -316,20 +318,20 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_epic(&self, id: &str) -> Result<Option<Epic>, StoreError> {
-        Ok(self.find_epic(id).map(|(_, epic, _)| epic))
+        Ok(self.find_epic(id)?.map(|(_, epic, _)| epic))
     }
 
     fn get_epic_by_format_id(&self, format_id: &str) -> Result<Option<Epic>, StoreError> {
         Ok(find_by(
-            crate::workgraph::layout::epic_record_files(&self.root),
+            crate::workgraph::layout::epic_record_files(&self.root)?,
             |e: &Epic| e.format_id == format_id,
-        )
+        )?
         .map(|(_, epic, _)| epic))
     }
 
     fn update_epic(&self, id: &str, update: EpicUpdate) -> Result<(), StoreError> {
         let (path, _epic, body) = self
-            .find_epic(id)
+            .find_epic(id)?
             .ok_or_else(|| StoreError::NotFound(format!("epic:{id}")))?;
         let mut fields = Vec::new();
         if let Some(status) = update.status {
@@ -349,7 +351,7 @@ impl RecordStore for MarkdownStore {
     }
 
     fn list_epics(&self, filter: EpicFilter) -> Result<Vec<Epic>, StoreError> {
-        let records = Self::scan::<Epic>(crate::workgraph::layout::epic_record_files(&self.root));
+        let records = Self::scan::<Epic>(crate::workgraph::layout::epic_record_files(&self.root)?)?;
         Ok(records
             .into_iter()
             .map(|(_, epic)| epic)
@@ -381,20 +383,20 @@ impl RecordStore for MarkdownStore {
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, StoreError> {
-        Ok(self.find_task(id).map(|(_, task, _)| task))
+        Ok(self.find_task(id)?.map(|(_, task, _)| task))
     }
 
     fn get_task_by_format_id(&self, format_id: &str) -> Result<Option<Task>, StoreError> {
         Ok(find_by(
-            crate::workgraph::layout::task_record_files(&self.root),
+            crate::workgraph::layout::task_record_files(&self.root)?,
             |t: &Task| t.format_id == format_id,
-        )
+        )?
         .map(|(_, task, _)| task))
     }
 
     fn update_task(&self, id: &str, update: TaskUpdate) -> Result<(), StoreError> {
         let (path, _task, body) = self
-            .find_task(id)
+            .find_task(id)?
             .ok_or_else(|| StoreError::NotFound(format!("task:{id}")))?;
         let mut fields = Vec::new();
         if let Some(status) = update.status {
@@ -417,7 +419,7 @@ impl RecordStore for MarkdownStore {
     }
 
     fn list_tasks(&self, filter: TaskFilter) -> Result<Vec<Task>, StoreError> {
-        let records = Self::scan::<Task>(crate::workgraph::layout::task_record_files(&self.root));
+        let records = Self::scan::<Task>(crate::workgraph::layout::task_record_files(&self.root)?)?;
         Ok(records
             .into_iter()
             .map(|(_, task)| task)
@@ -937,7 +939,7 @@ created: 2026-06-11
     }
 
     #[test]
-    fn test_scan_skips_unparseable_files() {
+    fn test_scan_refuses_unparseable_files() {
         let dir = tempfile::tempdir().unwrap();
         let store = MarkdownStore::new(dir.path()).unwrap();
         store
@@ -949,7 +951,10 @@ created: 2026-06-11
         )
         .unwrap();
 
-        let all = store.list_epics(EpicFilter::default()).unwrap();
-        assert_eq!(all.len(), 1, "unparseable file must be skipped, not fatal");
+        let error = store.list_epics(EpicFilter::default()).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Yaml { path, .. } if path.ends_with("epics/notes.md")),
+            "a candidate record parse failure must refuse the inventory"
+        );
     }
 }

@@ -34,7 +34,17 @@ pub(super) fn dispatch(
             return;
         }
     }
-    let Some(base) = super::resolve_base(root, base_candidates) else {
+    let resolved_base = match super::resolve_base(root, base_candidates) {
+        Ok(value) => value,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
+    };
+    let Some(base) = resolved_base else {
         return;
     };
     ran.push("id-registry");

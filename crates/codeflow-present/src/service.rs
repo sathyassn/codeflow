@@ -589,7 +589,7 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
 
 fn csp_source_hash(source: &str) -> String {
     format!(
-        "'sha256-{}'",
+        "sha256-{}",
         STANDARD.encode(sha2::Sha256::digest(source.as_bytes()))
     )
 }
@@ -1011,6 +1011,8 @@ async fn not_found() -> Response<Body> {
     clippy::result_large_err,
     reason = "Axum responses preserve exact request-rejection headers at this private boundary"
 )]
+// Unreadable header values are unproven; every endpoint caller returns the
+// HTTP refusal supplied here before reading or changing session state.
 fn require_application_request(
     state: &AppState,
     headers: &HeaderMap,
@@ -1076,6 +1078,8 @@ fn require_application_request(
     clippy::result_large_err,
     reason = "Axum responses preserve exact request-rejection headers at this private boundary"
 )]
+// An unreadable Host is unproven; require_application_request and bootstrap
+// endpoint callers return this HTTP 421 refusal.
 fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<(), Response<Body>> {
     if headers
         .get(header::HOST)
@@ -1092,12 +1096,17 @@ fn require_host(state: &AppState, headers: &HeaderMap) -> std::result::Result<()
 
 // Both representations are equivalent. Prefer Brotli whenever explicitly
 // acceptable; q=0 and malformed quality values never opt into an encoding.
+// An unreadable value is unproven: asset refuses None with HTTP 406.
 fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
+    let values = headers
+        .get_all(header::ACCEPT_ENCODING)
+        .iter()
+        .map(|value| value.to_str().ok())
+        .collect::<Option<Vec<_>>>()?;
     ["br", "gzip"].into_iter().find(|wanted| {
-        headers
-            .get_all(header::ACCEPT_ENCODING)
+        values
             .iter()
-            .filter_map(|value| value.to_str().ok())
+            .copied()
             .flat_map(|value| value.split(','))
             .any(|item| {
                 let mut parts = item.split(';');
@@ -1161,6 +1170,8 @@ fn plain(status: StatusCode, message: &str) -> Response<Body> {
     )
 }
 
+// An unreadable output header is unproven; secure_html and plain return the
+// empty HTTP 500 refusal instead of exposing content without its headers.
 fn response_with_headers(
     status: StatusCode,
     body: Body,
@@ -1172,7 +1183,9 @@ fn response_with_headers(
         if let Ok(value) = HeaderValue::from_str(value) {
             response.headers_mut().insert(name.clone(), value);
         } else {
-            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            let mut refused = Response::new(Body::empty());
+            *refused.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            return refused;
         }
     }
     response
@@ -1210,8 +1223,7 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
             "renderer prepaint source is missing".to_string(),
         ));
     };
-    if prepaint.source.len() > 64 * 1024
-        || prepaint.csp_sha256 != csp_source_hash(&prepaint.source).trim_matches('\'')
+    if prepaint.source.len() > 64 * 1024 || prepaint.csp_sha256 != csp_source_hash(&prepaint.source)
     {
         return Err(PresentError::CorruptState(
             "renderer prepaint source violates its CSP integrity contract".to_string(),
@@ -2606,6 +2618,31 @@ mod tests {
             );
         }
         assert_ne!(etags["br"], etags["gzip"]);
+    }
+
+    #[test]
+    fn r16_unreadable_encoding_refuses_even_beside_supported_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(header::ACCEPT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.append(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        assert_eq!(service_encoding(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn r16_invalid_response_header_refuses_the_content() {
+        let response = response_with_headers(
+            StatusCode::OK,
+            Body::from("private"),
+            &[(header::CONTENT_TYPE, "bad\nvalue")],
+        );
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(response.into_body(), 100)
+            .await
+            .unwrap();
+        assert!(bytes.is_empty());
     }
 
     #[test]

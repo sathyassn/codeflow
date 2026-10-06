@@ -168,36 +168,52 @@ impl ProtectionPlan {
     /// `protected_branches`, then to `main`/`master`) and derives rule
     /// strictness from the corresponding `git.*` block/warn/allow values
     /// (missing values default to the charter's strict baseline).
-    #[must_use]
-    pub fn from_policy_file(path: &Path) -> Self {
-        let policy: serde_json::Value = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or(serde_json::Value::Null);
-        let git = policy.get("git").unwrap_or(&serde_json::Value::Null);
-
-        let branches: Vec<String> = git
-            .get("protected_branches")
-            .or_else(|| policy.get("protected_branches"))
-            .and_then(serde_json::Value::as_array)
-            .map_or_else(
-                || vec!["main".to_string(), "master".to_string()],
-                |a| {
-                    a.iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(ToString::to_string)
-                        .collect()
-                },
-            );
-
-        let blocks = |key: &str| -> bool {
-            git.get(key)
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|v| v == "block")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the policy cannot be read or its protection fields are invalid.
+    pub fn from_policy_file(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("cannot read policy {}: {error}", path.display()))?;
+        let policy: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?;
+        if !policy.is_object() {
+            return Err("policy must be an object".into());
+        }
+        let git = match policy.get("git") {
+            Some(value) if !value.is_object() => return Err("policy.git must be an object".into()),
+            value => value,
         };
-        let force = blocks("force_push_protected");
-        let delete = blocks("delete_protected");
-        let push = blocks("push_to_protected");
+        let branches = match git
+            .and_then(|git| git.get("protected_branches"))
+            .or_else(|| policy.get("protected_branches"))
+        {
+            None => vec!["main".to_string(), "master".to_string()],
+            Some(value) => value
+                .as_array()
+                .ok_or("protected_branches must be an array")?
+                .iter()
+                .map(|branch| {
+                    branch
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| "protected_branches entries must be strings".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        let blocks = |key: &str| -> Result<bool, String> {
+            match git.and_then(|git| git.get(key)) {
+                None => Ok(true),
+                Some(value) => match value.as_str() {
+                    Some("block") => Ok(true),
+                    Some("warn" | "allow") => Ok(false),
+                    _ => Err(format!("policy.git.{key} must be block, warn or allow")),
+                },
+            }
+        };
+        let force = blocks("force_push_protected")?;
+        let delete = blocks("delete_protected")?;
+        let push = blocks("push_to_protected")?;
 
         let rules = branches
             .into_iter()
@@ -210,7 +226,7 @@ impl ProtectionPlan {
                 data_profile: false,
             })
             .collect();
-        Self { rules }
+        Ok(Self { rules })
     }
 
     /// Add the registry data profile when the repository tracks durable
@@ -658,7 +674,7 @@ mod tests {
     fn test_plan_from_policy_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
         assert_eq!(plan.rules.len(), 2);
         assert_eq!(plan.rules[0].pattern, "main");
         assert!(!plan.rules[0].is_glob());
@@ -669,11 +685,9 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_missing_policy_defaults_to_main_master() {
+    fn test_plan_missing_policy_is_unproven() {
         let dir = tempfile::tempdir().unwrap();
-        let plan = ProtectionPlan::from_policy_file(&dir.path().join("nope.json"));
-        let patterns: Vec<&str> = plan.rules.iter().map(|r| r.pattern.as_str()).collect();
-        assert_eq!(patterns, vec!["main", "master"]);
+        assert!(ProtectionPlan::from_policy_file(&dir.path().join("nope.json")).is_err());
     }
 
     #[test]
@@ -685,7 +699,7 @@ mod tests {
             r#"{ "git": { "protected_branches": ["main"], "delete_protected": "warn" } }"#,
         )
         .unwrap();
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
         assert!(!plan.rules[0].block_deletion);
         assert!(plan.rules[0].block_force_push, "unset values stay strict");
     }
@@ -694,7 +708,7 @@ mod tests {
     fn test_dry_run_report_prints_plan() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
         let report = plan.dry_run_report("github");
         assert_eq!(report.status, ProtectStatus::DryRun);
         let text = report.render();
@@ -713,7 +727,7 @@ mod tests {
     fn test_manual_provider_degrades_with_checklist() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_policy(dir.path(), r#"["main"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
         let provider = provider_for("gitlab", dir.path()).unwrap();
         let report = provider.apply(&plan);
         assert_eq!(report.status, ProtectStatus::Degraded);
@@ -730,7 +744,7 @@ mod tests {
             "echo 'HTTP 403: Upgrade to GitHub Pro or make this repository public to enable this feature. (https://docs.github.com/rest/branches/branch-protection)' >&2\nexit 1",
         );
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
 
         let provider = GithubProvider::with_gh(gh, dir.path());
         let report = provider.apply(&plan);
@@ -762,7 +776,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let gh = write_shim(dir.path(), "printf '%s' '{}'\nexit 0");
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
 
         let provider = GithubProvider::with_gh(gh, dir.path());
         let report = provider.apply(&plan);
@@ -794,7 +808,7 @@ mod tests {
         std::fs::set_permissions(&gh, perms).unwrap();
 
         let path = write_policy(dir.path(), r#"["main"]"#);
-        let plan = ProtectionPlan::from_policy_file(&path);
+        let plan = ProtectionPlan::from_policy_file(&path).unwrap();
         let report = GithubProvider::with_gh(gh, dir.path()).apply(&plan);
         assert_eq!(report.status, ProtectStatus::Degraded);
         assert!(!report.checklist.is_empty());
@@ -804,8 +818,10 @@ mod tests {
     fn registry_data_profile_is_a_ruleset_that_leaves_main_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_policy(dir.path(), r#"["main"]"#);
-        let before = ProtectionPlan::from_policy_file(&path);
-        let plan = ProtectionPlan::from_policy_file(&path).with_registry_profile();
+        let before = ProtectionPlan::from_policy_file(&path).unwrap();
+        let plan = ProtectionPlan::from_policy_file(&path)
+            .unwrap()
+            .with_registry_profile();
         assert_eq!(plan.rules.len(), before.rules.len() + 1);
         let main = &plan.rules[0];
         assert_eq!(main.pattern, "main");
@@ -889,5 +905,26 @@ mod tests {
             .expect("run_gh finished instead of deadlocking on the pipe")
             .unwrap();
         assert_eq!(out, expected);
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_protection_rejects_wrong_field_types() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("policy.json");
+        for text in [
+            r#"{"git":{"protected_branches":["main",7]}}"#,
+            r#"{"git":{"push_to_protected":"unknown"}}"#,
+            r#"{"git":[]}"#,
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(
+                super::ProtectionPlan::from_policy_file(&path).is_err(),
+                "{text}"
+            );
+        }
     }
 }

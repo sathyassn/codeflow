@@ -22,7 +22,7 @@ pub struct LandedPolicy {
 /// A populated tracking namespace must contain every required authority ref.
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
     let Ok(repo) = Repository::discover(root) else {
-        return Ok(working(root, "working copy (unborn HEAD; no remote)"));
+        return working(root, "working copy (unborn HEAD; no remote)");
     };
     let remotes = repo.remotes().map_err(|e| e.to_string())?;
     // OS text rule (issue 79, `docs/architecture.md`): kept strict. The remote
@@ -65,19 +65,16 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
                 git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
             )
         }) {
-            return Ok(working(
-                root,
-                &format!("working copy (unborn HEAD; {reason})"),
-            ));
+            return working(root, &format!("working copy (unborn HEAD; {reason})"));
         }
         let (policy, project) = at(&repo, "HEAD")?;
-        return Ok(finish(root, policy, project, format!("HEAD ({reason})")));
+        return finish(root, policy, project, format!("HEAD ({reason})"));
     }
     let remote = remote.ok_or("populated tracking namespace has no configured remote")?;
     let (defaults, fallback) = default_sources(&repo, remote)?;
     let source = &defaults[0];
     let (mut policy, mut project) = at(&repo, source)?;
-    let branch = super::repo::current_branch(&repo);
+    let branch = super::repo::current_branch(&repo)?;
     let mut targets = std::collections::BTreeSet::new();
     targets.extend(declared_target(&repo, remote, &branch, &policy, source)?);
     for source in defaults.iter().skip(1) {
@@ -112,7 +109,7 @@ pub fn load(root: &Path) -> Result<LandedPolicy, String> {
             let _ = write!(sources, " + {target_ref} (stricter policy levels)");
         }
     }
-    let mut authority = finish(root, policy, project, sources);
+    let mut authority = finish(root, policy, project, sources)?;
     if fallback {
         authority.remote_head_advice = Some(format!(
             "operator advice: git remote set-head {remote} --auto; without remote HEAD the default is assumed to be main or master; custom defaults need set-head"
@@ -161,14 +158,14 @@ fn default_sources(repo: &Repository, remote: &str) -> Result<(Vec<String>, bool
     }
 }
 
-fn working(root: &Path, source: &str) -> LandedPolicy {
-    LandedPolicy {
-        policy: Policy::load_effective(root).0,
-        project: super::policy::read_project_toml(root),
+fn working(root: &Path, source: &str) -> Result<LandedPolicy, String> {
+    Ok(LandedPolicy {
+        policy: Policy::load_effective(root)?.0,
+        project: super::policy::read_project_toml(root)?,
         source: source.into(),
         local_differs: false,
         remote_head_advice: None,
-    }
+    })
 }
 
 fn finish(
@@ -176,17 +173,17 @@ fn finish(
     policy: Policy,
     project: Option<toml::Value>,
     source: String,
-) -> LandedPolicy {
-    let local_differs = serde_json::to_value(Policy::load(root)).ok()
-        != serde_json::to_value(&policy).ok()
-        || super::policy::read_project_toml(root) != project;
-    LandedPolicy {
+) -> Result<LandedPolicy, String> {
+    let local_differs = serde_json::to_value(Policy::load(root)?).map_err(|e| e.to_string())?
+        != serde_json::to_value(&policy).map_err(|e| e.to_string())?
+        || super::policy::read_project_toml(root)? != project;
+    Ok(LandedPolicy {
         policy,
         project,
         source,
         local_differs,
         remote_head_advice: None,
-    }
+    })
 }
 
 /// The `.codeflow/policy.json` text recorded at `rev`, read as git data
@@ -268,6 +265,7 @@ fn declared_target(
             continue;
         };
         let mut found = None;
+        let mut unreadable = None;
         // A record path is valid text; a name that is not UTF-8 is never one.
         crate::git::walk_tree(repo, &tree, &mut |path, entry| {
             let Ok(text) = path.rule_text() else {
@@ -283,22 +281,37 @@ fn declared_target(
                 && suffix.starts_with(&format!("{id}-"))
                 && id.starts_with("TSK-")
             {
-                if let Ok(blob) = repo.find_blob(entry.id()) {
-                    if let Ok(text) = std::str::from_utf8(blob.content()) {
-                        if let Some(front) = text
-                            .strip_prefix("---\n")
-                            .and_then(|s| s.split_once("\n---").map(|(f, _)| f))
-                        {
-                            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(front) {
-                                found = value["integration_target"].as_str().map(str::to_owned);
-                            }
-                        }
+                let read = || -> Result<Option<String>, String> {
+                    let blob = repo
+                        .find_blob(entry.id())
+                        .map_err(|e| format!("cannot read task {id}: {e}"))?;
+                    let text = std::str::from_utf8(blob.content())
+                        .map_err(|e| format!("cannot decode task {id}: {e}"))?;
+                    let front = text
+                        .strip_prefix("---\n")
+                        .and_then(|s| s.split_once("\n---").map(|(f, _)| f))
+                        .ok_or_else(|| format!("cannot read task {id}: missing frontmatter"))?;
+                    let value: serde_yaml::Value = serde_yaml::from_str(front)
+                        .map_err(|e| format!("cannot parse task {id}: {e}"))?;
+                    match value.get("integration_target") {
+                        None | Some(serde_yaml::Value::Null) => Ok(None),
+                        Some(value) => value
+                            .as_str()
+                            .map(|s| Some(s.to_owned()))
+                            .ok_or_else(|| format!("cannot read task {id} target: expected text")),
                     }
+                };
+                match read() {
+                    Ok(target) => found = target,
+                    Err(error) => unreadable = Some(error),
                 }
             }
             crate::git::Walk::Continue
         })
         .map_err(|e| e.to_string())?;
+        if let Some(error) = unreadable {
+            return Err(error);
+        }
         if let Some(target) = found {
             // A default-branch record can name a missing target, which must fail closed.
             if name.ends_with(&format!("/{target}")) || name == default_source {

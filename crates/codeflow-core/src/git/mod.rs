@@ -88,71 +88,76 @@ pub struct LinkedWorktree {
 /// `find_worktree`, and dropping it from a list would hide a checkout from a
 /// guard or from cleanup. Its checkout is read from its `gitdir` file, which
 /// is what `find_worktree` reads too. A folder the platform cannot hold as a
-/// path is left out of the list and counted by `unreadable_worktrees`.
-#[must_use]
-pub fn linked_worktrees(repo: &git2::Repository) -> Vec<LinkedWorktree> {
-    let Ok(names) = repo.worktrees() else {
-        return Vec::new();
-    };
-    let names = name::names_of(&names);
+/// path refuses the inventory instead of disappearing from protection.
+/// # Errors
+/// Any registered worktree or its administrative path cannot be read.
+pub fn linked_worktrees(repo: &git2::Repository) -> Result<Vec<LinkedWorktree>, String> {
+    let names = repo
+        .worktrees()
+        .map_err(|error| format!("cannot read registered worktrees: {error}"))?;
     let mut out = Vec::new();
-    for name in names {
-        let Ok(admin) = name
-            .os_path()
-            .map(|folder| repo.commondir().join("worktrees").join(folder))
-        else {
-            continue;
-        };
-        let path = match name.rule_text() {
-            Ok(valid) => repo
-                .find_worktree(valid)
-                .ok()
-                .map(|worktree| worktree.path().to_path_buf()),
-            Err(_) => gitdir_checkout(&admin),
-        };
-        if let Some(path) = path {
-            out.push(LinkedWorktree { name, path, admin });
-        }
+    for name in name::names_of(&names) {
+        let folder = name.os_path().map_err(|error| error.to_string())?;
+        let admin = repo.commondir().join("worktrees").join(folder);
+        let path = gitdir_checkout(&admin)?;
+        out.push(LinkedWorktree { name, path, admin });
     }
-    out
+    Ok(out)
 }
 
-/// The checkout named by `<admin>/gitdir`, which holds the path of the
-/// checkout's `.git`.
-fn gitdir_checkout(admin: &std::path::Path) -> Option<PathBuf> {
-    let text = std::fs::read(admin.join("gitdir")).ok()?;
-    let gitdir = GitName::from_bytes(text.trim_ascii_end()).os_path().ok()?;
-    gitdir.parent().map(std::path::Path::to_path_buf)
+/// Git writes exactly one LF after the administrative checkout path.
+fn gitdir_checkout(admin: &std::path::Path) -> Result<PathBuf, String> {
+    let text = std::fs::read(admin.join("gitdir"))
+        .map_err(|error| format!("cannot read worktree gitdir {}: {error}", admin.display()))?;
+    let bytes = text.strip_suffix(b"\n").unwrap_or(&text);
+    let gitdir = GitName::from_bytes(bytes)
+        .os_path()
+        .map_err(|error| error.to_string())?;
+    gitdir
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| {
+            format!(
+                "cannot read worktree gitdir {}: no checkout parent",
+                admin.display()
+            )
+        })
 }
 
-/// Every checkout of the repository, the main one and each linked worktree,
-/// with the full name of the reference its `HEAD` names (`None` when it is
-/// detached or unreadable).
-///
-/// OS text rule (issue 79): the path is exact bytes where the platform allows
-/// it and is read from git's own files, never from a text listing, where a
-/// newline in a folder name would end the path early and name another
-/// checkout. A caller that acts on a checkout (a `reset --hard`) can trust the
-/// path it gets here.
-#[must_use]
-pub fn checkout_heads(repo: &git2::Repository) -> Vec<(PathBuf, Option<GitName>)> {
-    let head_of = |git_dir: &std::path::Path| -> Option<GitName> {
-        let text = std::fs::read(git_dir.join("HEAD")).ok()?;
-        text.trim_ascii_end()
-            .strip_prefix(b"ref: ")
-            .map(GitName::from_bytes)
+/// Every checkout and its exact symbolic HEAD; only a detached HEAD is None.
+/// # Errors
+/// Checkout registration or HEAD bytes cannot be read.
+pub fn checkout_heads(repo: &git2::Repository) -> Result<Vec<(PathBuf, Option<GitName>)>, String> {
+    let head_of = |git_dir: &std::path::Path| -> Result<Option<GitName>, String> {
+        let text = std::fs::read(git_dir.join("HEAD"))
+            .map_err(|error| format!("cannot read HEAD {}: {error}", git_dir.display()))?;
+        let bytes = text.strip_suffix(b"\n").unwrap_or(&text);
+        if let Some(name) = bytes.strip_prefix(b"ref: ") {
+            if name.is_empty() {
+                return Err("cannot read HEAD: empty reference".into());
+            }
+            Ok(Some(GitName::from_bytes(name)))
+        } else if matches!(bytes.len(), 40 | 64) && bytes.iter().all(u8::is_ascii_hexdigit) {
+            Ok(None)
+        } else {
+            Err(format!(
+                "cannot read HEAD {}: malformed record",
+                git_dir.display()
+            ))
+        }
     };
     let mut out = Vec::new();
-    if let Ok(main) = git2::Repository::open(repo.commondir()) {
-        if let Some(workdir) = main.workdir() {
-            out.push((workdir.to_path_buf(), head_of(repo.commondir())));
-        }
+    let main = git2::Repository::open(repo.commondir())
+        .map_err(|error| format!("cannot read main checkout: {error}"))?;
+    if let Some(workdir) = main.workdir() {
+        out.push((workdir.to_path_buf(), head_of(repo.commondir())?));
     }
-    for worktree in linked_worktrees(repo) {
-        let head = head_of(&worktree.admin);
+    for worktree in linked_worktrees(repo)? {
+        let head = head_of(&worktree.admin)?;
         out.push((worktree.path, head));
     }
-    out
+    Ok(out)
 }
 
 /// Writes `packed-refs` for a test repository with reference names that a
@@ -315,7 +320,7 @@ mod tests {
         .unwrap();
         std::fs::write(admin.join("commondir"), "../..\n").unwrap();
         std::fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
-        let listed = super::linked_worktrees(&repo);
+        let listed = super::linked_worktrees(&repo).unwrap();
         assert_eq!(listed.len(), 1, "{listed:?}");
         assert_eq!(listed[0].name, super::GitName::from_bytes(b"caf\xe9"));
         assert_eq!(listed[0].path, checkout);

@@ -33,7 +33,7 @@ use codeflow_core::registry;
 /// environment (charter §6.2 / D9).
 #[must_use]
 pub fn integrate_token_present() -> bool {
-    std::env::var(INTEGRATE_TOKEN_ENV).is_ok_and(|v| !v.is_empty())
+    std::env::var_os(INTEGRATE_TOKEN_ENV).is_some_and(|value| !value.is_empty())
 }
 
 /// `true` when a human's `CODEFLOW_HUMAN_OVERRIDE=1` is present (ADR-0007).
@@ -41,14 +41,17 @@ pub fn integrate_token_present() -> bool {
 /// and blocks in-session attempts to set it.
 #[must_use]
 pub fn human_override_present() -> bool {
-    std::env::var(HUMAN_OVERRIDE_ENV).is_ok_and(|v| v == "1")
+    std::env::var_os(HUMAN_OVERRIDE_ENV).is_some_and(|value| value == "1")
 }
 
 /// Project root for hook evaluation: the repo containing `start`, or `start`
 /// itself when not in a repository (policy then falls back to defaults).
-#[must_use]
-pub fn project_root(start: &std::path::Path) -> PathBuf {
-    codeflow_core::hooks::RepoInfo::discover(start).map_or_else(|| start.to_path_buf(), |i| i.root)
+///
+/// # Errors
+/// Returns why repository state cannot be read.
+pub fn project_root(start: &std::path::Path) -> Result<PathBuf, String> {
+    Ok(codeflow_core::hooks::RepoInfo::discover(start)?
+        .map_or_else(|| start.to_path_buf(), |i| i.root))
 }
 
 /// Print violations and notes for one enforcement plane run in `root`;
@@ -166,8 +169,13 @@ fn record_refusal(
 ) {
     use codeflow_core::hooks::{rfc3339_utc_now, session_summary, PolicyLevel};
     use codeflow_core::ledger::refusal;
-    let Some(info) = codeflow_core::hooks::RepoInfo::discover(root) else {
-        return;
+    let info = match codeflow_core::hooks::RepoInfo::discover(root) {
+        Ok(Some(info)) => info,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("codeflow: cannot record refusal: {error}");
+            return;
+        }
     };
     let ledger = info.ledger_dir();
     let now = rfc3339_utc_now();

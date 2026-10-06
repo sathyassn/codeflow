@@ -35,20 +35,24 @@ pub struct NewRecord {
 pub type Allocator<'a> = dyn FnMut(&str) -> Result<(String, String), StoreError> + 'a;
 
 fn checkout_allocator(
-    next: impl Fn() -> String,
+    next: impl Fn() -> Result<String, StoreError>,
 ) -> impl FnMut(&str) -> Result<(String, String), StoreError> {
-    move |_| Ok((next(), crate::ids::new_uid()))
+    move |_| Ok((next()?, crate::ids::new_uid()))
 }
 
-pub(crate) fn planning_target(pm_root: &Path) -> String {
-    crate::workgraph::default_work_target(repository_root(pm_root)).map_or_else(
-        || "none".to_string(),
-        |target| {
-            target
-                .strip_prefix("origin/")
-                .unwrap_or(&target)
-                .to_string()
-        },
+pub(crate) fn planning_target(pm_root: &Path) -> Result<String, StoreError> {
+    Ok(
+        crate::workgraph::default_work_target(repository_root(pm_root))
+            .map_err(|error| StoreError::Invalid(error.to_string()))?
+            .map_or_else(
+                || "none".to_string(),
+                |target| {
+                    target
+                        .strip_prefix("origin/")
+                        .unwrap_or(&target)
+                        .to_string()
+                },
+            ),
     )
 }
 
@@ -81,90 +85,110 @@ fn record_stem(path: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn direct_record_stems(dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
+fn direct_record_stems(dir: &Path) -> Result<Vec<String>, StoreError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
     };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().is_some_and(|extension| extension == "md") {
-                record_stem(&path)
-            } else if path.is_dir() {
-                path.file_name()
-                    .and_then(|value| value.to_str())
-                    .map(str::to_owned)
-            } else {
-                None
-            }
-        })
-        .collect()
+    let mut stems = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let stem = if path.extension().is_some_and(|extension| extension == "md") {
+            record_stem(&path)
+        } else if entry.file_type()?.is_dir() {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        if let Some(stem) = stem {
+            stems.push(stem);
+        }
+    }
+    Ok(stems)
 }
 
-fn task_record_stems(pm_root: &Path) -> Vec<String> {
-    crate::workgraph::layout::task_record_files(pm_root)
+fn task_record_stems(pm_root: &Path) -> Result<Vec<String>, StoreError> {
+    Ok(crate::workgraph::layout::task_record_files(pm_root)?
         .iter()
         .filter_map(|path| record_stem(path))
-        .collect()
+        .collect())
 }
 
 /// Next free epic id (`EPC-NNN`, max visible sequence + 1).
-#[must_use]
-pub fn next_epic_id(pm_root: &Path) -> String {
-    let next = direct_record_stems(&pm_root.join("epics"))
+///
+/// # Errors
+///
+/// Returns an error if the epic directory or one of its entries cannot be read.
+pub fn next_epic_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = direct_record_stems(&pm_root.join("epics"))?
         .iter()
         .filter_map(|id| sequence(id, "EPC-"))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("EPC-{next:03}")
+    Ok(format!("EPC-{next:03}"))
 }
 
 /// Next free spec id (`SPC-NNN`, max visible sequence + 1).
-#[must_use]
-pub fn next_spec_id(pm_root: &Path) -> String {
-    let next = direct_record_stems(&pm_root.join("specs"))
+///
+/// # Errors
+///
+/// Returns an error if the spec directory or one of its entries cannot be read.
+pub fn next_spec_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = direct_record_stems(&pm_root.join("specs"))?
         .iter()
         .filter_map(|id| sequence(id, "SPC-"))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("SPC-{next:03}")
+    Ok(format!("SPC-{next:03}"))
 }
 
 /// Next free independent task id (`TSK-NNN`, max canonical or legacy
 /// reservation sequence + 1).
-#[must_use]
-pub fn next_task_id(pm_root: &Path) -> String {
-    let next = task_record_stems(pm_root)
+///
+/// # Errors
+///
+/// Returns an error if a task inventory directory or entry cannot be read.
+pub fn next_task_id(pm_root: &Path) -> Result<String, StoreError> {
+    let next = task_record_stems(pm_root)?
         .iter()
         .filter_map(|id| task_reservation_sequence(id))
         .max()
         .unwrap_or(0)
         + 1;
-    format!("TSK-{next:03}")
+    Ok(format!("TSK-{next:03}"))
 }
 
 /// Whether a stable work-item id exists in the visible checkout.
-#[must_use]
-pub fn work_item_exists(pm_root: &Path, id: &str) -> bool {
+///
+/// # Errors
+///
+/// Returns an error if the work-item inventory cannot be read.
+pub fn work_item_exists(pm_root: &Path, id: &str) -> Result<bool, StoreError> {
     let paths = if crate::workgraph::is_valid_epic_format_id(id) {
-        crate::workgraph::layout::epic_record_files(pm_root)
+        crate::workgraph::layout::epic_record_files(pm_root)?
     } else if crate::workgraph::is_valid_task_format_id(id) {
-        crate::workgraph::layout::task_record_files(pm_root)
+        crate::workgraph::layout::task_record_files(pm_root)?
     } else {
-        return false;
+        return Ok(false);
     };
-    paths
+    Ok(paths
         .iter()
-        .any(|path| record_stem(path).as_deref() == Some(id))
+        .any(|path| record_stem(path).as_deref() == Some(id)))
 }
 
 /// Whether an epic exists in the visible checkout.
-#[must_use]
-pub fn epic_exists(pm_root: &Path, id: &str) -> bool {
-    crate::workgraph::is_valid_epic_format_id(id) && work_item_exists(pm_root, id)
+///
+/// # Errors
+///
+/// Returns an error if the epic inventory cannot be read.
+pub fn epic_exists(pm_root: &Path, id: &str) -> Result<bool, StoreError> {
+    Ok(crate::workgraph::is_valid_epic_format_id(id) && work_item_exists(pm_root, id)?)
 }
 
 fn today() -> String {
@@ -238,7 +262,7 @@ pub fn create_epic_with(
     allocate: &mut Allocator<'_>,
 ) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
-    let (id, uid) = allocate(&planning_target(pm_root))?;
+    let (id, uid) = allocate(&planning_target(pm_root)?)?;
     let nnn = id.strip_prefix("EPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -305,7 +329,7 @@ pub fn create_task_with(
 ) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
     match (epic_id, standalone_reason.map(str::trim)) {
-        (Some(epic), None | Some("")) if epic_exists(pm_root, epic) => {}
+        (Some(epic), None | Some("")) if epic_exists(pm_root, epic)? => {}
         (Some(epic), None | Some("")) => {
             return Err(StoreError::NotFound(format!("epic:{epic}")));
         }
@@ -335,14 +359,16 @@ pub fn create_task_with(
             "integration target must be a stable non-task branch name".to_string(),
         ));
     }
-    let resolved_target = integration_target
-        .map(str::to_owned)
-        .or_else(|| crate::workgraph::default_work_target(repository_root))
-        .ok_or_else(|| {
-            StoreError::Invalid(
-                "integration target must resolve to a local or remote-tracking branch".to_string(),
-            )
-        })?;
+    let resolved_target = match integration_target {
+        Some(target) => Some(target.to_owned()),
+        None => crate::workgraph::default_work_target(repository_root)
+            .map_err(|error| StoreError::Invalid(error.to_string()))?,
+    }
+    .ok_or_else(|| {
+        StoreError::Invalid(
+            "integration target must resolve to a local or remote-tracking branch".to_string(),
+        )
+    })?;
     if !super::work_target_resolves(repository_root, &resolved_target) {
         return Err(StoreError::Invalid(format!(
             "integration target '{resolved_target}' does not resolve to a local or remote-tracking branch"
@@ -440,11 +466,11 @@ pub fn create_spec_with(
     let targets = work_item_ids
         .iter()
         .map(|id| {
-            find_work_item_path(pm_root, id)
+            find_work_item_path(pm_root, id)?
                 .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let (id, uid) = allocate(&planning_target(pm_root))?;
+    let (id, uid) = allocate(&planning_target(pm_root)?)?;
     let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -487,17 +513,17 @@ fn restore(spec: &Path, written: &[(&PathBuf, String)]) {
     let _ = fs::remove_file(spec);
 }
 
-fn find_work_item_path(pm_root: &Path, id: &str) -> Option<PathBuf> {
+fn find_work_item_path(pm_root: &Path, id: &str) -> Result<Option<PathBuf>, StoreError> {
     let paths = if crate::workgraph::is_valid_epic_format_id(id) {
-        crate::workgraph::layout::epic_record_files(pm_root)
+        crate::workgraph::layout::epic_record_files(pm_root)?
     } else if crate::workgraph::is_valid_task_format_id(id) {
-        crate::workgraph::layout::task_record_files(pm_root)
+        crate::workgraph::layout::task_record_files(pm_root)?
     } else {
-        return None;
+        return Ok(None);
     };
-    paths
+    Ok(paths
         .into_iter()
-        .find(|path| record_stem(path).as_deref() == Some(id))
+        .find(|path| record_stem(path).as_deref() == Some(id)))
 }
 
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
@@ -506,7 +532,7 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
         .or_else(|| content.strip_prefix("---\n"))?;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == "---" {
+        if super::record_text::without_line_ending(line) == "---" {
             return Some((&rest[..offset], &rest[offset + line.len()..]));
         }
         offset += line.len();
@@ -552,7 +578,7 @@ fn append_spec_reference(path: &Path, spec_id: &str) -> Result<(), StoreError> {
 fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<String, StoreError> {
     let mut offset = 0;
     for line_with_ending in yaml.split_inclusive('\n') {
-        let line = line_with_ending.trim_end_matches(['\r', '\n']);
+        let line = super::record_text::without_line_ending(line_with_ending);
         let Some(after_key) = line
             .strip_prefix(key)
             .and_then(|rest| rest.strip_prefix(':'))
@@ -573,7 +599,7 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             let open = value_start + open;
             let close = value_start + open.saturating_sub(value_start) + 1 + close;
             let existing = &yaml[open + 1..close];
-            let replacement = if existing.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
+            let replacement = if existing.trim_matches([' ', '\t']).is_empty() {
                 value.to_string()
             } else {
                 format!("{existing}, {value}")
@@ -583,7 +609,7 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             return Ok(updated);
         }
 
-        if after_key.trim_matches([' ', '\t', '\r', '\n']).is_empty()
+        if after_key.trim_matches([' ', '\t']).is_empty()
             || after_key.trim_start_matches([' ', '\t']).starts_with('#')
         {
             let newline = if line_with_ending.ends_with("\r\n") {
@@ -665,9 +691,9 @@ mod tests {
     #[test]
     fn independent_allocators_start_at_one() {
         let dir = project();
-        assert_eq!(next_epic_id(dir.path()), "EPC-001");
-        assert_eq!(next_spec_id(dir.path()), "SPC-001");
-        assert_eq!(next_task_id(dir.path()), "TSK-001");
+        assert_eq!(next_epic_id(dir.path()).unwrap(), "EPC-001");
+        assert_eq!(next_spec_id(dir.path()).unwrap(), "SPC-001");
+        assert_eq!(next_task_id(dir.path()).unwrap(), "TSK-001");
     }
 
     #[test]
@@ -675,7 +701,7 @@ mod tests {
         let dir = project();
         seed(dir.path(), "tasks", "TSK-041-008");
         seed(dir.path(), "tasks", "TSK-009");
-        assert_eq!(next_task_id(dir.path()), "TSK-042");
+        assert_eq!(next_task_id(dir.path()).unwrap(), "TSK-042");
     }
 
     #[test]
@@ -854,10 +880,10 @@ mod tests {
         let dir = project();
         seed(dir.path(), "epics", "EPC-001");
         seed(dir.path(), "tasks", "TSK-001");
-        assert!(work_item_exists(dir.path(), "EPC-001"));
-        assert!(work_item_exists(dir.path(), "TSK-001"));
-        assert!(!work_item_exists(dir.path(), "SPC-001"));
-        assert!(!work_item_exists(dir.path(), "not-an-id"));
+        assert!(work_item_exists(dir.path(), "EPC-001").unwrap());
+        assert!(work_item_exists(dir.path(), "TSK-001").unwrap());
+        assert!(!work_item_exists(dir.path(), "SPC-001").unwrap());
+        assert!(!work_item_exists(dir.path(), "not-an-id").unwrap());
     }
 
     #[test]

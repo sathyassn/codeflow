@@ -205,41 +205,50 @@ pub enum TemplateSource {
     Fallback(String),
 }
 
-/// The template for `kind`: the project's when usable, otherwise
-/// `embedded`, with where it came from.
-#[must_use]
-pub fn load(root: &Path, kind: RecordKind, embedded: &str) -> (String, TemplateSource) {
+/// The template for `kind`: the project's checked template when present, or
+/// `embedded` when the project has no template.
+///
+/// # Errors
+///
+/// Returns an error if the project template exists but cannot be read or validated.
+pub fn load(
+    root: &Path,
+    kind: RecordKind,
+    embedded: &str,
+) -> Result<(String, TemplateSource), String> {
     let path = root
         .join(PROJECT_TEMPLATES)
         .join(format!("{}.md", name(kind)));
     match std::fs::read_to_string(&path) {
         Ok(text) => match check(kind, &text) {
-            Ok(()) => (text, TemplateSource::Project),
-            Err(reason) => (
-                embedded.to_string(),
-                TemplateSource::Fallback(format!(
-                    "{PROJECT_TEMPLATES}/{}.md is not a usable {} template ({reason}); used the embedded template",
-                    name(kind),
-                    name(kind)
-                )),
-            ),
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            (embedded.to_string(), TemplateSource::Embedded)
-        }
-        Err(e) => (
-            embedded.to_string(),
-            TemplateSource::Fallback(format!(
-                "cannot read {PROJECT_TEMPLATES}/{}.md ({e}); used the embedded template",
+            Ok(()) => Ok((text, TemplateSource::Project)),
+            Err(reason) => Err(format!(
+                "{PROJECT_TEMPLATES}/{}.md is not a usable template: {reason}",
                 name(kind)
             )),
-        ),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok((embedded.to_string(), TemplateSource::Embedded))
+        }
+        Err(e) => Err(format!(
+            "cannot read {PROJECT_TEMPLATES}/{}.md: {e}",
+            name(kind)
+        )),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r16_unreadable_project_template_does_not_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join(PROJECT_TEMPLATES);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("task.md"), b"#\xff").unwrap();
+        assert!(load(dir.path(), RecordKind::Task, TASK).is_err());
+    }
 
     const TASK: &str = include_str!("../../../../assets/base/pm/task.md.tmpl");
     const EPIC: &str = include_str!("../../../../assets/base/pm/epic.md.tmpl");
@@ -324,7 +333,7 @@ mod tests {
     fn load_prefers_a_usable_project_template_and_falls_back_otherwise() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
-            load(dir.path(), RecordKind::Task, TASK).1,
+            load(dir.path(), RecordKind::Task, TASK).unwrap().1,
             TemplateSource::Embedded
         );
         let folder = dir.path().join(PROJECT_TEMPLATES);
@@ -335,14 +344,11 @@ mod tests {
         );
         std::fs::write(folder.join("task.md"), &custom).unwrap();
         assert_eq!(
-            load(dir.path(), RecordKind::Task, TASK),
+            load(dir.path(), RecordKind::Task, TASK).unwrap(),
             (custom, TemplateSource::Project)
         );
         std::fs::write(folder.join("task.md"), "# not a template\n").unwrap();
-        let (text, source) = load(dir.path(), RecordKind::Task, TASK);
-        assert_eq!(text, TASK);
-        assert!(
-            matches!(source, TemplateSource::Fallback(reason) if reason.contains("not a usable task template"))
-        );
+        let error = load(dir.path(), RecordKind::Task, TASK).unwrap_err();
+        assert!(error.contains("not a usable template"));
     }
 }

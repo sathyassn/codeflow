@@ -777,33 +777,29 @@ impl Inventory<'static> {
 // Loading and parsing
 // ---------------------------------------------------------------------------
 
-/// Add every UTF-8 file under the skill tree `dir` to `files`, keyed by its
-/// path under `dir`. Unreadable entries and non-UTF-8 files are skipped;
-/// symlinked directories are not followed.
-pub fn load_skill_tree(dir: &Path, files: &mut SkillFiles) {
-    load_under(dir, dir, files);
+/// Load the complete skill tree. Any unreadable entry makes the tree unproven.
+/// # Errors
+/// Returns the obtaining error for a directory, entry, or text file.
+pub fn load_skill_tree(dir: &Path, files: &mut SkillFiles) -> std::io::Result<()> {
+    if !dir.try_exists()? {
+        return Ok(());
+    }
+    load_under(dir, dir, files)
 }
-
-fn load_under(base: &Path, dir: &Path, files: &mut SkillFiles) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(Result::ok) {
+fn load_under(base: &Path, dir: &Path, files: &mut SkillFiles) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
         let path = entry.path();
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
+        let kind = entry.file_type()?;
         if kind.is_dir() {
-            load_under(base, &path, files);
+            load_under(base, &path, files)?;
         } else if kind.is_file() {
-            if let (Ok(text), Ok(relative)) =
-                (std::fs::read_to_string(&path), path.strip_prefix(base))
-            {
-                let key = crate::portable_path::slashed(relative);
-                files.insert(key, text);
-            }
+            let text = std::fs::read_to_string(&path)?;
+            let relative = path.strip_prefix(base).map_err(std::io::Error::other)?;
+            files.insert(crate::portable_path::slashed(relative), text);
         }
     }
+    Ok(())
 }
 
 fn has_extension(path: &str, extension: &str) -> bool {
@@ -1924,5 +1920,18 @@ mod tests {
         let mut expected: Vec<&str> = expected.lines().collect();
         expected.sort_unstable();
         assert_eq!(found, expected);
+    }
+}
+
+#[cfg(test)]
+mod r16_obtaining_regressions {
+
+    #[test]
+    fn r16_reading_refuses_unreadable_skill_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("skills");
+        std::fs::write(&path, "not a directory").unwrap();
+        let mut files = std::collections::BTreeMap::new();
+        assert!(super::load_skill_tree(&path, &mut files).is_err());
     }
 }

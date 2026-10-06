@@ -114,13 +114,11 @@ fn gh(dir: &Path, args: &[&str]) -> Result<String, String> {
     let mut stderr = child.stderr.take().expect("piped stderr");
     let out = std::thread::spawn(move || {
         let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
-        text
+        stdout.read_to_string(&mut text).map(|_| text)
     });
     let err = std::thread::spawn(move || {
         let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
-        text
+        stderr.read_to_string(&mut text).map(|_| text)
     });
     let started = Instant::now();
     let status = loop {
@@ -137,8 +135,14 @@ fn gh(dir: &Path, args: &[&str]) -> Result<String, String> {
             Err(e) => return Err(format!("`gh` could not be waited on: {e}")),
         }
     };
-    let stdout = out.join().unwrap_or_default();
-    let stderr = err.join().unwrap_or_default();
+    let stdout = out
+        .join()
+        .map_err(|_| "cannot read gh stdout: reader panicked")?
+        .map_err(|error| format!("cannot read gh stdout: {error}"))?;
+    let stderr = err
+        .join()
+        .map_err(|_| "cannot read gh stderr: reader panicked")?
+        .map_err(|error| format!("cannot read gh stderr: {error}"))?;
     if status.success()
         || stdout
             .trim_start_matches([' ', '\t', '\n', '\r'])

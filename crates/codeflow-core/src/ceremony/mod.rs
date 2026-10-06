@@ -207,8 +207,10 @@ fn refusals(repo_root: &Path, window: &Window, prs: &[MergedPr]) -> Refusals {
             (start, Some(end))
         }
     };
-    let Some(info) = crate::hooks::RepoInfo::discover(repo_root) else {
-        return Refusals::Unknown("not a git repository".to_string());
+    let info = match crate::hooks::RepoInfo::discover(repo_root) {
+        Ok(Some(info)) => info,
+        Ok(None) => return Refusals::Unknown("not a git repository".to_string()),
+        Err(error) => return Refusals::Unknown(format!("cannot read repository: {error}")),
     };
     let log = match refusal::read(&info.ledger_dir()) {
         Ok(log) => log,

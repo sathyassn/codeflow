@@ -112,8 +112,12 @@ fn show(root: &Path) -> i32 {
         PolicySource::ProjectFile => {
             println!("codeflow policy: .codeflow/policy.json is in effect");
         }
+        PolicySource::UnreadableFile(error) => {
+            eprintln!("codeflow policy: {error}");
+            return 1;
+        }
         PolicySource::MalformedFile => {
-            println!("codeflow policy: .codeflow/policy.json DOES NOT PARSE — enforcement is using the built-in defaults for EVERY key");
+            println!("codeflow policy: .codeflow/policy.json DOES NOT PARSE — enforcement refuses this policy");
         }
     }
     for e in &errors {

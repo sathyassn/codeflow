@@ -162,7 +162,7 @@ impl ScaffoldManifest {
                 && !entry.template
                 && source
                     .read(&format!("base/{}", entry.src))
-                    .is_some_and(|asset| asset == bytes)
+                    .is_ok_and(|asset| asset.is_some_and(|asset| asset == bytes))
         })
     }
 
@@ -321,8 +321,8 @@ mod tests {
     struct DirSourceForTest(std::path::PathBuf);
 
     impl AssetSource for DirSourceForTest {
-        fn read(&self, path: &str) -> Option<Vec<u8>> {
-            std::fs::read(self.0.join(path)).ok()
+        fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+            std::fs::read(self.0.join(path)).map(Some)
         }
     }
 }

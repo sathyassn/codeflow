@@ -36,8 +36,16 @@ pub(super) fn dispatch(
     let Some(range) = range else {
         return;
     };
-    if !super::classification::tracking_on(root, Some(range)).unwrap_or(true) {
-        return;
+    match super::classification::tracking_on(root, Some(range)) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
     }
     ran.push("acceptance");
     println!("codeflow ci: acceptance: {SCOPE_NOTE}");
@@ -176,34 +184,35 @@ fn release_head(
 
 /// On a release range, the one task the release checks select as the owner
 /// of its direct work (SPC-013 R-120), judged at the same head as the
-/// acceptance check; `None` when none or several are eligible, or the
-/// range cannot be read, which the acceptance check refuses.
+/// acceptance check; `None` when none or several are eligible. An unreadable
+/// range returns an error that classification refuses.
 pub(super) fn release_owner(
     root: &Path,
     range: &Range<'_>,
     names: &super::Names<'_>,
-) -> Option<String> {
-    let (destination, scope) = release_scope(root, names).ok()??;
-    let head = release_head(root, range, scope).ok()?;
+) -> Result<Option<String>, String> {
+    let Some((destination, scope)) = release_scope(root, names).map_err(str::to_string)? else {
+        return Ok(None);
+    };
+    let head = release_head(root, range, scope)?;
     release_line::release_owner(root, destination, range.base, &head)
-        .ok()
-        .flatten()
 }
 
 /// On a release range, the records it brings from verified lines, for the
 /// records rule to judge where each was introduced (SPC-013 R-120). `None`
-/// on an ordinary range, and when the range cannot be judged, which the
-/// acceptance check refuses.
+/// on an ordinary range. An unreadable range returns an error that the
+/// record checks refuse.
 pub(super) fn brought(
     root: &Path,
     range: &Range<'_>,
     names: &super::Names<'_>,
-) -> Option<codeflow_core::workgraph::lifecycle::Brought> {
-    let (destination, scope) = release_scope(root, names).ok()??;
-    let head = release_head(root, range, scope).ok()?;
+) -> Result<Option<codeflow_core::workgraph::lifecycle::Brought>, String> {
+    let Some((destination, scope)) = release_scope(root, names).map_err(str::to_string)? else {
+        return Ok(None);
+    };
+    let head = release_head(root, range, scope)?;
     release_line::release_findings(root, destination, range.base, &head)
-        .ok()
-        .map(|judged| judged.brought)
+        .map(|judged| Some(judged.brought))
 }
 
 fn unscoped(error: &str) -> String {
@@ -232,7 +241,9 @@ fn criteria(
     // Without a pull request body (a push), a task branch's only valid class
     // is its own task, so it may change that task's criteria as its PR may.
     if class.is_none() {
-        if let Some(task_id) = task_id_from_branch(root, branch) {
+        if let Some(task_id) =
+            task_id_from_branch(root, branch).map_err(|error| error.to_string())?
+        {
             return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, &task_id);
         }
     }
@@ -241,12 +252,14 @@ fn criteria(
         Some(Class::EpicLine(_) | Class::RootBranch(_)) => true,
         Some(_) => false,
         None => {
-            if root_branch_at(root, range.base).as_deref() == Some(branch)
+            if root_branch_at(root, range.base)?.as_deref() == Some(branch)
                 || (branch.starts_with("integration/")
                     && check_epic_line(root, branch, range.target, range.base, range.head).is_ok())
             {
                 true
-            } else if task_id_from_branch(root, branch).is_none()
+            } else if task_id_from_branch(root, branch)
+                .map_err(|error| error.to_string())?
+                .is_none()
                 && planning_amendment_range(root, range)?
             {
                 return Ok(Criteria::Amendment(None));

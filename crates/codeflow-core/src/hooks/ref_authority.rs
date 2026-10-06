@@ -193,6 +193,17 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
         return Err("cannot inspect remote update configuration; the operator checks git config --show-origin --list".into());
     }
     let entries = config_entries(&config.stdout);
+    for (key, value) in &entries {
+        if value == UNREADABLE_VALUE
+            && (key.starts_with("remotes.")
+                || (key.starts_with("remote.")
+                    && (key.ends_with(".skipdefaultupdate") || key.ends_with(".skipfetchall"))))
+        {
+            return Err(format!(
+                "cannot read remote update configuration value for {key} as UTF-8"
+            ));
+        }
+    }
     let entries: Vec<_> = entries
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -236,7 +247,15 @@ fn update_remotes(root: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 .iter()
                 .rev()
                 .find(|(key, _)| *key == skip_key || *key == alias_key);
-            if !skip.is_some_and(|(_, value)| git2::Config::parse_bool(*value).unwrap_or(false)) {
+            let skip = skip
+                .map(|(_, value)| {
+                    git2::Config::parse_bool(value).map_err(|error| {
+                        format!("cannot read remote update skip setting for {name}: {error}")
+                    })
+                })
+                .transpose()?
+                .unwrap_or(false);
+            if !skip {
                 names.push(name.clone());
             }
         }

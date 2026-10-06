@@ -155,9 +155,7 @@ fn a_base_git_refuses_is_reported_with_git_s_cause() {
     let said = said(&out);
     assert_ne!(out.status.code(), Some(0), "{said}");
     assert!(
-        said.contains(
-            "could not resolve a base ref (tried: main): git refused it: fatal: replacement"
-        ),
+        said.contains("cannot read revision main: fatal: replacement"),
         "{said}"
     );
     assert!(!said.contains("fetch the base branch"), "{said}");

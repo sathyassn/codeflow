@@ -47,6 +47,8 @@ pub struct LedgerUnwritten {
 /// The repair a ledger path needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repair {
+    /// Obtaining the repository or policy inputs failed.
+    RestoreInputs,
     /// A file stands where the ledger needs a directory.
     RemoveFile,
     /// A directory stands where the ledger writes a file.
@@ -63,6 +65,7 @@ impl Repair {
     #[must_use]
     pub fn words(self) -> &'static str {
         match self {
+            Self::RestoreInputs => "restore readable repository and policy inputs",
             Self::RemoveFile => {
                 "remove or rename the file that stands where the ledger needs a directory"
             }
@@ -90,16 +93,26 @@ impl Repair {
 pub fn record(root: &Path, payload_json: &str) -> Result<Option<PathBuf>, LedgerUnwritten> {
     let payload: serde_json::Value =
         serde_json::from_str(payload_json.trim()).unwrap_or(serde_json::Value::Null);
-    let Some(info) = RepoInfo::discover(root) else {
+    let Some(info) = RepoInfo::discover(root).map_err(|cause| LedgerUnwritten {
+        path: root.to_path_buf(),
+        cause,
+        repair: Repair::RestoreInputs,
+    })?
+    else {
         return Ok(None);
     };
-    let summary = build(&info, &payload);
+    let summary = build(&info, &payload)?;
     append(&info, &summary).map(Some)
 }
 
 /// Gather the session facts from the repository state.
-#[must_use]
-pub fn build(info: &RepoInfo, payload: &serde_json::Value) -> SessionRecord {
+///
+/// # Errors
+/// The policy needed to build the session summary cannot be read.
+pub fn build(
+    info: &RepoInfo,
+    payload: &serde_json::Value,
+) -> Result<SessionRecord, LedgerUnwritten> {
     let str_field = |key: &str| {
         payload
             .get(key)
@@ -107,11 +120,15 @@ pub fn build(info: &RepoInfo, payload: &serde_json::Value) -> SessionRecord {
             .map(ToString::to_string)
     };
 
-    let policy = Policy::load(&info.root);
+    let policy = Policy::load(&info.root).map_err(|cause| LedgerUnwritten {
+        path: info.root.join(".codeflow/policy.json"),
+        cause,
+        repair: Repair::RestoreInputs,
+    })?;
     let (base_branch, changed_files, commits_on_branch) =
         diff_stats(&info.root, policy.git.default_base_branch());
 
-    SessionRecord {
+    Ok(SessionRecord {
         session_id: str_field("session_id"),
         branch: info
             .branch_name
@@ -122,7 +139,7 @@ pub fn build(info: &RepoInfo, payload: &serde_json::Value) -> SessionRecord {
         commits_on_branch,
         reason: str_field("reason"),
         timestamp: str_field("timestamp").unwrap_or_else(rfc3339_utc_now),
-    }
+    })
 }
 
 /// Changed-file count (work tree + index vs merge-base) and commit count

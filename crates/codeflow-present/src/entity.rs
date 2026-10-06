@@ -136,7 +136,7 @@ fn collapsed(raw: &str) -> Option<String> {
 /// `html` have none.
 pub fn block_entities(block: &Block) -> Result<Vec<Entity>> {
     match block {
-        Block::Figure { declaration, .. } => Ok(figure_entities(declaration)),
+        Block::Figure { declaration, .. } => figure_entities(declaration),
         Block::Html { html, legend, .. } => {
             let mut entities = stage_entities(&Html::parse_fragment(html));
             if let Some(legend) = legend {
@@ -181,9 +181,9 @@ pub fn find_entity<'a>(
 // figure blocks
 // ---------------------------------------------------------------------------
 
-fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
+fn figure_entities(declaration: &serde_json::Value) -> Result<Vec<Entity>> {
     let Some(figure) = declaration.get("figure") else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let states = figure
         .get("states")
@@ -227,7 +227,7 @@ fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
                 let label = collapsed(&label_texts)
                     .or_else(|| means(state).as_deref().and_then(collapsed))
                     .unwrap_or_else(|| finish_label(id));
-                let bounds = mark_extent(item).map(Rect::from_extent);
+                let bounds = mark_extent(item)?.map(Rect::from_extent);
                 entities.push(Entity {
                     id: id.to_string(),
                     label,
@@ -258,18 +258,29 @@ fn figure_entities(declaration: &serde_json::Value) -> Vec<Entity> {
             unverified_reason: Some("a legend entry is page text outside the drawing".to_string()),
         });
     }
-    entities
+    Ok(entities)
 }
 
-fn number(item: &serde_json::Value, key: &str) -> Option<f64> {
+fn number(item: &serde_json::Value, key: &str) -> Result<f64> {
     item.get(key)
         .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            crate::PresentError::InvalidDocument(format!(
+                "cannot read finite figure coordinate {key}"
+            ))
+        })
 }
 
-/// The extent of a declared mark's primary shape, as the grammar draws it.
-fn mark_extent(item: &serde_json::Value) -> Option<Extent> {
-    let shape = item.get("shape").and_then(serde_json::Value::as_str)?;
+/// Read a declared mark's geometry. Malformed fields propagate through
+/// `figure_entities` and `block_entities`, so selector validation refuses them.
+/// Valid shapes outside the bounds engine retain an explicit unknown extent.
+fn mark_extent(item: &serde_json::Value) -> Result<Option<Extent>> {
+    let unreadable = || crate::PresentError::InvalidDocument("cannot read figure geometry".into());
+    let shape = item
+        .get("shape")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(unreadable)?;
     let mut extent = Extent::default();
     match shape {
         "rect" => {
@@ -293,19 +304,36 @@ fn mark_extent(item: &serde_json::Value) -> Option<Extent> {
             extent.add(number(item, "x2")?, number(item, "y2")?);
         }
         "polyline" => {
-            for point in item.get("points")?.as_array()? {
-                let pair = point.as_array()?;
-                let (x, y) = (pair.first()?.as_f64()?, pair.get(1)?.as_f64()?);
+            for point in item
+                .get("points")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(unreadable)?
+            {
+                let pair = point.as_array().ok_or_else(unreadable)?;
+                let (x, y) = (
+                    pair.first()
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(unreadable)?,
+                    pair.get(1)
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or_else(unreadable)?,
+                );
                 if !(x.is_finite() && y.is_finite()) {
-                    return None;
+                    return Err(unreadable());
                 }
                 extent.add(x, y);
             }
         }
-        "path" => return path_extent(item.get("d")?.as_str()?),
-        _ => return None,
+        "path" => {
+            return Ok(path_extent(
+                item.get("d")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(unreadable)?,
+            ))
+        }
+        _ => return Ok(None),
     }
-    extent.finish()
+    Ok(extent.finish())
 }
 
 // ---------------------------------------------------------------------------
@@ -881,6 +909,26 @@ fn quadratic_extent(extent: &mut Extent, xs: [f64; 3], ys: [f64; 3]) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r16_malformed_figure_entity_refuses_block_read() {
+        let block = crate::document::Block::Figure {
+            id: "probe".into(),
+            declaration: serde_json::json!({"figure":{"wide":{"draw":[{"id":"a","state":"ready","shape":"path","d":23}]}}}),
+        };
+        assert!(super::block_entities(&block).is_err());
+    }
+
+    #[test]
+    fn r16_geometry_field_type_refuses_instead_of_unknown_extent() {
+        assert!(super::mark_extent(&serde_json::json!({"shape":"path","d":23})).is_err());
+        assert!(
+            super::mark_extent(&serde_json::json!({"shape":"circle","cx":0,"cy":0,"r":"bad"}))
+                .is_err()
+        );
+        assert!(super::mark_extent(&serde_json::json!({"shape":"text"}))
+            .unwrap()
+            .is_none());
+    }
 
     #[test]
     fn r15_svg_length_keeps_unicode_whitespace() {

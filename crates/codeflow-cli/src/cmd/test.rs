@@ -233,16 +233,32 @@ fn run_setup(args: &SetupArgs) -> i32 {
     let root = super::repo_root();
     if args.list_templates {
         for name in crate::embedded::test_template_names() {
-            let description = crate::embedded::read_test_template(&name)
-                .map(|content| setup::template_description(&content))
-                .unwrap_or_default();
+            let content = match crate::embedded::read_test_template(&name) {
+                Ok(Some(content)) => content,
+                Ok(None) => {
+                    eprintln!("codeflow test setup: listed template {name} is absent");
+                    return 1;
+                }
+                Err(error) => {
+                    eprintln!("codeflow test setup: {error}");
+                    return 1;
+                }
+            };
+            let description = setup::template_description(&content);
             println!("{name}  — {description}");
         }
         return 0;
     }
 
     if let Some(name) = &args.template {
-        let Some(content) = crate::embedded::read_test_template(name) else {
+        let loaded = match crate::embedded::read_test_template(name) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                eprintln!("codeflow test setup: {error}");
+                return 1;
+            }
+        };
+        let Some(content) = loaded else {
             eprintln!(
                 "codeflow test setup: template {name:?} not found; run `codeflow test setup --list-templates`"
             );

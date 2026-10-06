@@ -2359,6 +2359,18 @@ fn verify_reserved_public_inventory(
     }
 }
 
+fn reserved_file_size(entry: &std::fs::DirEntry, child: &Path) -> Result<u64, String> {
+    entry
+        .metadata()
+        .map(|metadata| metadata.len())
+        .map_err(|error| {
+            format!(
+                "cannot read reserved public metadata {}: {error}",
+                child.display()
+            )
+        })
+}
+
 #[allow(clippy::too_many_arguments)] // Recursive bounded walker carries one shared budget and report.
 fn collect_reserved_public_files(
     portal: &Path,
@@ -2437,7 +2449,12 @@ fn collect_reserved_public_files(
             }
         } else if kind.is_file() {
             *file_count += 1;
-            *bytes = bytes.saturating_add(entry.metadata().map_or(u64::MAX, |item| item.len()));
+            let Ok(size) = reserved_file_size(&entry, &child)
+                .inspect_err(|error| report.issues.push(error.clone()))
+            else {
+                return false;
+            };
+            *bytes = bytes.saturating_add(size);
             let Some(text) = portable_relative_path(&child) else {
                 report.issues.push(format!(
                     "reserved public output path is unsafe: {}",
@@ -2970,6 +2987,20 @@ fn normalize_markdown_source(value: &str) -> Cow<'_, str> {
     }
 }
 
+fn fragment_source<'a>(
+    page: &Page,
+    source_blobs: &'a BTreeMap<String, Vec<u8>>,
+) -> Result<&'a str, String> {
+    let error = || {
+        format!(
+            "{} fragment source is unreadable or not valid UTF-8",
+            page.source_path
+        )
+    };
+    let bytes = source_blobs.get(&page.source_path).ok_or_else(error)?;
+    std::str::from_utf8(bytes).map_err(|_| error())
+}
+
 fn verify_portal_fragments(
     portal: &Path,
     pages: &[Page],
@@ -2986,15 +3017,12 @@ fn verify_portal_fragments(
     let mut built_budget_reported = false;
     let mut fragment_links = 0_usize;
     for page in pages.iter().filter(|page| !page.stale) {
-        let Some(source) = source_blobs
-            .get(&page.source_path)
-            .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        else {
-            report.issues.push(format!(
-                "{} fragment source is unreadable or not valid UTF-8",
-                page.source_path
-            ));
-            continue;
+        let source = match fragment_source(page, source_blobs) {
+            Ok(source) => source,
+            Err(error) => {
+                report.issues.push(error);
+                continue;
+            }
         };
         let normalized = normalize_markdown_source(source);
         let body = markdown_body(&normalized);
@@ -3034,8 +3062,14 @@ fn verify_portal_fragments(
             {
                 None
             } else {
-                decode_percent(link_path)
-                    .and_then(|decoded| resolve_source_link(&page.source_path, &decoded))
+                let Some(decoded) = decode_percent(link_path) else {
+                    report.issues.push(format!(
+                        "{} contains unreadable percent-encoded path: {destination}",
+                        page.source_path
+                    ));
+                    continue;
+                };
+                resolve_source_link(&page.source_path, &decoded)
             };
             let Some(target_source) = target_source else {
                 continue;
@@ -3053,21 +3087,18 @@ fn verify_portal_fragments(
                 continue;
             };
             let expected = format!("id=\"{}\"", escape_html_attribute(&fragment));
-            if !built_cache.contains_key(*target_route) {
-                let loaded = load_fragment_artifact(
-                    portal,
-                    target_route,
-                    &mut remaining_built_bytes,
-                    &mut built_budget_reported,
-                    report,
-                );
-                built_cache.insert((*target_route).to_string(), loaded);
-            }
-            if !built_cache
-                .get(*target_route)
-                .and_then(Option::as_ref)
-                .is_some_and(|html| html.contains(&expected))
-            {
+            let loaded = built_cache
+                .entry((*target_route).to_string())
+                .or_insert_with(|| {
+                    load_fragment_artifact(
+                        portal,
+                        target_route,
+                        &mut remaining_built_bytes,
+                        &mut built_budget_reported,
+                        report,
+                    )
+                });
+            if !loaded.as_ref().is_some_and(|html| html.contains(&expected)) {
                 report.issues.push(format!(
                     "{} fragment does not resolve to a built portal anchor: {destination}",
                     page.source_path

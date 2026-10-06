@@ -99,7 +99,10 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         let template = std::fs::read(dir.path().join(".github/pull_request_template.md")).unwrap();
         assert_eq!(
             template,
-            source().read("base/ci/pull_request_template.md").unwrap()
+            source()
+                .read("base/ci/pull_request_template.md")
+                .unwrap()
+                .unwrap()
         );
         // The scaffold ships LF on every platform (.gitattributes); a CRLF
         // checkout would leave the fill-ins below unmatched and the body empty.
@@ -161,14 +164,16 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
 /// template is intentionally unchanged here: its prose belongs to another task.
 struct PreviousAssets;
 impl AssetSource for PreviousAssets {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
-        let bytes = source().read(path)?;
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let Some(bytes) = source().read(path)? else {
+            return Ok(None);
+        };
         if path == "base/scaffold-manifest.toml" {
             let text = String::from_utf8(bytes).unwrap();
             let (before, template) = text
                 .split_once("src = \"ci/pull_request_template.md\"")
                 .unwrap();
-            return Some(
+            return Ok(Some(
                 format!(
                     "{before}src = \"ci/pull_request_template.md\"{}",
                     template.replacen(
@@ -178,17 +183,17 @@ impl AssetSource for PreviousAssets {
                     )
                 )
                 .into_bytes(),
-            );
+            ));
         }
         if path != "base/policy.json" {
-            return Some(bytes);
+            return Ok(Some(bytes));
         }
         let mut policy: Value = serde_json::from_slice(&bytes).unwrap();
         let git = policy["git"].as_object_mut().unwrap();
         git.remove("pr_release_impact");
         git.remove("pr_breaking_level");
         git.insert("pr_required_sections".into(), json!(["Summary", "Changes"]));
-        Some(serde_json::to_vec_pretty(&policy).unwrap())
+        Ok(Some(serde_json::to_vec_pretty(&policy).unwrap()))
     }
 }
 
@@ -368,18 +373,20 @@ fn invalid_breaking_policy_level_fails_with_key_and_values() {
 /// A future managed prose edit, isolated from the other agent's real template.
 struct NextTemplate;
 impl AssetSource for NextTemplate {
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
-        let bytes = source().read(path)?;
+    fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        let Some(bytes) = source().read(path)? else {
+            return Ok(None);
+        };
         if path == "base/ci/pull_request_template.md" {
-            Some(
+            Ok(Some(
                 [
                     b"<!-- Fictional new upstream guidance. -->\n".as_slice(),
                     &bytes,
                 ]
                 .concat(),
-            )
+            ))
         } else {
-            Some(bytes)
+            Ok(Some(bytes))
         }
     }
 }

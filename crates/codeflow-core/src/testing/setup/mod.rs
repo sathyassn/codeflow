@@ -92,7 +92,7 @@ pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
     {
         return Err(SetupError::ConfigExists(config_path));
     }
-    let detected = detect::detect_stacks(project_dir);
+    let detected = detect::detect_stacks(project_dir)?;
 
     let config = TestConfig {
         description: None,

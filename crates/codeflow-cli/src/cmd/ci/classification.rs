@@ -16,9 +16,8 @@ use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE}
 use codeflow_core::workgraph::amendment;
 use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
 use codeflow_core::workgraph::{
-    check_epic_line, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch, task_id_from_branch_at,
+    check_epic_line, durable_work_tracking_enabled, durable_work_tracking_enabled_at,
+    resolve_work_target_checked, task_id_from_branch,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -255,17 +254,19 @@ pub(super) struct Range<'a> {
 
 /// The branch `git.root_branch` names in the policy at `base`. It is read at
 /// the target, so a pull request cannot name its own head as the root.
-pub(super) fn root_branch_at(root: &Path, base: &str) -> Option<String> {
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["show", &format!("{base}:.codeflow/policy.json")])
-        .output()
-        .ok()
-        .filter(|out| out.status.success())?;
-    let policy: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let name = policy["git"]["root_branch"].as_str()?;
-    (!name.is_empty()).then(|| name.to_string())
+pub(super) fn root_branch_at(root: &Path, base: &str) -> Result<Option<String>, String> {
+    let Some(text) = codeflow_core::hooks::landed_policy::policy_text_at(root, base)? else {
+        return Ok(None);
+    };
+    let policy: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot read root-branch policy: {error}"))?;
+    match policy.get("git").and_then(|git| git.get("root_branch")) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|name| Some(name.to_string()))
+            .ok_or_else(|| "cannot read root_branch: expected a string".to_string()),
+    }
 }
 
 /// Whether durable work tracking is on at the head or at the target, so a
@@ -290,9 +291,14 @@ fn integration_line_eligible(
     range: &Range<'_>,
     tagged: &mut Vec<super::TaggedViolation>,
 ) -> bool {
-    if !branch.starts_with("integration/")
-        || root_branch_at(root, range.base).as_deref() == Some(branch)
-    {
+    let root_branch = match root_branch_at(root, range.base) {
+        Ok(name) => name,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return false;
+        }
+    };
+    if !branch.starts_with("integration/") || root_branch.as_deref() == Some(branch) {
         return true;
     }
     match check_epic_line(root, branch, range.target, range.base, range.head) {
@@ -322,8 +328,19 @@ pub(super) fn bodyless_line_check(
     let Some(range) = range else {
         return;
     };
-    if !branch.starts_with("integration/") || !matches!(tracking_on(root, Some(range)), Ok(true)) {
+    if !branch.starts_with("integration/") {
         return;
+    }
+    match tracking_on(root, Some(range)) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
     }
     ran.push("classification");
     integration_line_eligible(root, branch, range, tagged);
@@ -348,10 +365,13 @@ pub(super) fn branch_journey(
     };
     // The task as the judged head carries it, so a run from another checkout
     // (a push of a branch other than the one checked out) still finds it.
-    let Some(task_id) = task_id_from_branch_at(root, branch, range.head)
-        .or_else(|| task_id_from_branch(root, branch))
-    else {
-        return;
+    let task_id = match super::branch_task_at(root, branch, range.head) {
+        Ok(Some(task)) => task,
+        Ok(None) => return,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
     };
     // Tracking as the judged head carries it too, so a run from a checkout
     // without tracking (a push from `main`) still sees a head that adds it.
@@ -394,18 +414,55 @@ pub(super) fn branch_journey(
 /// Where durable tracking is off: whether the body names exactly one unit
 /// that matches the branch, or the range is on the root branch the target's
 /// policy names, which carries no `Task:` line.
-fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_>>) -> bool {
-    match task_lines(body).as_slice() {
-        [TaskLine::Tracked(id)] => {
-            task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
-        }
+fn names_its_unit(
+    root: &Path,
+    body: &str,
+    branch: &str,
+    range: Option<&Range<'_>>,
+) -> Result<bool, String> {
+    Ok(match task_lines(body).as_slice() {
+        [TaskLine::Tracked(id)] => task_id_from_branch(root, branch)
+            .map_err(|error| error.to_string())?
+            .is_none_or(|carried| carried == *id),
         [TaskLine::Epic(_) | TaskLine::Epics(_) | TaskLine::Unit(_)] => {
-            task_id_from_branch(root, branch).is_none()
+            task_id_from_branch(root, branch)
+                .map_err(|error| error.to_string())?
+                .is_none()
         }
-        [] => {
-            range.is_some_and(|range| root_branch_at(root, range.base).as_deref() == Some(branch))
-        }
+        [] => match range {
+            Some(range) => root_branch_at(root, range.base)?.as_deref() == Some(branch),
+            None => false,
+        },
         _ => false,
+    })
+}
+
+/// Decide whether full classification applies, recording a refusal for any
+/// unreadable tracking state or invalid unit name before dispatch can return.
+fn classification_applies(
+    root: &Path,
+    body: &str,
+    branch: &str,
+    range: Option<&Range<'_>>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) -> bool {
+    match tracking_on(root, range) {
+        Ok(true) => true,
+        Ok(false) => {
+            match names_its_unit(root, body, branch, range) {
+                Ok(true) => {},
+                Ok(false) => push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT),
+                Err(error) => push(tagged, RULE, error, HINT),
+            }
+            false
+        }
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            false
+        }
     }
 }
 
@@ -425,25 +482,10 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) -> Option<Class> {
-    match tracking_on(root, range) {
-        Ok(true) => {}
-        Ok(false) => {
-            ran.push("classification");
-            if !names_its_unit(root, body, branch, range) {
-                push(tagged, RULE, "the PR must have exactly one non-empty, non-placeholder Task: unit name matching its branch".into(), HINT);
-            }
-            return None;
-        }
-        Err(error) => {
-            tagged.push(super::TaggedViolation {
-                sha: None,
-                violation: super::tracking_state_violation(error),
-            });
-            ran.push("classification");
-            return None;
-        }
-    }
     ran.push("classification");
+    if !classification_applies(root, body, branch, range, tagged) {
+        return None;
+    }
     let Some(range) = range else {
         push(
             tagged,
@@ -473,15 +515,29 @@ pub(super) fn dispatch(
     let amendment_problem =
         |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
+    let branch_task = match task_id_from_branch(root, branch) {
+        Ok(task) => task,
+        Err(error) => {
+            push(tagged, RULE, error.to_string(), HINT);
+            return None;
+        }
+    };
+    let root_branch = match root_branch_at(root, range.base) {
+        Ok(name) => name,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return None;
+        }
+    };
     let input = Input {
         body,
         branch,
         files: &files,
-        branch_task: task_id_from_branch(root, branch),
+        branch_task,
         epic_line: branch
             .starts_with("integration/")
             .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
-        root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
+        root_branch: root_branch.as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
     };
@@ -664,10 +720,13 @@ fn tracked(
     }
     // The record at the head first: a standalone record is on its branch,
     // not in a base checkout.
-    let declared = declared_work_target_at_revision(root, branch, head)
-        .ok()
-        .flatten()
-        .or_else(|| declared_work_target(root, task_id));
+    let declared = match super::work_target_at(root, branch, head, task_id) {
+        Ok(target) => target,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
+    };
     // The own-branch preflight prints any resolution note and reports a
     // diverged target; this check reports it only for another task's claim.
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
@@ -722,7 +781,13 @@ fn journey(
     files: &[String],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
-    let project = ProjectPaths::load(root);
+    let project = match ProjectPaths::load(root) {
+        Ok(project) => project,
+        Err(error) => {
+            push(tagged, RULE, error, HINT);
+            return;
+        }
+    };
     let sets = path_sets();
     let Some((path, member)) = files.iter().find_map(|path| {
         sets.adopter_facing_member(path, &project)
@@ -849,7 +914,7 @@ mod tests {
                 .success());
         }
         assert_eq!(
-            root_branch_at(dir.path(), "HEAD").as_deref(),
+            root_branch_at(dir.path(), "HEAD").unwrap().as_deref(),
             Some("release\u{a0}")
         );
     }

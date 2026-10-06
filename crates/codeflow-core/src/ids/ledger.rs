@@ -400,11 +400,7 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         let mut fields = record.iter().map(String::as_str);
         let header = fields.next().unwrap_or_default();
         let mut parts = header.split('\x1f');
-        let sha = parts
-            .next()
-            .unwrap_or_default()
-            .trim_start_matches('\n')
-            .to_string();
+        let sha = parts.next().unwrap_or_default().to_string();
         let parents = parts
             .next()
             .unwrap_or_default()

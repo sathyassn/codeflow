@@ -62,6 +62,23 @@ pub(super) fn run(
     url: Option<&str>,
     report: &mut StageReport,
 ) {
+    if let Err(error) = run_checked(root, policy, refs, remote, url, report) {
+        report.violations.push(Violation::always_blocking(
+            "git.test_gate_on_push",
+            format!("cannot prove push inputs: {error}"),
+            "repair the unreadable input and retry the push",
+        ));
+    }
+}
+
+fn run_checked(
+    root: &Path,
+    policy: &GitPolicy,
+    refs: &[PushRef],
+    remote: Option<&str>,
+    url: Option<&str>,
+    report: &mut StageReport,
+) -> Result<(), String> {
     // A push of the id registry carries no code: it is judged by its own
     // rules (SPC-013 R-6), and checking it here would recurse through the
     // registry sync the hook runs.
@@ -77,7 +94,7 @@ pub(super) fn run(
     // `codeflow ci` is gated by the policy at the destination's default
     // branch (see [`judged_by`]), so a head cannot turn that check off.
     if pushed.is_empty() {
-        return;
+        return Ok(());
     }
     let started = Instant::now();
     let exe = match std::env::current_exe() {
@@ -88,15 +105,18 @@ pub(super) fn run(
                 format!("push set could not locate the codeflow binary: {error}"),
                 codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
             ));
-            return;
+            return Ok(());
         }
     };
     let url = url.or(remote);
     // Tracking refs describe the fetch location; they stand in for the push
     // location only when the two are the same.
-    let namespace = remote
-        .filter(|name| url.is_some_and(|url| fetches_from(root, name, url)))
-        .and_then(|name| tracking_namespace(root, name));
+    let namespace = match (remote, url) {
+        (Some(name), Some(url)) if fetches_from(root, name, url)? => {
+            tracking_namespace(root, name)?
+        }
+        _ => None,
+    };
     // Asked once, on first use, for every pushed branch and each
     // `codeflow ci` the push set runs.
     let listing: OnceCell<Result<String, String>> = OnceCell::new();
@@ -111,16 +131,16 @@ pub(super) fn run(
         answer: &answer,
         anchor: &anchor,
         fetch_failed: &fetch_failed,
-        fork: fork(root, url),
+        fork: fork(root, url)?,
         namespace: namespace.as_deref(),
         policy,
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
-    run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps);
+    run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps)?;
 
     if !policy.test_gate_on_push.is_active() {
-        return;
+        return Ok(());
     }
     if codeflow_core::release_local::adopted(root) {
         let remote = remote.unwrap_or("origin");
@@ -129,9 +149,9 @@ pub(super) fn run(
         }
     }
 
-    let head = rev_parse(root, "HEAD");
-    let incomplete = incomplete_checkout(root);
-    let clean = incomplete.is_none() && tracked_tree_clean(root);
+    let head = rev_parse(root, "HEAD")?;
+    let incomplete = incomplete_checkout(root)?;
+    let clean = incomplete.is_none() && tracked_tree_clean(root)?;
     let at_head = |r: &&&PushRef| clean && head.as_deref() == Some(r.local_sha.as_str());
     if pushed.iter().any(|r| at_head(&r)) {
         run_check(
@@ -169,6 +189,7 @@ pub(super) fn run(
     report
         .status
         .push(format!("push set finished in {:.1}s", total.as_secs_f64()));
+    Ok(())
 }
 
 fn violation(
@@ -213,13 +234,13 @@ fn run_ci_ranges(
     destination: &Destination<'_>,
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
-) {
+) -> Result<(), String> {
     if let Some(why) = &destination.fork {
         report.status.push(format!("note: {why}"));
     }
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        let judged = judged_by(root, destination, steps);
+        let judged = judged_by(root, destination, steps)?;
         let (policy, judging) = match &judged {
             Judged::Target {
                 target,
@@ -265,7 +286,7 @@ fn run_ci_ranges(
             }
         };
         let policy = &policy;
-        let base = ci_base(root, r, branch, destination, report);
+        let base = ci_base(root, r, branch, destination, report)?;
         if let Some(base) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
@@ -283,14 +304,14 @@ fn run_ci_ranges(
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
             // which can be another line's tip. A new branch keeps the base.
-            if let Some(tip) = existing_tip(root, r) {
+            if let Some(tip) = existing_tip(root, r)? {
                 args.extend(["--baseline-from", tip]);
             }
             // The commit checks run from the candidate authority's tip (see
             // [`commits_from`]); a declared target bounds only the others.
             let from;
             if let Judged::Target { target, tip, .. } = &judged {
-                from = commits_from(root, r, branch, target, tip, &base, report);
+                from = commits_from(root, r, branch, target, tip, &base, report)?;
                 args.extend(["--policy-from", tip, "--commits-from", &from]);
             }
             // The release scope reads the policy at this destination's
@@ -307,6 +328,7 @@ fn run_ci_ranges(
             run_check_with(exe, root, &args, input, policy, report, steps);
         }
     }
+    Ok(())
 }
 
 /// Where a pushed branch's commit checks start, under the candidate
@@ -334,10 +356,10 @@ fn commits_from(
     tip: &str,
     base: &str,
     report: &mut StageReport,
-) -> String {
+) -> Result<String, String> {
     let keep = tip.to_string();
     if base == tip {
-        return keep;
+        return Ok(keep);
     }
     let related = codeflow_core::git::command()
         .arg("-C")
@@ -347,21 +369,21 @@ fn commits_from(
         .output();
     let unknown = |why: &str, report: &mut StageReport| {
         report.status.push(format!(
-            "note: whether '{branch}' shares history with {target} {} cannot be read ({why}), so its commit checks run from that tip",
+            "note: whether '{branch}' shares history with {target} {} cannot be read ({why}), so push checks refuse",
             short(tip)
         ));
-        keep.clone()
+        Err(format!("cannot prove history: {why}"))
     };
     let out = match related {
         Ok(out) => out,
         Err(error) => return unknown(&error.to_string(), report),
     };
     match out.status.code() {
-        Some(0) => return keep,
+        Some(0) => return Ok(keep),
         Some(1) => {}
         _ => return unknown(String::from_utf8_lossy(&out.stderr).trim(), report),
     }
-    let shallow = git(root, &["rev-parse", "--is-shallow-repository"]);
+    let shallow = git(root, &["rev-parse", "--is-shallow-repository"])?;
     if shallow
         .as_deref()
         .map(|value| value.strip_suffix('\n').unwrap_or(value))
@@ -379,10 +401,10 @@ fn commits_from(
         }
         Err(why) => return unknown(&why, report),
     }
-    let (from, what) = match existing_tip(root, r) {
+    let (from, what) = match existing_tip(root, r)? {
         Some(old) => {
-            if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none() {
-                return keep;
+            if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?.is_none() {
+                return Ok(keep);
             }
             (old, "its own new commits")
         }
@@ -393,7 +415,7 @@ fn commits_from(
         short(tip),
         short(from)
     ));
-    from.to_string()
+    Ok(from.to_string())
 }
 
 /// The base of a pushed branch's `codeflow ci` range: a release branch's
@@ -406,13 +428,13 @@ fn ci_base(
     branch: &str,
     destination: &Destination<'_>,
     report: &mut StageReport,
-) -> Option<String> {
-    match release_base(root, r, branch, destination, report) {
+) -> Result<Option<String>, String> {
+    Ok(match release_base(root, r, branch, destination, report) {
         Scoped::Refused => None,
         Scoped::Release(tip) => Some(tip),
         Scoped::Ordinary => {
             let mut notices = Vec::new();
-            let range = range_base(root, r, destination, &mut notices);
+            let range = range_base(root, r, destination, &mut notices)?;
             report
                 .status
                 .extend(notices.into_iter().map(|text| format!("note: {text}")));
@@ -424,7 +446,7 @@ fn ci_base(
                 None
             }
         }
-    }
+    })
 }
 
 /// The local release preflight of a project that adopted `CodeFlow`'s
@@ -670,14 +692,16 @@ fn is_finding_header(line: &str) -> bool {
 /// `refs/remotes/origin/`), read from its fetch refspecs. `None` for a URL or
 /// path pushed to directly, or a remote with no glob fetch refspec: that
 /// destination has no local history of its own to compare with.
-fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
+fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, String> {
     let key = format!("remote.{remote}.fetch");
-    let out = git(root, &["config", "-z", "--get-all", &key])?;
-    out.split('\0').find_map(|spec| {
+    let Some(out) = git(root, &["config", "-z", "--get-all", &key])? else {
+        return Ok(None);
+    };
+    Ok(out.split('\0').find_map(|spec| {
         let (_, dst) = spec.strip_prefix('+').unwrap_or(spec).split_once(':')?;
         let prefix = dst.strip_suffix('*')?;
         prefix.starts_with("refs/").then(|| prefix.to_string())
-    })
+    }))
 }
 
 /// What judges a pushed branch's `codeflow ci` (sathyassn/codeflow#22).
@@ -729,6 +753,8 @@ enum TargetPolicy {
     Malformed(String),
 }
 
+/// Malformed is unproven; `judged_by` carries it into `Judged::Invalid` and
+/// `run_ci_ranges` refuses regardless of the candidate policy level.
 fn target_policy(root: &Path, tip: &str) -> TargetPolicy {
     let version = env!("CARGO_PKG_VERSION");
     let text = match codeflow_core::hooks::landed_policy::policy_text_at(root, tip) {
@@ -762,16 +788,12 @@ fn blocking(policy: &GitPolicy) -> GitPolicy {
 /// A note for a push that does not go to the configured `upstream`: its
 /// pull request may target the upstream, whose policy can differ from the
 /// candidate authority read here.
-fn fork(root: &Path, url: Option<&str>) -> Option<String> {
-    let upstream = git(root, &["remote", "get-url", "upstream"])?;
-    // Only git's own newline is framing: a path may end in a carriage return.
+fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
+    let Some(upstream) = git(root, &["config", "--get", "remote.upstream.url"])? else {
+        return Ok(None);
+    };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
-    (url != Some(upstream)).then(|| {
-        format!(
-            "the push goes to {}, not the configured upstream {upstream}; a pull request from it may target the upstream, whose policy can differ from the candidate authority read here",
-            url.unwrap_or("an unnamed destination")
-        )
-    })
+    Ok((url != Some(upstream)).then(|| format!("the push goes to {}, not the configured upstream {upstream}; a pull request may target upstream", url.unwrap_or("an unnamed destination"))))
 }
 
 /// What judges every pushed branch: the policy at the destination default
@@ -781,13 +803,27 @@ fn fork(root: &Path, url: Option<&str>) -> Option<String> {
 /// the destination advertises proves it exists, not that its policy
 /// landed through review. An unanswered destination, a failed fetch or a
 /// default branch without a policy leave no candidate authority.
-fn judged_by(root: &Path, destination: &Destination<'_>, steps: &mut Vec<PushStep>) -> Judged {
+fn judged_by(
+    root: &Path,
+    destination: &Destination<'_>,
+    steps: &mut Vec<PushStep>,
+) -> Result<Judged, String> {
+    let asked = destination
+        .answer(root)
+        .map_err(str::to_string)?
+        .as_ref()
+        .map_err(Clone::clone)?;
+    if asked.default.is_none() {
+        return Ok(Judged::Unverified(
+            "the destination has no default branch yet".into(),
+        ));
+    }
     let anchor = match destination.anchor(root, steps) {
         Ok(anchor) => anchor,
-        Err(why) => return Judged::Unverified(why.clone()),
+        Err(why) => return Err(why.clone()),
     };
     let (target, tip) = (anchor.name.clone(), anchor.tip.clone());
-    match &anchor.policy {
+    Ok(match &anchor.policy {
         TargetPolicy::Valid(policy) => Judged::Target {
             target,
             tip,
@@ -801,7 +837,7 @@ fn judged_by(root: &Path, destination: &Destination<'_>, steps: &mut Vec<PushSte
         TargetPolicy::Missing => Judged::Unverified(format!(
             "the destination's default branch {target} has no policy yet"
         )),
-    }
+    })
 }
 
 /// What is known of the destination's history.
@@ -926,9 +962,9 @@ impl Destination<'_> {
 
 /// Whether remote `name` fetches from `url`, so that its tracking refs
 /// describe the location pushed to. A `pushurl` elsewhere does not.
-fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
-    git(root, &["remote", "get-url", name])
-        .is_some_and(|fetch| fetch.strip_suffix('\n').unwrap_or(&fetch) == url)
+fn fetches_from(root: &Path, name: &str, url: &str) -> Result<bool, String> {
+    Ok(git(root, &["remote", "get-url", name])?
+        .is_some_and(|fetch| fetch.strip_suffix('\n').unwrap_or(&fetch) == url))
 }
 
 /// How a pushed branch's range is chosen, by its scope at the destination.
@@ -1006,8 +1042,18 @@ fn release_base(
             "fix what the message names, then push again",
         );
     }
-    let tracked = durable_work_tracking_enabled(root).unwrap_or(true)
-        || durable_work_tracking_enabled_at(root, &pushed.local_sha).unwrap_or(true);
+    let tracked = match (
+        durable_work_tracking_enabled(root).map_err(|error| error.to_string()),
+        durable_work_tracking_enabled_at(root, &pushed.local_sha),
+    ) {
+        (Ok(here), Ok(at_head)) => here || at_head,
+        (Err(error), _) | (_, Err(error)) => {
+            return refuse(
+                format!("cannot read push tracking state: {error}"),
+                "repair the unreadable work state and retry",
+            )
+        }
+    };
     let tracked = tracked
         || match release_line::default_tracks_work(root, asked) {
             Ok(on) => on,
@@ -1078,7 +1124,7 @@ fn advertised_commits(root: &Path, listed: &str) -> Advertised {
     }
     let mut input = shas.join("\n");
     input.push('\n');
-    let Some(types) = git_input(
+    let Ok(Some(types)) = git_input(
         root,
         &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
         &input,
@@ -1120,12 +1166,11 @@ struct RangeBase {
 /// 3. An existing branch otherwise uses the historical boundary against all
 ///    locally available advertised tips and its own old sha. A rewrite is
 ///    noted; unrelated history uses the old sha so CI reports it unrelated.
-/// 4. If the destination cannot be asked, an existing branch uses its old
-///    sha alone, noted.
+/// 4. If the destination cannot be asked or its answer is unreadable, refuse.
 /// 5. A new branch uses the historical boundary against available advertised
 ///    tips, or its pushed sha when the destination already holds all its history.
-/// 6. With no locally available advertised tips or a failed query, a new branch
-///    uses protected tracking refs only from the same destination, noting failure.
+/// 6. With no locally available advertised tips, a new branch uses protected
+///    tracking refs only from the same destination.
 /// 7. Otherwise return `None` and leave the range unresolved for CI. Never
 ///    substitute a policy default or a local branch for an undeclared target.
 fn range_base(
@@ -1133,38 +1178,33 @@ fn range_base(
     r: &PushRef,
     destination: &Destination<'_>,
     notices: &mut Vec<String>,
-) -> Option<RangeBase> {
+) -> Result<Option<RangeBase>, String> {
     if let Advertised::Tips(tips) = destination.advertised(root) {
-        if let Some(base) = target_base(root, r, destination.policy, tips, notices) {
-            return Some(base);
+        if let Some(base) = target_base(root, r, destination.policy, tips, notices)? {
+            return Ok(Some(base));
         }
     }
-    if existing_tip(root, r).is_some() {
-        return Some(existing_base(root, r, destination));
+    if existing_tip(root, r)?.is_some() {
+        return Ok(Some(existing_base(root, r, destination)?));
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.commits.is_empty() => {
-            let line = own_line_tip(root, r, destination);
-            return bounded_by(
+            let line = own_line_tip(root, r, destination)?;
+            return Ok(bounded_by(
                 root,
                 &r.local_sha,
                 tips.commits.iter(),
                 None,
                 line.as_deref(),
-            )
-            .map(|base| RangeBase { base, note: None });
+            )?
+            .map(|base| RangeBase { base, note: None }));
         }
         Advertised::Tips(_) => None,
-        Advertised::Failed(why) => Some(Finding::new(
-            format!(
-                "asking the destination for its branches failed ({why}): the range of new \
-                 branch '{}' is bounded by its tracked protected branches instead",
-                r.remote_branch().unwrap_or_default()
-            ),
-            remedy::PUSH_DESTINATION_SILENT.remedy(),
-        )),
+        Advertised::Failed(why) => return Err(why.clone()),
     };
-    let ns = destination.namespace?;
+    let Some(ns) = destination.namespace else {
+        return Ok(None);
+    };
     let mut known: Vec<String> = Vec::new();
     for branch in &destination.policy.protected_branches {
         let reference = format!("{ns}{branch}");
@@ -1177,22 +1217,22 @@ fn range_base(
                     "--format=%(refname)",
                     &reference,
                 ],
-            )
+            )?
             .is_some_and(|out| !out.is_empty());
             if any {
                 known.push(format!("--glob={reference}"));
             }
-        } else if is_commit(root, &reference) {
+        } else if is_commit(root, &reference)? {
             known.push(reference);
         }
     }
     if known.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut args = vec!["rev-list", "--boundary", r.local_sha.as_str(), "--not"];
     args.extend(known.iter().map(String::as_str));
-    let listed = git(root, &args)?;
-    boundary(&listed, &r.local_sha, note)
+    let listed = git(root, &args)?.ok_or("cannot read range boundaries")?;
+    Ok(boundary(&listed, &r.local_sha, note))
 }
 
 /// Match the pull request's base without excluding any destination-missing
@@ -1204,12 +1244,18 @@ fn target_base(
     policy: &GitPolicy,
     tips: &AdvertisedTips,
     notices: &mut Vec<String>,
-) -> Option<RangeBase> {
-    let branch = r.remote_branch()?;
+) -> Result<Option<RangeBase>, String> {
+    let Some(branch) = r.remote_branch() else {
+        return Ok(None);
+    };
     let line = policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
     let (base, target) = if line {
-        let old = existing_tip(root, r)?;
-        git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?;
+        let Some(old) = existing_tip(root, r)? else {
+            return Ok(None);
+        };
+        if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?.is_none() {
+            return Ok(None);
+        }
         (old.to_string(), branch.to_string())
     } else {
         let target = codeflow_core::workgraph::work_start::declared_work_target_at_revision(
@@ -1217,20 +1263,27 @@ fn target_base(
             branch,
             &r.local_sha,
         )
-        .ok()??;
+        .map_err(|error| error.to_string())?;
+        let Some(target) = target else {
+            return Ok(None);
+        };
         if !codeflow_core::workgraph::is_stable_work_target(&target) {
-            return None;
+            return Ok(None);
         }
         let target = target.as_str();
-        let tip = tips.branches.get(target)?;
+        let Some(tip) = tips.branches.get(target) else {
+            return Ok(None);
+        };
         if tips.commits.binary_search(tip).is_err() {
             notices.push(format!(
                 "declared target '{target}' advertised at {tip} is not fetched here; \
                      falling back to advertised-history range selection for '{branch}'"
             ));
-            return None;
+            return Ok(None);
         }
-        let base = git(root, &["merge-base", &r.local_sha, tip])?;
+        let Some(base) = git(root, &["merge-base", &r.local_sha, tip])? else {
+            return Ok(None);
+        };
         (
             base.strip_suffix('\n').unwrap_or(&base).to_string(),
             target.to_string(),
@@ -1241,14 +1294,15 @@ fn target_base(
         r.local_sha
     ));
     let mut note = None;
-    if let Some(old) = existing_tip(root, r) {
-        if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_none()
-            && git(root, &["merge-base", old, &r.local_sha]).is_some()
+    if let Some(old) = existing_tip(root, r)? {
+        if git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?.is_none()
+            && git(root, &["merge-base", old, &r.local_sha])?.is_some()
         {
             let count = git(
                 root,
                 &["rev-list", "--count", &format!("{base}..{}", r.local_sha)],
-            )?;
+            )?
+            .ok_or("cannot read rewritten commit count")?;
             note = Some(Finding::new(
                 format!(
                     "'{branch}' rewrites the destination's {}: `codeflow ci` checks {} commit(s), \
@@ -1260,22 +1314,26 @@ fn target_base(
             ));
         }
     }
-    Some(RangeBase { base, note })
+    Ok(Some(RangeBase { base, note }))
 }
 
 /// The destination's advertised sha for a branch it already has, when that
 /// commit is here: the push updates an existing branch.
-fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Option<&'a str> {
+fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Result<Option<&'a str>, String> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
-    (!zero && is_commit(root, &r.remote_sha)).then_some(r.remote_sha.as_str())
+    Ok((!zero && is_commit(root, &r.remote_sha)?).then_some(r.remote_sha.as_str()))
 }
 
 /// The historical advertised-history fallback for an existing branch.
-fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> RangeBase {
+fn existing_base(
+    root: &Path,
+    r: &PushRef,
+    destination: &Destination<'_>,
+) -> Result<RangeBase, String> {
     let branch = r.remote_branch().unwrap_or_default();
     let old = &r.remote_sha;
-    let line = own_line_tip(root, r, destination);
-    let (base, failed) = match destination.advertised(root) {
+    let line = own_line_tip(root, r, destination)?;
+    let (base, failed): (String, Option<&String>) = match destination.advertised(root) {
         Advertised::Tips(tips) => (
             bounded_by(
                 root,
@@ -1283,19 +1341,25 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
                 std::iter::once(old).chain(&tips.commits),
                 Some(old),
                 line.as_deref(),
-            )
+            )?
             .unwrap_or_else(|| old.clone()),
             None,
         ),
-        Advertised::Failed(why) => (old.clone(), Some(why)),
+        Advertised::Failed(why) => return Err(why.clone()),
     };
-    let extends = git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_some();
-    let related = git(root, &["merge-base", old, &r.local_sha]).is_some();
-    let count = (!extends && related).then(|| {
+    let extends = git(root, &["merge-base", "--is-ancestor", old, &r.local_sha])?.is_some();
+    let related = git(root, &["merge-base", old, &r.local_sha])?.is_some();
+    let count = if !extends && related {
         let range = format!("{base}..{}", r.local_sha);
-        git(root, &["rev-list", "--count", &range])
-            .map_or_else(|| "?".to_string(), |n| n.trim().to_string())
-    });
+        Some(
+            git(root, &["rev-list", "--count", &range])?
+                .ok_or("cannot read rewrite count")?
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
     let rewrite = format!("'{branch}' rewrites the destination's {}", short(old));
     let note = match (failed, count) {
         (None, None) => None,
@@ -1324,7 +1388,7 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
             ))
         }
     };
-    RangeBase { base, note }
+    Ok(RangeBase { base, note })
 }
 
 /// The exclusive base of `local_sha` against the `known` commits the
@@ -1336,40 +1400,40 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
 /// request into the line is judged on. Without such a line, [`narrowest`]
 /// picks among the boundaries, where `own` (the branch's own advertised
 /// sha) is not another ref. The base is always a commit the destination
-/// holds, so nothing new is left out. `None` when git fails or no boundary
-/// exists (no shared history).
+/// holds, so nothing new is left out. `None` means no boundary exists
+/// (no shared history); Git obtaining errors propagate to the push refusal.
 fn bounded_by<'a>(
     root: &Path,
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
     own: Option<&str>,
     line: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     let known: Vec<&String> = known.collect();
     let mut input = format!("{local_sha}\n");
     for sha in &known {
-        input.push('^');
-        input.push_str(sha);
-        input.push('\n');
+        let _ = writeln!(input, "^{sha}");
     }
-    let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+    let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?
+        .ok_or("cannot read range boundaries")?;
     if listed.is_empty() {
-        return Some(local_sha.to_string());
+        return Ok(Some(local_sha.to_string()));
     }
     let bounds: Vec<&str> = listed
         .split_terminator('\n')
         .filter_map(|l| l.strip_prefix('-'))
         .collect();
     if let (Some(line), [_, _, ..]) = (line, bounds.as_slice()) {
-        let on_line: Vec<&str> = bounds
-            .iter()
-            .copied()
-            .filter(|bound| git(root, &["merge-base", "--is-ancestor", bound, line]).is_some())
-            .collect();
+        let mut on_line = Vec::new();
+        for &bound in &bounds {
+            if git(root, &["merge-base", "--is-ancestor", bound, line])?.is_some() {
+                on_line.push(bound);
+            }
+        }
         if !on_line.is_empty() {
             let mut args = vec!["merge-base", "--independent"];
             args.extend(&on_line);
-            if let Some(newest) = git(root, &args) {
+            if let Some(newest) = git(root, &args)? {
                 if let [only] = newest
                     .strip_suffix('\n')
                     .unwrap_or(&newest)
@@ -1377,7 +1441,7 @@ fn bounded_by<'a>(
                     .collect::<Vec<_>>()
                     .as_slice()
                 {
-                    return Some((*only).to_string());
+                    return Ok(Some((*only).to_string()));
                 }
             }
         }
@@ -1386,7 +1450,7 @@ fn bounded_by<'a>(
         .into_iter()
         .filter(|sha| Some(sha.as_str()) != own)
         .collect();
-    narrowest(root, local_sha, &bounds, own, &others).map(str::to_string)
+    Ok(narrowest(root, local_sha, &bounds, own, &others)?.map(str::to_string))
 }
 
 /// The boundary to take as the range base. One base cannot leave out every
@@ -1403,49 +1467,66 @@ fn narrowest<'b>(
     boundaries: &[&'b str],
     own: Option<&str>,
     others: &[&String],
-) -> Option<&'b str> {
+) -> Result<Option<&'b str>, String> {
     if boundaries.len() < 2 {
-        return boundaries.first().copied();
+        return Ok(boundaries.first().copied());
     }
-    let count = |input: &str| {
-        git_input(root, &["rev-list", "--count", "--stdin"], input)
-            .and_then(|n| n.strip_suffix('\n').unwrap_or(&n).parse::<usize>().ok())
-            .unwrap_or(usize::MAX)
+    let count = |input: &str| -> Result<usize, String> {
+        let text = git_input(root, &["rev-list", "--count", "--stdin"], input)?
+            .ok_or("cannot read range count")?;
+        text.strip_suffix('\n')
+            .unwrap_or(&text)
+            .parse()
+            .map_err(|error| format!("cannot parse range count: {error}"))
     };
-    boundaries.iter().copied().min_by_key(|base| {
+    let mut scored = Vec::new();
+    for &base in boundaries {
         let range = format!("{local_sha}\n^{base}\n");
-        let all = count(&range);
+        let all = count(&range)?;
         let mut not_own = range;
         if let Some(own) = own {
-            not_own.push('^');
-            not_own.push_str(own);
-            not_own.push('\n');
+            let _ = writeln!(not_own, "^{own}");
         }
         let mut fresh = not_own.clone();
         for sha in others {
-            fresh.push('^');
-            fresh.push_str(sha);
-            fresh.push('\n');
+            let _ = writeln!(fresh, "^{sha}");
         }
-        (count(&not_own).saturating_sub(count(&fresh)), all)
-    })
+        scored.push((base, (count(&not_own)?.saturating_sub(count(&fresh)?), all)));
+    }
+    Ok(scored
+        .into_iter()
+        .min_by_key(|(_, score)| *score)
+        .map(|(base, _)| base))
 }
 
 /// The advertised tip of the integration line the pushed branch's task
 /// declares, when the branch carries a task and the destination has that
 /// line.
-fn own_line_tip(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<String> {
+fn own_line_tip(
+    root: &Path,
+    r: &PushRef,
+    destination: &Destination<'_>,
+) -> Result<Option<String>, String> {
     use codeflow_core::workgraph::{declared_work_target, task_id_from_branch};
-    let id = task_id_from_branch(root, r.remote_branch()?)?;
-    let target = declared_work_target(root, &id)?;
-    let Ok(Ok(asked)) = destination.answer(root) else {
-        return None;
+    let Some(branch) = r.remote_branch() else {
+        return Ok(None);
     };
-    asked
+    let Some(id) = task_id_from_branch(root, branch).map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let Some(target) = declared_work_target(root, &id).map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let asked = destination
+        .answer(root)
+        .map_err(str::to_string)?
+        .as_ref()
+        .map_err(Clone::clone)?;
+    Ok(asked
         .heads
         .iter()
         .find(|(name, _)| *name == target)
-        .map(|(_, tip)| tip.to_string())
+        .map(|(_, tip)| tip.to_string()))
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
@@ -1469,19 +1550,19 @@ fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<Rang
 /// Why the working checkout is not the whole committed tree, if it is not:
 /// a sparse checkout, or a submodule that is uninitialized, at another
 /// commit or conflicted.
-fn incomplete_checkout(root: &Path) -> Option<String> {
-    let sparse =
-        git(root, &["config", "--bool", "core.sparseCheckout"]).is_some_and(|v| v == "true\n");
-    if sparse {
-        return Some("the checkout is sparse".to_string());
+fn incomplete_checkout(root: &Path) -> Result<Option<String>, String> {
+    let sparse = git(root, &["config", "--bool", "core.sparseCheckout"])?;
+    if sparse.as_deref() == Some("true\n") {
+        return Ok(Some("the checkout is sparse".to_string()));
     }
-    if !root.join(".gitmodules").exists() {
-        return None;
+    match std::fs::metadata(root.join(".gitmodules")) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read submodule state: {error}")),
     }
-    let Some(status) = git(root, &["submodule", "status", "--recursive"]) else {
-        return Some("submodule state could not be read".to_string());
-    };
-    status.split_terminator('\n').find_map(|line| {
+    let status = git(root, &["submodule", "status", "--recursive"])?
+        .ok_or("cannot read submodule status")?;
+    Ok(status.split_terminator('\n').find_map(|line| {
         let path = line.get(1..)?.split_whitespace().nth(1).unwrap_or("?");
         match line.chars().next()? {
             '-' => Some(format!("submodule {path} is not initialized")),
@@ -1489,7 +1570,7 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
             'U' => Some(format!("submodule {path} has merge conflicts")),
             _ => None,
         }
-    })
+    }))
 }
 
 /// Git for the hook's own queries: never fetches a missing object, even in
@@ -1497,22 +1578,21 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
 ///
 /// OS text rule (issue 79): the answer is read as text (shas, config values,
 /// URLs, ref and submodule names the callers compare), so an answer that is
-/// not valid UTF-8 reads as no answer, which every caller treats as unknown,
-/// never as a lossy spelling.
-fn git(root: &Path, args: &[&str]) -> Option<String> {
-    codeflow_core::git::command()
+/// not valid UTF-8 returns an error through `run_checked` to `run`, which refuses.
+/// Only Git exit 1 for lookup/predicate commands means a genuinely absent answer.
+fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
         .env("GIT_NO_LAZY_FETCH", "1")
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map_err(|error| format!("cannot read Git answer: {error}"))?;
+    git_answer(args, out)
 }
 
 /// [`git`] with `input` on stdin.
-fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
+fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, String> {
     let out = codeflow_core::git::output_with_input(
         codeflow_core::git::command()
             .arg("-C")
@@ -1521,15 +1601,30 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
             .env("GIT_NO_LAZY_FETCH", "1"),
         input.as_bytes(),
     )
-    .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8(out.stdout).ok())
-        .flatten()
+    .map_err(|error| format!("cannot read Git answer: {error}"))?;
+    git_answer(args, out)
 }
 
-fn rev_parse(root: &Path, rev: &str) -> Option<String> {
-    git(
+fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>, String> {
+    if !out.status.success() {
+        if out.status.code() == Some(1)
+            && matches!(args.first(), Some(&"merge-base" | &"rev-parse" | &"config"))
+        {
+            return Ok(None);
+        }
+        return Err(format!(
+            "cannot read Git {} answer: {}",
+            args.first().copied().unwrap_or("command"),
+            out.status
+        ));
+    }
+    String::from_utf8(out.stdout)
+        .map(Some)
+        .map_err(|error| format!("cannot decode Git answer: {error}"))
+}
+
+fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    Ok(git(
         root,
         &[
             "rev-parse",
@@ -1537,18 +1632,22 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
             "--quiet",
             &format!("{rev}^{{commit}}"),
         ],
-    )
+    )?
     .map(|s| s.strip_suffix('\n').unwrap_or(&s).to_string())
-    .filter(|s| !s.is_empty())
+    .filter(|s| !s.is_empty()))
 }
 
-fn is_commit(root: &Path, sha: &str) -> bool {
-    rev_parse(root, sha).is_some()
+fn is_commit(root: &Path, sha: &str) -> Result<bool, String> {
+    Ok(rev_parse(root, sha)?.is_some())
 }
 
 /// `true` when no tracked file differs from the checked-out commit.
-fn tracked_tree_clean(root: &Path) -> bool {
-    git(root, &["status", "--porcelain", "--untracked-files=no"]).is_some_and(|out| out.is_empty())
+fn tracked_tree_clean(root: &Path) -> Result<bool, String> {
+    Ok(
+        git(root, &["status", "--porcelain", "--untracked-files=no"])?
+            .ok_or("cannot read worktree status")?
+            .is_empty(),
+    )
 }
 
 fn short(sha: &str) -> &str {
@@ -1559,10 +1658,9 @@ fn short(sha: &str) -> &str {
 mod name_text_tests {
     use super::*;
 
-    /// Issue 79: a git answer that is not valid UTF-8 reads as no answer,
-    /// which every caller treats as unknown, never as a lossy spelling.
+    /// Obtaining errors are explicit failures at the push refusal boundary.
     #[test]
-    fn a_git_answer_that_is_not_utf8_is_no_answer() {
+    fn r16_a_git_answer_that_is_not_utf8_refuses() {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
         let init = codeflow_core::git::command()
@@ -1579,9 +1677,11 @@ mod name_text_tests {
             .write_all(b"[demo]\n\tword = caf\xe9\n\tplain = ok\n")
             .unwrap();
         assert_eq!(
-            git(dir.path(), &["config", "--get", "demo.plain"]).as_deref(),
+            git(dir.path(), &["config", "--get", "demo.plain"])
+                .unwrap()
+                .as_deref(),
             Some("ok\n")
         );
-        assert_eq!(git(dir.path(), &["config", "--get", "demo.word"]), None);
+        assert!(git(dir.path(), &["config", "--get", "demo.word"]).is_err());
     }
 }

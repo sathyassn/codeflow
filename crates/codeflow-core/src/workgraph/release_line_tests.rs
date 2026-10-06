@@ -789,3 +789,31 @@ fn transition_oid_keeps_unicode_whitespace() {
     );
     assert!(super::parse_table("cutoff", &toml::Value::Table(table)).is_err());
 }
+
+#[test]
+fn r16_invalid_config_comment_refuses_release_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(b".codeflow/project.toml", b"# bad\xff\nstack = 'rust'\n")],
+    );
+    assert!(super::config_at(&repo, oid, &mut std::collections::HashMap::new()).is_err());
+}
+
+#[test]
+fn r16_historical_record_errors_do_not_equal_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(
+            b"project-management/tasks/TSK-001.md",
+            b"---\nid: TSK-001\n---\n# bad\xff",
+        )],
+    );
+    assert!(super::record_at(&repo, oid, "project-management/tasks/TSK-001.md").is_err());
+    assert!(super::record_at(&repo, git2::Oid::ZERO_SHA1, "missing.md").is_err());
+    assert!(super::record_at(&repo, oid, "missing.md")
+        .unwrap()
+        .is_none());
+    assert!(super::landing_on_line(&repo, git2::Oid::ZERO_SHA1, &|_| Ok(false)).is_err());
+}

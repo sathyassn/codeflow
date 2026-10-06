@@ -11,7 +11,7 @@
 //! Append rule (I4): each event is one line, written with its newline in one
 //! write and synced before the receipt is returned, under the session lock.
 //! A failed write is cut back to the previous length. When the ledger is
-//! opened, a final line with no newline, or one that does not parse, is a
+//! opened, a final line without the committing LF is a
 //! torn append from a crash: it is truncated under the lock. Its request
 //! never got a receipt, so the page's retry appends it again. Any other line
 //! that does not parse, or a ledger whose sequence, ids, amendments or
@@ -528,8 +528,8 @@ fn cut_back(file: &File, length: u64) -> std::io::Result<()> {
 }
 
 /// Splits the ledger into its events and the byte length to keep. A final
-/// line with no newline, or a final line that does not parse, is torn and
-/// left out; any other line that does not parse is corruption.
+/// line without LF is an uncommitted tail. Every LF-terminated record must
+/// parse, including the final one; invalid or oversized records are corruption.
 fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)> {
     let mut events = Vec::new();
     let mut start = 0;
@@ -538,24 +538,21 @@ fn parse_ledger(path: &Path, bytes: &[u8]) -> Result<(Vec<ResponseEvent>, usize)
             return Ok((events, start));
         };
         let end = start + offset;
-        let last = end + 1 == bytes.len();
         let line = &bytes[start..end];
-        let parsed = if line.len() as u64 > limits::MAX_RESPONSE_RECORD_BYTES {
-            None
-        } else {
-            serde_json::from_slice::<ResponseEvent>(line).ok()
-        };
-        match parsed {
-            Some(event) => events.push(event),
-            None if last => return Ok((events, start)),
-            None => {
-                return Err(PresentError::CorruptState(format!(
-                    "{} line {} is not a response record",
-                    path.display(),
-                    events.len() + 1
-                )));
-            }
+        if line.len() as u64 > limits::MAX_RESPONSE_RECORD_BYTES {
+            return Err(PresentError::CorruptState(format!(
+                "{} response record exceeds its bound",
+                path.display()
+            )));
         }
+        let event = serde_json::from_slice::<ResponseEvent>(line).map_err(|error| {
+            PresentError::CorruptState(format!(
+                "{} line {} is not a response record: {error}",
+                path.display(),
+                events.len() + 1
+            ))
+        })?;
+        events.push(event);
         start = end + 1;
     }
     Ok((events, start))
@@ -912,6 +909,15 @@ mod crash {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r16_complete_invalid_ledger_record_refuses() {
+        assert!(super::parse_ledger(std::path::Path::new("ledger"), b"{\n").is_err());
+        let (events, kept) = super::parse_ledger(std::path::Path::new("ledger"), b"{").unwrap();
+        assert!(events.is_empty());
+        assert_eq!(kept, 0);
+    }
+
     use super::*;
 
     /// The room each answer keeps holds the longest state line there is.
@@ -1009,10 +1015,9 @@ mod tests {
         let unterminated = whole.trim_end_matches('\n');
         let (events, keep) = parse_ledger(path, unterminated.as_bytes()).unwrap();
         assert_eq!((events.len(), keep), (1, line(1).len()));
-        // A final line with its newline that does not parse: torn.
+        // A complete final record that does not parse is corruption.
         let broken = format!("{}{{\"event\":\"answ\n", line(1));
-        let (events, keep) = parse_ledger(path, broken.as_bytes()).unwrap();
-        assert_eq!((events.len(), keep), (1, line(1).len()));
+        assert!(parse_ledger(path, broken.as_bytes()).is_err());
         // A line that does not parse before the last: corruption.
         let middle = format!("{{\"event\":\"nonsense\"}}\n{}", line(1));
         assert!(matches!(

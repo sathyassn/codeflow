@@ -18,14 +18,14 @@ use super::LedgerError;
 /// 3. Parse all events from all files
 /// 4. Sort by timestamp (stable sort preserves intra-file order)
 ///
-/// Corrupt lines are skipped with a warning (logged to stderr).
+/// Unreadable files and corrupt lines refuse the rebuild.
 ///
 /// # Errors
 ///
 /// Returns `LedgerError::Io` if the directory cannot be read.
 pub fn rebuild_ledger_type(ledger_dir: &Path, type_name: &str) -> Result<Vec<Event>, LedgerError> {
     let subdir = ledger_dir.join(type_name);
-    if !subdir.is_dir() {
+    if !subdir.try_exists()? {
         return Ok(Vec::new());
     }
 
@@ -33,20 +33,24 @@ pub fn rebuild_ledger_type(ledger_dir: &Path, type_name: &str) -> Result<Vec<Eve
 
     // Read base file.
     let base_file = subdir.join(format!("{type_name}.jsonl"));
-    if base_file.exists() {
-        read_events_from_file(&base_file, &mut events);
+    if base_file.try_exists()? {
+        read_events_from_file(&base_file, &mut events)?;
     }
 
     // Read fragment files.
     let prefix = format!("{type_name}-ses-");
-    if let Ok(entries) = fs::read_dir(&subdir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with(&prefix) && super::is_jsonl_file(name) && !super::is_lock_file(name)
-            {
-                read_events_from_file(&path, &mut events);
-            }
+    for entry in fs::read_dir(&subdir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(prefix.as_bytes())
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+        {
+            read_events_from_file(&path, &mut events)?;
         }
     }
 
@@ -76,32 +80,19 @@ pub fn rebuild_all(
 
 /// Parse JSONL events from a file, appending to `events`.
 ///
-/// Corrupt lines are skipped (logged to stderr).
-fn read_events_from_file(path: &Path, events: &mut Vec<Event>) {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("warn: rebuild: cannot read {}: {e}", path.display());
-            return;
-        }
-    };
-
+/// Unreadable files and corrupt lines refuse the rebuild.
+fn read_events_from_file(path: &Path, events: &mut Vec<Event>) -> Result<(), LedgerError> {
+    let content = fs::read_to_string(path)?;
     for (i, line) in content.split_terminator('\n').enumerate() {
-        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
-        if trimmed.is_empty() {
+        if line.trim_matches([' ', '\t', '\r']).is_empty() {
             continue;
         }
-        match serde_json::from_str::<Event>(trimmed) {
-            Ok(event) => events.push(event),
-            Err(e) => {
-                eprintln!(
-                    "warn: rebuild: skipping corrupt line {} in {}: {e}",
-                    i + 1,
-                    path.display()
-                );
-            }
-        }
+        let event = serde_json::from_str::<Event>(line).map_err(|error| {
+            LedgerError::Corrupt(format!("{}:{}: {error}", path.display(), i + 1))
+        })?;
+        events.push(event);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -177,7 +168,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_skips_corrupt_lines() {
+    fn test_rebuild_refuses_corrupt_lines() {
         let dir = tempfile::tempdir().unwrap();
         let subdir = dir.path().join("config");
         fs::create_dir_all(&subdir).unwrap();
@@ -192,8 +183,7 @@ NOT VALID JSON
         )
         .unwrap();
 
-        let events = rebuild_ledger_type(dir.path(), "config").unwrap();
-        assert_eq!(events.len(), 2, "corrupt line should be skipped");
+        assert!(rebuild_ledger_type(dir.path(), "config").is_err());
     }
 
     #[test]

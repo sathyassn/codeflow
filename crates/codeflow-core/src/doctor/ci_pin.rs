@@ -71,7 +71,7 @@ const INSTALLS: [(&str, &str, &str); 5] = [
 /// at any indentation. Doctor claims the pin only for such a file: marker
 /// text, a comment or an edited install says nothing about what CI runs.
 pub(super) fn recognized(content: &str) -> bool {
-    let lines: Vec<&str> = content.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let lines: Vec<&str> = content.lines().collect();
     INSTALLS.iter().any(|(template, first, last)| {
         let Some(span) = span(template, first, last) else {
             return false;
@@ -114,11 +114,47 @@ fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
     line.strip_prefix(indent)
 }
 
+struct PinInputs {
+    state: Option<String>,
+    policy: Option<String>,
+    pin: Option<String>,
+}
+
+fn current_inputs(root: &Path) -> Result<PinInputs, String> {
+    let read = |name: &str| -> Result<Option<String>, String> {
+        let path = root.join(name);
+        if !path.try_exists().map_err(|error| error.to_string())? {
+            return Ok(None);
+        }
+        std::fs::read_to_string(path)
+            .map(Some)
+            .map_err(|error| format!("{name}: {error}"))
+    };
+    read_inputs(read)
+}
+
+fn read_inputs(read: impl Fn(&str) -> TargetText) -> Result<PinInputs, String> {
+    let state = read(STATE)?;
+    let policy = read(POLICY)?;
+    let pin = state.as_deref().map(pinned).transpose()?.flatten();
+    Ok(PinInputs { state, policy, pin })
+}
+
 /// The pin state of the checkout at `root`.
 pub(super) fn report(root: &Path) -> PinReport {
-    let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
-    let head_state = read(STATE);
-    let Some(head_pin) = head_state.as_deref().and_then(pinned) else {
+    let refused = |error: String| PinReport {
+        status: Status::Fail,
+        message: format!("cannot read CI pin inputs: {error}"),
+    };
+    let PinInputs {
+        state: head_state,
+        policy: head_policy,
+        pin: head_pin,
+    } = match current_inputs(root) {
+        Ok(inputs) => inputs,
+        Err(error) => return refused(error),
+    };
+    let Some(head_pin) = head_pin else {
         return PinReport {
             status: Status::Warn(remedy::DOCTOR_CI_PIN_MISSING.remedy()),
             message: format!(
@@ -126,7 +162,11 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
-    let Some((target, show)) = target_files(root) else {
+    let target_files = match target_files(root) {
+        Ok(target) => target,
+        Err(error) => return refused(error),
+    };
+    let Some((target, show)) = target_files else {
         return PinReport {
             status: Status::Pass,
             message: format!(
@@ -134,15 +174,23 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
-    let target_state = show(STATE).transpose();
-    let target_policy = show(POLICY).transpose();
-    let (Ok(target_state), Ok(target_policy)) = (target_state, target_policy) else {
-        return PinReport {
-            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
-            message: format!("{target} contains a state or policy file that is not valid UTF-8; its CI pin is unproven"),
-        };
+    let PinInputs {
+        state: target_state,
+        policy: target_policy,
+        pin: target_pin,
+    } = match read_inputs(show) {
+        Ok(inputs) => inputs,
+        Err(error) => return refused(error),
     };
-    let Some(target_pin) = target_state.as_deref().and_then(pinned) else {
+    if let Err(error) = head_policy
+        .as_deref()
+        .map(policy_keys)
+        .transpose()
+        .and_then(|_| target_policy.as_deref().map(policy_keys).transpose())
+    {
+        return refused(error);
+    }
+    let Some(target_pin) = target_pin else {
         return PinReport {
             status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
             message: format!(
@@ -171,9 +219,13 @@ pub(super) fn report(root: &Path) -> PinReport {
     let carried = carried_upgrade(
         head_state.as_deref(),
         target_state.as_deref(),
-        read(POLICY).as_deref(),
+        head_policy.as_deref(),
         target_policy.as_deref(),
     );
+    let carried = match carried {
+        Ok(carried) => carried,
+        Err(error) => return refused(error),
+    };
     if carried.is_empty() {
         return PinReport {
             status: Status::Pass,
@@ -192,46 +244,71 @@ pub(super) fn report(root: &Path) -> PinReport {
 }
 
 /// The `scaffold_version` a project state pins, if any.
-fn pinned(state: &str) -> Option<String> {
-    let value: toml::Value = toml::from_str(state).ok()?;
-    value
+fn pinned(state: &str) -> Result<Option<String>, String> {
+    let value: toml::Value =
+        toml::from_str(state).map_err(|error| format!("cannot parse state: {error}"))?;
+    Ok(value
         .get("scaffold_version")
         .and_then(toml::Value::as_str)
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
+        .map(str::to_string))
 }
 
 /// The first target ref that exists, and a reader of files at its commit.
-type TargetText = Option<Result<String, std::string::FromUtf8Error>>;
+type TargetText = Result<Option<String>, String>;
 
-fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> TargetText)> {
-    let repo = git2::Repository::discover(root).ok()?;
-    let (name, tree) = TARGETS.iter().find_map(|name| {
-        let reference = repo.find_reference(name).ok()?;
-        let resolved = reference.resolve().ok()?;
-        let tree = resolved.peel_to_commit().ok()?.tree().ok()?.id();
-        // OS text rule (issue 79): the name is only shown; the tree is already
-        // resolved, so a name that is not valid UTF-8 falls back to the ref.
-        let shown = crate::git::name::reference_shorthand(&resolved)
-            .display()
-            .to_string();
-        Some((shown, tree))
-    })?;
-    let prefix = repo
-        .workdir()
-        .and_then(|workdir| {
-            let root = root.canonicalize().ok()?;
-            let workdir = workdir.canonicalize().ok()?;
-            root.strip_prefix(workdir).ok().map(Path::to_path_buf)
-        })
-        .unwrap_or_default();
-    let show = move |path: &str| {
-        let tree = repo.find_tree(tree).ok()?;
-        let entry = tree.get_path(&prefix.join(path)).ok()?;
-        let blob = repo.find_blob(entry.id()).ok()?;
-        Some(String::from_utf8(blob.content().to_vec()))
+type TargetFiles<R> = Result<Option<(String, R)>, String>;
+
+fn target_files(root: &Path) -> TargetFiles<impl Fn(&str) -> TargetText> {
+    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+    let mut target = None;
+    for name in TARGETS {
+        let reference = match repo.find_reference(name) {
+            Ok(reference) => reference,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let resolved = reference.resolve().map_err(|error| error.to_string())?;
+        let tree = resolved
+            .peel_to_commit()
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?
+            .id();
+        target = Some((
+            crate::git::name::reference_shorthand(&resolved)
+                .display()
+                .to_string(),
+            tree,
+        ));
+        break;
+    }
+    let Some((name, tree)) = target else {
+        return Ok(None);
     };
-    Some((name, show))
+    let prefix = if let Some(workdir) = repo.workdir() {
+        root.canonicalize()
+            .map_err(|error| error.to_string())?
+            .strip_prefix(workdir.canonicalize().map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?
+            .to_path_buf()
+    } else {
+        return Err("target repository has no worktree".into());
+    };
+    let show = move |path: &str| -> TargetText {
+        let tree = repo.find_tree(tree).map_err(|error| error.to_string())?;
+        let entry = match tree.get_path(&prefix.join(path)) {
+            Ok(entry) => entry,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        String::from_utf8(blob.content().to_vec())
+            .map(Some)
+            .map_err(|error| error.to_string())
+    };
+    Ok(Some((name, show)))
 }
 
 /// What an upgrade carries beyond the pin: policy keys the target's policy
@@ -241,33 +318,43 @@ fn carried_upgrade(
     target_state: Option<&str>,
     head_policy: Option<&str>,
     target_policy: Option<&str>,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut carried = Vec::new();
-    let head_keys = head_policy.map(policy_keys).unwrap_or_default();
-    let target_keys = target_policy.map(policy_keys).unwrap_or_default();
+    let head_keys = head_policy
+        .map(policy_keys)
+        .transpose()?
+        .unwrap_or_default();
+    let target_keys = target_policy
+        .map(policy_keys)
+        .transpose()?
+        .unwrap_or_default();
     let added: Vec<String> = head_keys.difference(&target_keys).cloned().collect();
     if !added.is_empty() {
         carried.push(format!("new policy keys ({})", added.join(", ")));
     }
     let state_schema = |text: Option<&str>| {
-        text.and_then(|t| toml::from_str::<toml::Value>(t).ok())
-            .and_then(|v| v.get("schema_version").map(ToString::to_string))
+        text.map(toml::from_str::<toml::Value>)
+            .transpose()
+            .map(|value| value.and_then(|v| v.get("schema_version").map(ToString::to_string)))
+            .map_err(|error| error.to_string())
     };
-    if state_schema(head_state) != state_schema(target_state) {
+    if state_schema(head_state)? != state_schema(target_state)? {
         carried.push(format!("a new {STATE} schema_version"));
     }
     let policy_schema = |text: Option<&str>| {
-        text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
-            .and_then(|v| v.get("schema_version").map(ToString::to_string))
+        text.map(serde_json::from_str::<serde_json::Value>)
+            .transpose()
+            .map(|value| value.and_then(|v| v.get("schema_version").map(ToString::to_string)))
+            .map_err(|error| error.to_string())
     };
-    if policy_schema(head_policy) != policy_schema(target_policy) {
+    if policy_schema(head_policy)? != policy_schema(target_policy)? {
         carried.push(format!("a new {POLICY} schema_version"));
     }
-    carried
+    Ok(carried)
 }
 
 /// Every object key path in a policy, dotted (`git.commit_format`).
-fn policy_keys(text: &str) -> BTreeSet<String> {
+fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
     fn walk(value: &serde_json::Value, prefix: &str, out: &mut BTreeSet<String>) {
         if let Some(map) = value.as_object() {
             for (key, child) in map {
@@ -282,10 +369,10 @@ fn policy_keys(text: &str) -> BTreeSet<String> {
         }
     }
     let mut out = BTreeSet::new();
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-        walk(&value, "", &mut out);
-    }
-    out
+    let value = serde_json::from_str::<serde_json::Value>(text)
+        .map_err(|error| format!("cannot parse policy: {error}"))?;
+    walk(&value, "", &mut out);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -444,6 +531,9 @@ mod tests {
             Some(POLICY_TEXT),
             Some(POLICY_TEXT),
         );
-        assert_eq!(carried, vec![format!("a new {STATE} schema_version")]);
+        assert_eq!(
+            carried.unwrap(),
+            vec![format!("a new {STATE} schema_version")]
+        );
     }
 }

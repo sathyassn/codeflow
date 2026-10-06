@@ -205,9 +205,12 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
     };
     let root = super::repo_root();
     let pm = root.join("project-management");
-    let Some(template) = load_template("base/pm/epic.md.tmpl") else {
-        eprintln!("error: epic template unavailable");
-        return 1;
+    let template = match load_template("base/pm/epic.md.tmpl") {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let Some(mut issuer) = Issuer::new(
         &root,
@@ -326,7 +329,17 @@ fn new_task(
 ) -> i32 {
     let root = super::repo_root();
     let pm = root.join("project-management");
-    if epic.is_some_and(|value| !allocate::epic_exists(&pm, value)) {
+    let exists = match epic
+        .map(|value| allocate::epic_exists(&pm, value))
+        .transpose()
+    {
+        Ok(value) => value.unwrap_or(true),
+        Err(error) => {
+            eprintln!("error: cannot read epic: {error}");
+            return 1;
+        }
+    };
+    if !exists {
         eprintln!(
             "error: epic {} not found under {}",
             epic.unwrap_or_default(),
@@ -334,9 +347,12 @@ fn new_task(
         );
         return 1;
     }
-    let Some(template) = load_template("base/pm/task.md.tmpl") else {
-        eprintln!("error: task template unavailable");
-        return 1;
+    let template = match load_template("base/pm/task.md.tmpl") {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let request = serde_json::json!({
         "kind": "task",
@@ -394,9 +410,12 @@ fn resume_task(id: &str) -> i32 {
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     };
-    let Some(template) = load_template("base/pm/task.md.tmpl") else {
-        eprintln!("error: task template unavailable");
-        return 1;
+    let template = match load_template("base/pm/task.md.tmpl") {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let pm = root.join("project-management");
     let (record_id, uid) = (unwritten.id.clone(), unwritten.uid.clone());
@@ -441,9 +460,12 @@ fn resume_task(id: &str) -> i32 {
 /// Where durable work is tracked, its id is issued from the registry like
 /// any other task (SPC-013 R-12).
 fn run_follow_up(source: &str, title: &str) -> i32 {
-    let Some(template) = load_template("base/pm/task.md.tmpl") else {
-        eprintln!("error: task template unavailable");
-        return 1;
+    let template = match load_template("base/pm/task.md.tmpl") {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let root = super::repo_root();
     let request = serde_json::json!({ "kind": "task", "follow_up_of": source, "title": title });
@@ -492,12 +514,19 @@ pub enum AdrCommand {
 pub fn run_adr(args: &AdrArgs) -> i32 {
     let AdrCommand::New { title } = &args.command;
     let root = super::repo_root();
-    let template = std::fs::read_to_string(root.join("docs/decisions/template.md"))
-        .ok()
-        .or_else(|| load_template("base/docs/decisions/template.md"));
-    let Some(template) = template else {
-        eprintln!("error: ADR template unavailable");
-        return 1;
+    let template = match std::fs::read_to_string(root.join("docs/decisions/template.md")) {
+        Ok(template) => Ok(template),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            load_template("base/docs/decisions/template.md")
+        }
+        Err(error) => Err(format!("cannot read ADR template: {error}")),
+    };
+    let template = match template {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let request = serde_json::json!({ "kind": "adr", "title": title });
     let Some(mut issuer) = Issuer::new(&root, Kind::Adr, title, request) else {
@@ -615,7 +644,14 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     let root = super::repo_root();
     let pm = root.join("project-management");
     for work_item in work_item {
-        if !allocate::work_item_exists(&pm, work_item) {
+        let exists = match allocate::work_item_exists(&pm, work_item) {
+            Ok(exists) => exists,
+            Err(error) => {
+                eprintln!("error: cannot read work item: {error}");
+                return 1;
+            }
+        };
+        if !exists {
             eprintln!(
                 "error: work item {work_item} not found under {}",
                 pm.display()
@@ -623,9 +659,12 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
             return 1;
         }
     }
-    let Some(template) = load_template("base/pm/spec.md.tmpl") else {
-        eprintln!("error: spec template unavailable");
-        return 1;
+    let template = match load_template("base/pm/spec.md.tmpl") {
+        Ok(template) => template,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
     };
     let request = serde_json::json!({ "kind": "spec", "for": work_item, "title": title });
     let Some(mut issuer) = Issuer::new(&root, Kind::Spc, title, request) else {
@@ -698,13 +737,16 @@ fn report(rec: &NewRecord) -> i32 {
 /// `project-management/templates/<kind>.md` when it is usable, otherwise the
 /// embedded one, with a warning that names why the project's was not used.
 /// Any other embedded template is returned as shipped.
-fn load_template(asset: &str) -> Option<String> {
-    let embedded = EmbeddedAssets
+fn load_template(asset: &str) -> Result<String, String> {
+    let bytes = EmbeddedAssets
         .read(asset)
-        .and_then(|bytes| String::from_utf8(bytes).ok())?;
+        .map_err(|error| format!("cannot read template {asset}: {error}"))?
+        .ok_or_else(|| format!("template {asset} is absent"))?;
+    let embedded = String::from_utf8(bytes)
+        .map_err(|error| format!("cannot decode template {asset}: {error}"))?;
     if !asset.starts_with("base/pm/") {
         // Not a work record (the ADR template): no project record template.
-        return Some(embedded);
+        return Ok(embedded);
     }
     let kind = if asset.ends_with("epic.md.tmpl") {
         RecordKind::Epic
@@ -713,9 +755,9 @@ fn load_template(asset: &str) -> Option<String> {
     } else {
         RecordKind::Task
     };
-    let (text, source) = record_template::load(&super::repo_root(), kind, &embedded);
+    let (text, source) = record_template::load(&super::repo_root(), kind, &embedded)?;
     if let TemplateSource::Fallback(reason) = source {
         eprintln!("warning: {reason}");
     }
-    Some(text)
+    Ok(text)
 }

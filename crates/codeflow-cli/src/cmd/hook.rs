@@ -105,8 +105,10 @@ pub fn run(args: &HookArgs) -> i32 {
         }
     } else {
         let mut stdin = String::new();
-        // Preserve the existing advisory behavior for every legacy hook.
-        let _ = std::io::stdin().read_to_string(&mut stdin);
+        if let Err(error) = std::io::stdin().read_to_string(&mut stdin) {
+            eprintln!("codeflow hook: cannot read hook input: {error}");
+            return 2;
+        }
         stdin
     };
 
@@ -115,24 +117,26 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::ExecGuard => exec_guard(&stdin),
         HookName::EditGuard => edit_guard(&stdin),
         HookName::SessionOrient => session_orient(&stdin),
-        HookName::PromptReminder => {
-            prompt_reminder(&stdin);
-            0
-        }
+        HookName::PromptReminder => prompt_reminder(&stdin),
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
     }
 }
 
-/// The advisory entry: dispatch on the payload's event. Every path exits 0,
-/// and output is written without panicking, so a closed stdout cannot turn
-/// advice into a failed session or a refused prompt. The guards never pass
-/// through here.
+/// The advisory entry: dispatch on the payload's event. Output writes do not
+/// panic, so a closed stdout does not fail the session. Unreadable repository
+/// state is reported as a nonzero result. The guards never pass through here.
 fn session_orient(stdin: &str) -> i32 {
     match guidance::payload_event(stdin) {
         guidance::HookEvent::SessionStart => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            let root = super::project_root(&cwd);
+            let root = match super::project_root(&cwd) {
+                Ok(root) => root,
+                Err(error) => {
+                    eprintln!("codeflow: cannot read project root: {error}");
+                    return 2;
+                }
+            };
             let digest = orient::generate(&root);
             let mut out = std::io::stdout();
             let _ = write!(out, "{digest}");
@@ -145,20 +149,30 @@ fn session_orient(stdin: &str) -> i32 {
             }
             let _ = out.flush();
         }
-        guidance::HookEvent::PromptSubmit => prompt_reminder(stdin),
+        guidance::HookEvent::PromptSubmit => return prompt_reminder(stdin),
         guidance::HookEvent::Other(_) => {}
     }
     0
 }
 
 /// Write the prompt's one rule line, if any; a write error is dropped.
-fn prompt_reminder(stdin: &str) {
+fn prompt_reminder(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    if let Some(line) = guidance::prompt_reminder(&super::project_root(&cwd), stdin) {
+    if let Some(line) = guidance::prompt_reminder(
+        &match super::project_root(&cwd) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("codeflow: cannot read project root: {error}");
+                return 2;
+            }
+        },
+        stdin,
+    ) {
         let mut out = std::io::stdout();
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
     }
+    0
 }
 
 fn read_bounded_utf8(reader: impl Read, max_bytes: usize) -> Result<String, &'static str> {
@@ -222,11 +236,9 @@ fn git_guard(stdin: &str) -> i32 {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
-            // Fail open with a visible warning: a malformed payload must not
-            // veto every shell call (charter principle 8 — legible, not silent).
             let finding = payload_finding("git-guard", &e);
-            eprintln!("{}", finding.line("codeflow git-guard", "warning"));
-            return 0;
+            eprintln!("{}", finding.line("codeflow git-guard", "error"));
+            return 2;
         }
     };
     let Some(command) = payload.shell_command() else {
@@ -238,7 +250,13 @@ fn git_guard(stdin: &str) -> i32 {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
-    let root = super::project_root(&cwd);
+    let root = match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: cannot read project root: {error}");
+            return 2;
+        }
+    };
     let authority = match codeflow_core::hooks::landed_policy::load(&root) {
         Ok(value) => value,
         Err(error) => {
@@ -250,17 +268,31 @@ fn git_guard(stdin: &str) -> i32 {
         }
     };
     let policy = &authority.policy;
-    let branch = codeflow_core::hooks::RepoInfo::discover(&root)
-        .map(|i| i.branch)
+    let repo_info = match codeflow_core::hooks::RepoInfo::discover(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow git-guard: {error}");
+            return 2;
+        }
+    };
+    let branch = repo_info
+        .as_ref()
+        .map(|info| info.branch.clone())
         .unwrap_or_default();
     // The session's root checkout, when the command runs in one (TSK-165).
-    let root_checkout = codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git);
+    let root_checkout = match codeflow_core::root_checkout::RootCheckout::at(&root, &policy.git) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow git-guard: {error}");
+            return 2;
+        }
+    };
 
     let lookup = gh_pr_base;
     // Resolve a retargeted repository (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to its
     // branch and policy, so a git op is judged by the repository it targets,
     // not the session's (charter §6.1; TSK-112).
-    let session_common = codeflow_core::hooks::RepoInfo::discover(&root).map(|i| i.common_dir);
+    let session_common = repo_info.map(|info| info.common_dir);
     let dir_cwd = cwd.clone();
     let dir_target = move |spec: &git_guard::Retarget<'_>| {
         git_guard::read_target(&dir_cwd, session_common.as_deref(), spec)
@@ -369,11 +401,12 @@ pub fn exec_guard_canary(stdin: &str) -> codeflow_core::doctor::CapturedRun {
     let mut out = Vec::new();
     let mut err = Vec::new();
     let code = match shell_call(stdin, &mut err) {
-        Some((_, command)) => {
+        Ok(Some((_, command))) => {
             let violations = exec_guard::evaluate_floor(&command);
             exec_guard_answer(&mut out, &mut err, stdin, &violations, &FLOOR_SOURCE, None)
         }
-        _ => 0,
+        Ok(None) => 0,
+        Err(_) => 2,
     };
     codeflow_core::doctor::CapturedRun {
         code: Some(code),
@@ -385,19 +418,24 @@ pub fn exec_guard_canary(stdin: &str) -> codeflow_core::doctor::CapturedRun {
 /// The policy source the canary names: the floor, with no policy read.
 const FLOOR_SOURCE: &str = "the catastrophic-command floor, which no policy relaxes";
 
-/// The payload and its shell command, or `None` when the payload does not
-/// read (a warning, allowing) or is not a supported shell tool call.
-fn shell_call(stdin: &str, err: &mut dyn Write) -> Option<(git_guard::HookPayload, String)> {
+/// The payload and its shell command. A non-shell event is absent; unreadable
+/// payload bytes are errors that the real guard and canary refuse.
+fn shell_call(
+    stdin: &str,
+    err: &mut dyn Write,
+) -> Result<Option<(git_guard::HookPayload, String)>, git_guard::PayloadError> {
     let payload = match git_guard::HookPayload::parse(stdin) {
         Ok(p) => p,
         Err(e) => {
             let finding = payload_finding("exec-guard", &e);
-            let _ = writeln!(err, "{}", finding.line("codeflow exec-guard", "warning"));
-            return None;
+            let _ = writeln!(err, "{}", finding.line("codeflow exec-guard", "error"));
+            return Err(e);
         }
     };
-    let command = payload.shell_command()?.to_string();
-    Some((payload, command))
+    let Some(command) = payload.shell_command().map(str::to_string) else {
+        return Ok(None);
+    };
+    Ok(Some((payload, command)))
 }
 
 /// The exec-guard answer to `violations`: the policy source and Grok's deny
@@ -419,8 +457,10 @@ fn exec_guard_answer(
 }
 
 fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let Some((payload, command)) = shell_call(stdin, err) else {
-        return 0; // unreadable, or not a supported shell tool call
+    let (payload, command) = match shell_call(stdin, err) {
+        Ok(Some(call)) => call,
+        Ok(None) => return 0,
+        Err(_) => return 2,
     };
     let command = command.as_str();
 
@@ -429,7 +469,13 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
-    let root = super::project_root(&cwd);
+    let root = match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: cannot read project root: {error}");
+            return 2;
+        }
+    };
     // Security levels use the same committed authority as the Git guard.
     let authority = match codeflow_core::hooks::landed_policy::load(&root) {
         Ok(value) => value,
@@ -442,13 +488,17 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
     };
     let policy = &authority.policy;
+    // Unreadable shell text is unproven; hook::run returns this refusal code.
+    let Ok(shell) = std::env::var_os("SHELL")
+        .map(std::ffi::OsString::into_string)
+        .transpose()
+    else {
+        let _ = writeln!(err, "codeflow hook: cannot read SHELL as UTF-8");
+        return 2;
+    };
     let violations = exec_guard::evaluate_in(
         command,
-        exec_guard::shell_is_posix(
-            &payload.tool_name,
-            std::env::var("SHELL").ok().as_deref(),
-            cfg!(unix),
-        ),
+        exec_guard::shell_is_posix(&payload.tool_name, shell.as_deref(), cfg!(unix)),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
@@ -471,7 +521,13 @@ fn edit_guard(stdin: &str) -> i32 {
         .clone()
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| ".".into());
-    let root = super::project_root(&cwd);
+    let root = match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: cannot read project root: {error}");
+            return 2;
+        }
+    };
     let authority = match codeflow_core::hooks::landed_policy::load(&root) {
         Ok(value) => value,
         Err(error) => {
@@ -487,7 +543,13 @@ fn edit_guard(stdin: &str) -> i32 {
         eprintln!("codeflow edit-guard: git.hook_integrity: cannot resolve home; the operator repairs the hook process environment");
         return 2;
     };
-    let repo = codeflow_core::hooks::RepoInfo::discover(&root);
+    let repo = match codeflow_core::hooks::RepoInfo::discover(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow edit-guard: {error}");
+            return 2;
+        }
+    };
     let context = edit_guard::EditContext {
         cwd: &cwd,
         root: &root,
@@ -546,7 +608,8 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
 /// The base branch `gh` printed. OS text rule (issue 79): the base is judged
 /// against protected globs, so a name that is not valid UTF-8 is not read as a
 /// lossy lookalike, and only the answer's own newline is framing: a name that
-/// ends in other whitespace keeps it.
+/// ends in other whitespace keeps it. An unreadable answer remains unproven:
+/// `git_guard::check_gh` refuses an unresolved base for a protected-merge check.
 fn base_from_answer(stdout: Vec<u8>) -> Option<String> {
     let text = String::from_utf8(stdout).ok()?;
     let base = text.strip_suffix('\n').unwrap_or(&text).to_string();
@@ -555,7 +618,16 @@ fn base_from_answer(stdout: Vec<u8>) -> Option<String> {
 
 fn session_summary(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    match session_summary::record(&super::project_root(&cwd), stdin) {
+    match session_summary::record(
+        &match super::project_root(&cwd) {
+            Ok(root) => root,
+            Err(error) => {
+                eprintln!("codeflow: cannot read project root: {error}");
+                return 2;
+            }
+        },
+        stdin,
+    ) {
         Ok(Some(path)) => {
             eprintln!("codeflow session-summary: recorded to {}", path.display());
             0
@@ -582,6 +654,11 @@ fn session_summary(stdin: &str) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r16_guard_payload_parse_errors_refuse() {
+        assert_eq!(super::git_guard("{"), 2);
+        assert_eq!(super::exec_guard_canary("{").code, Some(2));
+    }
     use super::{base_from_answer, read_bounded_utf8};
     use std::io::Cursor;
 

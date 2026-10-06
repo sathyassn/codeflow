@@ -78,22 +78,29 @@ impl ProjectPaths {
     /// Read the project's paths from its effective policy, falling back to the
     /// default for the stack recorded in `.codeflow/project.toml` (or the
     /// generic default when no stack is recorded).
-    #[must_use]
-    pub fn load(repo_root: &Path) -> Self {
-        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
-        let product = policy.git.product_paths.clone().unwrap_or_else(|| {
-            let stack = crate::scaffold::state::ProjectState::load(repo_root)
-                .map(|state| state.stack)
-                .unwrap_or_default();
-            stack_product_paths(&stack)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the effective policy or project stack cannot be read.
+    pub fn load(repo_root: &Path) -> Result<Self, String> {
+        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root)?;
+        let product = if let Some(paths) = policy.git.product_paths {
+            paths
+        } else {
+            let project = crate::hooks::policy::read_project_toml(repo_root)?;
+            let stack = match project.as_ref().and_then(|value| value.get("stack")) {
+                None => "",
+                Some(value) => value.as_str().ok_or("project stack is not a string")?,
+            };
+            stack_product_paths(stack)
                 .iter()
                 .map(ToString::to_string)
                 .collect()
-        });
-        Self {
+        };
+        Ok(Self {
             product,
             watched: policy.git.breaking_watch_paths,
-        }
+        })
     }
 
     fn for_key(&self, key: &str) -> &[String] {

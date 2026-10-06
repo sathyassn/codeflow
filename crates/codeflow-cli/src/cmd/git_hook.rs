@@ -57,7 +57,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
         return 0;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let root = super::project_root(&cwd);
+    let root = match super::project_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: cannot read project root: {error}");
+            return 2;
+        }
+    };
     // reference-transaction fires on every ref update, including the hundreds
     // of remote-tracking refs a `git fetch` touches. Short-circuit before any
     // policy load or full stdin parse when it cannot apply (charter §6.1
@@ -98,7 +104,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
         }
     }
 
-    let (policy, _armed) = Policy::load_effective(&root);
+    let (policy, _armed) = match Policy::load_effective(&root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let token = super::integrate_token_present();
 
     let (plane, result) = match args.stage {
@@ -117,10 +129,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
         StageName::PrePush => {
             let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,
-                Err(error) => {
-                    eprintln!("{}", degraded_hook_input_note("pre-push", &error));
-                    String::new()
-                }
+                Err(error) => return refuse_hook("pre-push", &error),
             };
             let refs = git_hook::parse_push_refs(&stdin);
             let mut result = git_hook::pre_push(
@@ -142,16 +151,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
 
     match result {
         Ok(report) => super::render_stage(plane, &root, &report, 1),
-        Err(e) => {
-            // A hook that cannot evaluate must not block work invisibly:
-            // report and pass (CI remains the hard line, charter D19).
-            let finding = codeflow_core::remedy::Finding::new(
-                format!("{e}; check skipped"),
-                codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
-            );
-            eprintln!("{}", finding.line(&format!("codeflow {plane}"), "warning"));
-            0
-        }
+        Err(error) => refuse_hook(plane, &error),
     }
 }
 
@@ -234,7 +234,13 @@ fn run_reference_transaction_with_reader(
             // An explicitly inactive policy has nothing to protect. Otherwise
             // unreadable prepared input leaves the transaction unclassifiable,
             // so Git must cancel it instead of silently moving a protected ref.
-            let (policy, _armed) = Policy::load_effective(root);
+            let (policy, _armed) = match Policy::load_effective(root) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("codeflow: cannot read policy: {error}");
+                    return 2;
+                }
+            };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
             {
@@ -255,7 +261,13 @@ fn run_reference_transaction_with_reader(
         return 0;
     }
 
-    let (policy, _armed) = Policy::load_effective(root);
+    let (policy, _armed) = match Policy::load_effective(root) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("codeflow: cannot read policy: {error}");
+            return 2;
+        }
+    };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
@@ -280,12 +292,14 @@ fn read_hook_input(mut reader: impl Read) -> std::io::Result<String> {
     Ok(input)
 }
 
-fn degraded_hook_input_note(stage: &str, error: &std::io::Error) -> String {
-    codeflow_core::remedy::Finding::new(
-        format!("could not read hook stdin ({error}); ref checks degraded"),
-        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
-    )
-    .line(&format!("codeflow {stage}"), "warning")
+/// Every hook reader error reaches this nonzero refusal boundary.
+fn refuse_hook(stage: &str, error: &impl std::fmt::Display) -> i32 {
+    let finding = codeflow_core::remedy::Finding::new(
+        format!("cannot evaluate {stage}: {error}; operation blocked"),
+        codeflow_core::remedy::HOOK_UNEVALUATED.remedy(),
+    );
+    eprintln!("{}", finding.line(&format!("codeflow {stage}"), "error"));
+    1
 }
 
 fn commit_msg(
@@ -306,13 +320,12 @@ fn commit_msg(
             msg_file.display()
         ))
     })?;
-    // The contract-surface tripwire needs the files this commit stages
-    // (ADR-0020); empty on any error, so it simply does not fire.
+    // Both obtaining errors propagate to the outer nonzero hook refusal.
     let mut report = git_hook::commit_msg_with_files(
         &policy.git,
         &message,
-        &staged_files(root),
-        merge_in_progress(root),
+        &staged_files(root)?,
+        merge_in_progress(root)?,
         &git_hook::MessageSource::Pending(pending_cleanup(root)?),
     );
     // A commit has no pull request body to settle it with (TSK-147 AC-4).
@@ -379,51 +392,55 @@ fn git_config_values(
 /// git dir. The `Merge ` subject exemption keys off THIS structural fact, not
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
-fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = codeflow_core::git::command()
+fn merge_in_progress(root: &Path) -> Result<bool, codeflow_core::error::HookError> {
+    let unreadable = |why: String| {
+        codeflow_core::error::HookError::Config(format!("cannot read merge state: {why}"))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        // OS text rule (issue 79): the folder is joined to a path, so its
-        // exact bytes are used and one the platform cannot hold is not read.
-        .and_then(|o| {
-            // Only git's own newline is framing: a name may end in a space or
-            // a carriage return.
-            codeflow_core::git::GitName::from_bytes(
-                o.stdout.strip_suffix(b"\n").unwrap_or(&o.stdout),
-            )
-            .os_path()
-            .ok()
-        });
-    match git_dir {
-        Some(dir) => root.join(dir).join("MERGE_HEAD").exists(),
-        None => false,
+        .map_err(|error| unreadable(error.to_string()))?;
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
+    }
+    let dir = codeflow_core::git::GitName::from_bytes(
+        out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout),
+    )
+    .os_path()
+    .map_err(|error| unreadable(error.to_string()))?;
+    match std::fs::metadata(root.join(dir).join("MERGE_HEAD")) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(unreadable(error.to_string())),
     }
 }
 
 /// Files staged for the pending commit (`git diff --cached --name-only`), for
-/// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
-/// so an unavailable file list simply means no nudge.
-fn staged_files(root: &Path) -> Vec<String> {
-    codeflow_core::git::command()
+/// the contract-surface tripwire. Unreadable inventory refuses the hook.
+fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookError> {
+    let unreadable = |why: String| {
+        codeflow_core::error::HookError::Config(format!("cannot read staged files: {why}"))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only", "-z"])
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            // Each path is kept as its storage key (OS text rule, issue 79).
-            o.stdout
-                .split(|byte| *byte == 0)
-                .filter(|path| !path.is_empty())
-                .map(|path| codeflow_core::git::GitName::from_bytes(path).storage_key())
-                .collect()
-        })
-        .unwrap_or_default()
+        .map_err(|error| unreadable(error.to_string()))?;
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
+    }
+    if !out.stdout.is_empty() && !out.stdout.ends_with(b"\0") {
+        return Err(unreadable("unterminated path inventory".into()));
+    }
+    Ok(out
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| codeflow_core::git::GitName::from_bytes(path).storage_key())
+        .collect())
 }
 
 #[cfg(test)]
@@ -466,12 +483,12 @@ mod tests {
     }
 
     #[test]
-    fn pre_push_stdin_failure_note_remains_degraded_and_nonblocking() {
+    fn r16_hook_obtaining_errors_refuse() {
         let error = read_hook_input(FailingReader).unwrap_err();
-        let note = degraded_hook_input_note("pre-push", &error);
-        assert!(note.contains("pre-push"), "{note}");
-        assert!(note.contains("ref checks degraded"), "{note}");
-        assert!(note.contains("clear it: rerun `git push`"), "{note}");
+        assert_eq!(refuse_hook("pre-push", &error), 1);
+        let directory = tempfile::tempdir().unwrap();
+        assert!(merge_in_progress(directory.path()).is_err());
+        assert!(staged_files(directory.path()).is_err());
     }
 
     #[test]
@@ -537,7 +554,7 @@ mod tests {
     fn hook_stdin_that_is_not_utf8_is_not_read() {
         let error = read_hook_input(&b"0 1 refs/heads/caf\xe9\n"[..]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
-        assert!(degraded_hook_input_note("pre-push", &error).contains("ref checks degraded"));
+        assert_eq!(refuse_hook("pre-push", &error), 1);
         assert_eq!(
             read_hook_input(&b"0 1 refs/heads/cafe\n"[..]).unwrap(),
             "0 1 refs/heads/cafe\n"
@@ -626,7 +643,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         repo_with_commit(dir.path(), &[b"a"]);
         stage_paths(dir.path(), &[b"caf\xe9", "caf\u{fffd}".as_bytes()]);
-        let files = staged_files(dir.path());
+        let files = staged_files(dir.path()).unwrap();
         assert_eq!(files.len(), 2, "{files:?}");
         assert!(files.contains(&"caf\u{fffd}".to_string()));
         assert!(files.contains(&codeflow_core::git::GitName::from_bytes(b"caf\xe9").storage_key()));

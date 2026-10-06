@@ -41,15 +41,18 @@ pub(crate) fn bounded_record_files(
             if kind.is_file() && path.extension().is_some_and(|extension| extension == "md") {
                 files.epics.push(path);
             } else if kind.is_dir() {
-                let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
-                    return Ok(());
-                };
-                let nested = path.join(format!("{name}.md"));
-                if let Ok(metadata) = fs::symlink_metadata(&nested) {
-                    charge_entry(remaining)?;
-                    if metadata.file_type().is_file() {
-                        files.epics.push(nested);
+                let mut name = entry.file_name();
+                name.push(".md");
+                let nested = path.join(name);
+                match fs::symlink_metadata(&nested) {
+                    Ok(metadata) => {
+                        charge_entry(remaining)?;
+                        if metadata.file_type().is_file() {
+                            files.epics.push(nested);
+                        }
                     }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(InventoryError::Unreadable),
                 }
                 bounded_markdown_files(&path.join("tasks"), remaining, &mut files.tasks)?;
             }
@@ -187,86 +190,97 @@ fn bounded_markdown_files(
 }
 
 /// Canonical flat epic records plus legacy nested epic records.
-pub(crate) fn epic_record_files(pm_root: &Path) -> Vec<PathBuf> {
+/// Unreadable inventory entries are errors, never missing records.
+pub(crate) fn epic_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let epics = pm_root.join("epics");
-    let mut paths = direct_markdown_files(&epics);
-    let Some(entries) = real_directory_entries(&epics) else {
-        return paths;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        let nested = path.join(format!("{name}.md"));
-        if fs::symlink_metadata(&nested).is_ok_and(|metadata| metadata.file_type().is_file()) {
-            paths.push(nested);
+    let mut paths = direct_markdown_files(&epics)?;
+    if let Some(entries) = real_directory_entries(&epics)? {
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let mut filename = name.to_os_string();
+            filename.push(".md");
+            let nested = path.join(filename);
+            match fs::symlink_metadata(&nested) {
+                Ok(metadata) if metadata.file_type().is_file() => paths.push(nested),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 /// Canonical flat task records plus tasks under legacy nested epics.
-pub(crate) fn task_record_files(pm_root: &Path) -> Vec<PathBuf> {
-    let mut paths = direct_markdown_files(&pm_root.join("tasks"));
-    let epics = pm_root.join("epics");
-    let Some(entries) = real_directory_entries(&epics) else {
-        return paths;
-    };
-    for entry in entries.filter_map(Result::ok) {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            paths.extend(direct_markdown_files(&entry.path().join("tasks")));
+pub(crate) fn task_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = direct_markdown_files(&pm_root.join("tasks"))?;
+    if let Some(entries) = real_directory_entries(&pm_root.join("epics"))? {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                paths.extend(direct_markdown_files(&entry.path().join("tasks"))?);
+            }
         }
     }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
 /// Canonical flat spec records.
-pub(crate) fn spec_record_files(pm_root: &Path) -> Vec<PathBuf> {
+pub(crate) fn spec_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     direct_markdown_files(&pm_root.join("specs"))
 }
 
-fn direct_markdown_files(dir: &Path) -> Vec<PathBuf> {
-    let Some(entries) = real_directory_entries(dir) else {
-        return Vec::new();
-    };
-    let mut paths = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let file_type = entry.file_type().ok()?;
-            let path = entry.path();
-            (file_type.is_file() && path.extension().is_some_and(|extension| extension == "md"))
-                .then_some(path)
-        })
-        .collect::<Vec<_>>();
+fn direct_markdown_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    if let Some(entries) = real_directory_entries(dir)? {
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "md")
+            {
+                paths.push(entry.path());
+            }
+        }
+    }
     paths.sort();
-    paths
+    Ok(paths)
 }
 
-fn real_directory_entries(dir: &Path) -> Option<fs::ReadDir> {
-    let Ok(metadata) = fs::symlink_metadata(dir) else {
-        return None;
-    };
-    if !metadata.file_type().is_dir() {
-        return None;
+fn real_directory_entries(dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => fs::read_dir(dir).map(Some),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
-    fs::read_dir(dir).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_inventory_does_not_hide_directory_read_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        std::os::unix::fs::symlink("blocked", &blocked).unwrap();
+        assert!(task_record_files(&blocked).is_err());
+        assert!(epic_record_files(&blocked).is_err());
+        assert!(spec_record_files(&blocked).is_err());
+    }
 
     #[test]
     fn task_activation_probe_reads_only_supported_task_homes() {
@@ -355,9 +369,9 @@ mod tests {
             fs::write(pm.join(path), "record").unwrap();
         }
         let files = bounded_record_files(pm, 6).unwrap();
-        assert_eq!(files.tasks, task_record_files(pm));
-        assert_eq!(files.epics, epic_record_files(pm));
-        assert_eq!(files.specs, spec_record_files(pm));
+        assert_eq!(files.tasks, task_record_files(pm).unwrap());
+        assert_eq!(files.epics, epic_record_files(pm).unwrap());
+        assert_eq!(files.specs, spec_record_files(pm).unwrap());
         assert!(matches!(
             bounded_record_files(pm, 5),
             Err(InventoryError::LimitExceeded)
@@ -382,22 +396,51 @@ mod tests {
         fs::write(pm.join("epics/EPC-002/tasks/TSK-002-001.md"), "").unwrap();
         fs::write(pm.join("specs/SPC-001.md"), "").unwrap();
 
-        assert_eq!(epic_record_files(pm).len(), 2);
-        assert_eq!(task_record_files(pm).len(), 2);
-        assert_eq!(spec_record_files(pm).len(), 1);
+        assert_eq!(epic_record_files(pm).unwrap().len(), 2);
+        assert_eq!(task_record_files(pm).unwrap().len(), 2);
+        assert_eq!(spec_record_files(pm).unwrap().len(), 1);
 
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(pm.join("epics/EPC-001.md"), pm.join("epics/EPC-999.md"))
                 .unwrap();
             std::os::unix::fs::symlink(pm.join("tasks"), pm.join("epics/EPC-998")).unwrap();
-            assert_eq!(epic_record_files(pm).len(), 2);
-            assert_eq!(task_record_files(pm).len(), 2);
+            assert_eq!(epic_record_files(pm).unwrap().len(), 2);
+            assert_eq!(task_record_files(pm).unwrap().len(), 2);
 
             let linked_pm = tempfile::tempdir().unwrap();
             std::os::unix::fs::symlink(pm.join("epics"), linked_pm.path().join("epics")).unwrap();
-            assert!(epic_record_files(linked_pm.path()).is_empty());
-            assert!(task_record_files(linked_pm.path()).is_empty());
+            assert!(epic_record_files(linked_pm.path()).unwrap().is_empty());
+            assert!(task_record_files(linked_pm.path()).unwrap().is_empty());
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r16_bounded_inventory_keeps_non_utf8_epic_directories() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir
+            .path()
+            .join("epics")
+            .join(std::ffi::OsStr::from_bytes(b"odd\xff"));
+        std::fs::create_dir(dir.path().join("epics")).unwrap();
+        match std::fs::create_dir(&nested) {
+            Ok(()) => {}
+            Err(error)
+                if cfg!(target_os = "macos")
+                    && error.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                // This macOS filesystem rejects the invalid-byte name before
+                // inventory can run. Linux exercises the byte-path fixture.
+                eprintln!("non-UTF-8 directory fixture unavailable on this filesystem: {error}");
+                return;
+            }
+            Err(error) => panic!("cannot create non-UTF-8 directory fixture: {error}"),
+        }
+        let task = nested.join("tasks/TSK-001.md");
+        std::fs::create_dir(nested.join("tasks")).unwrap();
+        std::fs::write(&task, "task").unwrap();
+        let inventory = bounded_record_files(dir.path(), 10).unwrap();
+        assert_eq!(inventory.tasks, [task]);
     }
 }

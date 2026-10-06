@@ -133,7 +133,7 @@ pub fn read_branch_name(
         // every branch rule treats as protected, as the hook plane does.
         Ok(out) if out.status.success() => Ok(std::str::from_utf8(&out.stdout).map_or_else(
             |_| crate::hooks::policy::NON_UTF8_BRANCH.to_string(),
-            |text| text.trim_end_matches(['\n', '\r']).to_string(),
+            |text| text.strip_suffix('\n').unwrap_or(text).to_string(),
         )),
         Ok(out) => Err(format!(
             "`git check-ref-format --branch` failed: {}",
@@ -222,7 +222,7 @@ pub fn read_target(
         git2::Repository::discover(&start).ok()?
     };
     // Empty on a detached HEAD, which no branch rule protects.
-    let branch = super::repo::current_branch(&repo);
+    let branch = super::repo::current_branch(&repo).ok()?;
     let same = session_common.is_some_and(|s| same_path(s, repo.commondir()))
         && git2::Repository::discover(cwd)
             .ok()
@@ -239,14 +239,15 @@ pub fn read_target(
                 .git,
         )
     };
-    let root = repo
+    let root = if let Some(dir) = repo
         .workdir()
         .filter(|_| crate::root_checkout::is_root_checkout(&repo))
-        .and_then(|dir| {
-            super::landed_policy::load(dir)
-                .ok()
-                .and_then(|authority| RootCheckout::read(&repo, &authority.policy.git))
-        });
+    {
+        let authority = super::landed_policy::load(dir).ok()?;
+        RootCheckout::read(&repo, &authority.policy.git).ok()?
+    } else {
+        None
+    };
     Some(TargetRepo {
         branch,
         policy,
@@ -947,7 +948,7 @@ fn cd_target(tokens: &[String]) -> Option<String> {
     tokens[1..]
         .iter()
         .find(|t| !t.starts_with('-'))
-        .map(|t| t.trim_matches(|c| c == '"' || c == '\'').to_string())
+        .cloned()
         .filter(|d| !d.is_empty())
 }
 
@@ -1385,8 +1386,11 @@ fn path_integrity(path: &Path, cwd: &Path, payload_cwd: &Path) -> Option<&'stati
     if super::edit_guard::repository_authority_target(&exact, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
-    super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true)
-        .then_some("repository enforcement files")
+    match super::edit_guard::repository_enforcement_target(&exact, payload_cwd, true) {
+        Ok(true) => Some("repository enforcement files"),
+        Ok(false) => None,
+        Err(_) => Some("repository enforcement paths (cannot read repository state)"),
+    }
 }
 
 /// [`token_integrity_path`] for the token as written, without expanding a
@@ -1403,8 +1407,10 @@ fn token_integrity_path_literal(
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
-    if super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
-        return Some("repository enforcement files");
+    match super::edit_guard::repository_enforcement_target(&path, payload_cwd, true) {
+        Ok(true) => return Some("repository enforcement files"),
+        Ok(false) => {}
+        Err(_) => return Some("repository enforcement paths (cannot read repository state)"),
     }
     integrity_target(&normalize_path(token)).or_else(|| {
         let base = integrity_disk_case(payload_cwd);
@@ -2069,7 +2075,7 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             .map(str::to_string)
             .or_else(|| {
                 checkout_under(path, cwd, payload_cwd, None)
-                    .map(|c| format!("the registered worktree {}", c.display()))
+                    .map(|c| format!("the registered worktree {}", c.description()))
             })
     };
     match glob.expand() {
@@ -2079,8 +2085,14 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             .map(|p| format!("{p} (through `{word}`)")),
         Err(GlobStop::TooManyEntries) => {
             let prefix = glob.prefix();
-            let holds = super::edit_guard::holds_enforcement_files(&prefix, cwd)
-                || super::edit_guard::holds_enforcement_files(&prefix, payload_cwd);
+            let holds =
+                match super::edit_guard::holds_enforcement_files(&prefix, cwd).and_then(|first| {
+                    super::edit_guard::holds_enforcement_files(&prefix, payload_cwd)
+                        .map(|second| first || second)
+                }) {
+                    Ok(holds) => holds,
+                    Err(error) => return Some(format!("cannot read enforcement paths: {error}")),
+                };
             (holds || reached(&prefix).is_some()).then(|| {
                 format!(
                     "`{word}`, which reads more than {GLOB_ENTRY_LIMIT} entries under a directory that holds enforcement files"
@@ -2471,11 +2483,16 @@ fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
     if !bytes.starts_with(b".") || !bytes.iter().any(|b| b"*?[{".contains(b)) {
         return None;
     }
-    let parent = path.parent()?.canonicalize().ok()?;
-    let root = super::RepoInfo::discover(&parent)?
-        .root
-        .canonicalize()
-        .ok()?;
+    let Ok(parent) = path.parent()?.canonicalize() else {
+        return Some("repository root pattern (cannot read directory)");
+    };
+    let info = match super::RepoInfo::discover(&parent) {
+        Ok(info) => info?,
+        Err(_) => return Some("repository root pattern (cannot read repository)"),
+    };
+    let Ok(root) = info.root.canonicalize() else {
+        return Some("repository root pattern (cannot read root)");
+    };
     if parent != root {
         return None;
     }
@@ -3031,13 +3048,20 @@ fn line_names(line: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
                     glob_reach(w, cwd, payload_cwd)
                 } else {
                     let path = integrity_shell_path(w, cwd);
-                    (!w.is_empty()
-                        && super::edit_guard::repository_enforcement_target(
-                            &path,
-                            payload_cwd,
-                            false,
-                        ))
-                    .then(|| format!("repository enforcement files (through `{w}`)"))
+                    if w.is_empty() {
+                        return None;
+                    }
+                    match super::edit_guard::repository_enforcement_target(
+                        &path,
+                        payload_cwd,
+                        false,
+                    ) {
+                        Ok(true) => Some(format!("repository enforcement files (through `{w}`)")),
+                        Ok(false) => None,
+                        Err(error) => {
+                            Some(format!("cannot read repository enforcement paths: {error}"))
+                        }
+                    }
                 }
             })
         });
@@ -3052,13 +3076,12 @@ fn assignment_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// The words of a command line, split at blanks and shell operators, with
-/// their quotes removed.
+/// Raw words split at blanks and shell operators for conservative name
+/// detection. Only `shell_words` removes shell quote framing.
 fn line_words(line: &str) -> impl Iterator<Item = &str> {
     line.split(|c: char| {
         shell_blank(c) || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
     })
-    .map(|w| w.trim_matches(['\'', '"']))
     .filter(|w| !w.is_empty())
 }
 
@@ -3093,7 +3116,7 @@ fn read_only_program(tokens: &[String]) -> bool {
 /// A variable the line does not set, read from the guard's own
 /// environment: every other occurrence of the name on the line must be an
 /// expansion of it.
-fn environment_value(name: &str, line: &str) -> Option<String> {
+fn environment_value(name: &str, line: &str) -> Option<std::ffi::OsString> {
     let bare = line.match_indices(name).any(|(at, _)| {
         let before = &line[..at];
         let after = &line[at + name.len()..];
@@ -3110,7 +3133,7 @@ fn environment_value(name: &str, line: &str) -> Option<String> {
     if bare {
         return None;
     }
-    std::env::var(name).ok()
+    std::env::var_os(name)
 }
 
 /// The paths a destructive command's target word names, or `None` when
@@ -3138,7 +3161,7 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return None;
         }
-        text.push_str(&environment_value(name, line)?);
+        text.push_str(environment_value(name, line)?.to_str()?);
         rest = &after[used..];
     }
     text.push_str(rest);
@@ -3154,28 +3177,56 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
 /// A recursive delete of a registered worktree, or of a directory holding
 /// one, removes a live checkout with its uncommitted work and enforcement
 /// files (TSK-216 review finding 1).
-fn checkout_delete_violation(level: PolicyLevel, what: &str, checkout: &Path) -> Violation {
+enum CheckoutReach {
+    Path(PathBuf),
+    Unreadable(String),
+}
+
+impl CheckoutReach {
+    fn description(&self) -> String {
+        match self {
+            Self::Path(path) => path.display().to_string(),
+            Self::Unreadable(why) => format!("cannot read registered worktrees: {why}"),
+        }
+    }
+}
+
+fn checkout_delete_violation(
+    level: PolicyLevel,
+    what: &str,
+    checkout: &CheckoutReach,
+) -> Violation {
+    let message = match checkout {
+        CheckoutReach::Path(path) => format!(
+            "{what} would delete the registered worktree `{}` with its work and enforcement files",
+            path.display()
+        ),
+        CheckoutReach::Unreadable(why) => {
+            format!("{what}: cannot read registered worktrees: {why}")
+        }
+    };
     Violation::new(
         "git.hook_integrity",
         level,
-        format!(
-            "{what} would delete the registered worktree `{}` with its work and enforcement files",
-            checkout.display()
-        ),
+        message,
         crate::remedy::WORKTREE_DELETE.remedy(),
     )
 }
 
-/// The registered checkout under `path`, read in the repository at `cwd`
-/// and, when that fails, at the session's own cwd.
 fn checkout_under(
     path: &Path,
     cwd: &Path,
     payload_cwd: &Path,
     except: Option<&Path>,
-) -> Option<PathBuf> {
-    super::edit_guard::registered_checkout_under(path, cwd, except)
-        .or_else(|| super::edit_guard::registered_checkout_under(path, payload_cwd, except))
+) -> Option<CheckoutReach> {
+    for root in [cwd, payload_cwd] {
+        match super::edit_guard::registered_checkout_under(path, root, except) {
+            Ok(Some(path)) => return Some(CheckoutReach::Path(path)),
+            Ok(None) => {}
+            Err(error) => return Some(CheckoutReach::Unreadable(error)),
+        }
+    }
+    None
 }
 
 /// Judge the targets of a command that deletes directories (TSK-216 review
@@ -3193,7 +3244,15 @@ fn worktree_delete_check(
     line: &str,
     except: Option<&Path>,
 ) -> Option<Violation> {
-    let held = super::edit_guard::holds_registered_worktrees(cwd);
+    let held = match super::edit_guard::holds_registered_worktrees(cwd) {
+        Ok(held) => held,
+        Err(error) => {
+            return Some(hook_integrity_violation(
+                level,
+                format!("cannot read registered worktrees: {error}"),
+            ))
+        }
+    };
     for target in targets.iter().filter(|t| !t.is_empty()) {
         match resolve_targets(target, cwd, line) {
             Some(paths) => {
@@ -3413,18 +3472,12 @@ fn sed_text_violation(
                     format!("reads its script from its input, and the command line names `{p}`")
                 })
             } else {
-                let path = cwd.join(file);
-                match std::fs::metadata(&path) {
-                    Ok(meta) if meta.len() > SED_SCRIPT_LIMIT => Some(format!(
-                        "runs the script file `{file}`, which is too large for the guard to read"
-                    )),
-                    Ok(_) => std::fs::read(&path)
-                        .ok()
-                        .and_then(|bytes| enforcement_text(&String::from_utf8_lossy(&bytes)))
+                match read_sed_script(file, cwd) {
+                    SedRead::Read(text) => enforcement_text(&text)
                         .map(|p| format!("runs the script file `{file}`, which names `{p}`")),
-                    Err(_) => line_names(line, cwd, payload_cwd).map(|p| {
-                        format!("runs the script file `{file}`, which the guard cannot read, and the command line names `{p}`")
-                    }),
+                    SedRead::Unreadable { file, why } => {
+                        Some(format!("cannot read script `{file}`: {why}"))
+                    }
                 }
             };
             if let Some(why) = why {
@@ -3632,11 +3685,21 @@ fn find_action_violation(
         }
         if let Some(at) = rest.iter().position(|a| a == "-files0-from") {
             let text = match rest.get(at + 1).map(String::as_str) {
-                Some("-") | None => line.to_string(),
-                Some(file) => std::fs::read(cwd.join(file)).map_or_else(
-                    |_| line.to_string(),
-                    |bytes| String::from_utf8_lossy(&bytes).into_owned(),
-                ),
+                Some("-") | None => {
+                    return Some(hook_integrity_violation(
+                        level,
+                        "cannot read find starting points from stdin".to_string(),
+                    ))
+                }
+                Some(file) => match std::fs::read_to_string(cwd.join(file)) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return Some(hook_integrity_violation(
+                            level,
+                            format!("cannot read find starting points from {file}: {error}"),
+                        ))
+                    }
+                },
             };
             if let Some(p) = enforcement_text(&text).or_else(|| worktree_text(&text)) {
                 return Some(hook_integrity_violation(
@@ -3674,10 +3737,18 @@ fn find_action_violation(
             }
         })
         .collect();
-    let reachable: Vec<PathBuf> = start_paths
-        .iter()
-        .flat_map(|start| super::edit_guard::find_candidates(start, payload_cwd))
-        .collect();
+    let mut reachable = Vec::new();
+    for start in &start_paths {
+        match super::edit_guard::find_candidates(start, payload_cwd) {
+            Ok(paths) => reachable.extend(paths),
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read find targets: {error}"),
+                ))
+            }
+        }
+    }
     let mut at = end;
     while let Some(arg) = rest.get(at) {
         let filter = find_name_filter(&rest[..at]);
@@ -3877,24 +3948,24 @@ fn recursive_change_violation(
     if !recursive {
         return None;
     }
-    rm_operands(args)
+    for target in rm_operands(args)
         .into_iter()
         .filter(|target| !target.is_empty())
-        .find_map(|target| {
-            let paths = resolve_targets(target, cwd, line)?;
-            paths
-                .iter()
-                .any(|path| {
-                    super::edit_guard::holds_enforcement_files(path, cwd)
-                        || super::edit_guard::holds_enforcement_files(path, payload_cwd)
-                })
-                .then(|| {
-                    hook_integrity_violation(
-                        level,
-                        format!("`{cmd}` would change `{target}`, which holds enforcement files, and what lies below it"),
-                    )
-                })
-        })
+    {
+        let Some(paths) = resolve_targets(target, cwd, line) else {
+            continue;
+        };
+        for path in &paths {
+            for root in [cwd, payload_cwd] {
+                match super::edit_guard::holds_enforcement_files(path, root) {
+                    Ok(true) => return Some(hook_integrity_violation(level, format!("`{cmd}` would change `{target}`, which holds enforcement files, and what lies below it"))),
+                    Ok(false) => {},
+                    Err(error) => return Some(hook_integrity_violation(level, format!("cannot read recursive-change targets: {error}"))),
+                }
+            }
+        }
+    }
+    None
 }
 
 /// GNU `parallel` runs a command over its input as `xargs` does; its
@@ -4121,16 +4192,29 @@ fn direct_write_violation(
         }
     }
     if cmd == "sed" {
-        if let Some(p) = sed_script_writes(args, cwd)
-            .iter()
-            .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
-        {
-            return Some(hook_integrity_violation(
-                level,
-                format!("a `sed` script `w` command or backup writes the integrity path `{p}`"),
-            ));
+        match sed_script_writes(args, cwd) {
+            SedRead::Read(paths) => {
+                if let Some(p) = paths
+                    .iter()
+                    .find_map(|path| token_integrity_path(path, cwd, payload_cwd))
+                {
+                    return Some(hook_integrity_violation(
+                        level,
+                        format!(
+                            "a `sed` script `w` command or backup writes the integrity path `{p}`"
+                        ),
+                    ));
+                }
+            }
+            SedRead::Unreadable { file, why } => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read `sed` script `{file}`: {why}"),
+                ))
+            }
         }
     }
+
     if matches!(cmd, "cp" | "ln") || (cmd == "rsync" && !rsync_dry_run(args)) {
         // Only the destination is written. A copy or link from an integrity
         // path leaves that source in place.
@@ -7068,17 +7152,32 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
 /// Scan a `gh pr create` or `gh pr edit` body for AI attribution / emoji
 /// (charter §6.4) and policy characters (ADR-0067).
 ///
-/// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
-/// file are scanned. Fail-open (matching the guard's doctrine): a missing or
-/// unreadable body file passes rather than blocking. A stdin body (`-F -`) is
-/// out of scope — its content is not available to the guard, so it is not read.
+/// Both inline and file bodies are read before allowing publication.
 fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
-    let inline = flag_value(rest, &["--body", "-b"]);
-    let from_file = flag_value(rest, &["--body-file", "-F"])
-        .filter(|path| *path != "-")
-        .and_then(|path| std::fs::read_to_string(path).ok());
-    for body in inline.into_iter().chain(from_file.as_deref()) {
+    if let Some(body) = flag_value(rest, &["--body", "-b"]) {
         scan_pr_body(body, policy, out);
+    }
+    if let Some(path) = flag_value(rest, &["--body-file", "-F"]) {
+        let body = if path == "-" {
+            Err("cannot read PR body from stdin".to_string())
+        } else {
+            std::fs::read_to_string(path)
+                .map_err(|error| format!("cannot read PR body {path}: {error}"))
+        };
+        match body {
+            Ok(body) => scan_pr_body(&body, policy, out),
+            Err(error) if policy.ai_attribution.is_active() || policy.commit_emoji.is_active() => {
+                out.push(Violation::new(
+                    "git.pr_body",
+                    PolicyLevel::Block,
+                    error,
+                    crate::remedy::Remedy::sanctioned(
+                        "use a readable UTF-8 body file or an inline body",
+                    ),
+                ));
+            }
+            Err(_) => {}
+        }
     }
 }
 
@@ -7644,18 +7743,63 @@ fn sed_file_operands(args: &[String]) -> Vec<&str> {
 /// legitimate script. The backup an in-place edit writes is a candidate
 /// too: the file name plus its suffix, or a GNU suffix with `*` replaced
 /// by the file name (`-i'dir/*'`).
-fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
+#[derive(Debug)]
+enum SedRead<T> {
+    Read(T),
+    Unreadable { file: String, why: String },
+}
+
+fn read_sed_script(file: &str, cwd: &Path) -> SedRead<String> {
+    use std::io::Read;
+    let unreadable = |why: String| SedRead::Unreadable {
+        file: file.into(),
+        why,
+    };
+    let metadata = match std::fs::metadata(cwd.join(file)) {
+        Ok(metadata) => metadata,
+        Err(error) => return unreadable(error.to_string()),
+    };
+    if !metadata.is_file() {
+        return unreadable("not a regular script file".into());
+    }
+    if metadata.len() > SED_SCRIPT_LIMIT {
+        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    }
+    let input = match std::fs::File::open(cwd.join(file)) {
+        Ok(input) => input,
+        Err(error) => return unreadable(error.to_string()),
+    };
+    match input.metadata() {
+        Ok(metadata) if !metadata.is_file() => {
+            return unreadable("script is no longer a regular file".into())
+        }
+        Ok(metadata) if metadata.len() > SED_SCRIPT_LIMIT => {
+            return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"))
+        }
+        Ok(_) => {}
+        Err(error) => return unreadable(error.to_string()),
+    }
+    let mut bytes = Vec::new();
+    if let Err(error) = input.take(SED_SCRIPT_LIMIT + 1).read_to_end(&mut bytes) {
+        return unreadable(error.to_string());
+    }
+    if bytes.len() as u64 > SED_SCRIPT_LIMIT {
+        return unreadable(format!("exceeds {SED_SCRIPT_LIMIT} byte limit"));
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => SedRead::Read(text),
+        Err(error) => unreadable(format!("not valid UTF-8: {error}")),
+    }
+}
+
+fn sed_script_writes(args: &[String], cwd: &Path) -> SedRead<Vec<String>> {
     let mut scripts: Vec<String> = args.to_vec();
     for spec in SED_GRAMMARS {
         let parsed = parse_options(args, spec);
         for file in parsed.values_of('f', "--file") {
-            let path = cwd.join(file);
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if meta.len() <= 1 << 16 {
-                    if let Ok(text) = std::fs::read_to_string(&path) {
-                        scripts.push(text);
-                    }
-                }
+            match read_sed_script(file, cwd) {
+                SedRead::Read(text) => scripts.push(text),
+                SedRead::Unreadable { file, why } => return SedRead::Unreadable { file, why },
             }
         }
     }
@@ -7701,7 +7845,7 @@ fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
             }
         }
     }
-    out
+    SedRead::Read(out)
 }
 
 /// For commands where only the presence of a long flag matters and no option
@@ -8592,9 +8736,87 @@ mod tests {
         assert!(root_dot_pattern_target(&path).is_some());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn r16_cd_keeps_a_quote_in_the_dequoted_directory_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::create_dir(root.join("safe'")).unwrap();
+        std::os::unix::fs::symlink("../.git/config", root.join("safe'/link")).unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "cd \"safe'\"; printf x > link",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_sed_unreadable_script_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::os::unix::fs::symlink(".git/config", root.join("link")).unwrap();
+        std::fs::write(root.join("script.sed"), b"# caf\xe9\nw link\n").unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f script.sed in.txt",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r16_sed_oversized_script_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::os::unix::fs::symlink(".git/config", root.join("link")).unwrap();
+        let mut script = vec![b'#'; 65 * 1024];
+        script.extend_from_slice(b"\nw link\n");
+        std::fs::write(root.join("script.sed"), script).unwrap();
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f script.sed in.txt",
+            &ctx(&policy, "task/local"),
+            &root,
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
+    #[test]
+    fn r16_sed_shared_limit_refuses_even_without_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.sed");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(SED_SCRIPT_LIMIT + 1)
+            .unwrap();
+        assert!(matches!(
+            read_sed_script("large.sed", dir.path()),
+            SedRead::Unreadable { why, .. } if why.contains("limit")
+        ));
+        let policy = GitPolicy::default();
+        let report = evaluate_report_at(
+            "sed -f large.sed in.txt",
+            &ctx(&policy, "task/local"),
+            dir.path(),
+        );
+        assert!(blocks(&report.violations), "{:?}", report.violations);
+    }
+
     #[test]
     fn r15_owned_sed_keeps_carriage_return_in_write_operand() {
-        let paths = sed_script_writes(&["w notes.md\r\nw other.md".into()], Path::new("."));
+        let SedRead::Read(paths) =
+            sed_script_writes(&["w notes.md\r\nw other.md".into()], Path::new("."))
+        else {
+            panic!("inline script")
+        };
         assert!(paths.contains(&"notes.md\r".to_string()), "{paths:?}");
         assert!(!paths.contains(&"notes.md".to_string()), "{paths:?}");
     }
@@ -8661,7 +8883,10 @@ mod tests {
             .iter()
             .any(|s| s.contains("x\u{a0}}")));
         assert_eq!(
-            sed_script_writes(&["w file\u{a0}".into()], Path::new(".")),
+            match sed_script_writes(&["w file\u{a0}".into()], Path::new(".")) {
+                SedRead::Read(paths) => paths,
+                other @ SedRead::Unreadable { .. } => panic!("{other:?}"),
+            },
             vec!["file\u{a0}"]
         );
         assert_eq!(
@@ -9436,11 +9661,28 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_body_file_missing_passes() {
-        // Fail-open: an unreadable / missing body file must not block.
+    fn r16_missing_sed_script_and_unreadable_pr_stdin_refuse() {
+        let policy = default_policy();
+        for command in [
+            "sed -i -f /no/such/script.sed README.md",
+            "gh pr create --body-file -",
+        ] {
+            assert!(
+                blocks(&evaluate(command, &ctx(&policy, "feat/x"))),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pr_body_file_missing_refuses() {
+        // An unreadable publication body cannot be certified.
         let p = default_policy();
         let cmd = "gh pr create -t 'feat: x' --body-file '/no/such/body/file.md'";
-        assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
+        let violations = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert!(violations
+            .iter()
+            .any(|v| v.rule == "git.pr_body" && v.message.contains("cannot read")));
     }
 
     // -- gh pr merge (ADR-0007) --
@@ -9943,7 +10185,6 @@ mod tests {
             "sed -i '' -e s/a/b/ README.md",
             "sed -i .bak s/a/b/ README.md",
             "sed -i -e s/.codeflow/x/ README.md",
-            "sed -i -f .codeflow/script.sed README.md",
             "rm -f '' README.md",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -11082,7 +11323,9 @@ mod tests {
             }
             ran.push(format!("{form:?}"));
             let args: Vec<String> = form.iter().map(ToString::to_string).collect();
-            let mut judged: Vec<String> = sed_script_writes(&args, dir.path());
+            let SedRead::Read(mut judged) = sed_script_writes(&args, dir.path()) else {
+                panic!("script fixture unreadable")
+            };
             if requests_in_place(&args) {
                 judged.extend(sed_file_operands(&args).into_iter().map(String::from));
             }
@@ -11116,15 +11359,22 @@ mod tests {
     #[test]
     fn test_integrity_stream_read_with_sed_allowed() {
         let p = default_policy();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("script.sed"), "p\n").unwrap();
         for cmd in [
             "sed -n 1,5p .codeflow/policy.json",
             "sed -e s/block/off/ .codeflow/policy.json",
             "sed -es/input/output/ .codeflow/policy.json",
             "sed -f script.sed .codeflow/policy.json",
             "sed -n -e p .codeflow/policy.json",
-            "sed -Ef /tmp/script.sed .codeflow/policy.json",
+            "sed -Ef script.sed .codeflow/policy.json",
         ] {
-            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+            let report = evaluate_report_at(cmd, &ctx(&p, "feat/x"), dir.path());
+            assert!(
+                report.violations.is_empty(),
+                "{cmd}: {:?}",
+                report.violations
+            );
         }
     }
 
@@ -11879,7 +12129,6 @@ mod tests {
             "x=$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)",
             "cat > f <<'EOF' && git add f\nnever `gh pr merge 12`\nEOF",
             "cat <<'EOF' | tee -a f | grep -c x\n`gh pr merge 12`\nEOF",
-            "gh pr create --title t --body-file - <<'EOF'\nnever `gh pr merge 12`\nEOF",
             "jq -n --arg b \"$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)\" '$b'",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));

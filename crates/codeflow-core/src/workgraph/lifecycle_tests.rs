@@ -774,7 +774,7 @@ fn epic_close_counts_the_closing_epic_as_the_last_spec_consumer() {
     repo.commit("plan");
     close_epic_with_block(&repo).unwrap();
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
 
@@ -855,7 +855,7 @@ fn spec_state_is_derived_from_its_consumers() {
         "project-management/specs/SPC-001.md",
         &spec("SPC-001", "approved", ""),
     );
-    let graph = || Graph::from_worktree(repo.root());
+    let graph = || Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(
         spec_state(&graph(), "SPC-001"),
         Some(SpecState::NoDeliveringConsumer)
@@ -964,7 +964,7 @@ fn the_draft_verb_names_both_spec_routes_and_writes_nothing() {
         if state == "implemented" {
             repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
             repo.commit("consumer complete");
-            let graph = Graph::from_worktree(repo.root());
+            let graph = Graph::from_worktree(repo.root()).unwrap();
             assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
         }
         let before = repo.read(SPEC);
@@ -1077,7 +1077,7 @@ fn a_consumer_naming_the_spec_in_escaped_yaml_keeps_the_freeze() {
     );
     repo.write(TASK_PATH, &escaped("complete"));
     repo.commit("consumer complete");
-    let graph = Graph::from_worktree(repo.root());
+    let graph = Graph::from_worktree(repo.root()).unwrap();
     assert_eq!(spec_state(&graph, "SPC-001"), Some(SpecState::Implemented));
     let reopen = StatusChange {
         reason: Some("regression".into()),
@@ -1110,7 +1110,7 @@ fn reviewer_r4_git_quoted_record_path_keeps_the_freeze() {
         repo.write(SHIPPED_SPEC, &spec("SPC-001", "approved", ""));
         repo.write(&path, &consumer("TSK-001", "complete", "SPC-001"));
         repo.commit("ship with a nested legacy record path");
-        let graph = Graph::from_worktree(repo.root());
+        let graph = Graph::from_worktree(repo.root()).unwrap();
         assert_eq!(
             spec_state(&graph, "SPC-001"),
             Some(SpecState::Implemented),
@@ -1912,7 +1912,7 @@ fn an_approved_spec_with_done_consumers_is_healthy_and_real_mismatches_warn() {
     );
     let base = repo.commit("approved spec, consumers done");
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Implemented)
     );
     let healthy = validate_lifecycle(repo.root());
@@ -1944,7 +1944,7 @@ fn a_spec_without_a_complete_consumer_is_not_implemented() {
     repo.write(EPIC_PATH, &epic("archived", "SPC-001", EPIC_CRITERION));
     repo.write(TASK_PATH, &consumer("TSK-001", "cancelled", "SPC-001"));
     assert_eq!(
-        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        spec_state(&Graph::from_worktree(repo.root()).unwrap(), "SPC-001"),
         Some(SpecState::Open)
     );
 }
@@ -3242,4 +3242,31 @@ fn unreadable_checked_out_baseline_is_refused() {
         toml::Value::Array(vec![toml::Value::Integer(1)]),
     );
     assert!(super::baseline_entries(Some(&toml::Value::Table(table))).is_err());
+}
+
+#[test]
+fn r16_unreadable_worktree_record_refuses_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("project-management/tasks/TSK-001.md");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"---\nid: TSK-001\n---\n# bad\xff").unwrap();
+    let verdict = validate_lifecycle(dir.path());
+    assert!(
+        !verdict.errors.is_empty(),
+        "unreadable record must not vanish: {verdict:?}"
+    );
+}
+
+#[test]
+fn r16_unreadable_revision_record_refuses_graph_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(
+        dir.path(),
+        &[(
+            b"project-management/specs/SPC-001.md",
+            b"---\nid: SPC-001\nstatus: implemented\n---\n#\xff",
+        )],
+    );
+    assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
+    assert!(super::shipped_in_history(&repo, oid, "SPC-001").is_err());
 }

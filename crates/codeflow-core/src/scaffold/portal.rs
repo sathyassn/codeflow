@@ -1178,6 +1178,10 @@ fn setup_portal_locked(
     }
     let manifest_bytes = source
         .read(MANIFEST_ASSET)
+        .map_err(|error| ScaffoldError::InvalidState {
+            what: MANIFEST_ASSET.into(),
+            detail: error.to_string(),
+        })?
         .ok_or_else(|| ScaffoldError::ManifestMissing(MANIFEST_ASSET.into()))?;
     if manifest_bytes.len() > MAX_MANIFEST_BYTES {
         return Err(ScaffoldError::ManifestInvalid(
@@ -1226,6 +1230,10 @@ fn setup_portal_locked(
     for file in &manifest.files {
         let asset = source
             .read(&format!("{ASSET_PREFIX}{}", file.path))
+            .map_err(|error| ScaffoldError::InvalidState {
+                what: file.path.clone(),
+                detail: error.to_string(),
+            })?
             .ok_or_else(|| {
                 ScaffoldError::ManifestMissing(format!("{ASSET_PREFIX}{}", file.path))
             })?;
@@ -1971,8 +1979,8 @@ mod tests {
     struct MapSource(BTreeMap<String, Vec<u8>>);
 
     impl AssetSource for MapSource {
-        fn read(&self, path: &str) -> Option<Vec<u8>> {
-            self.0.get(path).cloned()
+        fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+            Ok(self.0.get(path).cloned())
         }
     }
 

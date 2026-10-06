@@ -43,10 +43,10 @@ fn umbrella_policy() -> GitPolicy {
     }
 }
 
-fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-    let map: HashMap<String, String> = pairs
+fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    let map: HashMap<String, OsString> = pairs
         .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .map(|(k, v)| ((*k).to_string(), OsString::from(v)))
         .collect();
     move |name: &str| map.get(name).cloned()
 }
@@ -331,13 +331,13 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
     let root = repo_with_commit(&dir.path().join("r"));
     let repo = git2::Repository::open(&root).unwrap();
 
-    let rb = root_branch(&repo, &umbrella_policy());
+    let rb = root_branch(&repo, &umbrella_policy()).unwrap();
     assert_eq!(
         (rb.name.rule_text().unwrap(), rb.source),
         (WORKSPACE_ROOT_BRANCH, RootBranchSource::Policy)
     );
 
-    let rb = root_branch(&repo, &GitPolicy::default());
+    let rb = root_branch(&repo, &GitPolicy::default()).unwrap();
     assert_eq!(
         (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::ProtectedList)
@@ -347,7 +347,7 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
         protected_branches: vec!["release/*".into()],
         ..GitPolicy::default()
     };
-    let rb = root_branch(&repo, &fallback);
+    let rb = root_branch(&repo, &fallback).unwrap();
     assert_eq!(
         (rb.name.rule_text().unwrap(), rb.source),
         ("main", RootBranchSource::Fallback)
@@ -362,7 +362,7 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
             "refs/remotes/origin/trunk",
         ],
     );
-    let rb = root_branch(&repo, &GitPolicy::default());
+    let rb = root_branch(&repo, &GitPolicy::default()).unwrap();
     assert_eq!(
         (rb.name.rule_text().unwrap(), rb.source),
         ("trunk", RootBranchSource::OriginHead)
@@ -375,7 +375,7 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
 fn a_commit_at_the_root_on_its_root_branch_is_fine() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));
-    assert_eq!(commit_finding(&root, &GitPolicy::default()), None);
+    assert_eq!(commit_finding(&root, &GitPolicy::default()).unwrap(), None);
 }
 
 #[test]
@@ -383,7 +383,9 @@ fn a_commit_at_the_root_on_a_feature_branch_is_found_with_its_message() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
-    let finding = commit_finding(&root, &GitPolicy::default()).expect("a finding");
+    let finding = commit_finding(&root, &GitPolicy::default())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(
         finding.message(),
         format!(
@@ -407,7 +409,9 @@ fn a_commit_at_the_root_on_a_detached_head_is_found() {
     let root = repo_with_commit(&dir.path().join("r"));
     let sha = git(&root, &["rev-parse", "HEAD"]);
     git(&root, &["switch", "--quiet", "--detach"]);
-    let finding = commit_finding(&root, &GitPolicy::default()).expect("a finding");
+    let finding = commit_finding(&root, &GitPolicy::default())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(finding.head, Head::Detached(sha.chars().take(9).collect()));
     assert!(finding.message().contains("on a detached HEAD at"));
 }
@@ -421,7 +425,7 @@ fn a_commit_in_a_linked_worktree_on_a_feature_branch_is_fine() {
         &["worktree", "add", "--quiet", ".worktrees/t", "-b", "feat/t"],
     );
     assert_eq!(
-        commit_finding(&root.join(".worktrees/t"), &GitPolicy::default()),
+        commit_finding(&root.join(".worktrees/t"), &GitPolicy::default()).unwrap(),
         None
     );
 }
@@ -431,9 +435,11 @@ fn an_umbrella_root_on_its_root_branch_passes_and_on_a_feature_branch_is_found()
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("u"));
     git(&root, &["switch", "--quiet", "-c", WORKSPACE_ROOT_BRANCH]);
-    assert_eq!(commit_finding(&root, &umbrella_policy()), None);
+    assert_eq!(commit_finding(&root, &umbrella_policy()).unwrap(), None);
     git(&root, &["switch", "--quiet", "-c", "feat/x"]);
-    let finding = commit_finding(&root, &umbrella_policy()).expect("a finding");
+    let finding = commit_finding(&root, &umbrella_policy())
+        .unwrap()
+        .expect("a finding");
     assert_eq!(
         finding.message(),
         format!(
@@ -452,7 +458,7 @@ fn a_root_branch_named_main_explicitly_adds_no_finding_on_main() {
         root_branch: "main".into(),
         ..GitPolicy::default()
     };
-    assert_eq!(commit_finding(&root, &policy), None);
+    assert_eq!(commit_finding(&root, &policy).unwrap(), None);
 }
 
 // ---- git-guard (AC-2) --------------------------------------------------------
@@ -463,9 +469,9 @@ fn a_root_branch_named_main_explicitly_adds_no_finding_on_main() {
 fn guard(cwd: &Path, policy: &GitPolicy, command: &str) -> Vec<Violation> {
     use crate::hooks::git_guard::{evaluate, read_target, GuardContext, Retarget};
     let repo = git2::Repository::discover(cwd).unwrap();
-    let branch = crate::hooks::repo::current_branch(&repo);
+    let branch = crate::hooks::repo::current_branch(&repo).unwrap();
     let common = repo.commondir().to_path_buf();
-    let root = RootCheckout::at(cwd, policy);
+    let root = RootCheckout::at(cwd, policy).unwrap();
     let dir_target = |spec: &Retarget<'_>| read_target(cwd, Some(&common), spec);
     let ctx = GuardContext {
         policy,
@@ -874,7 +880,7 @@ fn umbrella(dir: &Path) -> PathBuf {
 }
 
 fn found(root: &Path) -> Vec<NestedRepo> {
-    nested_repositories(&git2::Repository::open(root).unwrap())
+    nested_repositories(&git2::Repository::open(root).unwrap()).unwrap()
 }
 
 #[test]
@@ -1133,8 +1139,8 @@ fn a_registered_submodule_stays_tracked_and_unflagged() {
     );
     git(&root, &["commit", "--quiet", "-m", "add submodule"]);
     let repo = git2::Repository::open(&root).unwrap();
-    assert!(nested_repositories(&repo).is_empty());
-    let subs = submodule_paths(&repo);
+    assert!(nested_repositories(&repo).unwrap().is_empty());
+    let subs = submodule_paths(&repo).unwrap();
     assert!(stray_gitlinks(&repo, &subs).is_empty());
     let report = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
     assert!(warnings(&report).is_empty(), "{report:?}");
@@ -1187,7 +1193,7 @@ fn a_gitlink_without_a_submodule_entry_is_reported() {
     git(&root, &["add", "embedded"]);
     let repo = git2::Repository::open(&root).unwrap();
     assert_eq!(
-        stray_gitlinks(&repo, &submodule_paths(&repo)),
+        stray_gitlinks(&repo, &submodule_paths(&repo).unwrap()),
         vec!["embedded".to_string()]
     );
 }
@@ -1721,7 +1727,7 @@ fn finish_on_a_policy_without_a_git_object_sets_the_key() {
     write_policy(&root, "{}");
     let report = finish(&root, prepare_branch(&root, &GitPolicy::default()).unwrap()).unwrap();
     assert!(report.policy_changed);
-    let (policy, _) = crate::hooks::policy::Policy::load_effective(&root);
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(&root).unwrap();
     assert_eq!(policy.git.root_branch, WORKSPACE_ROOT_BRANCH);
 }
 
@@ -1793,6 +1799,27 @@ fn the_workspace_hint_appears_only_for_nested_repositories_without_a_root_branch
         .ends_with("so it looks like a workspace; nothing was switched"));
     assert_eq!(workspace_hint(&root, &umbrella_policy()), None);
     assert_eq!(git(&root, &["branch", "--show-current"]), "main");
+}
+
+#[test]
+fn r16_repository_reports_do_not_hide_malformed_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("repo"));
+    std::fs::write(root.join(".git/HEAD"), b"malformed HEAD\n").unwrap();
+    let findings = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
+    assert!(findings
+        .iter()
+        .any(|finding| finding.message.contains("cannot read")));
+    let hint = workspace_hint(&root, &GitPolicy::default()).expect("cannot-read finding");
+    assert!(hint.message.contains("cannot read"), "{}", hint.message);
+
+    std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+    let findings = doctor_report(&root, &GitPolicy::default(), &env_of(&[]));
+    assert!(
+        !findings.is_empty(),
+        "existing unreadable repository cannot disappear"
+    );
+    assert!(workspace_hint(&root, &GitPolicy::default()).is_some());
 }
 
 // ---- the policy keys (AC-1) -------------------------------------------------
@@ -1877,15 +1904,17 @@ fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
     let repo = git2::Repository::open(&root).unwrap();
 
     let invalid = GitName::from_bytes(b"release/caf\xe9");
-    assert_eq!(head(&repo), Some(Head::Branch(invalid.clone())));
-    let origin = default_branch(&repo, &GitPolicy::default());
+    assert_eq!(head(&repo).unwrap(), Head::Branch(invalid.clone()));
+    let origin = default_branch(&repo, &GitPolicy::default()).unwrap();
     assert_eq!(
         (origin.name, origin.source),
         (invalid, RootBranchSource::OriginHead)
     );
 
     // On the root branch itself: no finding.
-    let facts = RootCheckout::read(&repo, &GitPolicy::default()).unwrap();
+    let facts = RootCheckout::read(&repo, &GitPolicy::default())
+        .unwrap()
+        .unwrap();
     assert!(facts
         .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
         .is_none());
@@ -1896,7 +1925,7 @@ fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
         root_branch: "release/caf\u{fffd}".to_string(),
         ..GitPolicy::default()
     };
-    let facts = RootCheckout::read(&repo, &lookalike).unwrap();
+    let facts = RootCheckout::read(&repo, &lookalike).unwrap().unwrap();
     assert!(facts
         .commit_on_name(Some(&GitName::from_bytes(b"release/caf\xe9")))
         .is_some());
@@ -1976,11 +2005,10 @@ fn a_folder_that_is_not_utf8_does_not_hide_or_rename_a_nested_repository() {
     std::fs::create_dir_all(odd.join("inner").join(".git")).unwrap();
     std::fs::create_dir_all(root.join("plain").join(".git")).unwrap();
     let repo = git2::Repository::open(&root).unwrap();
-    let found: Vec<String> = nested_repositories(&repo)
-        .into_iter()
-        .map(|n| n.path)
-        .collect();
-    assert_eq!(found, ["plain"]);
+    assert!(
+        nested_repositories(&repo).is_err(),
+        "cannot omit a repository that finish would need to ignore"
+    );
 }
 
 /// Round eight on issue 79: a tracked file whose name is not valid UTF-8 and
@@ -2003,8 +2031,8 @@ fn a_tracked_change_to_a_name_that_is_not_utf8_is_kept() {
 }
 
 /// Round fifteen on issue 79: a `.git` file whose folder holds a newline names
-/// that folder, so a folder that is not under the worktrees of this repository
-/// is no owned worktree, whatever its first line says.
+/// that exact folder. When it does not exist, ownership is unreadable and
+/// nested inventory refuses; the first line cannot prove an owned worktree.
 #[test]
 fn a_gitfile_folder_with_a_newline_is_not_an_owned_worktree() {
     let dir = tempfile::tempdir().unwrap();
@@ -2013,9 +2041,10 @@ fn a_gitfile_folder_with_a_newline_is_not_an_owned_worktree() {
     let marker = dir.path().join("wt-git");
     let inside = common.join("worktrees").join("meta");
     std::fs::write(&marker, format!("gitdir: {}\n", inside.display())).unwrap();
-    assert!(is_own_worktree(&marker, &common));
+    assert!(is_own_worktree(&marker, &common).unwrap());
     std::fs::write(&marker, format!("gitdir: {}\nother\n", inside.display())).unwrap();
-    assert!(!is_own_worktree(&marker, &common));
+    let error = is_own_worktree(&marker, &common).unwrap_err();
+    assert!(error.contains("cannot resolve gitfile target"), "{error}");
 }
 
 #[test]
@@ -2027,9 +2056,12 @@ fn configured_root_branch_keeps_unicode_whitespace() {
             root_branch: name.into(),
             ..GitPolicy::default()
         };
-        assert_eq!(root_branch(&repo, &policy).name.bytes(), name.as_bytes());
+        assert_eq!(
+            root_branch(&repo, &policy).unwrap().name.bytes(),
+            name.as_bytes()
+        );
         assert_eq!(workspace_branch_name(&policy), name);
-        let checkout = RootCheckout::read(&repo, &policy).unwrap();
+        let checkout = RootCheckout::read(&repo, &policy).unwrap().unwrap();
         assert!(checkout.commit_on(name).is_none());
         assert!(checkout.commit_on("release").is_some());
     }
@@ -2041,4 +2073,91 @@ fn r15_actor_unicode_marker_is_present() {
         actor(&env_of(&[("CLAUDECODE", "\u{a0}")])),
         Actor::Agent("CLAUDECODE")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_process_env_preserves_non_utf8_values() {
+    use std::os::unix::ffi::OsStrExt;
+    let name = format!("CODEFLOW_R16_PROCESS_ENV_{}_UNREADABLE", std::process::id());
+    std::env::set_var(&name, std::ffi::OsStr::from_bytes(b"\xff"));
+    let value = process_env(&name);
+    std::env::remove_var(&name);
+    assert!(value.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_actor_preserves_non_utf8_process_marker() {
+    use std::os::unix::ffi::OsStrExt;
+    let key = format!("CODEFLOW_R16_ACTOR_{}_UNREADABLE", std::process::id());
+    std::env::set_var(&key, std::ffi::OsStr::from_bytes(b"\xff"));
+    let observed = actor(&|name| {
+        (name == "CODEX_SESSION_ID")
+            .then(|| process_env(&key))
+            .flatten()
+    });
+    std::env::remove_var(&key);
+    assert_eq!(observed, Actor::Agent("CODEX_SESSION_ID"));
+}
+
+#[cfg(unix)]
+fn env_of_os(pairs: &[(&str, &[u8])]) -> impl Fn(&str) -> Option<OsString> {
+    use std::os::unix::ffi::OsStringExt;
+    let values: HashMap<String, OsString> = pairs
+        .iter()
+        .map(|(key, value)| ((*key).into(), OsString::from_vec(value.to_vec())))
+        .collect();
+    move |name| values.get(name).cloned()
+}
+
+#[cfg(unix)]
+#[test]
+fn r16_actor_preserves_non_utf8_marker_bytes() {
+    assert_eq!(
+        actor(&env_of_os(&[("CODEX_SESSION_ID", b"\xff")])),
+        Actor::Agent("CODEX_SESSION_ID")
+    );
+    assert_eq!(
+        actor(&env_of_os(&[
+            (HUMAN_OVERRIDE_ENV, b"1\xff"),
+            ("CODEX_SESSION_ID", b"\xff")
+        ])),
+        Actor::Agent("CODEX_SESSION_ID")
+    );
+}
+
+#[test]
+fn r16_finish_preserves_unreadable_gitignore() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = umbrella(dir.path());
+    write_policy(&root, "{\"git\": {\"protected_branches\": [\"main\"]}}\n");
+    let original = b"# bad\xff\n";
+    std::fs::write(root.join(".gitignore"), original).unwrap();
+    let step = prepare_branch(&root, &GitPolicy::default()).unwrap();
+    assert!(finish(&root, step).is_err());
+    assert_eq!(std::fs::read(root.join(".gitignore")).unwrap(), original);
+}
+
+#[test]
+fn r16_nested_inventory_refuses_unrepresentable_ignore_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    std::fs::create_dir_all(root.join("line\nbreak").join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    assert!(nested_repositories(&repo).is_err());
+}
+
+#[test]
+fn r16_unreadable_origin_head_refuses_root_commit_judgment() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let repo = git2::Repository::open(&root).unwrap();
+    let origin = repo.path().join("refs/remotes/origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    std::fs::write(origin.join("HEAD"), b"not a ref\n").unwrap();
+    assert!(default_branch(&repo, &GitPolicy::default()).is_err());
+    let finding = hook_violation(&root, &GitPolicy::default(), &env_of(&[])).unwrap();
+    assert_eq!(finding.level, PolicyLevel::Block);
+    assert!(finding.message.contains("cannot read"));
 }
