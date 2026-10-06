@@ -334,9 +334,12 @@ fn gates_line(root: &Path) -> String {
 /// same way.
 pub(crate) fn git_hooks_dir(root: &Path) -> Option<std::path::PathBuf> {
     let repo = super::repo::open(root)?;
-    if let Ok(config) = repo.config() {
-        if let Ok(path) = config.get_string("core.hookspath") {
-            let p = std::path::PathBuf::from(&path);
+    // OS text rule (issue 79): a hooks path that is not valid UTF-8 is still
+    // the folder git runs, so the bytes are kept; one the platform cannot hold
+    // resolves to nothing, never to the default folder.
+    if let Ok(config) = repo.config().and_then(|mut config| config.snapshot()) {
+        if let Ok(bytes) = config.get_bytes("core.hookspath") {
+            let p = crate::git::GitName::from_bytes(bytes).os_path().ok()?;
             return Some(if p.is_absolute() { p } else { root.join(p) });
         }
     }
@@ -362,6 +365,29 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// Round fifteen on issue 79: a hooks path that is not valid UTF-8 is the
+    /// folder git runs, not the default hooks folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_hooks_path_that_is_not_utf8_is_the_active_folder() {
+        use std::io::Write as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[core]\n\thooksPath = hooks-\xff\n")
+            .unwrap();
+        let active = git_hooks_dir(dir.path()).unwrap();
+        assert_eq!(
+            active.as_os_str().as_bytes(),
+            [dir.path().as_os_str().as_bytes(), b"/hooks-\xff"].concat()
+        );
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = crate::git::command()

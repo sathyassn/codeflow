@@ -773,6 +773,20 @@ mod tests {
         );
     }
 
+    /// Round fifteen on issue 79: a gitfile folder that holds a newline is that
+    /// folder, not the first line of it (which is another repository's state).
+    #[test]
+    fn a_gitfile_folder_with_a_newline_is_not_cut_at_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join(".git"), "gitdir: /x/meta\nother\n").unwrap();
+        assert_eq!(
+            runtime_state_dir(&repo),
+            Some(PathBuf::from("/x/meta\nother/codeflow"))
+        );
+    }
+
     #[test]
     fn test_runtime_state_dir_absent() {
         let dir = tempfile::tempdir().unwrap();

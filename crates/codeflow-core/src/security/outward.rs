@@ -676,12 +676,18 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         .rfind(|(key, _)| *key == format!("alias.{name}"))
         .map(|(_, value)| value.to_string());
     let value = inline.or_else(|| {
-        git2::Repository::open(&dir)
+        let config = git2::Repository::open(&dir)
             .ok()?
             .config()
             .ok()?
-            .get_string(&format!("alias.{name}"))
-            .ok()
+            .snapshot()
+            .ok()?;
+        // OS text rule (issue 79): the alias is read to find the command words
+        // it runs (`push`, `tag`), which are ASCII. A value with bytes that
+        // are not UTF-8 is still analysed, with those bytes as U+FFFD, rather
+        // than read as no alias; no decision compares the replaced text.
+        let bytes = config.get_bytes(&format!("alias.{name}")).ok()?;
+        Some(String::from_utf8_lossy(bytes).into_owned())
     });
     if let Some(value) = value.filter(|v| !v.starts_with('!')) {
         let mut args = vec!["git".to_string()];
@@ -873,6 +879,28 @@ mod tests {
             Some(temp.path()),
         );
         assert!(!direct[0].remedy.contains("--no-follow-tags"), "{direct:?}");
+    }
+
+    /// Round fifteen on issue 79: an alias with bytes that are not UTF-8 is
+    /// still read for the tag it creates, not taken for no alias.
+    #[test]
+    fn an_alias_that_is_not_utf8_still_creates_its_tag() {
+        use std::io::Write as _;
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(temp.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[alias]\n\tmark = tag --message=caf\xe9\n")
+            .unwrap();
+        assert!(!evaluate_at(
+            "git mark v9 && git push origin v9",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
     }
 
     #[test]

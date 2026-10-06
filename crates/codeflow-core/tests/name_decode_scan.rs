@@ -122,6 +122,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("codeflow-core/src/scaffold/gitutil.rs", "add_and_commit", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/scaffold/gitutil.rs", "git_ok", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/scaffold/gitutil.rs", "is_repo", "from_utf8_lossy", 1, "an object id or fixed ASCII word git prints, compared with ASCII only (`true`)"),
+    ("codeflow-core/src/security/outward.rs", "git_alias", "from_utf8_lossy", 1, "an alias value read only to find the ASCII command words it runs (push, tag); bytes that are not UTF-8 become U+FFFD in text that no decision compares, and the alternative would read the alias as absent"),
     ("codeflow-core/src/security/deletion.rs", "Reader::glob_paths", "to_string_lossy", 1, "a name that is not UTF-8 makes the deletion unproven when the glob has a single-character wildcard or a bracket; the lossy spelling decides only literal and `*` patterns, which it answers as the bytes would, except that a literal U+FFFD in the pattern also matches such a name, which only adds a candidate or a refusal"),
     ("codeflow-core/src/testing/coverage/cobertura.rs", "parse_cobertura_str", "from_utf8_lossy", 2, "attributes of a coverage XML report, a format contract"),
     ("codeflow-core/src/testing/delivery.rs", "observation", "from_utf8_lossy", 2, "output of a sandbox probe, shown in a report"),

@@ -2001,3 +2001,19 @@ fn a_tracked_change_to_a_name_that_is_not_utf8_is_kept() {
         "{changes:?}"
     );
 }
+
+/// Round fifteen on issue 79: a `.git` file whose folder holds a newline names
+/// that folder, so a folder that is not under the worktrees of this repository
+/// is no owned worktree, whatever its first line says.
+#[test]
+fn a_gitfile_folder_with_a_newline_is_not_an_owned_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let common = dir.path().join("common");
+    std::fs::create_dir_all(common.join("worktrees").join("meta")).unwrap();
+    let marker = dir.path().join("wt-git");
+    let inside = common.join("worktrees").join("meta");
+    std::fs::write(&marker, format!("gitdir: {}\n", inside.display())).unwrap();
+    assert!(is_own_worktree(&marker, &common));
+    std::fs::write(&marker, format!("gitdir: {}\nother\n", inside.display())).unwrap();
+    assert!(!is_own_worktree(&marker, &common));
+}

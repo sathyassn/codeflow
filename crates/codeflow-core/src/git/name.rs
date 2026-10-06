@@ -307,18 +307,19 @@ pub fn tracking_branch(name: &GitName, remotes: &[GitName]) -> Option<GitName> {
     Some(GitName::from_bytes(&bytes[at + 1..]))
 }
 
-/// The folder a `.git` file names: its first `gitdir:` line, as an exact path.
-/// Git writes `gitdir: <path>` and a newline, so the single space and the
-/// newline are framing and any other whitespace belongs to the path (OS text
-/// rule, issue 79). `None` when there is no such line or the platform cannot
-/// hold the path.
+/// The folder a `.git` file names, read as git reads it: the file starts with
+/// `gitdir: ` and the path is the rest with the trailing newlines and carriage
+/// returns removed, so any other character, an embedded newline included,
+/// belongs to the path (OS text rule, issue 79). `None` when the file has
+/// another shape, names nothing, or the platform cannot hold the path.
 #[must_use]
 pub fn gitfile_dir(bytes: &[u8]) -> Option<std::path::PathBuf> {
-    let line = bytes
-        .split(|byte| *byte == b'\n')
-        .find_map(|line| line.strip_prefix(b"gitdir:"))?;
-    let line = line.strip_prefix(b" ").unwrap_or(line);
-    GitName::from_bytes(line).os_path().ok()
+    let rest = bytes.strip_prefix(b"gitdir: ")?;
+    let end = rest
+        .iter()
+        .rposition(|byte| *byte != b'\n' && *byte != b'\r')?
+        + 1;
+    GitName::from_bytes(&rest[..end]).os_path().ok()
 }
 
 /// The path of every file a diff touches (the old and the new path of each
@@ -573,8 +574,9 @@ mod tests {
         assert!(tracking_branch(&GitName::from_bytes(b"flat"), &remotes).is_none());
     }
 
-    /// Round fourteen on issue 79: a `.git` file names a folder exactly, so
-    /// whitespace that ends the path is part of it.
+    /// Round fourteen on issue 79: a `.git` file names a folder as git reads
+    /// it: the rest of the file after `gitdir: `, without the trailing line
+    /// ends, so other whitespace and an embedded newline are the path.
     #[test]
     fn a_gitfile_names_its_folder_exactly() {
         let dir = |bytes: &[u8]| gitfile_dir(bytes).map(|path| path.display().to_string());
@@ -583,8 +585,14 @@ mod tests {
             dir("gitdir: /a/b\u{a0}\n".as_bytes()).as_deref(),
             Some("/a/b\u{a0}")
         );
-        assert_eq!(dir(b"gitdir: /a/b\r\n").as_deref(), Some("/a/b\r"));
+        assert_eq!(dir(b"gitdir: /a/b\r\n").as_deref(), Some("/a/b"));
+        assert_eq!(
+            dir(b"gitdir: /a/meta\nother\n").as_deref(),
+            Some("/a/meta\nother")
+        );
         assert_eq!(dir(b"nothing here\n"), None);
+        assert_eq!(dir(b"gitdir: \n"), None);
+        assert_eq!(dir(b"junk\ngitdir: /a/b\n"), None);
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt as _;
