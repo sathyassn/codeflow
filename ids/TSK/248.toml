@@ -1,0 +1,11 @@
+id = "TSK-248"
+uid = "7bd67de1-bfe7-439f-8999-b65dc3ac150d"
+kind = "TSK"
+title = "An epic line with a direct commit can be repaired and lands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-06T17:52:03Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
