@@ -330,10 +330,15 @@ blocked, completed and landed points from git author times and joins them by
 task id to the planning scenario of the adopted home's frozen forecasts, or
 of one `--forecast`. It exits 1 when `.codeflow/estimate.json` is adopted and
 its home is missing or unusable, the record is unreadable, or a given
-forecast cannot be read; otherwise 0, including when no forecast is joined.
-Started is the first commit after the target and is unknown after a squash,
-rebase or fast-forward landing. The minimum and thresholds are printed
-defaults, not policy. It writes nothing (ADR-0079).
+forecast cannot be read or is not a valid forecast; it exits 2 for an
+unusable threshold or minimum; otherwise 0, including when no forecast is
+joined. Landed is the first target commit that holds the reviewed commit,
+and elapsed active ends there when a later records change wrote the
+completion.
+Started is the task branch's first commit by ancestry and is unknown after a
+squash, rebase or fast-forward landing, or when author times run backwards.
+The minimum and thresholds are printed defaults, not policy. It writes
+nothing (ADR-0079).
 
 ### Enforce notes
 

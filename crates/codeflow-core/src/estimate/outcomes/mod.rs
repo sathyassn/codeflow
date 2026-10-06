@@ -93,7 +93,8 @@ pub struct TaskOutcome {
     pub completed: Option<Point>,
     pub cancelled: Option<Point>,
     pub landed: Option<Point>,
-    /// Completed minus started minus the blocked time between them.
+    /// Completed (or landed, when that came first) minus started, minus the
+    /// blocked time between them.
     pub elapsed_active_seconds: Option<i64>,
     /// Landed minus planned.
     pub lead_seconds: Option<i64>,
@@ -209,20 +210,19 @@ pub fn outcomes(repo_root: &Path, cwd: &Path, options: &Options) -> OutcomeRepor
     };
     for record in &records {
         let timings = history.timings(record);
-        let closed = timings.completed.as_ref().or(timings.cancelled.as_ref());
+        // The closing point follows the current status: a task completed,
+        // reopened and then cancelled closed when it was cancelled.
+        let closed = if record.status == "cancelled" {
+            timings.cancelled.as_ref()
+        } else {
+            timings.completed.as_ref()
+        };
         if let Some(since) = &options.since {
             if closed.is_none_or(|point| point.at.get(..10).unwrap_or_default() < since.as_str()) {
                 continue;
             }
         }
-        let elapsed = match (&timings.started, &timings.completed) {
-            (Some(Started::Known(started)), Some(done)) => {
-                let blocked = blocked_within(&timings.blocked, started, done);
-                let active = done.epoch_seconds - started.epoch_seconds - blocked;
-                (active >= 0).then_some(active)
-            }
-            _ => None,
-        };
+        let elapsed = elapsed_active(&timings);
         let lead = match (&timings.planned, &timings.landed) {
             (Some(planned), Some(landed)) => Some(landed.epoch_seconds - planned.epoch_seconds),
             _ => None,
@@ -255,6 +255,25 @@ pub fn outcomes(repo_root: &Path, cwd: &Path, options: &Options) -> OutcomeRepor
     }
     report.groups = groups(&report.tasks, options);
     report
+}
+
+/// Completed (or landed, when that came first) minus started, minus the
+/// blocked time between them; `None` without a known start.
+fn elapsed_active(timings: &history::Timings) -> Option<i64> {
+    match (&timings.started, &timings.completed) {
+        (Some(Started::Known(started)), Some(completed)) => {
+            // Work ends when it is completed, or when its code landed if a
+            // later records change wrote the completion.
+            let done = match &timings.landed {
+                Some(landed) if landed.epoch_seconds < completed.epoch_seconds => landed,
+                _ => completed,
+            };
+            let blocked = blocked_within(&timings.blocked, started, done);
+            let active = done.epoch_seconds - started.epoch_seconds - blocked;
+            (active >= 0).then_some(active)
+        }
+        _ => None,
+    }
 }
 
 /// Seconds of the blocked spans that fall between `started` and `done`.
@@ -311,11 +330,24 @@ fn forecasts(
             }
         };
         let sha256 = Some(super::sources::sha256(&bytes));
-        let Ok(forecast) = serde_json::from_slice::<Forecast>(&bytes) else {
+        let spans = serde_json::from_slice::<Forecast>(&bytes)
+            .ok()
+            .and_then(|forecast| {
+                let mut shape = super::model::ForecastReport::new();
+                super::shape::check(&forecast, &mut shape);
+                if shape.is_valid() {
+                    planned_spans(&forecast)
+                } else {
+                    None
+                }
+            });
+        let Some(spans) = spans else {
             report.finding(
                 "forecast_invalid",
                 explicit,
-                format!("{path}: not a version-one forecast (closed JSON schema)"),
+                format!(
+                    "{path}: not a valid version-one forecast (closed JSON schema, structure and activity intervals); nothing joined from it"
+                ),
             );
             report.forecasts.push(ForecastUse {
                 path,
@@ -325,7 +357,7 @@ fn forecasts(
             continue;
         };
         let mut joined = 0;
-        for (task, package, seconds) in planned_spans(&forecast) {
+        for (task, package, seconds) in spans {
             if let std::collections::btree_map::Entry::Vacant(entry) = predictions.entry(task) {
                 entry.insert(Prediction {
                     path: path.clone(),
@@ -420,6 +452,13 @@ fn forecast_files(
             .ok()
             .and_then(|root| crate::bounded_file::ConfinedRoot::open(&root).ok());
         for path in forecasts {
+            if super::sources::secret_path(Path::new(path)) {
+                files.push((
+                    path.clone(),
+                    Err("credential and secret file paths are not forecast inputs".to_string()),
+                ));
+                continue;
+            }
             let bytes = confined.as_ref().map_or_else(
                 || Err("the project root cannot be opened safely".to_string()),
                 |root| {
@@ -434,15 +473,21 @@ fn forecast_files(
 }
 
 /// For each canonical package, the span of its implement, review, verify
-/// and rework activities in the planning scenario.
-fn planned_spans(forecast: &Forecast) -> Vec<(String, String, u64)> {
-    let Some(planning) = forecast
+/// and rework activities in the planning scenario; `None` when an activity
+/// of the planning scenario overflows or ends past the horizon.
+fn planned_spans(forecast: &Forecast) -> Option<Vec<(String, String, u64)>> {
+    let planning = forecast
         .scenarios
         .iter()
-        .find(|scenario| scenario.name == ScenarioName::Planning)
-    else {
-        return Vec::new();
-    };
+        .find(|scenario| scenario.name == ScenarioName::Planning)?;
+    let mut ends = Vec::new();
+    for activity in &planning.activities {
+        let end = activity
+            .start_seconds
+            .checked_add(activity.duration_seconds)
+            .filter(|end| *end <= forecast.horizon_seconds)?;
+        ends.push(end);
+    }
     let mut out = Vec::new();
     for package in &forecast.packages {
         let Some(task) = package.source.task_id() else {
@@ -451,21 +496,15 @@ fn planned_spans(forecast: &Forecast) -> Vec<(String, String, u64)> {
         let spans: Vec<(u64, u64)> = planning
             .activities
             .iter()
-            .filter(|activity| activity.package_id.as_deref() == Some(package.id.as_str()))
-            .filter(|activity| {
+            .zip(&ends)
+            .filter(|(activity, _)| activity.package_id.as_deref() == Some(package.id.as_str()))
+            .filter(|(activity, _)| {
                 matches!(
                     activity.stage,
                     Stage::Implement | Stage::Review | Stage::Verify | Stage::Rework
                 )
             })
-            .filter_map(|activity| {
-                Some((
-                    activity.start_seconds,
-                    activity
-                        .start_seconds
-                        .checked_add(activity.duration_seconds)?,
-                ))
-            })
+            .map(|(activity, end)| (activity.start_seconds, *end))
             .collect();
         let start = spans.iter().map(|span| span.0).min();
         let end = spans.iter().map(|span| span.1).max();
@@ -473,7 +512,7 @@ fn planned_spans(forecast: &Forecast) -> Vec<(String, String, u64)> {
             out.push((task.to_string(), package.id.clone(), end - start));
         }
     }
-    out
+    Some(out)
 }
 
 fn groups(tasks: &[TaskOutcome], options: &Options) -> Vec<Group> {

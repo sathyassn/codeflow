@@ -41,13 +41,18 @@ pub enum Home {
 /// Read the adoption record of the repository at `repo_root`.
 #[must_use]
 pub fn read(repo_root: &Path) -> Adoption {
-    let path = repo_root.join(ADOPTION_PATH);
-    if std::fs::symlink_metadata(&path).is_err() {
+    if std::fs::symlink_metadata(repo_root.join(ADOPTION_PATH)).is_err() {
         return Adoption::Absent;
     }
-    let Ok(bytes) = crate::bounded_file::read_bounded_regular(&path, MAX_ADOPTION_BYTES) else {
+    // Read through the confined root, so a symlinked `.codeflow` cannot
+    // redirect the read outside the repository.
+    let bytes = std::fs::canonicalize(repo_root)
+        .ok()
+        .and_then(|root| crate::bounded_file::ConfinedRoot::open(&root).ok())
+        .and_then(|root| root.read(Path::new(ADOPTION_PATH), MAX_ADOPTION_BYTES).ok());
+    let Some(bytes) = bytes else {
         return Adoption::Invalid(format!(
-            "{ADOPTION_PATH} is not a regular file of at most 64 KiB"
+            "{ADOPTION_PATH} is not a regular file of at most 64 KiB inside the repository"
         ));
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {

@@ -68,6 +68,16 @@ pub fn run(args: &EstimateArgs) -> i32 {
                     return 2;
                 }
             }
+            if *minimum == 0 {
+                eprintln!("estimate outcomes: --minimum must be at least 1");
+                return 2;
+            }
+            if !(low.is_finite() && high.is_finite() && *low >= 0.0 && low < high) {
+                eprintln!(
+                    "estimate outcomes: --low and --high must be finite, --low at least 0 and below --high"
+                );
+                return 2;
+            }
             let options = codeflow_core::estimate::outcomes::Options {
                 since: since.clone(),
                 epic: epic.clone(),

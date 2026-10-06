@@ -530,7 +530,7 @@ fn started_is_unknown_without_a_task_branch_history() {
         squashed["started"]["unknown"]
             .as_str()
             .unwrap()
-            .contains("landed without a merge commit"),
+            .contains("landed without its reviewed commit (squash or rebase)"),
         "{squashed:#}"
     );
     assert_eq!(at(&squashed["landed"]), (squash, T0 + 4000));
@@ -543,7 +543,7 @@ fn started_is_unknown_without_a_task_branch_history() {
     assert!(single["elapsed_active_seconds"].is_null());
     let text = String::from_utf8_lossy(&fx.run(&["estimate", "outcomes"]).stdout).into_owned();
     assert!(
-        text.contains("started    unknown: landed without a merge commit"),
+        text.contains("started    unknown: landed without its reviewed commit"),
         "{text}"
     );
 }
@@ -559,4 +559,192 @@ fn since_filters_and_a_bad_date_is_refused() {
     assert_eq!(report["tasks"].as_array().unwrap().len(), 3);
     let out = fx.run(&["estimate", "outcomes", "--since", "yesterday"]);
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// Review round 1: code that landed before a later records change completed
+/// the task keeps its own landing and start.
+#[test]
+fn a_later_records_change_does_not_move_the_landing() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    let first = fx.code("a.txt", T0 + 1000);
+    let reviewed = fx.code("b.txt", T0 + 2000);
+    let landing = fx.merge("task/TSK-001-fixture", T0 + 3000);
+    fx.git(
+        &["checkout", "-q", "-b", "chore/records", "main"],
+        T0 + 5000,
+    );
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001 later", T0 + 5000);
+    fx.merge("chore/records", T0 + 6000);
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    let outcome = task(&report, "TSK-001");
+    assert_eq!(at(&outcome["landed"]), (landing, T0 + 3000), "{outcome:#}");
+    assert_eq!(at(&outcome["started"]), (first, T0 + 1000), "{outcome:#}");
+    // Active work ends at the landing, before the later completion.
+    assert_eq!(outcome["elapsed_active_seconds"], 2000, "{outcome:#}");
+}
+
+/// Review round 1: the start is the branch's first commit by ancestry, and
+/// author times that run backwards give no start.
+#[test]
+fn a_backwards_author_clock_gives_no_start() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 2000,
+    );
+    fx.code("a.txt", T0 + 2000);
+    let reviewed = fx.code("b.txt", T0 + 1000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 3000);
+    fx.merge("task/TSK-001-fixture", T0 + 4000);
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    assert!(
+        outcome["started"]["unknown"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("run backwards")),
+        "{outcome:#}"
+    );
+    assert!(outcome["elapsed_active_seconds"].is_null());
+}
+
+/// Review round 1: a forecast that fails the structural check, or whose
+/// planning activity overflows its horizon, joins nothing.
+#[test]
+fn an_invalid_forecast_joins_nothing() {
+    let fx = Fixture::new();
+    three_delivered(&fx);
+    let mut wrong: Value =
+        serde_json::from_str(&forecast(&["TSK-001", "TSK-002", "TSK-003"])).unwrap();
+    wrong["schema_version"] = json!(999);
+    std::fs::write(fx.root.join("wrong.json"), wrong.to_string()).unwrap();
+    let mut long: Value =
+        serde_json::from_str(&forecast(&["TSK-001", "TSK-002", "TSK-003"])).unwrap();
+    long["scenarios"][1]["activities"][1]["duration_seconds"] = json!(u64::MAX);
+    std::fs::write(fx.root.join("long.json"), long.to_string()).unwrap();
+    for file in ["wrong.json", "long.json"] {
+        let (code, report) = fx.report(&["--forecast", file]);
+        assert_eq!(code, Some(1), "{file}: {report:#}");
+        assert!(report["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["ratio"].is_null()));
+        assert_eq!(report["groups"], json!([]), "{file}");
+        assert!(
+            report["findings"].to_string().contains("forecast_invalid"),
+            "{file}"
+        );
+    }
+}
+
+/// Review round 1: the adoption record is read inside the repository only,
+/// and a discovered forecast under a secret-looking path is never read.
+#[cfg(unix)]
+#[test]
+fn adoption_and_forecast_reads_stay_safe() {
+    let fx = Fixture::new();
+    three_delivered(&fx);
+    let outside = fx.root.parent().unwrap().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        outside.join("estimate.json"),
+        json!({"schema_version": 1, "status": "adopted", "root": "OUTSIDE_MARKER"}).to_string(),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, fx.root.join(".codeflow")).unwrap();
+    let out = fx.run(&["estimate", "outcomes"]);
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(!text.contains("OUTSIDE_MARKER"), "{text}");
+    assert!(text.contains("inside the repository"), "{text}");
+    std::fs::remove_file(fx.root.join(".codeflow")).unwrap();
+
+    fx.adopt("project-management/estimates");
+    let secret = fx.root.join("project-management/estimates/forecasts/.env");
+    std::fs::create_dir_all(&secret).unwrap();
+    std::fs::write(secret.join("v1.json"), forecast(&["TSK-001"])).unwrap();
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    assert!(task(&report, "TSK-001")["forecast"].is_null(), "{report:#}");
+    assert!(report["forecasts"][0]["sha256"].is_null(), "{report:#}");
+}
+
+/// Review round 1: a task completed, reopened and then cancelled closes at
+/// its cancellation for `--since`.
+#[test]
+fn a_reopened_then_cancelled_task_closes_when_cancelled() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    let reviewed = fx.code("a.txt", T0 + 1000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 2000);
+    fx.record("TSK-001", "todo", None);
+    fx.commit("docs: reopen TSK-001", T0 + 3000);
+    fx.record("TSK-001", "cancelled", None);
+    fx.commit("docs: cancel TSK-001", T0 + 4 * 24 * HOUR);
+    fx.merge("task/TSK-001-fixture", T0 + 4 * 24 * HOUR + 100);
+    // T0 is 2027-01-15; the cancellation is on 2027-01-19.
+    let (_, report) = fx.report(&["--since", "2027-01-19"]);
+    let outcome = task(&report, "TSK-001");
+    assert_eq!(outcome["status"], "cancelled");
+    assert_eq!(outcome["cancelled"]["epoch_seconds"], T0 + 4 * 24 * HOUR);
+}
+
+/// Review round 1: thresholds that cannot give a verdict are refused.
+#[test]
+fn unusable_thresholds_are_refused() {
+    let fx = Fixture::new();
+    for args in [
+        &["--low", "NaN"][..],
+        &["--high", "inf"],
+        &["--low", "3", "--high", "2"],
+        &["--minimum", "0"],
+    ] {
+        let mut all = vec!["estimate", "outcomes"];
+        all.extend_from_slice(args);
+        assert_eq!(fx.run(&all).status.code(), Some(2), "{args:?}");
+    }
+}
+
+/// AC-8: a fast-forward landing leaves no merge to mark where the task
+/// branch began, so started is unknown.
+#[test]
+fn a_fast_forward_landing_gives_no_start() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    fx.code("a.txt", T0 + 1000);
+    let reviewed = fx.code("b.txt", T0 + 2000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 3000);
+    fx.git(&["checkout", "-q", "main"], T0 + 4000);
+    fx.git(
+        &["merge", "-q", "--ff-only", "task/TSK-001-fixture"],
+        T0 + 4000,
+    );
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    assert!(
+        outcome["started"]["unknown"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("landed without a merge commit")),
+        "{outcome:#}"
+    );
+    assert!(outcome["elapsed_active_seconds"].is_null());
 }

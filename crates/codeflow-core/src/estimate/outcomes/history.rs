@@ -301,14 +301,23 @@ impl<'r> History<'r> {
             timings.blocked.push(BlockedSpan { from, to: None });
         }
         let line = self.lines.get(&record.target).and_then(Option::as_ref);
+        let reviewed = record.reviewed.as_deref().and_then(|value| {
+            crate::workgraph::work_start::commit_by_object_id(self.repo, value.trim())
+                .ok()
+                .map(|commit| commit.id())
+        });
         let completion = timings
             .completed
             .as_ref()
             .and_then(|point| Oid::from_str(&point.commit).ok());
-        let landing = match (line, completion) {
-            (Some(line), Some(done)) if record.status == "complete" => {
-                Self::first_containing(line, done)
-            }
+        // The code lands with the reviewed commit; a record completed by a
+        // later records change does not move the landing. Without the
+        // reviewed commit on the target (squash or rebase), the completion
+        // marks it.
+        let landing = match line {
+            Some(line) if record.status == "complete" => reviewed
+                .and_then(|reviewed| Self::first_containing(line, reviewed))
+                .or_else(|| completion.and_then(|done| Self::first_containing(line, done))),
             _ => None,
         };
         timings.landed = landing.and_then(|oid| self.point(oid));
@@ -320,43 +329,47 @@ impl<'r> History<'r> {
             }
         });
         if record.status == "complete" {
-            timings.started = Some(self.started(record, line, landing));
+            timings.started = Some(self.started(record, line, landing, reviewed));
         }
         timings
     }
 
-    fn started(&self, record: &Record, line: Option<&Line>, landing: Option<Oid>) -> Started {
+    fn started(
+        &self,
+        record: &Record,
+        line: Option<&Line>,
+        landing: Option<Oid>,
+        reviewed: Option<Oid>,
+    ) -> Started {
         let unknown = |reason: &str| Started::Unknown {
             unknown: reason.to_string(),
         };
-        let Some(reviewed) = record.reviewed.as_deref() else {
+        if record.reviewed.is_none() {
             return unknown(
                 "the record has no single readable acceptance block naming its reviewed commit",
             );
-        };
-        let Ok(reviewed) =
-            crate::workgraph::work_start::commit_by_object_id(self.repo, reviewed.trim())
-                .map(|commit| commit.id())
-        else {
+        }
+        let Some(reviewed) = reviewed else {
             return unknown("the reviewed commit is not in this clone");
         };
         let base = match (landing, line) {
-            (Some(landing), _) => {
+            (Some(landing), Some(line)) => {
                 let Ok(merge) = self.repo.find_commit(landing) else {
                     return unknown("the landing commit cannot be read");
                 };
-                if merge.parent_count() < 2 {
+                let held = line
+                    .entered
+                    .get(&reviewed)
+                    .zip(line.entered.get(&landing))
+                    .is_some_and(|(at, landed)| at <= landed);
+                if !held {
                     return unknown(
-                        "landed without a merge commit (squash, rebase or fast-forward), so the task branch is not on the target",
+                        "landed without its reviewed commit (squash or rebase), so the task branch is not on the target",
                     );
                 }
-                let entered = line.and_then(|line| {
-                    let landed_at = line.entered.get(&landing)?;
-                    line.entered.get(&reviewed).map(|at| at <= landed_at)
-                });
-                if entered != Some(true) {
+                if landing == reviewed || merge.parent_count() < 2 {
                     return unknown(
-                        "the reviewed commit is not in the landed history (squash or rebase)",
+                        "landed without a merge commit (squash, rebase or fast-forward), so the task branch is not on the target",
                     );
                 }
                 match merge.parent_id(0) {
@@ -365,7 +378,7 @@ impl<'r> History<'r> {
                 }
             }
             (None, Some(line)) => line.tip,
-            (None, None) => {
+            _ => {
                 return unknown(&format!(
                     "the integration target `{}` does not resolve in this clone",
                     record.target
@@ -378,23 +391,34 @@ impl<'r> History<'r> {
         if walk.push(reviewed).is_err() || walk.hide(base).is_err() {
             return unknown("the task branch history cannot be read");
         }
-        let commits: Vec<Oid> = walk.filter_map(Result::ok).collect();
+        let commits: BTreeSet<Oid> = walk.filter_map(Result::ok).collect();
         if commits.is_empty() {
-            return unknown(
-                "the reviewed commit was on the target before the record was completed there",
-            );
+            return unknown("the reviewed commit was on the target before the task branch began");
         }
         if commits.iter().all(|commit| *commit == reviewed) {
             return unknown("no commit before the reviewed one on the task branch");
         }
-        commits
-            .iter()
-            .filter_map(|commit| self.point(*commit))
+        // The branch begins at a commit with no parent inside the range; by
+        // ancestry, not by clock. Several roots (a branch built on others)
+        // take the earliest.
+        let roots = commits.iter().filter(|oid| {
+            self.repo
+                .find_commit(**oid)
+                .is_ok_and(|commit| commit.parent_ids().all(|parent| !commits.contains(&parent)))
+        });
+        let Some(first) = roots
+            .filter_map(|oid| self.point(*oid))
             .min_by_key(|point| point.epoch_seconds)
-            .map_or_else(
-                || unknown("the task branch history cannot be read"),
-                Started::Known,
-            )
+        else {
+            return unknown("the task branch history cannot be read");
+        };
+        match self.point(reviewed) {
+            Some(end) if first.epoch_seconds <= end.epoch_seconds => Started::Known(first),
+            Some(_) => unknown(
+                "author times on the task branch run backwards, so its first commit gives no reliable start",
+            ),
+            None => unknown("the task branch history cannot be read"),
+        }
     }
 
     /// The oldest first-parent commit of `line` that contains `commit`.

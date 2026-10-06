@@ -192,8 +192,9 @@ erratum below, never an edit of the section.
   record it reports when the task was planned (its record reached the
   target), started (the first task-branch commit after the target, a lower
   bound), blocked and cleared, completed (the commit that wrote its
-  acceptance block) and landed, from commit author times; a squash, rebase
-  or fast-forward landing gives `started: unknown` with the reason. It joins
+  acceptance block) and landed (the first target commit holding the
+  reviewed commit), from commit author times; a squash, rebase or
+  fast-forward landing gives `started: unknown` with the reason. It joins
   each task by id to the planning scenario of the adopted home's frozen
   forecasts, or of one `--forecast`, and prints each task's ratio and, once
   a work type has `--minimum` ratios (default 3), the median and range with

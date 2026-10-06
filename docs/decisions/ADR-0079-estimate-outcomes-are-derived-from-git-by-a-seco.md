@@ -42,6 +42,11 @@ estimates line only where `.codeflow/estimate.json` exists.
 - Started is a lower bound: the first commit after the target, never the
   moment work began. A squash, rebase or fast-forward landing, or a branch
   whose only commit is the reviewed one, reports started as unknown.
+- Landed is the first target commit holding the reviewed commit, so a
+  completion written later by a records change does not move it, and
+  elapsed active ends at the landing in that case.
+- A forecast joins only when it passes the checker's structural checks;
+  thresholds that cannot give a verdict are refused.
 - Waits are never inferred; the outcome record names them.
 - The report reads only `HEAD`, its task records' integration targets and
   their history. A record edited only in a merge's conflict resolution is
