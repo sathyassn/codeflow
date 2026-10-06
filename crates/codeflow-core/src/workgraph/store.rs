@@ -138,6 +138,7 @@ impl MarkdownStore {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let root = root.into();
         let base = crate::workgraph::allocate::repository_root(&root);
+        // Only tests need this branch; production roots are always project-management.
         if base == root.as_path() && !base.exists() {
             fs::create_dir_all(base)?;
         }

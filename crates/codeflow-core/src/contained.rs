@@ -326,7 +326,11 @@ impl Tree {
             Err(error) => return Err(error),
         }
         hook()?;
+        #[cfg(test)]
+        fault::check(fault::Point::BeforeRemove, relative)?;
         platform::remove(&parent, &name, directory)?;
+        #[cfg(test)]
+        fault::check(fault::Point::AfterRemove, relative)?;
         platform::sync(&parent)
     }
 
@@ -406,35 +410,49 @@ impl Tree {
 }
 
 /// Test-only failure injection at the points a disk error is otherwise hard
-/// to provoke: after a replacement's rename and after a new file's write.
+/// to provoke: after a replacement's rename, after a new file's write, and
+/// before and after a removal.
 #[cfg(test)]
 pub(crate) mod fault {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
     use std::io;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub(crate) enum Point {
         AfterRename,
         AfterCreate,
+        BeforeRemove,
+        AfterRemove,
     }
 
     thread_local! {
-        static ARMED: RefCell<Option<(Point, String)>> = const { RefCell::new(None) };
+        static ARMED: RefCell<VecDeque<(Point, String)>> = const { RefCell::new(VecDeque::new()) };
     }
 
     /// Fail the next operation on `relative` at `point` on this thread.
     pub(crate) fn arm(point: Point, relative: &str) {
-        ARMED.with(|armed| *armed.borrow_mut() = Some((point, relative.to_string())));
+        arm_sequence(&[(point, relative)]);
+    }
+
+    /// Fail these operations in order, including failures during rollback.
+    pub(crate) fn arm_sequence(points: &[(Point, &str)]) {
+        ARMED.with(|armed| {
+            *armed.borrow_mut() = points
+                .iter()
+                .map(|(point, path)| (*point, (*path).to_string()))
+                .collect();
+        });
     }
 
     pub(super) fn check(point: Point, relative: &str) -> io::Result<()> {
         ARMED.with(|armed| {
             let mut armed = armed.borrow_mut();
             if armed
-                .as_ref()
+                .front()
                 .is_some_and(|(at, path)| *at == point && path == relative)
             {
-                *armed = None;
+                armed.pop_front();
                 return Err(io::Error::other(format!("injected failure at {point:?}")));
             }
             Ok(())

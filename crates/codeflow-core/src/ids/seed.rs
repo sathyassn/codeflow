@@ -543,35 +543,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .unwrap_or_default()
         .replacen(&from.to_string(), &to.to_string(), 1);
     let new_path = path.with_file_name(file);
-    // Read, write and delete beneath the root without following a link
-    // (issue 94). The renumbered record is placed first and exclusively, so
-    // a file already at the new number refuses the retarget before any
-    // other file in the tree changes.
-    let tree = crate::contained::Tree::open(root)?;
-    let old = crate::contained::relative_to(root, path)?;
-    let new = crate::contained::relative_to(root, &new_path)?;
-    let content = String::from_utf8(tree.read(&old, u64::MAX)?)
-        .map_err(|error| IdsError::Invalid(format!("{old}: {error}")))?;
-    let content = replace_id(&content, from, &to).unwrap_or(content);
-    let content = add_former_id(&content, from);
-    let moving = new != old;
-    if moving {
-        tree.create_new(&new, content.as_bytes())?;
-    }
-    let rewritten = match rewrite_links(&git, &tree, from, &to, &[&old, &new]) {
-        Ok(rewritten) => rewritten,
-        Err(error) => {
-            if moving {
-                let _ = tree.remove(&new);
-            }
-            return Err(error);
-        }
-    };
-    if moving {
-        tree.remove(&old)?;
-    } else {
-        tree.write(&new, content.as_bytes())?;
-    }
+    let rewritten = retarget_files(&git, path, &new_path, from, &to)?;
     Ok(Retarget {
         from: from.clone(),
         to,
@@ -579,6 +551,82 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         standing,
         rewritten,
     })
+}
+
+fn retarget_files(
+    git: &Git,
+    path: &Path,
+    new_path: &Path,
+    from: &RegId,
+    to: &RegId,
+) -> Result<Vec<PathBuf>, IdsError> {
+    // Read, write and delete beneath the root without following a link
+    // (issue 94). The renumbered record is placed first and exclusively, so
+    // a file already at the new number refuses the retarget before any
+    // other file in the tree changes.
+    let root = git.root();
+    let tree = crate::contained::Tree::open(root)?;
+    let old = crate::contained::relative_to(root, path)?;
+    let new = crate::contained::relative_to(root, new_path)?;
+    let original = String::from_utf8(tree.read(&old, u64::MAX)?)
+        .map_err(|error| IdsError::Invalid(format!("{old}: {error}")))?;
+    let content = replace_id(&original, from, to).unwrap_or_else(|| original.clone());
+    let content = add_former_id(&content, from);
+    let planned = plan_link_rewrites(git, &tree, from, to, &[&old, &new])?;
+    let moving = new != old;
+    if moving {
+        tree.create_new(&new, content.as_bytes())?;
+    }
+    if let Err(error) = rewrite_links(&tree, &planned) {
+        return Err(retarget_rollback_error(
+            &tree,
+            moving.then_some(new.as_str()),
+            error,
+            Vec::new(),
+        ));
+    }
+    let finish = if moving {
+        tree.remove(&old)
+    } else {
+        tree.write(&new, content.as_bytes())
+    };
+    if let Err(error) = finish {
+        // Removal can fail after unlinking, and replacement after renaming.
+        // Restore the old record as well as every rewritten link in either case.
+        let mut failed = restore_links(&tree, &planned);
+        if let Err(error) = tree.write(&old, original.as_bytes()) {
+            failed.push(format!("restoring {old} failed: {error}"));
+        }
+        return Err(retarget_rollback_error(
+            &tree,
+            moving.then_some(new.as_str()),
+            IdsError::Invalid(format!("{old}: {error}")),
+            failed,
+        ));
+    }
+    Ok(planned
+        .into_iter()
+        .map(|change| root.join(change.file))
+        .collect())
+}
+
+/// Finish rollback without hiding a failure to remove the newly created record.
+fn retarget_rollback_error(
+    tree: &crate::contained::Tree,
+    new: Option<&str>,
+    error: IdsError,
+    mut failed: Vec<String>,
+) -> IdsError {
+    if let Some(new) = new {
+        if let Err(error) = tree.remove(new) {
+            failed.push(format!("removing new record {new} failed: {error}"));
+        }
+    }
+    if failed.is_empty() {
+        error
+    } else {
+        IdsError::Invalid(format!("{error}; {}", failed.join("; ")))
+    }
 }
 
 fn add_former_id(text: &str, from: &RegId) -> String {
@@ -629,18 +677,23 @@ fn replace_id(text: &str, from: &RegId, to: &RegId) -> Option<String> {
     })
 }
 
-/// Rewrite links to `from` in tracked text under the record roots and docs,
+struct LinkRewrite {
+    file: String,
+    original: String,
+    updated: String,
+}
+
+/// Plan links to `from` in tracked text under the record roots and docs,
 /// except `skip` (the record being renumbered, at its old and new paths,
-/// since a tracked path can be absent on disk). Every change is planned
-/// before any is written; a failed write puts back the files this call
-/// changed, the failing one included, and names any that could not be.
-fn rewrite_links(
+/// since a tracked path can be absent on disk). Keep the originals until
+/// the whole retarget, including removal of the old record, succeeds.
+fn plan_link_rewrites(
     git: &Git,
     tree: &crate::contained::Tree,
     from: &RegId,
     to: &RegId,
     skip: &[&str],
-) -> Result<Vec<PathBuf>, IdsError> {
+) -> Result<Vec<LinkRewrite>, IdsError> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
@@ -660,34 +713,143 @@ fn rewrite_links(
             continue;
         };
         if let Some(updated) = replace_id(&text, from, to) {
-            planned.push((file, text, updated));
+            planned.push(LinkRewrite {
+                file,
+                original: text,
+                updated,
+            });
         }
     }
-    for (index, (file, _, updated)) in planned.iter().enumerate() {
-        if let Err(error) = tree.write(file, updated.as_bytes()) {
-            let failed: Vec<String> = planned[..=index]
-                .iter()
-                .filter(|(file, original, _)| tree.write(file, original.as_bytes()).is_err())
-                .map(|(file, _, _)| file.clone())
-                .collect();
+    Ok(planned)
+}
+
+/// A failed write restores every attempted link, including one whose rename
+/// already landed, and reports each restoration failure.
+fn rewrite_links(tree: &crate::contained::Tree, planned: &[LinkRewrite]) -> Result<(), IdsError> {
+    for (index, change) in planned.iter().enumerate() {
+        if let Err(error) = tree.write(&change.file, change.updated.as_bytes()) {
+            let failed = restore_links(tree, &planned[..=index]);
             if failed.is_empty() {
-                return Err(error.into());
+                return Err(IdsError::Invalid(format!("{}: {error}", change.file)));
             }
             return Err(IdsError::Invalid(format!(
-                "{file}: {error}; restoring {} also failed",
-                failed.join(", ")
+                "{}: {error}; {}",
+                change.file,
+                failed.join("; ")
             )));
         }
     }
-    Ok(planned
-        .into_iter()
-        .map(|(file, _, _)| git.root().join(file))
-        .collect())
+    Ok(())
+}
+
+fn restore_links(tree: &crate::contained::Tree, planned: &[LinkRewrite]) -> Vec<String> {
+    planned
+        .iter()
+        .filter_map(|change| {
+            tree.write(&change.file, change.original.as_bytes())
+                .err()
+                .map(|error| format!("restoring {} failed: {error}", change.file))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contained::fault::{self, Point};
+
+    const OLD: &str = "project-management/tasks/TSK-005.md";
+    const NEW: &str = "project-management/tasks/TSK-006.md";
+    const LINKS: [&str; 2] = ["docs/a.md", "docs/b.md"];
+
+    fn retarget_fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new(dir.path());
+        git.run(&["init", "-q", "-b", "task/retarget"]).unwrap();
+        git.run(&["config", "user.name", "Test"]).unwrap();
+        git.run(&["config", "user.email", "test@example.test"])
+            .unwrap();
+        let tree = crate::contained::Tree::open(dir.path()).unwrap();
+        tree.write(
+            OLD,
+            format!("---\nid: TSK-005\nuid: {}\ntitle: Move\n---\n", new_uid()).as_bytes(),
+        )
+        .unwrap();
+        for link in LINKS {
+            tree.write(link, b"see TSK-005\n").unwrap();
+        }
+        // Tracking is enough for link discovery; no fixture commit is needed.
+        git.run(&["add", "docs"]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn retarget_remove_failure_restores_records_and_links() {
+        for point in [Point::BeforeRemove, Point::AfterRemove] {
+            let dir = retarget_fixture();
+            let root = dir.path();
+            let before = std::fs::read(root.join(OLD)).unwrap();
+            fault::arm(point, OLD);
+            let error = retarget(root, &RegId::parse("TSK-005").unwrap()).unwrap_err();
+            assert!(error.to_string().contains("injected failure"), "{error}");
+            assert_eq!(std::fs::read(root.join(OLD)).unwrap(), before);
+            for link in LINKS {
+                assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
+            }
+            assert!(!root.join(NEW).exists(), "the new record is removed");
+        }
+    }
+
+    #[test]
+    fn retarget_reports_failed_new_record_cleanup() {
+        let dir = retarget_fixture();
+        let root = dir.path();
+        let before = std::fs::read(root.join(OLD)).unwrap();
+        fault::arm_sequence(&[(Point::AfterRename, LINKS[1]), (Point::BeforeRemove, NEW)]);
+        let error = retarget(root, &RegId::parse("TSK-005").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("AfterRename"), "{error}");
+        assert!(
+            error.contains(NEW) && error.contains("BeforeRemove"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(root.join(OLD)).unwrap(), before);
+        for link in LINKS {
+            assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
+        }
+        assert!(root.join(NEW).is_file(), "the reported new record remains");
+    }
+
+    #[test]
+    fn retarget_reports_each_rollback_failure_and_continues_restoring() {
+        let dir = retarget_fixture();
+        let root = dir.path();
+        let before = std::fs::read(root.join(OLD)).unwrap();
+        fault::arm_sequence(&[
+            (Point::AfterRemove, OLD),
+            (Point::AfterRename, LINKS[0]),
+            (Point::BeforeRemove, NEW),
+        ]);
+        let error = retarget(root, &RegId::parse("TSK-005").unwrap())
+            .unwrap_err()
+            .to_string();
+        for expected in [
+            OLD,
+            "AfterRemove",
+            LINKS[0],
+            "AfterRename",
+            NEW,
+            "BeforeRemove",
+        ] {
+            assert!(error.contains(expected), "missing {expected}: {error}");
+        }
+        assert_eq!(std::fs::read(root.join(OLD)).unwrap(), before);
+        for link in LINKS {
+            assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
+        }
+        assert!(root.join(NEW).is_file(), "the reported new record remains");
+    }
 
     #[test]
     fn uid_lines_go_after_id_inside_frontmatter_only() {
