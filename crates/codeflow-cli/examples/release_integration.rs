@@ -129,6 +129,7 @@ fn prepare(
         root,
         &[
             "clone",
+            "--no-local",
             "--quiet",
             "--no-checkout",
             "--",

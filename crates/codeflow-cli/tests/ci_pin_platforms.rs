@@ -244,6 +244,31 @@ impl Fixture {
         command
             .current_dir(self.repo())
             .env_clear()
+            // Restore Cargo's maintenance-off contract after scrubbing CI state.
+            .env(
+                "GIT_CONFIG_COUNT",
+                std::env::var("GIT_CONFIG_COUNT").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_KEY_0",
+                std::env::var("GIT_CONFIG_KEY_0").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_VALUE_0",
+                std::env::var("GIT_CONFIG_VALUE_0").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_KEY_1",
+                std::env::var("GIT_CONFIG_KEY_1").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_VALUE_1",
+                std::env::var("GIT_CONFIG_VALUE_1").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_PARAMETERS",
+                std::env::var("GIT_CONFIG_PARAMETERS").unwrap(),
+            )
             .env("PATH", std::env::var("PATH").unwrap())
             .env("HOME", self.home())
             .env("TMPDIR", &scratch)

@@ -11,6 +11,15 @@ cross-build-linux = "zigbuild --release -p codeflow-cli --target x86_64-unknown-
 # commits through real hooks must not inherit the session that runs it. An
 # empty marker counts as unset; a test that needs one sets it itself.
 [env]
+# Every fixture process, including Git descendants of CodeFlow, inherits these.
+# Disabling the writer also protects file-level copies of fixture object stores.
+GIT_CONFIG_COUNT = { value = "2", force = true }
+GIT_CONFIG_KEY_0 = { value = "maintenance.auto", force = true }
+GIT_CONFIG_VALUE_0 = { value = "false", force = true }
+GIT_CONFIG_KEY_1 = { value = "gc.auto", force = true }
+GIT_CONFIG_VALUE_1 = { value = "0", force = true }
+# Legacy injected parameters must not override the settings above.
+GIT_CONFIG_PARAMETERS = { value = "", force = true }
 CLAUDECODE = { value = "", force = true }
 CODEX_SESSION_ID = { value = "", force = true }
 CODEX_THREAD_ID = { value = "", force = true }

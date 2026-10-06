@@ -39,13 +39,6 @@ fn with_env<'c>(command: &'c mut Command, trap: Option<&Path>) -> &'c mut Comman
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        // Apply before init, including git children of codeflow: the scaffold
-        // commit must not leave detached maintenance writing during the clone.
-        .env("GIT_CONFIG_COUNT", "2")
-        .env("GIT_CONFIG_KEY_0", "maintenance.auto")
-        .env("GIT_CONFIG_VALUE_0", "false")
-        .env("GIT_CONFIG_KEY_1", "gc.auto")
-        .env("GIT_CONFIG_VALUE_1", "0")
         .env("GIT_AUTHOR_NAME", "Journey")
         .env("GIT_AUTHOR_EMAIL", "journey@example.test")
         .env("GIT_COMMITTER_NAME", "Journey")
