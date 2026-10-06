@@ -978,10 +978,11 @@ fn a_shallow_default_history_is_never_read_as_unadopted() {
     let removal = set_marker(&fx, "");
     let parent = fx.root.parent().unwrap();
     let url = format!("file://{}", fx.origin.display());
-    run_git(
-        parent,
-        &["clone", "--no-local", "-q", "--depth", "1", &url, "shallow"],
-    );
+    codeflow_fixture::clone(parent, &url, "shallow")
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let shallow = parent.join("shallow");
     let cut = [
         "this clone's history is shallow at",
@@ -1271,17 +1272,11 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     std::fs::write(unrelated.join("x"), "x\n").unwrap();
     run_git(&unrelated, &["add", "-A"]);
     run_git(&unrelated, &["commit", "-q", "-m", "chore: unrelated"]);
-    run_git(
-        &parent,
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--bare",
-            "unrelated",
-            "dangling.git",
-        ],
-    );
+    codeflow_fixture::clone(&parent, "unrelated", "dangling.git")
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let dangling = parent.join("dangling.git");
     run_git(&dangling, &["symbolic-ref", "HEAD", "refs/heads/nope"]);
     let head = fx.head();
@@ -1613,7 +1608,10 @@ fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
         run_git(&up, &["add", "-A"]);
         run_git(&up, &["commit", "-q", "-m", "chore: start"]);
         run_git(&up, &["push", "-q", url, "main"]);
-        run_git(dir.path(), &["clone", "--no-local", "-q", url, "client"]);
+        codeflow_fixture::clone(dir.path(), url, "client")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let client = dir.path().join("client");
         if adopted && !readable {
             write(&up, ".codeflow/project.toml", broken);
@@ -2917,16 +2915,10 @@ fn callers_fail_closed_when_scope_cannot_be_read() {
         use std::os::unix::fs::PermissionsExt as _;
         let fx = Fx::new(false);
         let parent = fx.root.parent().unwrap();
-        run_git(
-            parent,
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                fx.origin.to_str().unwrap(),
-                "other",
-            ],
-        );
+        codeflow_fixture::clone(parent, fx.origin.to_str().unwrap(), "other")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let other = parent.join("other");
         run_git(
             &other,
@@ -3791,16 +3783,10 @@ fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
     for key in ["release_rule_baseline", "release_records_baseline"] {
         let fx = Fx::new(false);
         let parent = fx.root.parent().unwrap().to_path_buf();
-        run_git(
-            &parent,
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                fx.origin.to_str().unwrap(),
-                "other",
-            ],
-        );
+        codeflow_fixture::clone(&parent, fx.origin.to_str().unwrap(), "other")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let other = parent.join("other");
         // Line B lands work by a merge, as a verified epic line does.
         run_git(

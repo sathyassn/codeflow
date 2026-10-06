@@ -1,5 +1,4 @@
 import test from 'node:test';
-import { fixtureEnvironment } from '../docs-portal/tests/portal-fixture.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, copyFile, rm, readFile, realpath } from 'node:fs/promises';
@@ -22,7 +21,7 @@ async function fixture(action) {
     await writeFile(join(root, 'crates/codeflow-present/Cargo.toml'), '[package]\nname="codeflow-present"\nversion="0.1.0"\nedition="2021"\n');
     await writeFile(join(root, 'crates/codeflow-present/src/lib.rs'), 'pub mod limits;');
     await writeFile(join(root, 'Cargo.lock'), 'version = 4\n[[package]]\nname = "codeflow-cli"\nversion = "0.1.0"\n[[package]]\nname = "codeflow-present"\nversion = "0.1.0"\n');
-    const git = (...args) => execFileSync('git', args, { cwd: root, env: { ...fixtureEnvironment(), GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' } });
+    const git = (...args) => execFileSync('git', args, { cwd: root, env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' } });
     git('init', '-q'); git('add', '.'); git('commit', '-qm', 'chore: fixture');
     await action(root, git);
   } finally { await rm(root, { recursive: true, force: true }); }

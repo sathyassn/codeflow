@@ -64,16 +64,7 @@ BOOTSTRAP_ARCHIVE = {"name": "source.tar.gz", "digest": "sha256:" + "a" * 64, "s
 
 def command(root: Path, *args: str) -> str:
     result = subprocess.run(
-        list(args), cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
-        env={
-            **os.environ,
-            "GIT_CONFIG_COUNT": "2",
-            "GIT_CONFIG_KEY_0": "maintenance.auto",
-            "GIT_CONFIG_VALUE_0": "false",
-            "GIT_CONFIG_KEY_1": "gc.auto",
-            "GIT_CONFIG_VALUE_1": "0",
-            "GIT_CONFIG_PARAMETERS": "",
-        },
+        list(args), cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
     )
     return result.stdout.strip()
 
@@ -246,20 +237,6 @@ class Repository:
             lines.append(f"- Migration: {migration}\n")
         lines.append(f"- Withdrawal: {withdrawal}\n")
         return "".join(lines)
-
-
-class GitMaintenanceTests(unittest.TestCase):
-    def test_fixture_initialization_starts_no_automatic_maintenance(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="release-maintenance-") as scratch:
-            trace = Path(scratch) / "trace.jsonl"
-            with mock.patch.dict(os.environ, {"GIT_TRACE2_EVENT": str(trace)}):
-                repo = Repository()
-                self.addCleanup(repo.cleanup)
-            events = [json.loads(line) for line in trace.read_text().splitlines()]
-            self.assertTrue(any(event.get("event") == "start" for event in events))
-            writers = [event for event in events if event.get("event") == "child_start"
-                       and any(arg in ("maintenance", "gc") for arg in event["argv"])]
-            self.assertEqual(writers, [])
 
 
 class PendingVersionTests(unittest.TestCase):

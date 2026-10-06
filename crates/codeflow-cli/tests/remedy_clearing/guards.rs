@@ -231,18 +231,15 @@ fn clears_force_push() {
     git(root, &["fetch", "-q", "origin"]);
     // Someone else's commit reached the destination's feat/x.
     let other = root.join(".other");
-    git(
+    codeflow_fixture::clone(
         root,
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            "feat/x",
-            root.join(".dest.git").to_str().unwrap(),
-            other.to_str().unwrap(),
-        ],
-    );
+        root.join(".dest.git").to_str().unwrap(),
+        other.to_str().unwrap(),
+    )
+    .branch("feat/x")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     commit(&other, "o.txt", "feat: add o");
     git(&other, &["push", "-q", "origin", "feat/x"]);
     commit(root, "y.txt", "feat: add y");

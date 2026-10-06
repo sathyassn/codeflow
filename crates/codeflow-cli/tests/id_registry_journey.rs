@@ -173,18 +173,11 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
 
     // A second clone takes the next number, never the same one.
     let other = dir.path().join("other");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            LINE,
-            bare.to_str().unwrap(),
-            "other",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "other")
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let second = ok(
         &codeflow(
             &other,
@@ -253,18 +246,11 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
     // hooks. Allocation reads history: issue refuses and names the restore;
     // `ids check` fails with current damage.
     let plain = dir.path().join("plain");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            "codeflow/registry",
-            bare.to_str().unwrap(),
-            "plain",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "plain")
+        .branch("codeflow/registry")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&plain, &["rm", "-q", "ids/TSK/003.toml"]);
     git(&plain, &["commit", "-q", "-m", "remove"]);
     git(&plain, &["push", "-q", "origin", "HEAD:codeflow/registry"]);
@@ -403,18 +389,11 @@ fn guard(root: &Path, command: &str) -> Output {
 /// A fresh checkout of the remote, set up the way the registry workflow
 /// fetches it, and its `codeflow ids check` verdict.
 fn ci_check(dir: &Path, bare: &Path, name: &str) -> Output {
-    git(
-        dir,
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            LINE,
-            bare.to_str().unwrap(),
-            name,
-        ],
-    );
+    codeflow_fixture::clone(dir, bare.to_str().unwrap(), name)
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let checkout = dir.join(name);
     git(
         &checkout,
@@ -448,18 +427,11 @@ fn a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci() {
     git(&root, &["push", "-q", "origin", LINE]);
 
     // A host without prevention takes a deletion from a clone without hooks.
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            "codeflow/registry",
-            bare.to_str().unwrap(),
-            "plain",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "plain")
+        .branch("codeflow/registry")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let plain = dir.path().join("plain");
     let bound = std::fs::read_to_string(plain.join("ids/TSK/001.toml")).unwrap();
     git(&plain, &["rm", "-q", "ids/TSK/001.toml"]);
@@ -632,18 +604,11 @@ fn adr_new_takes_its_number_from_the_registry() {
     let (dir, root, bare) = project_with_remote();
     // Another clone takes ADR-0002 first; this checkout cannot see it.
     let other = dir.path().join("other");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            LINE,
-            bare.to_str().unwrap(),
-            "other",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "other")
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let first = ok(
         &codeflow(&other, &["adr", "new", "Keep one registry"]),
         "adr new in another clone",
@@ -942,10 +907,11 @@ fn a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing() {
 
     // A depth-one clone would take the edit for the introduction: refused.
     let url = format!("file://{}", bare.display());
-    git(
-        dir.path(),
-        &["clone", "--no-local", "-q", "--depth", "1", &url, "shallow"],
-    );
+    codeflow_fixture::clone(dir.path(), &url, "shallow")
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let shallow = dir.path().join("shallow");
     let seed = codeflow(&shallow, &["ids", "seed"]);
     assert!(!seed.status.success(), "{}", text(&seed));

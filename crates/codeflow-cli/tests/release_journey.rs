@@ -326,17 +326,11 @@ impl Adopted {
             &serde_json::to_string(&host).unwrap(),
         );
         let remote = dir.path().join("remote.git");
-        git(
-            &root,
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                "--bare",
-                ".",
-                remote.to_str().unwrap(),
-            ],
-        );
+        codeflow_fixture::clone(&root, ".", remote.to_str().unwrap())
+            .bare()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         git(
             &root,
             &["remote", "add", "origin", remote.to_str().unwrap()],

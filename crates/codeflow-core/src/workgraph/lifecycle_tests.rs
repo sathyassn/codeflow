@@ -2483,12 +2483,9 @@ fn a_record_the_range_adds_is_new_in_a_shallow_clone() {
 
     let clone = tempfile::tempdir().unwrap();
     let url = format!("file://{}", source.root().display());
-    let status = crate::git::command()
-        .args(["clone", "--no-local", "--quiet", "--depth", "2", &url])
-        .arg(clone.path())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    codeflow_fixture::clone(source.root(), &url, clone.path())
+        .depth(2)
+        .run();
     assert!(matches!(
         Baseline::load(clone.path()),
         Baseline::Unavailable(_)

@@ -42,7 +42,6 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEFAULT_REPO=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 
-. "$SCRIPT_DIR/../../scripts/fixture-git-env.sh"
 . "$SCRIPT_DIR/lib.sh"
 
 COMMIT=""

@@ -636,15 +636,11 @@ fn ac5_installed_project_observes_landed_policy_and_missing_binary() {
     );
     repo.check("exec-guard", "sudo true", 0);
     let operator = repo.root().join("operator");
-    repo.git(&[
-        "clone",
-        "--no-local",
-        "-q",
-        "--branch",
-        "main",
-        repo.root().join("remote.git").to_str().unwrap(),
-        operator.to_str().unwrap(),
-    ]);
+    codeflow_fixture::clone(repo.root(), repo.root().join("remote.git"), &operator)
+        .branch("main")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let operator_git = |args: &[&str]| {
         let out = repo
             .command("git")

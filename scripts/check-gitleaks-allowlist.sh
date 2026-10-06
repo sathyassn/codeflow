@@ -3,7 +3,6 @@ set -eu
 
 GITLEAKS=${1:-gitleaks}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$ROOT/scripts/fixture-git-env.sh"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 

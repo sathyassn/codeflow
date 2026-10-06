@@ -1,99 +1,89 @@
-# file	line	exact trimmed source	reason
-crates/codeflow-cli/src/cmd/present.rs	758	command.env_clear();	Presentation service and canary children perform no Git operations.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	246	.env_clear()	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	249	"GIT_CONFIG_COUNT",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	250	std::env::var("GIT_CONFIG_COUNT").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	253	"GIT_CONFIG_KEY_0",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	254	std::env::var("GIT_CONFIG_KEY_0").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	257	"GIT_CONFIG_VALUE_0",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	258	std::env::var("GIT_CONFIG_VALUE_0").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	261	"GIT_CONFIG_KEY_1",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	262	std::env::var("GIT_CONFIG_KEY_1").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	265	"GIT_CONFIG_VALUE_1",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	266	std::env::var("GIT_CONFIG_VALUE_1").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	269	"GIT_CONFIG_PARAMETERS",	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/ci_pin_platforms.rs	270	std::env::var("GIT_CONFIG_PARAMETERS").unwrap(),	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace.
-crates/codeflow-cli/tests/hooks_cli.rs	908	"env -i PATH=/usr/bin rm build/a.o",	Guard input string, not an executed shell command.
-crates/codeflow-cli/tests/prose_oracle.rs	232	.env_clear()	Shell oracle uses logging stubs including Git and never operates on a repository.
-crates/codeflow-cli/tests/refusal_journey/landed.rs	859	for command in ["git -cremote.origin.url=elsewhere fetch origin", "git --config-env=remote.origin.url=OTHER fetch origin", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=elsewhere git fetch origin", "GIT_CONFIG_PARAMETERS=remote.origin.url=elsewhere git fetch origin", "GIT_CONFIG_GLOBAL=other.conf git fetch origin"] {	Command text passed to guard evaluation, not an environment mutation.
-crates/codeflow-cli/tests/refusal_journey/landed.rs	1098	format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.{replacement}.insteadOf GIT_CONFIG_VALUE_0={prefix}"),	Command text passed to guard evaluation, not an environment mutation.
-crates/codeflow-cli/tests/release_line_cli.rs	951	.envs(env.iter().copied())	Adds replace-ref test controls to inherited environment; no maintenance config overrides.
-crates/codeflow-cli/tests/release_line_cli.rs	1181	.envs(env)	Adds replace-ref test controls to inherited environment; no maintenance config overrides.
-crates/codeflow-cli/tests/release_line_cli.rs	1416	.envs(env.iter().copied())	Adds replace-ref test controls to inherited environment; no maintenance config overrides.
-crates/codeflow-cli/tests/tier_floor_e2e.rs	125	fn git_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {	Existing hook policy fixture parameter preserves inherited Git configuration.
-crates/codeflow-cli/tests/tier_floor_e2e.rs	147	.envs(envs.iter().copied())	Existing hook policy fixture input preserves inherited Git configuration.
-crates/codeflow-cli/tests/tier_floor_e2e.rs	726	fn git_ok_env(dir: &Path, args: &[&str], envs: &[(&str, &str)], what: &str) {	Existing hook policy fixture parameter preserves inherited Git configuration.
-crates/codeflow-cli/tests/tier_floor_e2e.rs	727	let out = git_env(dir, args, envs);	Existing hook policy fixture parameter preserves inherited Git configuration.
-crates/codeflow-cli/tests/workspace_mode.rs	837	.env("GIT_CONFIG_COUNT", "3")	Appends core.ignoreCase at slot 2 while preserving maintenance slots 0 and 1; behaviorally verified.
-crates/codeflow-cli/tests/workspace_mode.rs	838	.env("GIT_CONFIG_KEY_2", key)	Appends core.ignoreCase at slot 2 while preserving maintenance slots 0 and 1; behaviorally verified.
-crates/codeflow-cli/tests/workspace_mode.rs	839	.env("GIT_CONFIG_VALUE_2", value)	Appends core.ignoreCase at slot 2 while preserving maintenance slots 0 and 1; behaviorally verified.
-crates/codeflow-core/src/hooks/git_guard.rs	570	// hook-skip env vars) — `GIT_CONFIG_KEY_0=core.hooksPath …`.	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	849	/// `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=…` or	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	850	/// the older `GIT_CONFIG_PARAMETERS='core.hooksPath=…'`. Parallel to the	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	856	(name.starts_with("GIT_CONFIG_KEY_") || name == "GIT_CONFIG_PARAMETERS")	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	11574	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	11575	"GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x",	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	11581	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/hooks/git_guard.rs	12045	"export GIT_CONFIG_COUNT=1; git x -m y",	Guard documentation, token inspection or inert guard-test input; does not change process environments.
-crates/codeflow-core/src/root_checkout.rs	668	/// (`git -c`, `GIT_CONFIG_COUNT`) included; git's default, false, when it	Documentation of Git configuration precedence.
-crates/codeflow-core/src/scaffold/gitutil.rs	16	envs: &[(&str, &str)],	Scaffold environment parameter carries only the gate-context marker; maintenance settings remain inherited.
-crates/codeflow-core/src/scaffold/gitutil.rs	22	.envs(envs.iter().copied())	Adds the scaffold gate-context marker only; inherited maintenance settings remain intact.
-crates/codeflow-core/src/security/guard_forms.rs	1376	("env-cluster-split", "env -iS'rm -rf /'", Expect::Protected),	Inert shell-guard test corpus, never executed.
-crates/codeflow-core/src/security/outward.rs	1028	"env -i {}",	Constructs inert command text for security evaluation, not process execution.
-crates/codeflow-core/src/validate/portal.rs	3587	.env_clear()	Hardened Git readers only, or inert input to the pure environment-filter test.
-crates/codeflow-core/src/validate/portal.rs	3588	.envs(allowed_git_environment(std::env::vars_os()))	Hardened Git readers only, or inert input to the pure environment-filter test.
-crates/codeflow-core/src/validate/portal.rs	5464	(OsString::from("GIT_CONFIG_COUNT"), OsString::from("1")),	Hardened Git readers only, or inert input to the pure environment-filter test.
-crates/codeflow-core/src/validate/portal.rs	5466	OsString::from("GIT_CONFIG_KEY_0"),	Hardened Git readers only, or inert input to the pure environment-filter test.
-crates/codeflow-core/src/validate/portal.rs	5470	OsString::from("GIT_CONFIG_VALUE_0"),	Hardened Git readers only, or inert input to the pure environment-filter test.
-crates/codeflow-core/tests/git_spawn_contract.rs	826	"GIT_CONFIG_COUNT",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	827	"GIT_CONFIG_PARAMETERS",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	828	"GIT_CONFIG_KEY_",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	829	"GIT_CONFIG_VALUE_",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	830	"env_clear",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	831	"envs",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	832	"os.environ.clear",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	840	(token != "envs" || (!inside_identifier && !followed_by_identifier)).then_some(offset)	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	855	for (offset, _) in compact.match_indices("env:{") {	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	963	"cmd.env_clear();",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	964	"Command::env_clear(&mut cmd);",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	965	r#"cmd.envs([("GIT_CONFIG_COUNT", "0")]);"#,	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	966	r#"let key = "GIT_CONFIG_COUNT"; cmd.env_remove(key);"#,	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	967	r#"spawnSync("git", args, { env: { GIT_CONFIG_COUNT: "0" } });"#,	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	968	r#"os.environ["GIT_CONFIG_COUNT"] = "0""#,	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	969	"os.environ.clear()",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	970	"env -i git commit",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	971	"cmd.envs(map);",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	972	"cmd.envs /* comment */ (map);",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	973	"Command::envs(&mut cmd, map);",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	974	"cmd.envs\n(map);",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	976	"// cmd.env_clear();",	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	983	let original = r#"cmd.env("GIT_CONFIG_COUNT", inherited);"#;	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-core/tests/git_spawn_contract.rs	1021	let changed = source.replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()", "\"0\"");	Scanner token definitions and negative examples, not process execution.
-crates/codeflow-present/src/platform.rs	159	command.env_clear();	Restricted browser/system tools and canary children perform no Git operations.
-docs-portal/tests/adapter.test.mjs	1695	GIT_CONFIG_COUNT: "1",	Inert hostile input to hardenedGitEnvironment and assertions that it is excluded.
-docs-portal/tests/adapter.test.mjs	1696	GIT_CONFIG_KEY_0: "core.fsmonitor",	Inert hostile input to hardenedGitEnvironment and assertions that it is excluded.
-docs-portal/tests/adapter.test.mjs	1697	GIT_CONFIG_VALUE_0: "/tmp/attacker",	Inert hostile input to hardenedGitEnvironment and assertions that it is excluded.
-docs-portal/tests/adapter.test.mjs	1702	for (const key of ["AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "LD_PRELOAD"]) {	Inert hostile input to hardenedGitEnvironment and assertions that it is excluded.
-docs-portal/tests/portal-fixture.mjs	114	GIT_CONFIG_COUNT: "2",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-docs-portal/tests/portal-fixture.mjs	115	GIT_CONFIG_KEY_0: "maintenance.auto",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-docs-portal/tests/portal-fixture.mjs	116	GIT_CONFIG_VALUE_0: "false",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-docs-portal/tests/portal-fixture.mjs	117	GIT_CONFIG_KEY_1: "gc.auto",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-docs-portal/tests/portal-fixture.mjs	118	GIT_CONFIG_VALUE_1: "0",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-docs-portal/tests/portal-fixture.mjs	119	GIT_CONFIG_PARAMETERS: "",	Shared Node fixture environment disables maintenance before init and commit; trace test covers it.
-scripts/check-scaffold-gitleaks.sh	301	STEP_ENV="GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_2=diff.algorithm GIT_CONFIG_VALUE_2=invalid"	Appends diff test settings after inherited maintenance slots 0 and 1 for read-only scan children.
-scripts/check-scaffold-gitleaks.sh	786	STEP_ENV="$STEP_ENV GIT_CONFIG_KEY_$count=${pair%%=*} GIT_CONFIG_VALUE_$count=${pair#*=}"	Appends diff test settings after inherited maintenance slots 0 and 1 for read-only scan children.
-scripts/check-scaffold-gitleaks.sh	789	STEP_ENV="GIT_CONFIG_COUNT=$count$STEP_ENV"	Appends diff test settings after inherited maintenance slots 0 and 1 for read-only scan children.
-scripts/fixture-git-env.sh	3	export GIT_CONFIG_COUNT=2	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/fixture-git-env.sh	4	export GIT_CONFIG_KEY_0=maintenance.auto	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/fixture-git-env.sh	5	export GIT_CONFIG_VALUE_0=false	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/fixture-git-env.sh	6	export GIT_CONFIG_KEY_1=gc.auto	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/fixture-git-env.sh	7	export GIT_CONFIG_VALUE_1=0	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/fixture-git-env.sh	8	export GIT_CONFIG_PARAMETERS=	Shared shell fixture environment disables automatic maintenance for Git and codeflow descendants.
-scripts/test_binary_delta.mjs	25	const git = (...args) => execFileSync('git', args, { cwd: root, env: { ...fixtureEnvironment(), GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com' } });	Spreads the shared maintenance-off fixtureEnvironment and adds only author/committer identity.
-scripts/test_gate_parity.py	446	"        env: {LLVM_PROFILE_FILE_NAME: codeflow-%4m.profraw}\n"),	Inert YAML mutation used to test gate parity, not a child environment.
-scripts/test_release.py	70	"GIT_CONFIG_COUNT": "2",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
-scripts/test_release.py	71	"GIT_CONFIG_KEY_0": "maintenance.auto",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
-scripts/test_release.py	72	"GIT_CONFIG_VALUE_0": "false",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
-scripts/test_release.py	73	"GIT_CONFIG_KEY_1": "gc.auto",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
-scripts/test_release.py	74	"GIT_CONFIG_VALUE_1": "0",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
-scripts/test_release.py	75	"GIT_CONFIG_PARAMETERS": "",	Shared Python fixture command environment disables maintenance before init and commit; trace test covers it.
+# file	normalized call span	count	reason
+crates/codeflow-cli/src/cmd/ci.rs	env(key)	1	Reads CI variables through the environment lookup closure; not a process mutation.
+crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"inner")	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/src/cmd/present.rs	env(STAGE,"outer")	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/src/cmd/present.rs	env(name,value)	2	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/src/cmd/present.rs	env(secret,"sentinel")	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/src/cmd/present.rs	env_clear()	1	Presentation service and canary environment controls; these children perform no Git operations.
+crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env(key,value)	2	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
+crates/codeflow-cli/tests/ci_cli/pr_body_fixtures.rs	env_remove(key)	1	Sets or clears CI platform and PR-body controls; leaves inherited Git configuration intact.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_COUNT",std::env::var("GIT_CONFIG_COUNT").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_KEY_0",std::env::var("GIT_CONFIG_KEY_0").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_KEY_1",std::env::var("GIT_CONFIG_KEY_1").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_PARAMETERS",std::env::var("GIT_CONFIG_PARAMETERS").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_VALUE_0",std::env::var("GIT_CONFIG_VALUE_0").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env("GIT_CONFIG_VALUE_1",std::env::var("GIT_CONFIG_VALUE_1").unwrap(),)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env(key,value)	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	env_clear()	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_COUNT")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_KEY_0")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_KEY_1")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_PARAMETERS")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_VALUE_0")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/ci_pin_platforms.rs	var("GIT_CONFIG_VALUE_1")	1	Scrubs CI state then restores the forced Cargo maintenance settings; covered by a real commit trace. Dynamic additions are CI platform fields.
+crates/codeflow-cli/tests/classification_cli.rs	env(key,value)	1	Adds CI platform fields to the inherited fixture environment.
+crates/codeflow-cli/tests/hooks_cli.rs	env(key,value)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.
+crates/codeflow-cli/tests/hooks_cli.rs	env_remove(key)	1	Copies the isolated codeflow command environment for alternate-binary guard probes; preserves inherited Git settings.
+crates/codeflow-cli/tests/present_cli.rs	env(OWNER_PID_ENV,owner.to_string())	1	Sets the presentation owner PID test variable only.
+crates/codeflow-cli/tests/prose_oracle.rs	env_clear()	1	Shell oracle uses logging stubs including Git and never operates on a repository.
+crates/codeflow-cli/tests/refusal_journey/landed.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=elsewhere git fetch origin"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-cli/tests/refusal_journey/landed.rs	"GIT_CONFIG_PARAMETERS=remote.origin.url=elsewhere git fetch origin"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-cli/tests/refusal_journey/landed.rs	format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.{replacement}.insteadOf GIT_CONFIG_VALUE_0={prefix}")	1	Command text passed to guard evaluation, not an executed command or environment mutation.
+crates/codeflow-cli/tests/release_line_cli.rs	envs(env)	1	Adds replace-ref test controls to inherited environment; no maintenance overrides.
+crates/codeflow-cli/tests/release_line_cli.rs	envs(env.iter().copied())	2	Adds replace-ref test controls to inherited environment; no maintenance overrides.
+crates/codeflow-cli/tests/tier_floor_e2e.rs	envs(envs.iter().copied())	1	Adds hook policy fixture controls to inherited environment; no maintenance overrides.
+crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_COUNT","3")	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
+crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_KEY_2",key)	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
+crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_VALUE_2",value)	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
+crates/codeflow-cli/tests/workspace_mode.rs	env(name,"1")	1	Agent identity marker controls preserve inherited Git settings.
+crates/codeflow-cli/tests/workspace_mode.rs	env_remove(name)	1	Agent identity marker controls preserve inherited Git settings.
+crates/codeflow-core/src/doctor/mod.rs	env(&self,name:&str)	1	Read-only environment lookup function and its test doubles, not process mutation.
+crates/codeflow-core/src/doctor/mod.rs	env(name)	1	Read-only environment lookup function and its test doubles, not process mutation.
+crates/codeflow-core/src/doctor/mod.rs	env(name:&str)	2	Read-only environment lookup function and its test doubles, not process mutation.
+crates/codeflow-core/src/git/mod.rs	"GIT"	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
+crates/codeflow-core/src/git/mod.rs	env(HOOK_BINARY_ENV,binary)	1	GIT is command vocabulary; HOOK_BINARY_ENV passes the designated codeflow binary path.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	"GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	"export GIT_CONFIG_COUNT=1; git x -m y"	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	any(|(name,val)|{(name.starts_with("GIT_CONFIG_KEY_")||name=="GIT_CONFIG_PARAMETERS")&&mentions_hooks_path(val)})	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	evaluate("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.email GIT_CONFIG_VALUE_0=x git status",&ctx(&p,"feat/x"))	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	hook_integrity_violation(ctx.policy.hook_integrity,"command injects core.hooksPath via GIT_CONFIG_* env".to_string(),)	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG")	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/hooks/git_guard.rs	starts_with("GIT_CONFIG_KEY_")	1	Guard vocabulary, diagnostics and inert command-text tests; does not mutate process environments.
+crates/codeflow-core/src/ids/git.rs	env(key,value)	1	Adds temporary index/object-directory selectors for registry plumbing while inheriting maintenance settings.
+crates/codeflow-core/src/integrate.rs	env(GATE_TOKEN_ENV,ulid::Ulid::new().to_string())	1	Adds the integration gate token only.
+crates/codeflow-core/src/root_checkout.rs	env(HUMAN_OVERRIDE_ENV)	1	Reads human override and agent markers through an environment lookup callback.
+crates/codeflow-core/src/root_checkout.rs	env(name)	1	Reads human override and agent markers through an environment lookup callback.
+crates/codeflow-core/src/scaffold/gitutil.rs	envs(envs.iter().copied())	1	Adds the scaffold gate-context marker only; inherits maintenance settings.
+crates/codeflow-core/src/scaffold/state.rs	env(CHILD,format!("{}\n{stop}\n{}",root.display(),intents.display()),)	1	Passes the fixture crash-child paths and stop point only.
+crates/codeflow-core/src/testing/runner/mod.rs	env(GATE_HELPER_DIR,dir.path())	1	Passes validated target environment or the Windows helper fixture directory; workspace targets do not override maintenance settings.
+crates/codeflow-core/src/testing/runner/mod.rs	env(key,val)	1	Passes validated target environment or the Windows helper fixture directory; workspace targets do not override maintenance settings.
+crates/codeflow-core/src/validate/portal.rs	env_clear()	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/src/validate/portal.rs	envs(allowed_git_environment(std::env::vars_os()))	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_COUNT")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_KEY_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/src/validate/portal.rs	from("GIT_CONFIG_VALUE_0")	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.
+crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.env(\"GIT_CONFIG_\\x43OUNT\", \"0\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.envs([(\"GIT_CONFIG_COUNT\",\"0\")]);"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"concat!(\"GIT_CONFIG_\", \"COUNT\");"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"const GIT: &str = \"git\"; let c = Command::new(GIT);"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"let c = Command::new(r#\"GIT\"#);"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	"let key = \"GIT_CONFIG_COUNT\"; cmd.env_remove(key);"	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	any(|part|{!part.is_empty()&&(["GIT_CONFIG_COUNT","GIT_CONFIG_PARAMETERS","GIT_CONFIG_KEY_","GIT_CONFIG_VALUE_",].iter().any(|name|name.starts_with(part))||["GIT_CONFIG_KEY_","GIT_CONFIG_VALUE_"].iter().any(|prefix|{part.strip_prefix(prefix).is_some_and(|tail|tail.chars().all(|c|c.is_ascii_digit()))}))})	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	assert_eq!(environment_spans("cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"),vec!["env(\"GIT_CONFIG_COUNT\",\"0\")".to_owned()])	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	environment_spans("// GIT_CONFIG_COUNT env_clear")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	environment_spans("cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-core/tests/git_spawn_contract.rs	replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()","\"0\"")	1	Scanner vocabulary and inert positive/negative source examples; not process execution.
+crates/codeflow-fixture/src/lib.rs	env(mutself,key:implAsRef<OsStr>,value:implAsRef<OsStr>)	1	Closed clone builder forwards caller environment additions; all caller mutation sites are scanned and inherited settings are retained.
+crates/codeflow-fixture/src/lib.rs	envs(self.environment)	1	Closed clone builder forwards caller environment additions; all caller mutation sites are scanned and inherited settings are retained.
+crates/codeflow-present/src/platform.rs	env(STAGE,"inner")	1	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.
+crates/codeflow-present/src/platform.rs	env(STAGE,"outer")	1	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.
+crates/codeflow-present/src/platform.rs	env(name,value)	2	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.
+crates/codeflow-present/src/platform.rs	env_clear()	1	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.
+crates/codeflow-present/src/platform.rs	format!("O:{sid}G:{sid}D:P(A;{inheritance};GA;;;{sid})",sid=current.text)	1	Restricted browser/system-tool or canary environment controls, and an inert Windows ACL string; no Git operations.
+crates/codeflow-present/src/responses.rs	env(CHILD_BODY,&body_path)	1	Adds response crash-child fixture variables only.
+crates/codeflow-present/src/responses.rs	env(CHILD_ROOT,session.store.root())	1	Adds response crash-child fixture variables only.
+crates/codeflow-present/src/responses.rs	env(CHILD_SESSION,session.id.to_string())	1	Adds response crash-child fixture variables only.
+crates/codeflow-present/src/responses.rs	env(crash::CRASH_AT,cut.to_string())	1	Adds response crash-child fixture variables only.

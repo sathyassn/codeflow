@@ -158,20 +158,16 @@ fn clears_baseline_history() {
     // A depth-1 clone holds the commit that lists the baseline, not the
     // baseline commit itself.
     let clone = dir.path().join("clone");
-    git(
+    codeflow_fixture::clone(
         dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--depth",
-            "1",
-            "-b",
-            "plan/x",
-            &format!("file://{}", root.display()),
-            clone.to_str().unwrap(),
-        ],
-    );
+        format!("file://{}", root.display()),
+        clone.to_str().unwrap(),
+    )
+    .depth(1)
+    .branch("plan/x")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     prove(
         "BASELINE_HISTORY",
         "is not in this clone's history",
@@ -195,21 +191,25 @@ fn clears_ci_range_unreadable() {
     // A shallow CI checkout: each tip without the history that joins them.
     let clones = tempfile::tempdir().unwrap();
     let clone = clones.path().join("clone");
-    git(
+    codeflow_fixture::clone(
         clones.path(),
+        format!("file://{}", root.display()),
+        clone.to_str().unwrap(),
+    )
+    .depth(1)
+    .branch("feat/x")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
+    git(
+        &clone,
         &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--depth",
-            "1",
-            "--no-single-branch",
-            "-b",
-            "feat/x",
-            &format!("file://{}", root.display()),
-            clone.to_str().unwrap(),
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
         ],
     );
+    git(&clone, &["fetch", "-q", "--depth", "1", "origin"]);
     let check = || {
         codeflow(
             &clone,
@@ -853,8 +853,8 @@ fn clears_id_registry_unfetched() {
     let hosted = registered();
     let out = issue_task(&hosted, "plan/more", "more work");
     assert!(out.contains("TSK-002"), "{out}");
-    // The pull request branch reaches the platform, and a CI checkout
-    // clones it with its base and nothing else.
+    // The pull request branch reaches the platform. Model a CI checkout
+    // whose fetch rule omits the registry tracking ref.
     git(
         &hosted.dest,
         &[
@@ -865,18 +865,27 @@ fn clears_id_registry_unfetched() {
         ],
     );
     let clone = hosted.dir.path().join("checkout");
-    git(
+    codeflow_fixture::clone(
         hosted.dir.path(),
+        hosted.dest.to_str().unwrap(),
+        clone.to_str().unwrap(),
+    )
+    .branch("plan/more")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
+    // Fetch only the selected branch by default and remove the registry ref.
+    git(
+        &clone,
         &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--single-branch",
-            "-b",
-            "plan/more",
-            hosted.dest.to_str().unwrap(),
-            clone.to_str().unwrap(),
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/plan/more:refs/remotes/origin/plan/more",
         ],
+    );
+    git(
+        &clone,
+        &["update-ref", "-d", "refs/remotes/origin/codeflow/registry"],
     );
     let upstream = hosted.upstream();
     git(

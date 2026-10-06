@@ -27,11 +27,11 @@
 //! test target the runner starts through `sh -c`, is the user's command,
 //! not one codeflow builds.
 
-//! The fixture environment scan below checks raw source tokens, including
-//! comments and strings, across Rust, JavaScript, Python and shell fixtures.
-//! It cannot see dynamic keys constructed from fragments or environment
-//! changes made by an external program. Clone checks cover literal arrays
-//! passed to Command args and the Git helper names listed in the scanner.
+//! Fixture guards use decoded Rust tokens. Clones live only in the private
+//! fixture helper; environment exceptions bind normalized call spans and counts.
+//! Runtime string assembly, procedural macros, a child program that clones on
+//! its own, and environment changes by external programs remain outside the
+//! scans. The non-Rust scope check excludes the live-host scripts/proofs prototype.
 
 use std::path::{Path, PathBuf};
 
@@ -581,121 +581,6 @@ fn literal(toks: &[Token]) -> Option<&str> {
     }
 }
 
-/// The callee enclosing an array, ignoring completed nested expressions.
-fn array_callee(toks: &[Token], start: usize) -> Option<&Token> {
-    let mut stack = Vec::new();
-    for (index, token) in toks[..start].iter().enumerate() {
-        if token.punct('(') || token.punct('[') || token.punct('{') {
-            stack.push(index);
-        } else if token.punct(')') || token.punct(']') || token.punct('}') {
-            stack.pop();
-        }
-    }
-    let open = *stack.last()?;
-    (toks[open].punct('(') && open > 0).then(|| &toks[open - 1])
-}
-
-fn clone_option_takes_value(option: &str) -> bool {
-    matches!(
-        option,
-        "--template"
-            | "--reference"
-            | "--reference-if-able"
-            | "--separate-git-dir"
-            | "-c"
-            | "--config"
-            | "-o"
-            | "-b"
-            | "--branch"
-            | "--depth"
-            | "--filter"
-            | "--origin"
-            | "-u"
-            | "--upload-pack"
-            | "-j"
-            | "--jobs"
-            | "--shallow-since"
-            | "--shallow-exclude"
-            | "--server-option"
-            | "--bundle-uri"
-    )
-}
-
-/// Literal arrays passed to Command args or this suite's Git helpers form the
-/// supported subset. Split clone chains and bound clone arrays are refused.
-fn unsafe_fixture_clones(_file: &str, source: &str) -> Vec<String> {
-    let toks = tokens(source);
-    let mut offenders = Vec::new();
-    for (start, token) in toks.iter().enumerate() {
-        if token.is("arg")
-            && toks.get(start + 1).is_some_and(|t| t.punct('('))
-            && matches!(toks.get(start + 2), Some(Token::Str(s)) if s == "clone")
-        {
-            offenders
-                .push(".arg(\"clone\") hides its options; use one literal argument array".into());
-        }
-        if !token.punct('[') {
-            continue;
-        }
-        let end = group_end(&toks, start);
-        let args = arguments(&toks[start + 1..end]);
-        if !args.iter().any(|arg| literal(arg) == Some("clone")) {
-            continue;
-        }
-        let text: String = toks[start..=end].iter().map(Token::text).collect();
-        let before = &toks[..start];
-        let direct = matches!(before.last(), Some(t) if t.punct('('))
-            || matches!(before, [.., separator, amp] if amp.punct('&')
-                && (separator.punct('(') || separator.punct(',')));
-        if !direct {
-            let bound = before
-                .iter()
-                .rev()
-                .take_while(|t| !t.punct(';') && !t.punct('{'))
-                .any(|t| t.is("let"));
-            if bound {
-                offenders.push(format!("{text}: bound clone array hides its use"));
-            }
-            continue;
-        }
-        if !array_callee(&toks, start).is_some_and(|callee| {
-            ["args", "git", "run_git", "git_ok", "run", "command"]
-                .iter()
-                .any(|name| callee.is(name))
-        }) {
-            continue;
-        }
-        let mut command = 0;
-        while command + 1 < args.len() && matches!(literal(args[command]), Some("-C" | "-c")) {
-            command += 2;
-        }
-        if args.get(command).and_then(|arg| literal(arg)) != Some("clone") {
-            // A path or message named clone is not a clone invocation.
-            // Only the supported command slot identifies the operation.
-            // Unrelated argument arrays need no vocabulary allowance.
-            continue;
-        }
-        let mut transport = false;
-        let mut index = command + 1;
-        while index < args.len() {
-            match literal(args[index]) {
-                Some("--") => break,
-                Some("--no-local") => transport = true,
-                Some("--local" | "-l") => transport = false,
-                Some(option) if clone_option_takes_value(option) => {
-                    index += 1;
-                }
-                _ => {}
-            }
-            index += 1;
-        }
-        if !transport {
-            offenders.push(format!("{text}: fixture clone needs effective --no-local before --; local copies can race with repacking"));
-        }
-    }
-    offenders
-}
-
 fn fixture_sources() -> (PathBuf, Vec<PathBuf>) {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -715,300 +600,249 @@ fn fixture_sources() -> (PathBuf, Vec<PathBuf>) {
     (crates, files)
 }
 
-#[test]
-fn fixture_clones_use_the_git_transport() {
-    let (crates, files) = fixture_sources();
-    let mut offenders = Vec::new();
-    for file in files {
-        let source = std::fs::read_to_string(&file).unwrap();
-        let name = file
-            .strip_prefix(&crates)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        for finding in unsafe_fixture_clones(&name, &source) {
-            offenders.push(format!("{name}: {finding}"));
-        }
-    }
-    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
-}
-
-#[test]
-fn clone_scan_checks_the_flags_on_each_argument_list() {
-    for source in [
-        r#"git(root, &["clone", "-q", "--bare", source, dest]);"#,
-        r#"git(root, &["clone", "source", "dest"]);"#,
-        r#"git(root, &["clone", "--no-hardlinks", source, dest]);"#,
-        r#"command.args(["clone", path.to_str().unwrap()]).arg(dest);"#,
-        r#"git(root, &[r"clone", "-q", "file:///repo", "dest"]);"#,
-        r#"git(root, &["cl\x6fne", source]); // --no-local"#,
-        r#"git(root, &["clone", paths[0], dest]); let flag = "--no-local";"#,
-        r#"git(root, &["clone", path("--no-local"), dest]);"#,
-        r#"cmd.arg("clone").arg(source);"#,
-        r#"cmd.arg("clone").arg("--no-local").arg(source);"#,
-        r#"let args = ["clone", source]; cmd.args(args);"#,
-        r#"let args = &["clone", "--no-local", source]; cmd.args(args);"#,
-        r#"cmd.args(["-C", root, "clone", source]);"#,
-        r#"cmd.args(["clone", "--", "--no-local", source]);"#,
-        r#"cmd.args(["clone", "--no-local", "--local", source]);"#,
-        r#"cmd.args(["clone", "--no-local", "-l", source]);"#,
-        r#"cmd.args(["-c", "key=value", "clone", source]);"#,
-    ] {
-        assert!(
-            !unsafe_fixture_clones("probe.rs", source).is_empty(),
-            "{source}"
-        );
-    }
-    for source in [
-        r#"display_words(&["clone", "help"]); git(root, &["add", "clone"]);"#,
-        r#"["clone", "help"].iter();"#,
-        r#"Commands { subcommands: &["clone", "help"] }"#,
-        r#"cmd.args(["-c", "a=b", "-C", root, "clone", "--no-local", source]);"#,
-        r#"cmd.args(["clone", "--template=--local", "--no-local", source]);"#,
-        r#"git(root, &["clone", "--no-local", source, dest]);"#,
-        r#"git(root, &["clone", "--no-hardlinks", "--no-local", source, dest]);"#,
-        r#"command.args(["clone", "--no-local", "--depth", "1", url]);"#,
-        "git(root, &[/* fixture */ \"clone\",\n r\"--no-local\", source]);",
-        r#"cmd.args(["-C", root.to_str().unwrap(), "clone", "--no-local", source]);"#,
-        r#"cmd.args(["clone", "--local", "--no-local", source]);"#,
-        r#"cmd.args(["clone", "--no-local", "--", "--local", dest]);"#,
-        r#"// git(root, &["clone", source]);"#,
-        r#"let text = "git(root, &[\"clone\", source]);";"#,
-    ] {
-        assert!(
-            unsafe_fixture_clones("probe.rs", source).is_empty(),
-            "{source}"
-        );
-    }
-    assert_eq!(
-        unsafe_fixture_clones(
-            "probe.rs",
-            r#"git(root, &["clone", "--no-local", source, a]);
-        git(root, &["clone", source, b]);"#
-        )
-        .len(),
-        1
-    );
-}
-
-/// Environment tokens are deliberately checked in comments and strings too.
-/// Dynamic key construction from fragments and mutations by external programs
-/// remain outside this source scan. Exact line bindings require review on moves.
 #[derive(Debug)]
-struct EnvironmentAllowance<'a> {
+struct Allowance<'a> {
     file: &'a str,
-    line: usize,
-    text: &'a str,
+    span: &'a str,
+    count: usize,
     reason: &'a str,
 }
 
-fn environment_allowances() -> Vec<EnvironmentAllowance<'static>> {
-    include_str!("fixtures/git_environment_allowlist.tsv")
+fn allowances(table: &str) -> Vec<Allowance<'_>> {
+    table
         .lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| {
             let fields: Vec<_> = line.splitn(4, '\t').collect();
             assert_eq!(fields.len(), 4, "{line}");
-            EnvironmentAllowance {
+            Allowance {
                 file: fields[0],
-                line: fields[1].parse().unwrap(),
-                text: fields[2],
+                span: fields[1],
+                count: fields[2].parse().unwrap(),
                 reason: fields[3],
             }
         })
         .collect()
 }
 
-fn environment_sites(source: &str) -> Vec<(usize, &str)> {
-    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
-    let mut offsets = Vec::new();
-    for token in [
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_KEY_",
-        "GIT_CONFIG_VALUE_",
-        "env_clear",
-        "envs",
-        "os.environ.clear",
-    ] {
-        offsets.extend(compact.match_indices(token).filter_map(|(offset, _)| {
-            let prefix = &compact[..offset];
-            let inside_identifier = prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_');
-            let suffix = &compact[offset + token.len()..];
-            let followed_by_identifier =
-                suffix.starts_with(|c: char| c.is_alphanumeric() || c == '_');
-            (token != "envs" || (!inside_identifier && !followed_by_identifier)).then_some(offset)
-        }));
-    }
-    for (offset, _) in source.match_indices("env") {
-        let tail = &source[offset + 3..];
-        if tail.starts_with(char::is_whitespace) && tail.trim_start().starts_with("-i") {
-            offsets.push(
-                source[..offset]
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .map(char::len_utf8)
-                    .sum(),
-            );
+const ENV_ALLOWANCES: &str = include_str!("fixtures/git_environment_allowlist.tsv");
+const CLONE_ALLOWANCES: &str = include_str!("fixtures/git_clone_allowlist.tsv");
+
+fn normalized(toks: &[Token]) -> String {
+    toks.iter().map(Token::text).collect()
+}
+
+/// The nearest enclosing call, including its callee and its entire argument
+/// group. Tuple/array groups are skipped so a setting's value remains bound.
+fn call_span(toks: &[Token], index: usize) -> (usize, usize) {
+    let mut stack = Vec::new();
+    for (at, token) in toks[..index].iter().enumerate() {
+        if token.punct('(') || token.punct('[') || token.punct('{') {
+            stack.push(at);
+        } else if token.punct(')') || token.punct(']') || token.punct('}') {
+            stack.pop();
         }
     }
-    for (offset, _) in compact.match_indices("env:{") {
-        let object = &compact[offset + 5..];
-        let end = object.find('}').unwrap_or(object.len());
-        if !object[..end].contains("...process.env") {
-            offsets.push(offset);
+    for open in stack.into_iter().rev() {
+        if !toks[open].punct('(') || open == 0 {
+            continue;
+        }
+        let callee = if toks[open - 1].punct('!') && open > 1 {
+            open - 2
+        } else {
+            open - 1
+        };
+        if matches!(toks[callee], Token::Ident(_)) {
+            return (callee, group_end(toks, open));
         }
     }
-    let mut start = 0;
-    source
-        .lines()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            let end = start
-                + line
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .map(char::len_utf8)
-                    .sum::<usize>();
-            let marked = offsets
+    (index, index)
+}
+
+fn word_clone(value: &str) -> bool {
+    value
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|word| word == "clone")
+}
+
+fn clone_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = std::collections::BTreeSet::new();
+    for (index, token) in toks.iter().enumerate() {
+        if matches!(token, Token::Str(value) if word_clone(value)) {
+            spans.insert(call_span(&toks, index));
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end)| normalized(&toks[start..=end]))
+        .collect()
+}
+
+fn injected_configuration(value: &str) -> bool {
+    value
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|part| {
+            !part.is_empty()
+                && ([
+                    "GIT_CONFIG_COUNT",
+                    "GIT_CONFIG_PARAMETERS",
+                    "GIT_CONFIG_KEY_",
+                    "GIT_CONFIG_VALUE_",
+                ]
                 .iter()
-                .any(|offset| *offset >= start && *offset < end);
-            start = end;
-            marked.then_some((index + 1, line.trim()))
+                .any(|name| name.starts_with(part))
+                    || ["GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"]
+                        .iter()
+                        .any(|prefix| {
+                            part.strip_prefix(prefix)
+                                .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+                        }))
+        })
+}
+
+fn environment_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = std::collections::BTreeSet::new();
+    for (index, token) in toks.iter().enumerate() {
+        let call = toks.get(index + 1).is_some_and(|token| token.punct('('));
+        if token.is("env_clear") || (token.is("envs") && call) {
+            spans.insert((
+                index,
+                if call {
+                    group_end(&toks, index + 1)
+                } else {
+                    index
+                },
+            ));
+        } else if (token.is("env") || token.is("env_remove")) && call {
+            let end = group_end(&toks, index + 1);
+            let args = arguments(&toks[index + 2..end]);
+            if args.first().and_then(|arg| literal(arg)).is_none() {
+                spans.insert((index, end));
+            }
+        }
+        if matches!(token, Token::Str(value) if injected_configuration(value)) {
+            spans.insert(call_span(&toks, index));
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end)| normalized(&toks[start..=end]))
+        .collect()
+}
+
+fn unlisted_spans(file: &str, spans: &[String], allowed: &[Allowance<'_>]) -> Vec<String> {
+    let mut counts = std::collections::BTreeMap::new();
+    for span in spans {
+        *counts.entry(span.as_str()).or_insert(0_usize) += 1;
+    }
+    for entry in allowed.iter().filter(|entry| entry.file == file) {
+        counts.entry(entry.span).or_insert(0);
+    }
+    counts
+        .into_iter()
+        .filter_map(|(span, count)| {
+            let entry = allowed
+                .iter()
+                .find(|entry| entry.file == file && entry.span == span);
+            (!entry.is_some_and(|entry| entry.count == count && !entry.reason.is_empty())).then(
+                || {
+                    format!(
+                        "{file}: {span}: found {count}, allowed {}; AC-4 requires review",
+                        entry.map_or(0, |entry| entry.count)
+                    )
+                },
+            )
         })
         .collect()
 }
 
-fn environment_violations(
-    file: &str,
-    source: &str,
-    allowed: &[EnvironmentAllowance<'_>],
-) -> Vec<String> {
-    let sites = environment_sites(source);
-    let mut offenders = Vec::new();
-    for (line, text) in &sites {
-        if !allowed.iter().any(|entry| {
-            entry.file == file
-                && entry.line == *line
-                && entry.text == *text
-                && !entry.reason.is_empty()
-        }) {
-            offenders.push(format!(
-                "{file}:{line}: {text}: unreviewed environment token"
-            ));
-        }
-    }
-    for entry in allowed.iter().filter(|entry| entry.file == file) {
-        if !sites.contains(&(entry.line, entry.text)) {
-            offenders.push(format!(
-                "{file}:{}: {}: allowance moved, changed or disappeared",
-                entry.line, entry.text
-            ));
-        }
-    }
-    offenders
-}
-
-fn script_files(dir: &Path, files: &mut Vec<PathBuf>) {
-    if !dir.is_dir() {
-        return;
-    }
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            script_files(&path, files);
-        } else if path.extension().is_some_and(|ext| {
-            ["mjs", "js", "py", "sh", "bash"]
-                .iter()
-                .any(|name| ext == *name)
-        }) {
-            files.push(path);
-        }
-    }
-}
-
-#[test]
-fn fixture_processes_preserve_the_maintenance_environment() {
-    let (crates, mut files) = fixture_sources();
+fn scan_rust(spans: fn(&str) -> Vec<String>, table: &str, exclude_helper: bool) -> Vec<String> {
+    let (crates, files) = fixture_sources();
     let root = crates.parent().unwrap();
-    for area in ["docs-portal/tests", "scripts", "tests"] {
-        script_files(&root.join(area), &mut files);
-    }
-    let allowed = environment_allowances();
-    let mut offenders = Vec::new();
+    let allowed = allowances(table);
     let mut seen = std::collections::BTreeSet::new();
+    let mut findings = Vec::new();
     for file in files {
         let name = file
             .strip_prefix(root)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let source = std::fs::read_to_string(&file).unwrap();
-        offenders.extend(environment_violations(&name, &source, &allowed));
+        if exclude_helper && name.starts_with("crates/codeflow-fixture/") {
+            continue;
+        }
+        findings.extend(unlisted_spans(
+            &name,
+            &spans(&std::fs::read_to_string(&file).unwrap()),
+            &allowed,
+        ));
         seen.insert(name);
     }
-    for entry in &allowed {
+    for entry in allowed {
         assert!(
             seen.contains(entry.file),
             "allowance names missing file {}",
             entry.file
         );
     }
-    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+    findings
 }
 
 #[test]
-fn environment_scan_refuses_unreviewed_changes() {
+fn fixture_clones_go_through_the_helper() {
+    let findings = scan_rust(clone_spans, CLONE_ALLOWANCES, true);
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn fixture_processes_keep_the_inherited_git_configuration() {
+    let findings = scan_rust(environment_spans, ENV_ALLOWANCES, false);
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn clone_literals_refuse_every_invocation_form() {
+    for source in [
+        r#"cmd.args(["--no-pager","clone",src,dst]);"#,
+        r#"git(dir, &["clone","--no-local","-ql",src,dst]);"#,
+        r#"cmd.arg("clone");"#,
+        r#"cmd.args(["clone","--no-local",src,dst]).arg("--local");"#,
+        r#"cmd.args(["sh", "-c", "git clone x y"]);"#,
+        r#"cmd.arg("cl\x6fne");"#,
+    ] {
+        assert!(!clone_spans(source).is_empty(), "{source}");
+    }
+    assert!(clone_spans("codeflow_fixture::clone(dir, src, dst).run();").is_empty());
+    assert!(clone_spans("// git clone x y").is_empty());
+}
+
+#[test]
+fn decoded_environment_tokens_bind_the_whole_call() {
     for source in [
         "cmd.env_clear();",
         "Command::env_clear(&mut cmd);",
-        r#"cmd.envs([("GIT_CONFIG_COUNT", "0")]);"#,
+        r#"cmd.envs([("GIT_CONFIG_COUNT","0")]);"#,
         r#"let key = "GIT_CONFIG_COUNT"; cmd.env_remove(key);"#,
-        r#"spawnSync("git", args, { env: { GIT_CONFIG_COUNT: "0" } });"#,
-        r#"os.environ["GIT_CONFIG_COUNT"] = "0""#,
-        "os.environ.clear()",
-        "env -i git commit",
-        "cmd.envs(map);",
-        "cmd.envs /* comment */ (map);",
-        "Command::envs(&mut cmd, map);",
-        "cmd.envs\n(map);",
-        "spawn('git', [], { env:\n {} });",
-        "// cmd.env_clear();",
+        r#"cmd.env("GIT_CONFIG_\x43OUNT", "0");"#,
+        "cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");",
+        r#"concat!("GIT_CONFIG_", "COUNT");"#,
+        "cmd.env(key, value);",
+        "cmd.env_remove(key);",
     ] {
-        assert!(
-            !environment_violations("probe", source, &[]).is_empty(),
-            "{source}"
-        );
+        assert!(!environment_spans(source).is_empty(), "{source}");
     }
-    let original = r#"cmd.env("GIT_CONFIG_COUNT", inherited);"#;
-    let allowance = [EnvironmentAllowance {
-        file: "probe",
-        line: 1,
-        text: original,
-        reason: "restores Cargo settings",
-    }];
-    assert!(environment_violations("probe", original, &allowance).is_empty());
-    for source in [
-        original.replace("inherited", "\"0\""),
-        format!("\n{original}"),
-        format!("{original}\n{original}"),
-    ] {
-        assert!(
-            !environment_violations("probe", &source, &allowance).is_empty(),
-            "{source}"
-        );
-    }
-    for source in [
-        r#"cmd.env("GIT_CONFIG_GLOBAL", config);"#,
-        "cmd.env(\"PATH\", bin);",
-        "spawn('git', [], { env: { ...process.env, PATH: bin } });",
-    ] {
-        assert!(environment_sites(source).is_empty(), "{source}");
-    }
+    assert!(environment_spans(r#"cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");"#).is_empty());
+    assert!(environment_spans("// GIT_CONFIG_COUNT env_clear").is_empty());
+    assert_eq!(
+        environment_spans("cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"),
+        vec![r#"env("GIT_CONFIG_COUNT","0")"#.to_owned()]
+    );
 }
 
 #[test]
-fn environment_allowances_bind_the_actual_restoration_value() {
+fn environment_allowances_bind_values_and_duplicate_counts() {
     let file = "crates/codeflow-cli/tests/ci_pin_platforms.rs";
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1016,50 +850,91 @@ fn environment_allowances_bind_the_actual_restoration_value() {
         .parent()
         .unwrap();
     let source = std::fs::read_to_string(root.join(file)).unwrap();
-    let allowed = environment_allowances();
-    assert!(environment_violations(file, &source, &allowed).is_empty());
+    let original = environment_spans(&source);
+    let allowed = allowances(ENV_ALLOWANCES);
+    assert!(unlisted_spans(file, &original, &allowed).is_empty());
     let changed = source.replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()", "\"0\"");
     assert_ne!(changed, source);
-    let findings = environment_violations(file, &changed, &allowed);
-    assert!(!findings.is_empty(), "restoring zero must be refused");
-    assert!(findings.iter().all(|finding| finding.starts_with(file)));
+    let findings = unlisted_spans(file, &environment_spans(&changed), &allowed);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.contains(file) && finding.contains("env(")));
+    let duplicate = format!("{source}\nfn duplicate_site() {{ cmd.{}; }}", original[0]);
+    let findings = unlisted_spans(file, &environment_spans(&duplicate), &allowed);
+    assert!(findings.iter().any(|finding| {
+        finding.contains(file)
+            && finding.contains(&original[0])
+            && finding.contains("found 2, allowed 1")
+    }));
+    assert!(unlisted_spans(file, &environment_spans(&format!("\n{source}")), &allowed).is_empty());
+}
+
+fn scope_clone(source: &str) -> bool {
+    let words: Vec<_> = source
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|word| !word.is_empty())
+        .collect();
+    // Conservative vocabulary check: options or bindings between these words
+    // cannot hide a newly introduced fixture operation.
+    words.contains(&"git") && words.contains(&"clone")
+}
+
+fn non_rust_sources(dir: &Path, files: &mut Vec<PathBuf>) {
+    if !dir.is_dir() {
+        return;
+    }
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            // The live-host registry prototype clones a remote URL, outside the suite.
+            if path.file_name().is_some_and(|name| name == "proofs") && dir.ends_with("scripts") {
+                continue;
+            }
+            non_rust_sources(&path, files);
+        } else if path.extension().is_some_and(|ext| {
+            [
+                "mjs", "cjs", "js", "ts", "mts", "cts", "jsx", "tsx", "py", "sh", "bash", "zsh",
+            ]
+            .iter()
+            .any(|name| ext == *name)
+        }) {
+            files.push(path);
+        }
+    }
 }
 
 #[test]
-fn clone_options_consume_their_values() {
-    for option in [
-        "--template",
-        "--reference",
-        "--separate-git-dir",
-        "-c",
-        "--config",
-        "-o",
-        "-b",
-        "--branch",
-        "--depth",
-        "--filter",
-        "--origin",
-        "-u",
-        "--upload-pack",
-        "-j",
-        "--jobs",
-        "--shallow-since",
-        "--shallow-exclude",
-        "--server-option",
-        "--bundle-uri",
-    ] {
-        let source = format!(r#"cmd.args(["clone", "{option}", "--no-local", source]);"#);
-        assert!(
-            !unsafe_fixture_clones("probe", &source).is_empty(),
-            "{source}"
-        );
-        let source =
-            format!(r#"cmd.args(["clone", "{option}", "--local", "--no-local", source]);"#);
-        assert!(
-            unsafe_fixture_clones("probe", &source).is_empty(),
-            "{source}"
-        );
+fn non_rust_fixtures_never_clone() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let mut files = Vec::new();
+    for area in ["docs-portal/tests", "scripts", "tests"] {
+        non_rust_sources(&root.join(area), &mut files);
     }
+    let findings: Vec<_> = files
+        .into_iter()
+        .filter(|file| scope_clone(&std::fs::read_to_string(file).unwrap()))
+        .map(|file| {
+            format!(
+                "{}: AC-4 forbids non-Rust fixture git clone",
+                file.display()
+            )
+        })
+        .collect();
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn scope_check_refuses_node_and_shell_clones() {
+    assert!(scope_clone(r#"spawnSync("git", ["clone", source, dest]);"#));
+    assert!(scope_clone("git clone source dest"));
+    assert!(scope_clone(
+        r#"spawnSync("git", ["--no-pager", "clone", source, dest]);"#
+    ));
+    assert!(!scope_clone(r#"spawnSync("git", ["status"]);"#));
 }
 
 #[test]

@@ -69,16 +69,10 @@ impl World {
 
     fn clone_as(&self, name: &str, email: &str) -> PathBuf {
         let path = self.dir.path().join(name);
-        git(
-            self.dir.path(),
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                self.bare().to_str().unwrap(),
-                name,
-            ],
-        );
+        codeflow_fixture::clone(self.dir.path(), self.bare().to_str().unwrap(), name)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         git(&path, &["config", "user.email", email]);
         git(&path, &["config", "user.name", name]);
         path
@@ -1905,10 +1899,11 @@ fn a_shallow_clone_neither_seeds_nor_checks_until_it_is_unshallowed() {
     commit_all(&m, "edit the record");
     git(&m, &["push", "-q", "origin", "main"]);
     let url = format!("file://{}", world.bare().display());
-    git(
-        world.dir.path(),
-        &["clone", "--no-local", "-q", "--depth", "1", &url, "shallow"],
-    );
+    codeflow_fixture::clone(world.dir.path(), &url, "shallow")
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let shallow = world.dir.path().join("shallow");
     git(&shallow, &["config", "user.email", "shallow@example.test"]);
     git(&shallow, &["config", "user.name", "shallow"]);

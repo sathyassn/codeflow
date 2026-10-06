@@ -453,16 +453,14 @@ fn judge_a_forged_head(head_pin: &str) {
 
     // The pull_request_target run: the target checkout, the head as data.
     let target = dir.path().join("target");
-    git(
+    codeflow_fixture::clone(
         dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            origin.to_str().unwrap(),
-            target.to_str().unwrap(),
-        ],
-    );
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     git(
         &target,
         &["fetch", "-q", "origin", "feat/x:refs/codeflow/pr-head"],
@@ -563,16 +561,14 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
 
     // The run's working tree: GitHub's default checkout, the default branch.
     let target = dir.path().join("target");
-    git(
+    codeflow_fixture::clone(
         dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            origin.to_str().unwrap(),
-            target.to_str().unwrap(),
-        ],
-    );
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     assert_eq!(git(&target, &["branch", "--show-current"]), "main");
     git(
         &target,

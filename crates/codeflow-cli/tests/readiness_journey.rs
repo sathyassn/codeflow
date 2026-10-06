@@ -181,17 +181,11 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
     for line in [LINE, OTHER] {
         git(&root, &["branch", line, &default]);
     }
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            bare.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), bare.to_str().unwrap())
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
     // The scaffold holds a record (ADR-0001), so the shared id registry is

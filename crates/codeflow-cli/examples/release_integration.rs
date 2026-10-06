@@ -125,18 +125,12 @@ fn prepare(
     let remote = git(root, &["remote", "get-url", "origin"])?;
     let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
     let clone = temporary.path().join("release");
-    git(
-        root,
-        &[
-            "clone",
-            "--no-local",
-            "--quiet",
-            "--no-checkout",
-            "--",
-            &remote,
-            clone.to_str().ok_or("non-UTF-8 clone path")?,
-        ],
-    )?;
+    let output = codeflow_fixture::clone(root, &remote, &clone)
+        .no_checkout()
+        .output();
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
     let destination = release_line::ask_destination(&clone, Some(&remote))?;
     if !release_line::scope(&clone, &destination, release, None)?.head {
         return Err(format!(

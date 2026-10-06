@@ -108,17 +108,11 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
     );
     let default = git(&root, &["branch", "--show-current"]);
     git(&root, &["branch", LINE, &default]);
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            bare.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), bare.to_str().unwrap())
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
     ok(&codeflow(&root, &["ids", "seed"]), "ids seed");

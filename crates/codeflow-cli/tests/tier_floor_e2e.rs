@@ -691,17 +691,10 @@ fn refuses_a_force_push_over_an_unfetched_tip(tmp: &Path, root: &Path, remote: &
     // Another clone moves the remote; a forced push from here would discard
     // a commit this clone cannot see.
     let other = tmp.join("other");
-    git_ok(
-        tmp,
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            remote.to_str().unwrap(),
-            "other",
-        ],
-        "clone",
-    );
+    codeflow_fixture::clone(tmp, remote.to_str().unwrap(), "other")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     std::fs::write(other.join("more.txt"), "two\n").unwrap();
     git_ok(&other, &["add", "more.txt"], "add in the other clone");
     git_ok(&other, &["commit", "-q", "-m", "docs: add more"], "commit");

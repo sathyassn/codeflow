@@ -1807,17 +1807,15 @@ mod tests {
         fs::write(&path, format!("{text}\n{blocked}")).unwrap();
         commit(root, "central");
         let central = tempfile::tempdir().unwrap();
-        run(
+        codeflow_fixture::clone(
             Path::new("."),
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                "--bare",
-                root.to_str().unwrap(),
-                central.path().to_str().unwrap(),
-            ],
-        );
+            root.to_str().unwrap(),
+            central.path().to_str().unwrap(),
+        )
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
         run(
             root,
             &[
@@ -2170,16 +2168,14 @@ mod tests {
 
         // Upstream moves on too: the local branch and its upstream diverge.
         let other = tempfile::tempdir().unwrap();
-        run(
+        codeflow_fixture::clone(
             Path::new("."),
-            &[
-                "clone",
-                "--no-local",
-                "-q",
-                upstream.path().to_str().unwrap(),
-                other.path().to_str().unwrap(),
-            ],
-        );
+            upstream.path().to_str().unwrap(),
+            other.path().to_str().unwrap(),
+        )
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
         run(other.path(), &["config", "user.email", "test@example.com"]);
         run(other.path(), &["config", "user.name", "Test"]);
         fs::write(other.path().join("elsewhere.txt"), "x\n").unwrap();

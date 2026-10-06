@@ -25,6 +25,7 @@ tempfile.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+codeflow-fixture = { path = "../codeflow-fixture" }
 regex.workspace = true
 toml.workspace = true
 serde_yaml.workspace = true

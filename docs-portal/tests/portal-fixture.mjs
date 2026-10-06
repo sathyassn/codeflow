@@ -107,41 +107,28 @@ export function commitFixture(root, message, allowEmpty = false) {
   git(root, ["commit", "-q", ...(allowEmpty ? ["--allow-empty"] : []), "-m", message]);
 }
 
-// Keep fixture commits from launching a detached writer, even outside Cargo.
-export function fixtureEnvironment() {
-  return {
-    ...process.env,
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "maintenance.auto",
-    GIT_CONFIG_VALUE_0: "false",
-    GIT_CONFIG_KEY_1: "gc.auto",
-    GIT_CONFIG_VALUE_1: "0",
-    GIT_CONFIG_PARAMETERS: "",
-  };
-}
-
 export function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: fixtureEnvironment() });
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 }
 
 export function runAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [adapterPath], { cwd: root, env: fixtureEnvironment(), encoding: "utf8" });
+  const result = spawnSync(process.execPath, [adapterPath], { cwd: root, encoding: "utf8" });
   if (expectSuccess) assert.equal(result.status, 0, result.stderr);
   else assert.notEqual(result.status, 0, result.stdout);
   return result;
 }
 
 export function runLocalAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [path.join(root, "scripts/adapter.mjs")], { cwd: root, env: fixtureEnvironment(), encoding: "utf8" });
+  const result = spawnSync(process.execPath, [path.join(root, "scripts/adapter.mjs")], { cwd: root, encoding: "utf8" });
   if (expectSuccess) assert.equal(result.status, 0, result.stderr);
   else assert.notEqual(result.status, 0, result.stdout);
   return result;
 }
 
 export function buildFixture(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, env: fixtureEnvironment(), encoding: "utf8", timeout: 110_000 });
+  const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
   if (expectSuccess) assert.equal(result.status, 0, result.stderr || result.stdout);
   return result;
 }

@@ -3135,20 +3135,10 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = Command::new("git")
-        .args([
-            "clone",
-            "--no-local",
-            origin.path().to_str().unwrap(),
-            work.to_str().unwrap(),
-        ])
+    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .unwrap();
+        .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -5391,10 +5381,11 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    git(
-        clone.path(),
-        &["clone", "--no-local", "-q", "--filter=blob:none", &url, "."],
-    );
+    codeflow_fixture::clone(clone.path(), &url, ".")
+        .filter("blob:none")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
     git(source.path(), &["checkout", "-q", "-b", "feature"]);

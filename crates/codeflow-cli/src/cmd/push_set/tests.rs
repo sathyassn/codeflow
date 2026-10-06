@@ -359,16 +359,10 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
     let old = h.commit("old", "old", "feat: first work");
     h.advertise(&old, "task/TSK-001-change");
     let other = tempfile::tempdir().unwrap();
-    command(
-        other.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            h.remote.path().to_str().unwrap(),
-            ".",
-        ],
-    );
+    codeflow_fixture::clone(other.path(), h.remote.path().to_str().unwrap(), ".")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     command(other.path(), &["config", "user.name", "Test"]);
     command(
         other.path(),

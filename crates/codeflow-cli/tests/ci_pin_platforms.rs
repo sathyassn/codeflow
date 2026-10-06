@@ -406,17 +406,15 @@ fn diverged(fx: &Fixture, message: &str) -> Diverged {
 
 /// A bare copy of the fixture repository at `path` whose `main` is `main`.
 fn bare_copy(fx: &Fixture, path: &Path, main: &str) {
-    git(
+    codeflow_fixture::clone(
         fx.dir.path(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "--bare",
-            &fx.repo().display().to_string(),
-            &path.display().to_string(),
-        ],
-    );
+        fx.repo().display().to_string(),
+        path.display().to_string(),
+    )
+    .bare()
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     git(path, &["update-ref", "refs/heads/main", main]);
 }
 

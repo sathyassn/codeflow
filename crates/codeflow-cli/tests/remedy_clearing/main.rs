@@ -1876,18 +1876,15 @@ fn clears_push_range_unresolved() {
         "{started}"
     );
     let other = root.parent().unwrap().join("other");
-    git(
+    codeflow_fixture::clone(
         root.parent().unwrap(),
-        &[
-            "clone",
-            "--no-local",
-            "-q",
-            "-b",
-            "chore/archive",
-            dest.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ],
-    );
+        dest.to_str().unwrap(),
+        other.to_str().unwrap(),
+    )
+    .branch("chore/archive")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     write(&other, "o.txt", "o\n");
     git(&other, &["add", "o.txt"]);
     git(&other, &["commit", "-q", "-m", "feat: add o"]);
