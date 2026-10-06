@@ -57,6 +57,12 @@ jobs:
           # refuses a second installer).
           - part: benchmark
             only: read-benchmark,visual-eval-controls
+          # The prose exemption's two exhaustive checks (TSK-233): every
+          # certified line in real shells and the full differential against
+          # the 3.0.0 verdicts. The target sets CODEFLOW_ORACLE_FULL; quick
+          # mode and the coverage run keep the sampled default.
+          - part: prose
+            only: prose-exhaustive
           - part: present
             only: present-supply-chain,cf-present-qualification,present-browser,present-binary-delta
           - part: checks
@@ -141,6 +147,11 @@ jobs:
           printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
           sh scripts/check-scaffold-gitleaks.sh "$RUNNER_TEMP/gitleaks" "$(command -v codeflow)"
+
+      # The exhaustive prose oracle runs real zsh as well as bash.
+      - name: Install zsh for the prose oracle
+        if: matrix.part == 'prose'
+        run: sudo apt-get update && sudo apt-get install -y zsh
 
       # The Linux candidate has one full gate, split into the parts above.
       # Windows independently runs raw Rust checks; Unix-only journeys and the

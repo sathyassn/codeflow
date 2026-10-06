@@ -670,7 +670,7 @@ catalog! {
 
     /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),
-        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
+        "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; text that only quotes a launcher word is not refused when the whole line is `echo`, `printf` (a `%s`-only format), `grep` and `cat` with single-quoted words, document-file redirects and a quoted heredoc delimiter (`cat <<'EOF' > notes.md`), so write such text that way or with the editor tool and pass the file by path; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`); session policy relaxations take effect only after the operator lands them on every branch named as a policy source and fetches those branches, or commits them to HEAD while no remote-tracking refs exist";
 }
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ pub(crate) mod outward;
 pub mod pattern;
 pub mod policy;
 pub mod privilege;
+pub mod prose;
 
 pub use policy::SecurityPolicy;
 
