@@ -737,3 +737,68 @@ fn a_join_awaiting_selection_validates_and_cannot_start() {
     assert!(text.contains("TSK-004"), "{text}");
     assert!(text.contains("awaiting selection"), "{text}");
 }
+
+/// TSK-249 AC-2: real init, policy, remote refs, readiness and claim output.
+#[test]
+fn archive_branches_are_information_until_policy_names_the_remote() {
+    let (dir, root) = planned_project();
+    let archive = dir.path().join("archive.git");
+    git(
+        &root,
+        &["clone", "-q", "--bare", ".", archive.to_str().unwrap()],
+    );
+    git(&archive, &["branch", "task/TSK-001-old", LINE]);
+    git(
+        &root,
+        &["remote", "add", "archive", archive.to_str().unwrap()],
+    );
+    git(&root, &["fetch", "-q", "archive"]);
+    let next = ok(&codeflow(&root, &["work", "next"]), "archive next");
+    assert!(next.contains("ready    TSK-001 Root"), "{next}");
+    assert!(
+        next.contains("also on archive: task/TSK-001-old (not a claim:"),
+        "{next}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&ok(
+        &codeflow(&root, &["work", "next", "--json"]),
+        "archive JSON",
+    ))
+    .unwrap();
+    assert!(json["conflicts"].as_object().unwrap().is_empty(), "{json}");
+    let policy = root.join(".codeflow/policy.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+    value["git"]["claim_remotes"] = serde_json::json!(["archive"]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    // Keep the policy change on the integration line, as an adopter would.
+    commit(&root, "feat: count archive claims");
+    let json: serde_json::Value = serde_json::from_str(&ok(
+        &codeflow(&root, &["work", "next", "--json"]),
+        "named archive JSON",
+    ))
+    .unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["state"], "active", "{json}");
+    let refused = refused(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "named archive claim",
+    );
+    assert!(refused.contains("archive/task/TSK-001-old"), "{refused}");
+    value["git"]["claim_remotes"] = serde_json::json!([]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    commit(&root, "fix: exclude archive claims");
+    let claimed = ok(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "claim despite archive",
+    );
+    assert!(
+        claimed.contains("also on archive: task/TSK-001-old (not a claim:"),
+        "{claimed}"
+    );
+    assert!(claimed.contains("pushed to origin"), "{claimed}");
+}

@@ -75,6 +75,8 @@ pub struct Entry {
     pub reason: String,
     /// Visible, unlanded branches carrying the task id.
     pub branches: Vec<String>,
+    /// Branches on unrelated remotes, reported as information rather than claims.
+    pub informational_branches: Vec<String>,
 }
 
 /// Epic progress: counts of its tasks by status on the target tips.
@@ -225,17 +227,66 @@ fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<Strin
     Ok(Some("origin".to_string()))
 }
 
-/// Every visible branch carrying a task id on a sanctioned work prefix, with
-/// its tip: local branches and `origin`'s by branch name (a branch and its
-/// published copy are one claim), another remote's as `<remote>/<branch>`,
-/// so a claim visible on any remote counts and distinct claims stay
-/// distinct.
+/// The one remote scope for fetched refs and live claim listings. Origin
+/// carries published work; the target's fetch remote carries its integration
+/// line. Projects may opt additional remotes into advisory claims.
+fn claim_remotes(
+    repo: &Repository,
+    repo_root: &Path,
+    declared: &str,
+) -> Result<BTreeSet<String>, String> {
+    let mut remotes = BTreeSet::new();
+    if repo.find_remote("origin").is_ok() {
+        remotes.insert("origin".to_string());
+    }
+    if let Some(remote) = target_fetch_remote(repo, declared)? {
+        // A clone without origin still supports local-only claims.
+        if remote != "origin" || repo.find_remote("origin").is_ok() {
+            remotes.insert(remote);
+        }
+    }
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    for remote in policy.git.claim_remotes {
+        if remote.starts_with('-') || !git2::Remote::is_valid_name(&remote) {
+            return Err(format!("invalid remote '{remote}' in git.claim_remotes"));
+        }
+        remotes.insert(remote);
+    }
+    Ok(remotes)
+}
+
+#[derive(Default)]
+struct WorkBranches {
+    claims: BTreeMap<String, Vec<(String, git2::Oid)>>,
+    unrelated: BTreeMap<String, Vec<(String, String)>>,
+}
+
+impl WorkBranches {
+    fn information(&self, task_id: &str, target: &str) -> Vec<String> {
+        self.unrelated
+            .get(task_id)
+            .into_iter()
+            .flatten()
+            .map(|(remote, branch)| {
+                format!(
+                    "also on {remote}: {branch} (not a claim: {remote} does not carry work to {})",
+                    shown(target)
+                )
+            })
+            .collect()
+    }
+}
+
+/// Local branches and branches on claim remotes, plus information about
+/// branches on unrelated remotes. Origin's published copy shares its local
+/// branch name; other claim remotes keep their remote name.
 fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
     ids: &BTreeSet<String>,
-) -> BTreeMap<String, Vec<(String, git2::Oid)>> {
-    let mut carried: BTreeMap<String, Vec<(String, git2::Oid)>> = BTreeMap::new();
+    remotes: &BTreeSet<String>,
+) -> WorkBranches {
+    let mut carried = WorkBranches::default();
     let Ok(branches) = repo.branches(None) else {
         return carried;
     };
@@ -244,8 +295,8 @@ fn visible_work_branches(
         let Some(name) = branch.name().ok().flatten() else {
             continue;
         };
-        let (name, short) = match kind {
-            BranchType::Local => (name.to_string(), name.to_string()),
+        let (name, short, unrelated) = match kind {
+            BranchType::Local => (name.to_string(), name.to_string(), None),
             BranchType::Remote => {
                 let Some(remote) = repo
                     .branch_remote_name(&format!("refs/remotes/{name}"))
@@ -265,7 +316,8 @@ fn visible_work_branches(
                 } else {
                     name.to_string()
                 };
-                (shown, short.to_string())
+                let unrelated = (!remotes.contains(&remote)).then_some(remote);
+                (shown, short.to_string(), unrelated)
             }
         };
         let Some(oid) = branch.get().peel_to_commit().ok().map(|commit| commit.id()) else {
@@ -281,8 +333,18 @@ fn visible_work_branches(
         else {
             continue;
         };
-        if seen.insert((name.clone(), oid)) {
-            carried.entry(id.clone()).or_default().push((name, oid));
+        if let Some(remote) = unrelated {
+            carried
+                .unrelated
+                .entry(id.clone())
+                .or_default()
+                .push((remote, short));
+        } else if seen.insert((name.clone(), oid)) {
+            carried
+                .claims
+                .entry(id.clone())
+                .or_default()
+                .push((name, oid));
         }
     }
     carried
@@ -630,9 +692,13 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
         .iter()
         .flat_map(|(_, _, _, records)| records.keys().cloned())
         .collect();
-    let carried = visible_work_branches(&repo, &prefixes, &ids);
+    let mut scans = BTreeMap::new();
     let mut judged = BTreeSet::new();
-    for (_, reference, tip, records) in &tips {
+    for (target, reference, tip, records) in &tips {
+        let remotes = claim_remotes(&repo, repo_root, target)?;
+        let carried = scans
+            .entry(remotes.clone())
+            .or_insert_with(|| visible_work_branches(&repo, &prefixes, &ids, &remotes));
         for record in records
             .values()
             .filter(|record| record.kind == RecordKind::Task)
@@ -660,6 +726,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 &repo,
                 repo_root,
                 carried
+                    .claims
                     .get(&record.id)
                     .map(Vec::as_slice)
                     .unwrap_or_default(),
@@ -696,6 +763,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 state,
                 reason,
                 branches: names,
+                informational_branches: carried.information(&record.id, reference),
             });
         }
     }
@@ -712,6 +780,8 @@ pub struct Claim {
     pub branch: String,
     pub from: String,
     pub pushed: bool,
+    /// Unrelated remote branches visible in the last-fetched refs.
+    pub informational_branches: Vec<String>,
 }
 
 fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
@@ -994,8 +1064,7 @@ pub fn claim_on(
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let has_origin = repo.find_remote("origin").is_ok();
-    let target_remote = target_fetch_remote(&repo, &declared)?;
-    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let remotes = claim_remotes(&repo, repo_root, &declared)?;
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
         .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
@@ -1023,20 +1092,10 @@ pub fn claim_on(
         .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes = work_prefixes(repo_root);
-    let mut carried = visible_work_branches(&repo, &prefixes, &ids)
-        .remove(task_id)
-        .unwrap_or_default();
-    let mut listed: Vec<&str> = Vec::new();
-    if has_origin {
-        listed.push("origin");
-    }
-    if let Some(remote) = target_remote
-        .as_deref()
-        .filter(|remote| *remote != "origin")
-    {
-        listed.push(remote);
-    }
-    for remote in listed {
+    let mut visible = visible_work_branches(&repo, &prefixes, &ids, &remotes);
+    let information = visible.information(task_id, &reference);
+    let mut carried = visible.claims.remove(task_id).unwrap_or_default();
+    for remote in &remotes {
         carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
     }
     if rename {
@@ -1078,6 +1137,7 @@ pub fn claim_on(
         branch,
         from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
         pushed: has_origin,
+        informational_branches: information,
     })
 }
 
@@ -1149,12 +1209,18 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
     let Ok(repo) = Repository::discover(repo_root) else {
         return Vec::new();
     };
+    let declared = super::declared_work_target(repo_root, task_id).unwrap_or_default();
+    let Ok(remotes) = claim_remotes(&repo, repo_root, &declared) else {
+        return Vec::new();
+    };
     let ids = BTreeSet::from([task_id.to_string()]);
-    let carried = visible_work_branches(&repo, &work_prefixes(repo_root), &ids)
+    let carried = visible_work_branches(&repo, &work_prefixes(repo_root), &ids, &remotes)
+        .claims
         .remove(task_id)
         .unwrap_or_default();
-    let target_tip = super::declared_work_target(repo_root, task_id)
-        .and_then(|target| resolve_target(repo_root, &repo, &target).ok().flatten())
+    let target_tip = resolve_target(repo_root, &repo, &declared)
+        .ok()
+        .flatten()
         .map(|(_, oid)| oid);
     let open = match target_tip {
         Some(tip) => split_landed(&repo, repo_root, &carried, tip).0,
@@ -1884,6 +1950,155 @@ mod tests {
             Some(NotReady::Blocked),
             "an incomplete Blocker still holds"
         );
+    }
+
+    /// AC-1: an archive is informative; origin still owns claims.
+    #[test]
+    fn an_archive_branch_is_information_and_does_not_refuse_a_claim() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-194", "todo", "[]", "");
+        commit(root, "plan");
+        let _origin = with_origin(root);
+        let archive = bare_from(root, "main");
+        run(archive.path(), &["branch", "task/TSK-194-old", "main"]);
+        run(
+            root,
+            &["remote", "add", "archive", archive.path().to_str().unwrap()],
+        );
+        run(root, &["fetch", "-q", "archive"]);
+        assert!(other_branches(root, "TSK-194", "task/TSK-194-own").is_empty());
+        let claimed = claim(root, "TSK-194").unwrap();
+        assert!(claimed.pushed);
+        assert_eq!(claimed.informational_branches, ["also on archive: task/TSK-194-old (not a claim: archive does not carry work to main)"]);
+        let refused = claim(root, "TSK-194").unwrap_err();
+        assert!(
+            refused.contains("already claimed by a visible branch"),
+            "{refused}"
+        );
+    }
+
+    /// AC-3: fork targets count origin and upstream, without counting archives.
+    #[test]
+    fn a_fork_counts_origin_and_upstream_claims_but_not_archive() {
+        let dir = repo();
+        let root = dir.path();
+        let (upstream, origin) = forked(root, false);
+        let archive = bare_from(root, "main");
+        for (remote, bare) in [
+            ("origin", &origin),
+            ("upstream", &upstream),
+            ("archive", &archive),
+        ] {
+            run(bare.path(), &["branch", "task/TSK-001-working", "main"]);
+            if remote == "archive" {
+                run(
+                    root,
+                    &["remote", "add", remote, bare.path().to_str().unwrap()],
+                );
+            }
+            run(root, &["fetch", "-q", remote]);
+        }
+        let view = backlog(root).unwrap();
+        let task = entry(&view, "TSK-001");
+        assert_eq!(task.state, State::Active);
+        assert_eq!(
+            task.branches,
+            ["task/TSK-001-working", "upstream/task/TSK-001-working"]
+        );
+        assert_eq!(view.conflicts["TSK-001"], task.branches);
+        assert_eq!(
+            other_branches(root, "TSK-001", "task/TSK-001-own"),
+            task.branches
+        );
+    }
+
+    /// AC-4: locally fetched claims and live listings read the same remotes.
+    #[test]
+    fn local_and_live_claim_listings_share_remote_scope() {
+        let dir = repo();
+        let root = dir.path();
+        let (upstream, origin) = forked(root, false);
+        let archive = bare_from(root, "main");
+        for (remote, bare) in [
+            ("origin", &origin),
+            ("upstream", &upstream),
+            ("archive", &archive),
+        ] {
+            run(bare.path(), &["branch", "task/TSK-001-working", "main"]);
+            if remote == "archive" {
+                run(
+                    root,
+                    &["remote", "add", remote, bare.path().to_str().unwrap()],
+                );
+            }
+            run(root, &["fetch", "-q", remote]);
+        }
+        let view = backlog(root).unwrap();
+        assert_eq!(entry(&view, "TSK-001").branches.len(), 2);
+        let repo = Repository::open(root).unwrap();
+        let remotes = claim_remotes(&repo, root, "main").unwrap();
+        assert_eq!(
+            remotes,
+            BTreeSet::from(["origin".to_string(), "upstream".to_string()])
+        );
+        let ids = BTreeSet::from(["TSK-001".to_string()]);
+        let prefixes = work_prefixes(root);
+        let scanned = visible_work_branches(&repo, &prefixes, &ids, &remotes);
+        let local_names: BTreeSet<_> = scanned.claims["TSK-001"]
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        let live_names: BTreeSet<_> = remotes
+            .iter()
+            .flat_map(|remote| {
+                remote_claims(&repo, root, &prefixes, "TSK-001", remote)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(name, _)| name)
+            })
+            .collect();
+        assert_eq!(local_names, live_names);
+        drop(repo);
+        for remote in ["origin", "upstream"] {
+            run(
+                root,
+                &[
+                    "update-ref",
+                    "-d",
+                    &format!("refs/remotes/{remote}/task/TSK-001-working"),
+                ],
+            );
+            run(
+                root,
+                &[
+                    "config",
+                    &format!("remote.{remote}.fetch"),
+                    &format!("+refs/heads/main:refs/remotes/{remote}/main"),
+                ],
+            );
+        }
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("task/TSK-001-working"), "{refused}");
+        assert!(
+            refused.contains("upstream/task/TSK-001-working"),
+            "{refused}"
+        );
+        assert!(!refused.contains("archive"), "{refused}");
+        for bare in [&origin, &upstream] {
+            run(bare.path(), &["branch", "-D", "task/TSK-001-working"]);
+        }
+        // Excluded remotes are not contacted, even when their refs remain.
+        run(
+            root,
+            &[
+                "remote",
+                "set-url",
+                "archive",
+                "/nonexistent-TSK-249-archive",
+            ],
+        );
+        claim(root, "TSK-001").unwrap();
     }
 
     /// T103-4: a claim on origin that a narrow fetch refspec hides still

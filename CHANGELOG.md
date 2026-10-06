@@ -276,6 +276,12 @@ erratum below, never an edit of the section.
 
 ### Fixed
 
+<!-- codeflow:release-impact minor -->
+- **Work claims share the target's remote scope.** Archive and other unrelated
+  remote branches no longer prevent a claim or mark a task active. They remain
+  visible as information. Local branches, origin and the target's fetch remote
+  still count; projects can opt in other remotes with `git.claim_remotes`.
+
 <!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the

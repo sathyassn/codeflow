@@ -158,6 +158,10 @@ fn entry_line(entry: &Entry) -> String {
         line.push_str("\n         branch: ");
         line.push_str(&entry.branches.join(", "));
     }
+    for branch in &entry.informational_branches {
+        line.push_str("\n         ");
+        line.push_str(branch);
+    }
     line
 }
 
@@ -178,6 +182,7 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "state": entry.state.as_str(),
             "reason": entry.reason,
             "branches": entry.branches,
+            "informational_branches": entry.informational_branches,
         })).collect::<Vec<_>>(),
         "conflicts": backlog.conflicts,
     })
@@ -204,6 +209,9 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
                 "work claim: {task_id} -> {} from {}",
                 claim.branch, claim.from
             );
+            for information in &claim.informational_branches {
+                println!("  {information}");
+            }
             if claim.pushed {
                 println!("  pushed to origin; the branch is the visible mark of the claim");
             } else {

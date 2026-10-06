@@ -63,6 +63,13 @@ delete mutation, make three ordered work-start assertions:
    its current tip; build on an older base only when the task explicitly pins
    it.
 
+Work claims count local branches, branches on `origin` when configured, and
+branches on the target's fetch remote. Other remote branches are reported as
+information and do not make a task active or conflicting. A project that uses
+another remote to carry work can name it in `git.claim_remotes`, for example
+`["mirror"]`. The default is empty. `work next` reads last-fetched refs;
+`work claim` also lists the claim remotes live so a narrow fetch cannot hide work.
+
 ## Cleanup
 
 This section is the one home of the cleanup rules; the skills point here.

@@ -15,6 +15,7 @@
     "root_branch": "",
     "root_checkout_commits": "block",
     "worktree_locations": [".worktrees", ".claude/worktrees", "$CODEX_HOME/worktrees", "$GROK_HOME/worktrees", "$GROK_HOME/worktree_pool"],
+    "claim_remotes": [],
     "commit_format": "block",
     "commit_types": ["feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert"],
     "commit_desc_max_len": 50,

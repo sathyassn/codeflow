@@ -402,6 +402,13 @@ passes.
 - `recall --all` reads the user registry at `~/.codeflow/registry.json`, which
   most commands update as they run. There is no daemon.
 
+Claims count local branches and branches on `origin`, the target's fetch remote,
+and any additional remotes in `git.claim_remotes` (empty by default). Branches on
+other remotes appear as information in `work next` and `work claim`; they do not
+make a task active or create a conflict. `work next --json` keeps these in
+`informational_branches`, separate from the claim `branches`. Claim lists its
+remotes live as well as reading fetched refs, so a narrow fetch cannot hide work.
+
 ### Delegate notes
 
 `codeflow delegate wait` has the exit contract a host polls:

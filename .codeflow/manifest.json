@@ -1709,7 +1709,7 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "da0cb84571f125d7503b10562ce12887ee0e20193ff3e80e0b33fc6808152b30",
+      "sha256": "7e1daf582bc20442af704678458132e626c20b0149beb9fafcdbdb27facf977e",
       "exec": false
     },
     ".codeflow/rules/git-rules.md": {
@@ -1727,7 +1727,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "655f6abe200ed978cfa8a10ab884f90e042dbe667495d9994d10385843eaf7c6",
+      "sha256": "beb35d199fde5ad3046c7084bb0f128ac3b25e1845323aeb0f3cf27a66789bf6",
       "exec": false
     },
     ".codeflow/rules/writing.md": {

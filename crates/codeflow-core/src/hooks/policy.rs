@@ -219,6 +219,9 @@ pub struct GitPolicy {
     /// `$GROK_HOME/...`. The default covers `.worktrees` and the folders the
     /// harnesses manage; `doctor` reports a linked worktree outside them.
     pub worktree_locations: Vec<String>,
+    /// Additional remotes whose branches count as advisory work claims.
+    /// Origin and the target's fetch remote always count. Empty by default.
+    pub claim_remotes: Vec<String>,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
@@ -416,6 +419,7 @@ impl Default for GitPolicy {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            claim_remotes: Vec::new(),
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",
