@@ -748,3 +748,108 @@ fn a_fast_forward_landing_gives_no_start() {
     );
     assert!(outcome["elapsed_active_seconds"].is_null());
 }
+
+/// Review round 2: a text-only edit of the record on another line is no
+/// status transition, so it never clears a blocked span.
+#[test]
+fn a_concurrent_text_edit_does_not_clear_a_block() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    fx.code("a.txt", T0 + 1000);
+    fx.record("TSK-001", "blocked", None);
+    let block = fx.commit("docs: block TSK-001", T0 + 2000);
+    fx.git(&["checkout", "-q", "main"], T0 + 3000);
+    let path = fx.root.join("project-management/tasks/TSK-001.md");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replace(
+            "Fixture.\n\n## Acceptance",
+            "Edited on main.\n\n## Acceptance",
+        ),
+    )
+    .unwrap();
+    fx.commit("docs: reword TSK-001", T0 + 3000);
+    fx.git(&["checkout", "-q", "task/TSK-001-fixture"], T0 + 4000);
+    fx.git(
+        &["merge", "-q", "--no-ff", "-m", "merge main", "main"],
+        T0 + 4000,
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("status: blocked", "status: todo")).unwrap();
+    let clear = fx.commit("docs: clear TSK-001", T0 + 6000);
+    let reviewed = fx.code("b.txt", T0 + 7000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 8000);
+    fx.merge("task/TSK-001-fixture", T0 + 9000);
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    let spans = outcome["blocked"].as_array().unwrap();
+    assert_eq!(spans.len(), 1, "{outcome:#}");
+    assert_eq!(at(&spans[0]["from"]), (block, T0 + 2000));
+    assert_eq!(at(&spans[0]["to"]), (clear, T0 + 6000));
+    assert_eq!(outcome["elapsed_active_seconds"], 8000 - 1000 - 4000);
+}
+
+/// Review round 2: a squash landing stays a squash landing when the
+/// original task commits reach the target later through another branch.
+#[test]
+fn a_squash_landing_survives_later_reachability() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    fx.code("a.txt", T0 + 1000);
+    let reviewed = fx.code("b.txt", T0 + 2000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 3000);
+    fx.git(&["checkout", "-q", "main"], T0 + 4000);
+    fx.git(
+        &["merge", "-q", "--squash", "task/TSK-001-fixture"],
+        T0 + 4000,
+    );
+    let squash = fx.commit("feat: TSK-001 squashed", T0 + 4000);
+    fx.git(
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "feat/follow-up",
+            "task/TSK-001-fixture",
+        ],
+        T0 + 5000,
+    );
+    fx.code("c.txt", T0 + 5000);
+    fx.merge("feat/follow-up", T0 + 6000);
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    assert_eq!(at(&outcome["landed"]), (squash, T0 + 4000), "{outcome:#}");
+    assert!(outcome["started"]["unknown"].is_string(), "{outcome:#}");
+    assert!(outcome["elapsed_active_seconds"].is_null());
+}
+
+/// Review round 2: whether the completion came before the landing is read
+/// from ancestry; a landing merge with an earlier clock keeps the
+/// completion-based interval.
+#[test]
+fn completion_before_landing_is_judged_by_ancestry() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    fx.code("a.txt", T0 + 1000);
+    let reviewed = fx.code("b.txt", T0 + 2000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 3000);
+    fx.merge("task/TSK-001-fixture", T0 + 1500);
+    let (_, report) = fx.report(&[]);
+    assert_eq!(task(&report, "TSK-001")["elapsed_active_seconds"], 2000);
+}

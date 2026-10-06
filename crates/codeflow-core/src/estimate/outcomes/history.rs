@@ -62,6 +62,9 @@ pub(super) struct Timings {
     pub completed: Option<Point>,
     pub cancelled: Option<Point>,
     pub landed: Option<Point>,
+    /// The code landed before the completion reached the target (a later
+    /// records change wrote it), so active work ends at the landing.
+    pub ended_at_landing: bool,
 }
 
 /// The first-parent line of an integration target, oldest first, and for
@@ -75,9 +78,10 @@ struct Line {
 
 pub(super) struct History<'r> {
     repo: &'r Repository,
-    /// Per record path: each changing commit with the status it wrote
-    /// (empty when the record is absent), parents first.
-    changes: HashMap<String, Vec<(Oid, String)>>,
+    /// Per record path: each non-merge commit whose status differs from its
+    /// parent's, with the status before and after (empty when the record is
+    /// absent), parents first.
+    changes: HashMap<String, Vec<(Oid, String, String)>>,
     lines: HashMap<String, Option<Line>>,
 }
 
@@ -213,7 +217,7 @@ impl<'r> History<'r> {
             walk.push(line.tip)
                 .map_err(|error| error.message().to_string())?;
         }
-        let mut changes: HashMap<String, Vec<(Oid, String)>> = HashMap::new();
+        let mut changes: HashMap<String, Vec<(Oid, String, String)>> = HashMap::new();
         let mut statuses: HashMap<Oid, String> = HashMap::new();
         let mut homes = Homes::default();
         for oid in walk {
@@ -242,20 +246,27 @@ impl<'r> History<'r> {
                 if after == prior {
                     continue;
                 }
-                let status = after.map_or_else(String::new, |blob| {
-                    statuses
-                        .entry(*blob)
-                        .or_insert_with(|| {
-                            repo.find_blob(*blob)
-                                .map(|blob| status_of(blob.content()))
-                                .unwrap_or_default()
-                        })
-                        .clone()
-                });
-                changes
-                    .entry((*path).to_string())
-                    .or_default()
-                    .push((oid, status));
+                let mut status = |blob: Option<&Oid>| {
+                    blob.map_or_else(String::new, |blob| {
+                        statuses
+                            .entry(*blob)
+                            .or_insert_with(|| {
+                                repo.find_blob(*blob)
+                                    .map(|blob| status_of(blob.content()))
+                                    .unwrap_or_default()
+                            })
+                            .clone()
+                    })
+                };
+                let (to, from) = (status(after), status(prior));
+                // A text-only edit keeps the status; it is no transition,
+                // whichever line it is on.
+                if to != from {
+                    changes
+                        .entry((*path).to_string())
+                        .or_default()
+                        .push((oid, from, to));
+                }
             }
         }
         Ok(Self {
@@ -270,18 +281,23 @@ impl<'r> History<'r> {
         let mut timings = Timings::default();
         let empty = Vec::new();
         let changes = self.changes.get(&record.path).unwrap_or(&empty);
-        let mut previous = String::new();
         let mut added = None;
         let mut open_block: Option<Point> = None;
-        for (commit, status) in changes {
-            if added.is_none() && !status.is_empty() {
+        // Completions since the last reopen; parallel lines (a squash on the
+        // target and the task branch itself) can each carry one.
+        let mut completions: Vec<Oid> = Vec::new();
+        for (commit, from, to) in changes {
+            if from == "complete" {
+                completions.clear();
+            }
+            if to == "complete" {
+                completions.push(*commit);
+            }
+            if added.is_none() && from.is_empty() && !to.is_empty() {
                 added = Some(*commit);
             }
-            if *status == previous {
-                continue;
-            }
             let point = self.point(*commit);
-            if previous == "blocked" {
+            if from == "blocked" {
                 if let Some(from) = open_block.take() {
                     timings.blocked.push(BlockedSpan {
                         from,
@@ -289,37 +305,54 @@ impl<'r> History<'r> {
                     });
                 }
             }
-            match status.as_str() {
+            match to.as_str() {
                 "blocked" => open_block = point,
-                "complete" => timings.completed = point,
                 "cancelled" => timings.cancelled = point,
                 _ => {}
             }
-            previous.clone_from(status);
         }
         if let Some(from) = open_block {
             timings.blocked.push(BlockedSpan { from, to: None });
         }
         let line = self.lines.get(&record.target).and_then(Option::as_ref);
+        // The completion that reached the target first; else the latest.
+        let completion = completions
+            .iter()
+            .filter_map(|oid| Some((line?.entered.get(oid).copied()?, *oid)))
+            .min()
+            .map(|(_, oid)| oid)
+            .or_else(|| completions.last().copied());
+        timings.completed = completion.and_then(|oid| self.point(oid));
         let reviewed = record.reviewed.as_deref().and_then(|value| {
             crate::workgraph::work_start::commit_by_object_id(self.repo, value.trim())
                 .ok()
                 .map(|commit| commit.id())
         });
-        let completion = timings
-            .completed
-            .as_ref()
-            .and_then(|point| Oid::from_str(&point.commit).ok());
-        // The code lands with the reviewed commit; a record completed by a
-        // later records change does not move the landing. Without the
-        // reviewed commit on the target (squash or rebase), the completion
-        // marks it.
-        let landing = match line {
-            Some(line) if record.status == "complete" => reviewed
-                .and_then(|reviewed| Self::first_containing(line, reviewed))
-                .or_else(|| completion.and_then(|done| Self::first_containing(line, done))),
-            _ => None,
+        // Where on the target's first-parent line the reviewed commit and the
+        // completion first arrive, by ancestry. The code lands with the
+        // reviewed commit; a completion that arrives later was written by a
+        // records change. A completion that arrives first means the task
+        // landed without its reviewed commit (squash or rebase), even if
+        // that commit reaches the target later through another branch.
+        let at = |oid: Option<Oid>| {
+            line.and_then(|line| oid.and_then(|oid| line.entered.get(&oid).copied()))
         };
+        let (reviewed_at, completion_at) = (at(reviewed), at(completion));
+        let (landing_at, squashed) = if record.status == "complete" {
+            match (reviewed_at, completion_at) {
+                (Some(code), Some(done)) if done < code => (Some(done), true),
+                (Some(code), _) => (Some(code), false),
+                (None, Some(done)) => (Some(done), true),
+                (None, None) => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        let landing = landing_at.and_then(|index| line.map(|line| line.first_parents[index]));
+        timings.ended_at_landing = !squashed
+            && completion.is_some()
+            && landing_at.is_some()
+            && completion_at.is_none_or(|done| Some(done) > landing_at);
         timings.landed = landing.and_then(|oid| self.point(oid));
         timings.planned = added.and_then(|added| {
             let on_target = line.and_then(|line| Self::first_containing(line, added));
@@ -329,7 +362,7 @@ impl<'r> History<'r> {
             }
         });
         if record.status == "complete" {
-            timings.started = Some(self.started(record, line, landing, reviewed));
+            timings.started = Some(self.started(record, line, landing, reviewed, squashed));
         }
         timings
     }
@@ -340,6 +373,7 @@ impl<'r> History<'r> {
         line: Option<&Line>,
         landing: Option<Oid>,
         reviewed: Option<Oid>,
+        squashed: bool,
     ) -> Started {
         let unknown = |reason: &str| Started::Unknown {
             unknown: reason.to_string(),
@@ -353,20 +387,15 @@ impl<'r> History<'r> {
             return unknown("the reviewed commit is not in this clone");
         };
         let base = match (landing, line) {
-            (Some(landing), Some(line)) => {
-                let Ok(merge) = self.repo.find_commit(landing) else {
-                    return unknown("the landing commit cannot be read");
-                };
-                let held = line
-                    .entered
-                    .get(&reviewed)
-                    .zip(line.entered.get(&landing))
-                    .is_some_and(|(at, landed)| at <= landed);
-                if !held {
+            (Some(landing), Some(_)) => {
+                if squashed {
                     return unknown(
                         "landed without its reviewed commit (squash or rebase), so the task branch is not on the target",
                     );
                 }
+                let Ok(merge) = self.repo.find_commit(landing) else {
+                    return unknown("the landing commit cannot be read");
+                };
                 if landing == reviewed || merge.parent_count() < 2 {
                     return unknown(
                         "landed without a merge commit (squash, rebase or fast-forward), so the task branch is not on the target",

@@ -263,9 +263,10 @@ fn elapsed_active(timings: &history::Timings) -> Option<i64> {
     match (&timings.started, &timings.completed) {
         (Some(Started::Known(started)), Some(completed)) => {
             // Work ends when it is completed, or when its code landed if a
-            // later records change wrote the completion.
+            // later records change wrote the completion (decided by
+            // ancestry, never by clock).
             let done = match &timings.landed {
-                Some(landed) if landed.epoch_seconds < completed.epoch_seconds => landed,
+                Some(landed) if timings.ended_at_landing => landed,
                 _ => completed,
             };
             let blocked = blocked_within(&timings.blocked, started, done);
