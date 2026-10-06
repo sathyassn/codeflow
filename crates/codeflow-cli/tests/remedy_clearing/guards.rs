@@ -235,6 +235,7 @@ fn clears_force_push() {
         root,
         &[
             "clone",
+            "--no-local",
             "-q",
             "-b",
             "feat/x",

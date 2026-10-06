@@ -532,6 +532,116 @@ fn every_git_process_is_built_by_the_one_constructor() {
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
 }
 
+/// Fixture commands use literal argument arrays, passed to `args` or to a
+/// git helper. Require the transport flag even for URL sources:
+/// a variable can change from a URL to a filesystem path without this scan
+/// being able to follow it. This also covers test modules under `src`.
+/// `--no-hardlinks` still copies loose objects that a concurrent repack can
+/// remove; the transport reads through Git's object database instead.
+/// Dynamic argument builders and shell scripts remain a review concern.
+fn unsafe_fixture_clones(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut offenders = Vec::new();
+    for (start, token) in toks.iter().enumerate() {
+        if !token.punct('[') {
+            continue;
+        }
+        let before = &toks[..start];
+        let argument = matches!(before.last(), Some(t) if t.punct('('))
+            || matches!(before, [.., separator, amp] if amp.punct('&')
+                && (separator.punct('(') || separator.punct(',')));
+        if !argument || !matches!(toks.get(start + 1), Some(Token::Str(s)) if s == "clone") {
+            continue;
+        }
+        let mut depth = 0_usize;
+        let mut safe = false;
+        for (offset, tok) in toks[start..].iter().enumerate() {
+            if tok.punct('[') || tok.punct('(') || tok.punct('{') {
+                depth += 1;
+            } else if tok.punct(']') || tok.punct(')') || tok.punct('}') {
+                depth -= 1;
+                if depth == 0 {
+                    if !safe {
+                        offenders.push(
+                            toks[start..=start + offset]
+                                .iter()
+                                .map(Token::text)
+                                .collect(),
+                        );
+                    }
+                    break;
+                }
+            } else if depth == 1 && matches!(tok, Token::Str(s) if s == "--no-local") {
+                safe = true;
+            }
+        }
+    }
+    offenders
+}
+
+#[test]
+fn fixture_clones_use_the_git_transport() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(crates).unwrap() {
+        let krate = entry.unwrap().path();
+        for area in ["src", "tests"] {
+            let dir = krate.join(area);
+            if dir.is_dir() {
+                rust_files(&dir, &mut files);
+            }
+        }
+    }
+    let mut offenders = Vec::new();
+    for file in files {
+        let source = std::fs::read_to_string(&file).unwrap();
+        for args in unsafe_fixture_clones(&source) {
+            offenders.push(format!(
+                "{}: {args}: fixture clone needs --no-local: --no-hardlinks still \
+                 copies loose objects that a concurrent repack can remove",
+                file.strip_prefix(crates).unwrap().display()
+            ));
+        }
+    }
+    assert!(offenders.is_empty(), "{}", offenders.join("\n"));
+}
+
+#[test]
+fn clone_scan_checks_the_flags_on_each_argument_list() {
+    for source in [
+        r#"git(root, &["clone", "-q", "--bare", source, dest]);"#,
+        r#"git(root, &["clone", "source", "dest"]);"#,
+        r#"git(root, &["clone", "--no-hardlinks", source, dest]);"#,
+        r#"command.args(["clone", path.to_str().unwrap()]).arg(dest);"#,
+        r#"git(root, &[r"clone", "-q", "file:///repo", "dest"]);"#,
+        r#"git(root, &["cl\x6fne", source]); // --no-local"#,
+        r#"git(root, &["clone", paths[0], dest]); let flag = "--no-local";"#,
+        r#"git(root, &["clone", path("--no-local"), dest]);"#,
+    ] {
+        assert_eq!(unsafe_fixture_clones(source).len(), 1, "{source}");
+    }
+    for source in [
+        r#"git(root, &["clone", "--no-local", source, dest]);"#,
+        r#"git(root, &["clone", "--no-hardlinks", "--no-local", source, dest]);"#,
+        r#"command.args(["clone", "--no-local", "--depth", "1", url]);"#,
+        "git(root, &[/* fixture */ \"clone\",\n r\"--no-local\", source]);",
+        r#"// git(root, &["clone", source]);"#,
+        r#"let text = "git(root, &[\"clone\", source]);";"#,
+        r#"["clone", "re-render", "reproduce"].iter();"#,
+        r#"Commands { subcommands: &["clone", "help"] }"#,
+    ] {
+        assert!(unsafe_fixture_clones(source).is_empty(), "{source}");
+    }
+    assert_eq!(
+        unsafe_fixture_clones(
+            r#"git(root, &["clone", "--no-local", source, a]);
+               git(root, &["clone", source, b]);"#
+        )
+        .len(),
+        1
+    );
+}
+
 #[test]
 fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     let refused = [

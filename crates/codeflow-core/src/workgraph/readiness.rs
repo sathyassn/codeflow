@@ -1811,6 +1811,7 @@ mod tests {
             Path::new("."),
             &[
                 "clone",
+                "--no-local",
                 "-q",
                 "--bare",
                 root.to_str().unwrap(),
@@ -2173,6 +2174,7 @@ mod tests {
             Path::new("."),
             &[
                 "clone",
+                "--no-local",
                 "-q",
                 upstream.path().to_str().unwrap(),
                 other.path().to_str().unwrap(),

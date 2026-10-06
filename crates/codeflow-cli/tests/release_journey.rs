@@ -328,7 +328,14 @@ impl Adopted {
         let remote = dir.path().join("remote.git");
         git(
             &root,
-            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+            &[
+                "clone",
+                "--no-local",
+                "-q",
+                "--bare",
+                ".",
+                remote.to_str().unwrap(),
+            ],
         );
         git(
             &root,

@@ -457,6 +457,7 @@ fn judge_a_forged_head(head_pin: &str) {
         dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             origin.to_str().unwrap(),
             target.to_str().unwrap(),
@@ -566,6 +567,7 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
         dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             origin.to_str().unwrap(),
             target.to_str().unwrap(),

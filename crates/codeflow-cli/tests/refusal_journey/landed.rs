@@ -638,6 +638,7 @@ fn ac5_installed_project_observes_landed_policy_and_missing_binary() {
     let operator = repo.root().join("operator");
     repo.git(&[
         "clone",
+        "--no-local",
         "-q",
         "--branch",
         "main",

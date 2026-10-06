@@ -71,7 +71,13 @@ impl World {
         let path = self.dir.path().join(name);
         git(
             self.dir.path(),
-            &["clone", "-q", self.bare().to_str().unwrap(), name],
+            &[
+                "clone",
+                "--no-local",
+                "-q",
+                self.bare().to_str().unwrap(),
+                name,
+            ],
         );
         git(&path, &["config", "user.email", email]);
         git(&path, &["config", "user.name", name]);
@@ -1901,7 +1907,7 @@ fn a_shallow_clone_neither_seeds_nor_checks_until_it_is_unshallowed() {
     let url = format!("file://{}", world.bare().display());
     git(
         world.dir.path(),
-        &["clone", "-q", "--depth", "1", &url, "shallow"],
+        &["clone", "--no-local", "-q", "--depth", "1", &url, "shallow"],
     );
     let shallow = world.dir.path().join("shallow");
     git(&shallow, &["config", "user.email", "shallow@example.test"]);

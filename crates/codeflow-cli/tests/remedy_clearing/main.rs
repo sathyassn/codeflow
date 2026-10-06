@@ -1880,6 +1880,7 @@ fn clears_push_range_unresolved() {
         root.parent().unwrap(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "-b",
             "chore/archive",

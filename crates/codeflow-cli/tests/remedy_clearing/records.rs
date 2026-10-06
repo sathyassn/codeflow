@@ -162,6 +162,7 @@ fn clears_baseline_history() {
         dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "--depth",
             "1",
@@ -198,6 +199,7 @@ fn clears_ci_range_unreadable() {
         clones.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "--depth",
             "1",
@@ -867,6 +869,7 @@ fn clears_id_registry_unfetched() {
         hosted.dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "--single-branch",
             "-b",

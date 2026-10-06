@@ -361,7 +361,13 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
     let other = tempfile::tempdir().unwrap();
     command(
         other.path(),
-        &["clone", "-q", h.remote.path().to_str().unwrap(), "."],
+        &[
+            "clone",
+            "--no-local",
+            "-q",
+            h.remote.path().to_str().unwrap(),
+            ".",
+        ],
     );
     command(other.path(), &["config", "user.name", "Test"]);
     command(

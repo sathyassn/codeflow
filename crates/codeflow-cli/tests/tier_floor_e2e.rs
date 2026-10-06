@@ -693,7 +693,13 @@ fn refuses_a_force_push_over_an_unfetched_tip(tmp: &Path, root: &Path, remote: &
     let other = tmp.join("other");
     git_ok(
         tmp,
-        &["clone", "-q", remote.to_str().unwrap(), "other"],
+        &[
+            "clone",
+            "--no-local",
+            "-q",
+            remote.to_str().unwrap(),
+            "other",
+        ],
         "clone",
     );
     std::fs::write(other.join("more.txt"), "two\n").unwrap();

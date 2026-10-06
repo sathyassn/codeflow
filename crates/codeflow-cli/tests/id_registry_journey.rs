@@ -175,7 +175,15 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
     let other = dir.path().join("other");
     git(
         dir.path(),
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), "other"],
+        &[
+            "clone",
+            "--no-local",
+            "-q",
+            "-b",
+            LINE,
+            bare.to_str().unwrap(),
+            "other",
+        ],
     );
     let second = ok(
         &codeflow(
@@ -249,6 +257,7 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
         dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "-b",
             "codeflow/registry",
@@ -396,7 +405,15 @@ fn guard(root: &Path, command: &str) -> Output {
 fn ci_check(dir: &Path, bare: &Path, name: &str) -> Output {
     git(
         dir,
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), name],
+        &[
+            "clone",
+            "--no-local",
+            "-q",
+            "-b",
+            LINE,
+            bare.to_str().unwrap(),
+            name,
+        ],
     );
     let checkout = dir.join(name);
     git(
@@ -435,6 +452,7 @@ fn a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci() {
         dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "-b",
             "codeflow/registry",
@@ -616,7 +634,15 @@ fn adr_new_takes_its_number_from_the_registry() {
     let other = dir.path().join("other");
     git(
         dir.path(),
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), "other"],
+        &[
+            "clone",
+            "--no-local",
+            "-q",
+            "-b",
+            LINE,
+            bare.to_str().unwrap(),
+            "other",
+        ],
     );
     let first = ok(
         &codeflow(&other, &["adr", "new", "Keep one registry"]),
@@ -918,7 +944,7 @@ fn a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing() {
     let url = format!("file://{}", bare.display());
     git(
         dir.path(),
-        &["clone", "-q", "--depth", "1", &url, "shallow"],
+        &["clone", "--no-local", "-q", "--depth", "1", &url, "shallow"],
     );
     let shallow = dir.path().join("shallow");
     let seed = codeflow(&shallow, &["ids", "seed"]);

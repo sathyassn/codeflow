@@ -380,6 +380,7 @@ fn bare_copy(fx: &Fixture, path: &Path, main: &str) {
         fx.dir.path(),
         &[
             "clone",
+            "--no-local",
             "-q",
             "--bare",
             &fx.repo().display().to_string(),

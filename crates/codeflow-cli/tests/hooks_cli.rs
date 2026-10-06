@@ -3138,6 +3138,7 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
     let clone = Command::new("git")
         .args([
             "clone",
+            "--no-local",
             origin.path().to_str().unwrap(),
             work.to_str().unwrap(),
         ])
@@ -5392,7 +5393,7 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     let clone = tempfile::tempdir().unwrap();
     git(
         clone.path(),
-        &["clone", "-q", "--filter=blob:none", &url, "."],
+        &["clone", "--no-local", "-q", "--filter=blob:none", &url, "."],
     );
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
