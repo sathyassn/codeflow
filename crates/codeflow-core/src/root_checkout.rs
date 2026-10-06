@@ -216,6 +216,9 @@ pub struct RootBranch {
 /// A present default-branch reference cannot be read or has an invalid target.
 pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> Result<RootBranch, String> {
     match repo.find_reference("refs/remotes/origin/HEAD") {
+        // A valid direct ref names an object, not a default branch. Its
+        // contents were obtained, but there is no symbolic designation.
+        Ok(reference) if reference.kind() == Some(git2::ReferenceType::Direct) => {}
         Ok(reference) => {
             let name = crate::git::name::symbolic_target(&reference)
                 .and_then(|target| target.strip_prefix(b"refs/remotes/origin/"))
@@ -707,8 +710,8 @@ impl Drop for ScratchRepo {
 /// against a scratch repository, so this repository's `.git/info/exclude`
 /// and any global excludes file take no part. The scratch run matches case
 /// as git does in this repository (`core.ignoreCase`, runtime overrides
-/// included), not as a fresh repository on this file system would. Falls
-/// back to [`ignore_sources`] when no scratch repository can be made.
+/// included), not as a fresh repository on this file system would. Failure
+/// to create the scratch repository returns an error; shared rules are unproven.
 fn tree_ignore_sources(root: &Path, dirs: &[String]) -> Result<Vec<Option<String>>, String> {
     let ignore_case = format!("core.ignoreCase={}", effective_ignore_case(root)?);
     let scratch =
@@ -763,7 +766,8 @@ fn effective_ignore_case(root: &Path) -> Result<bool, String> {
 }
 
 /// One `git <prefix> check-ignore -v -n` call over `dirs`: for each, the
-/// ignore file whose positive rule decides it. `None` when git fails.
+/// ignore file whose positive rule decides it. A successful unmatched answer
+/// yields `None`; a failed Git call or malformed answer returns an error.
 fn check_ignore(
     root: &Path,
     prefix: &[&str],

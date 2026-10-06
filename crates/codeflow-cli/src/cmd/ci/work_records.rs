@@ -146,7 +146,7 @@ pub(super) fn check(
     }
 }
 
-fn block(message: String) -> Violation {
+pub(super) fn block(message: String) -> Violation {
     Violation::always_blocking(
         "work.records",
         message,

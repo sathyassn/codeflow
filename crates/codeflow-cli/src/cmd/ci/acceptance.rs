@@ -207,12 +207,20 @@ pub(super) fn brought(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Result<Option<codeflow_core::workgraph::lifecycle::Brought>, String> {
-    let Some((destination, scope)) = release_scope(root, names).map_err(str::to_string)? else {
+    let Some((destination, scope)) = release_scope(root, names).map_err(unscoped)? else {
         return Ok(None);
     };
     let head = release_head(root, range, scope)?;
     release_line::release_findings(root, destination, range.base, &head)
         .map(|judged| Some(judged.brought))
+}
+
+pub(super) fn scope_refusal(error: &str) -> Violation {
+    Violation::always_blocking(
+        FROZEN_RULE,
+        unscoped(error),
+        "repair the destination or policy named above, then rerun codeflow ci",
+    )
 }
 
 fn unscoped(error: &str) -> String {

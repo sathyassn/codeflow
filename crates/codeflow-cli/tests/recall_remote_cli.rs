@@ -231,6 +231,49 @@ fn any_command_touches_registry() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn r21_remote_protect_refuses_undecodable_identity_before_api() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "invalid-identity");
+    let shims = tempfile::tempdir().unwrap();
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        r#"#!/bin/sh
+if [ "$1" = "repo" ]; then
+  printf '{"nameWithOwner":"owner/caf'
+  printf '\377'
+  printf '","isPrivate":false}'
+  exit 0
+fi
+: > api-called
+printf '{}'
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths = vec![shims.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let out = codeflow()
+        .args(["remote", "protect"])
+        .current_dir(repo.path())
+        .env("CODEFLOW_HOME", home.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.contains("status: degraded"), "{text}");
+    assert!(text.contains("UTF-8"), "{text}");
+    assert!(!text.contains("status: applied"), "{text}");
+    assert!(!repo.path().join("api-called").exists());
+}
+
 /// TSK-137 AC-4: hook, ci and read-only commands leave the registry alone,
 /// other commands still record the repo, and a home the process may not
 /// write (a sandbox, a read-only directory) is silent.

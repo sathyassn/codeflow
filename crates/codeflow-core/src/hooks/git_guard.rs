@@ -5367,12 +5367,11 @@ fn check_authority(
     cwd: &Path,
     violations: &mut Vec<Violation>,
 ) {
-    if moved.transport_env
-        && git_subcommand(args).is_some_and(|(sub, rest)| {
-            matches!(sub, "fetch" | "pull" | "push")
-                || super::ref_authority::remote_transport_args(sub, rest).is_some()
-        })
-    {
+    let transport = git_subcommand(args).is_some_and(|(sub, rest)| {
+        matches!(sub, "fetch" | "pull" | "push")
+            || super::ref_authority::remote_transport_args(sub, rest).is_some()
+    });
+    if moved.transport_env && transport {
         violations.push(Violation::always_blocking(
             "git.policy_authority",
             "command-local configuration can redirect the configured remote".into(),
@@ -5380,26 +5379,39 @@ fn check_authority(
         ));
         return;
     }
-    if let Ok(specs) = compose_targets(args, moved) {
-        for spec in specs {
-            let target = spec
-                .as_ref()
-                .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
-            if let Err(reason) = super::landed_policy::load(&target) {
-                let recovery = git_subcommand(args)
-                    .is_some_and(|(sub, rest)| sub == "fetch" && rest.len() <= 1)
-                    && super::ref_authority::check(&target, args).is_none();
-                if !recovery {
-                    violations.push(Violation::always_blocking(
-                        "git.policy_authority",
-                        reason,
-                        "restore the named remote-tracking policy authority",
-                    ));
-                }
+    let specs = match compose_targets(args, moved) {
+        Ok(specs) => specs,
+        Err(reason) => {
+            if transport {
+                violations.push(Violation::always_blocking(
+                    "git.policy_authority",
+                    format!("cannot determine the transport repository: {reason}"),
+                    "use a readable explicit repository and its configured remote",
+                ));
             }
-            if let Some(reason) = super::ref_authority::check(&target, args) {
-                violations.push(Violation::always_blocking("git.policy_authority", reason, "the operator repairs the configured remote; agents use its ordinary fetch mapping"));
+            return;
+        }
+    };
+    for spec in specs {
+        let target = spec
+            .as_ref()
+            .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path));
+        if let Err(reason) = super::landed_policy::load(&target) {
+            let recovery = super::ref_authority::recovery_args(&target, args);
+            if !recovery {
+                violations.push(Violation::always_blocking(
+                    "git.policy_authority",
+                    reason,
+                    "restore the named remote-tracking policy authority",
+                ));
             }
+        }
+        if let Some(reason) = super::ref_authority::check(&target, args) {
+            violations.push(Violation::always_blocking(
+                "git.policy_authority",
+                reason,
+                "the operator repairs the configured remote; agents use its ordinary fetch mapping",
+            ));
         }
     }
 }
@@ -12243,12 +12255,16 @@ mod tests {
         assert!(evaluate("bash -x script.sh", &ctx(&p, "main")).is_empty());
         assert!(evaluate("env NODE_ENV=test npm test", &ctx(&p, "main")).is_empty());
         // `git -C <subdir>` resolving to a feature branch stays allowed.
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
         let resolver = |_: &Retarget<'_>| same_repo("feat/y");
-        assert!(evaluate(
+        let report = evaluate_report_at(
             "git -C sub status",
-            &ctx_with_dir_branch(&p, "main", &resolver)
-        )
-        .is_empty());
+            &ctx_with_dir_branch(&p, "main", &resolver),
+            dir.path(),
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
     }
 
     // -- data is not a command: heredoc bodies, quoted arguments, comments --

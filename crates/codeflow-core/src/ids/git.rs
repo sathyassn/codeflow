@@ -253,7 +253,9 @@ impl Git {
                 .iter()
                 .position(|b| *b == b'\n')
                 .ok_or_else(|| IdsError::Git("git cat-file: truncated output".to_string()))?;
-            let header = String::from_utf8_lossy(&stdout[cursor..cursor + end]).to_string();
+            let header = std::str::from_utf8(&stdout[cursor..cursor + end]).map_err(|error| {
+                IdsError::Git(format!("git cat-file header is not valid UTF-8: {error}"))
+            })?;
             cursor += end + 1;
             if header.ends_with(" missing") {
                 continue;

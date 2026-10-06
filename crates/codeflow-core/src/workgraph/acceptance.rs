@@ -1381,24 +1381,31 @@ impl<'r> RecordIndex<'r> {
     }
 
     /// The record files at `commit` that are this task, as sorted blob ids;
-    /// `None` when the commit or its tree cannot be read.
-    fn versions(&mut self, commit: Oid) -> Option<Vec<Oid>> {
-        let tree = self.repo.find_commit(commit).and_then(|c| c.tree()).ok()?;
+    /// An error when the commit, tree, or record bytes cannot be read.
+    fn versions(&mut self, commit: Oid) -> Result<Vec<Oid>, String> {
+        let tree = self
+            .repo
+            .find_commit(commit)
+            .and_then(|c| c.tree())
+            .map_err(|error| format!("cannot read the tree of {commit}: {error}"))?;
         let Some(records) = tree
             .get_name("project-management")
             .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
             .map(|entry| entry.id())
         else {
-            return Some(Vec::new());
+            return Ok(Vec::new());
         };
         if let Some(found) = self.trees.get(&records) {
-            return Some(found.clone());
+            return Ok(found.clone());
         }
-        let records_tree = self.repo.find_tree(records).ok()?;
+        let records_tree = self
+            .repo
+            .find_tree(records)
+            .map_err(|error| format!("cannot read records tree {records}: {error}"))?;
         let mut found = Vec::new();
         for (path, blob) in task_entries_in(self.repo, &records_tree) {
             if !self.blobs.contains_key(&blob) {
-                let record = self.read(&path, blob);
+                let record = self.read(&path, blob)?;
                 self.blobs.insert(blob, record);
             }
             if self.blobs.get(&blob).is_some_and(Option::is_some) {
@@ -1408,23 +1415,29 @@ impl<'r> RecordIndex<'r> {
         found.sort();
         found.dedup();
         self.trees.insert(records, found.clone());
-        Some(found)
+        Ok(found)
     }
 
     /// The record in `blob` when it is this task. Only a file that names
     /// the id or uid literally, or holds an escape (a double-quoted YAML
-    /// value can spell either one with `\x` escapes), is parsed.
-    fn read(&self, path: &str, blob: Oid) -> Option<RecordView> {
-        let blob = self.repo.find_blob(blob).ok()?;
-        let content = String::from_utf8_lossy(blob.content());
+    /// value can spell either one with `\x` escapes), is parsed. Obtaining
+    /// errors propagate through `versions`; `named_targets` and `holder_outside` refuse.
+    fn read(&self, path: &str, blob: Oid) -> Result<Option<RecordView>, String> {
+        let blob = self
+            .repo
+            .find_blob(blob)
+            .map_err(|error| format!("cannot read record {path}: {error}"))?;
+        let content = std::str::from_utf8(blob.content())
+            .map_err(|error| format!("record {path} is not valid UTF-8: {error}"))?;
         let mentions = content.contains(self.id.as_str())
             || self.uid.as_deref().is_some_and(|uid| content.contains(uid))
             || content.contains('\\');
         if !mentions {
-            return None;
+            return Ok(None);
         }
-        let record = RecordView::parse(RecordKind::Task, path, &content).ok()?;
-        is_same_task(&record, &self.id, self.uid.as_deref()).then_some(record)
+        Ok(RecordView::parse(RecordKind::Task, path, content)
+            .ok()
+            .filter(|record| is_same_task(record, &self.id, self.uid.as_deref())))
     }
 
     /// The task's record held in `blob`, once [`Self::versions`] found it.
@@ -1477,8 +1490,7 @@ fn holder_outside(
     walk.hide(head).map_err(unreadable)?;
     for commit in walk {
         let commit = commit.map_err(unreadable)?;
-        let tree_error = || format!("cannot read the tree of {commit}");
-        let versions = index.versions(commit).ok_or_else(tree_error)?;
+        let versions = index.versions(commit)?;
         if versions.is_empty() {
             continue;
         }
@@ -1489,9 +1501,7 @@ fn holder_outside(
             .collect();
         let mut inherited = std::collections::HashSet::new();
         for parent in parents {
-            let parent_versions = index
-                .versions(parent)
-                .ok_or_else(|| format!("cannot read the tree of {parent}"))?;
+            let parent_versions = index.versions(parent)?;
             inherited.extend(parent_versions);
         }
         if versions.iter().all(|version| inherited.contains(version)) {
@@ -1530,9 +1540,7 @@ fn named_targets(
     commits.push(range.anchor);
     let mut names = Vec::new();
     for commit in commits {
-        let versions = index
-            .versions(commit)
-            .ok_or_else(|| format!("cannot read the tree of {commit}"))?;
+        let versions = index.versions(commit)?;
         for blob in versions {
             let target = index
                 .record(blob)
@@ -1724,8 +1732,14 @@ fn presence_at(
             }
             continue;
         };
-        let content = String::from_utf8_lossy(blob.content());
-        match RecordView::parse(RecordKind::Task, &path, &content) {
+        let content = match std::str::from_utf8(blob.content()) {
+            Ok(content) => content,
+            Err(error) => {
+                unreadable.get_or_insert(format!("{path} at {at} is not valid UTF-8: {error}"));
+                continue;
+            }
+        };
+        match RecordView::parse(RecordKind::Task, &path, content) {
             Ok(record) if is_same_task(&record, id, uid) => {
                 return Presence::Present(Box::new(record));
             }
@@ -2479,6 +2493,41 @@ pub fn pull_request_findings_judged(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_record_index_refuses_undecodable_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let head = crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nstatus: todo\nintegration_target: caf\xff\n---\n",
+            )],
+        );
+        let mut index = super::RecordIndex::new(&repo, "TSK-001", None);
+        assert!(
+            index.versions(head).is_err(),
+            "unreadable target must remain unproven"
+        );
+    }
+
+    #[test]
+    fn r21_record_presence_refuses_undecodable_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let head = crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nstatus: todo\nintegration_target: caf\xff\n---\n",
+            )],
+        );
+        assert!(matches!(
+            super::presence_at(&repo, head, "TSK-001", None, "TSK-001.md"),
+            super::Presence::Unreadable(_)
+        ));
+    }
+
     use super::*;
 
     #[test]

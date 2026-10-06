@@ -372,6 +372,35 @@ fn the_root_branch_comes_from_policy_then_origin_head_then_protected_then_main()
 // ---- commits at the root checkout ------------------------------------------
 
 #[test]
+fn r21_direct_origin_head_has_no_default_branch_designation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let repo = git2::Repository::open(&root).unwrap();
+    let tip = repo.head().unwrap().target().unwrap();
+    repo.reference("refs/remotes/origin/HEAD", tip, true, "fixture")
+        .unwrap();
+    let branch = default_branch(&repo, &GitPolicy::default()).unwrap();
+    assert_eq!(branch.name.rule_text().unwrap(), "main");
+    assert_eq!(branch.source, RootBranchSource::ProtectedList);
+    repo.find_reference("refs/remotes/origin/HEAD")
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(
+        default_branch(&repo, &GitPolicy::default()).unwrap(),
+        branch
+    );
+    let fallback = GitPolicy {
+        protected_branches: vec![],
+        ..GitPolicy::default()
+    };
+    assert_eq!(
+        default_branch(&repo, &fallback).unwrap().source,
+        RootBranchSource::Fallback
+    );
+}
+
+#[test]
 fn a_commit_at_the_root_on_its_root_branch_is_fine() {
     let dir = tempfile::tempdir().unwrap();
     let root = repo_with_commit(&dir.path().join("r"));

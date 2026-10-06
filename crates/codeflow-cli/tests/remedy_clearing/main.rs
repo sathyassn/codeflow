@@ -2421,10 +2421,10 @@ fn clears_doctor_policy_decision() {
     write(&root, ".codeflow/policy.json", "{ not json");
     prove(
         "DOCTOR_POLICY_DECISION",
-        "git.pr_sections effective level",
+        "cannot read policy",
         || {
             let out = doctor(&root, "adopter-fit");
-            if out.starts_with("warn") {
+            if out.starts_with("FAIL") {
                 out
             } else {
                 String::new()

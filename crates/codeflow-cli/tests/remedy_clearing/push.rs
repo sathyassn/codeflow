@@ -1569,9 +1569,8 @@ fn an_unrelated_history_joined_into_a_related_branch_is_checked_in_full() {
 }
 
 /// A related branch whose old remote tip an overlay makes parentless is
-/// not taken for unrelated history: with a replace ref or a graft, the
-/// four-bullet commit it carries is still judged by the tightened default
-/// (review round seven).
+/// not taken for unrelated history. A replace ref or graft that prevents
+/// proving that history refuses the push before judging its commit body.
 #[test]
 fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
     for overlay in ["replace", "graft"] {
@@ -1616,7 +1615,9 @@ fn a_history_overlay_does_not_make_a_related_branch_unrelated() {
             out.contains("overlays its recorded history"),
             "{overlay}: {out}"
         );
-        refused(&dest, &out, &head_sha(&root));
+        // AC-10: unproven history refuses before any commit-body judgment.
+        assert!(out.contains("cannot prove history"), "{out}");
+        not_landed(&dest, &out, "feat/x", &head_sha(&root));
     }
 }
 

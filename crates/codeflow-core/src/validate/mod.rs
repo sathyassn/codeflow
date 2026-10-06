@@ -246,10 +246,12 @@ impl Default for ValidateOptions {
 pub fn parse_frontmatter(
     content: &[u8],
 ) -> Result<(HashMap<String, serde_yaml::Value>, Vec<u8>), ValidateError> {
-    let s = String::from_utf8_lossy(content);
+    let s = std::str::from_utf8(content).map_err(|error| {
+        ValidateError::InvalidFrontmatter(format!("record is not valid UTF-8: {error}"))
+    })?;
 
     // Strip BOM if present.
-    let s = s.strip_prefix('\u{FEFF}').unwrap_or(&s);
+    let s = s.strip_prefix('\u{FEFF}').unwrap_or(s);
 
     if !s.starts_with("---") {
         return Err(ValidateError::InvalidFrontmatter(
@@ -924,6 +926,14 @@ pub(crate) fn open_questions(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_frontmatter_refuses_undecodable_target_identity() {
+        assert!(
+            super::parse_frontmatter(b"---\nid: TSK-001\nintegration_target: caf\xff\n---\n")
+                .is_err()
+        );
+    }
+
     use std::str::FromStr;
 
     use crate::models::{EpicStatus, TaskStatus};

@@ -154,14 +154,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // the `git cat-file --batch` header line: an object id, a type and a size
-    (
-        "codeflow-cli/src/cmd/ci.rs",
-        "parse_batch",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
     // an object id or fixed ASCII word git prints, compared with ASCII only
     (
         "codeflow-cli/src/cmd/ci.rs",
@@ -210,13 +202,13 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // file or blob content, a format contract and not a name
+    // Blob text only classifies changed line regions by ASCII frontmatter keys and fixed status/Closeout headings; paths remain bytes and no record identity or target value is read.
     (
         "codeflow-core/src/ceremony/history.rs",
         "status_only",
         "from_utf8_lossy",
         2,
-        "format-contract",
+        "grammar:ceremony-regions",
     ),
     // probe output that doctor shows
     (
@@ -266,13 +258,13 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // file or blob content, a format contract and not a name (an added line)
+    // Added line content is tested for fixed ASCII conflict markers; independent path_bytes become exact GitName storage keys before content decoding.
     (
         "codeflow-core/src/hooks/conflict_markers.rs",
         "staged",
         "from_utf8_lossy",
         1,
-        "format-contract",
+        "grammar:conflict-marker-lines",
     ),
     // a git or tool error message shown to a person, never compared
     (
@@ -338,13 +330,13 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // file or blob content, a format contract and not a name (an added line scanned for secrets)
+    // Added content is tested by secret token patterns; file identities come independently from path_bytes and this text is never a command, path or name.
     (
         "codeflow-core/src/hooks/git_hook.rs",
         "scan_staged",
         "from_utf8_lossy",
         1,
-        "format-contract",
+        "grammar:secret-scan-lines",
     ),
     // an object id or fixed ASCII word git prints, compared with ASCII only (`hooks 3`)
     (
@@ -353,22 +345,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "ascii-marker",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/ids/check.rs",
-        "Texts::uid_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // the `git cat-file --batch` header line: an object id, a type and a size
-    (
-        "codeflow-core/src/ids/git.rs",
-        "Git::blobs",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
     ),
     // git stderr in an error message shown to a person, never compared
     (
@@ -386,14 +362,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/ids/inventory.rs",
-        "copies_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/ids/issue.rs",
@@ -409,30 +377,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         2,
         "display",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/ids/ledger.rs",
-        "Ledger::apply",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/ids/ledger.rs",
-        "Ledger::check_addition",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/ids/ledger.rs",
-        "Ledger::restore_problems",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
     ),
     // a git or tool error message shown to a person, never compared
     (
@@ -498,15 +442,15 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         2,
         "display",
     ),
-    // gh output (JSON text and messages)
+    // Only unsuccessful gh stdout/stderr is displayed; successful output carrying repository identity is decoded strictly and errors refuse API dispatch.
     (
         "codeflow-core/src/remote.rs",
         "GithubProvider::run_gh",
         "from_utf8_lossy",
         2,
-        "format-contract",
+        "display",
     ),
-    // the branch step's own name() method, a GitName, not a git2 accessor
+    // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
         "codeflow-core/src/root_checkout.rs",
         "WorkspaceReport::fmt",
@@ -522,7 +466,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "ascii-marker",
     ),
-    // the branch step's own name() method, a GitName, not a git2 accessor
+    // BranchStep::name returns the already validated branch String by reference unchanged; no native bytes are decoded or replaced.
     (
         "codeflow-core/src/root_checkout.rs",
         "finish",
@@ -570,7 +514,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // attributes of a coverage XML report, a format contract
+    // The parser takes &str after parse_cobertura read_to_string; quick_xml attribute slices come from that validated UTF-8 source, including filename. No undecoded external bytes reach this conversion.
     (
         "codeflow-core/src/testing/coverage/cobertura.rs",
         "parse_cobertura_str",
@@ -594,7 +538,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // attributes and text of a JUnit XML report, a format contract
+    // The parser takes &str after parse_junit read_to_string; quick_xml attributes/text are slices of validated UTF-8 source, including testcase names and classnames.
     (
         "codeflow-core/src/testing/report/junit.rs",
         "parse_junit_str",
@@ -626,13 +570,13 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "ascii-marker",
     ),
-    // file or blob content, a format contract and not a name
+    // Lossy document text only locates the line number printed with an already determined finding; it does not select the finding, parsed record identity or target.
     (
         "codeflow-core/src/validate/docs.rs",
         "find_line",
         "from_utf8_lossy",
         1,
-        "format-contract",
+        "display",
     ),
     // commit subjects (message text) searched for a task id
     (
@@ -642,15 +586,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:merge-subject",
     ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/validate/mod.rs",
-        "parse_frontmatter",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
+    // Body bytes are returned by strict parse_frontmatter from a UTF-8 str; this conversion cannot replace undecodable bytes and only checks required Markdown headings.
     (
         "codeflow-core/src/validate/mod.rs",
         "validate_sections",
@@ -658,7 +594,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
-    // file or blob content, a format contract and not a name
+    // Body bytes come from strict parse_frontmatter; acceptance evidence/checkbox parsing therefore consumes already validated UTF-8, never lossy record identities.
     (
         "codeflow-core/src/validate/mod.rs",
         "validate_task",
@@ -674,34 +610,10 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/acceptance.rs",
-        "RecordIndex::read",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/acceptance.rs",
-        "presence_at",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
+    // RecordView::parse takes &str; strict parse_frontmatter returns body bytes sliced from that validated input, so this conversion cannot replace identity or target bytes.
     (
         "codeflow-core/src/workgraph/lifecycle.rs",
         "RecordView::parse",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-core/src/workgraph/lifecycle.rs",
-        "landing_paths",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -2622,7 +2534,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // UTF-8 failure maps to true in the refusal condition; the remote URL mapping remains unproven and fetch is refused.
     (
         "crates/codeflow-core/src/hooks/ref_authority.rs",
-        "fetch",
+        "fetch_from_repository",
         "obtain-absent:from_utf8",
         1,
         "unproven",
@@ -2923,21 +2835,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // Git status porcelain quotes unsafe filenames, and every nonempty record blocks integration; record strings are diagnostic-only and are never used to open paths.
+    // Git porcelain quotes unsafe names; every nonempty status record blocks integration and names are only displayed, never opened or compared.
     (
         "crates/codeflow-core/src/integrate.rs",
         "dirty_files",
         "lines",
         1,
-        "format-contract",
+        "grammar:git-porcelain-status",
     ),
-    // Git status porcelain quotes unsafe filenames, and every nonempty record blocks integration; record strings are diagnostic-only and are never used to open paths.
+    // Git porcelain quotes unsafe names; every nonempty status record blocks integration and names are only displayed, never opened or compared.
     (
         "crates/codeflow-core/src/integrate.rs",
         "dirty_files",
         "trim",
         1,
-        "format-contract",
+        "grammar:git-porcelain-status",
     ),
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (

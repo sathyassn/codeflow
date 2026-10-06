@@ -1924,7 +1924,7 @@ fn judge_range_against(
         // line). Any other range is judged whole, so a private merge inside
         // a task branch cannot manufacture the exception.
         let landing = if on_line {
-            landing_paths(&repo, base, head, record)
+            landing_paths(&repo, base, head, record)?
         } else {
             None
         };
@@ -1962,39 +1962,52 @@ fn landing_paths(
     base: &str,
     head: Option<&str>,
     record: &RecordView,
-) -> Option<Vec<String>> {
+) -> Result<Option<Vec<String>>, String> {
     let to = record.status.as_str();
     if record.kind != RecordKind::Spec || !matches!(to, "approved" | "superseded") {
-        return None;
+        return Ok(None);
     }
-    let base = resolve_commit(repo, base)?;
-    let mut commit = repo.find_commit(resolve_commit(repo, head?)?).ok()?;
-    let status_at = |commit: &git2::Commit<'_>| -> Option<String> {
-        let entry = commit.tree().ok()?.get_path(Path::new(&record.path)).ok()?;
-        let blob = entry.to_object(repo).ok()?.into_blob().ok()?;
-        let text = String::from_utf8_lossy(blob.content()).into_owned();
-        RecordView::parse(record.kind, &record.path, &text)
-            .ok()
-            .map(|view| view.status)
+    let Some(head) = head else {
+        return Ok(None);
+    };
+    let base = resolve_commit(repo, base).ok_or("cannot resolve spec landing base")?;
+    let tip = resolve_commit(repo, head).ok_or("cannot resolve spec landing head")?;
+    let mut commit = repo.find_commit(tip).map_err(|error| error.to_string())?;
+    let status_at = |commit: &git2::Commit<'_>| -> Result<Option<String>, String> {
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        let entry = match tree.get_path(Path::new(&record.path)) {
+            Ok(entry) => entry,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|error| error.to_string())?;
+        let text = std::str::from_utf8(blob.content())
+            .map_err(|error| format!("spec landing record is not valid UTF-8: {error}"))?;
+        RecordView::parse(record.kind, &record.path, text).map(|view| Some(view.status))
     };
     while commit.id() != base {
-        let parent = commit.parent(0).ok()?;
-        let arrived =
-            status_at(&commit).as_deref() == Some(to) && status_at(&parent).as_deref() != Some(to);
+        if commit.parent_count() == 0 {
+            return Ok(None);
+        }
+        let parent = commit.parent(0).map_err(|error| error.to_string())?;
+        let arrived = status_at(&commit)?.as_deref() == Some(to)
+            && status_at(&parent)?.as_deref() != Some(to);
         if arrived {
             if commit.parent_count() < 2 {
-                return None;
+                return Ok(None);
             }
             return changed_paths(
                 repo,
                 &parent.id().to_string(),
                 Some(&commit.id().to_string()),
             )
-            .ok();
+            .map(Some);
         }
         commit = parent;
     }
-    None
+    Ok(None)
 }
 
 /// Complete tasks whose status left `complete` inside this range, including
@@ -2435,3 +2448,45 @@ fn has_active_branch(repo: &Repository, task: &RecordView, prefixes: &[String]) 
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_landing_paths_refuse_undecodable_parent_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = "project-management/specs/SPC-001.md";
+        let base = crate::git::add_commit(&repo, &[(b"seed", b"base")]);
+        let parent = crate::git::add_commit(
+            &repo,
+            &[(
+                path.as_bytes(),
+                b"---\nid: SPC-001\nstatus: draft\nintegration_target: caf\xff\n---\n",
+            )],
+        );
+        let valid = "---\nid: SPC-001\nstatus: approved\nintegration_target: main\n---\n";
+        let next = crate::git::add_commit(&repo, &[(path.as_bytes(), valid.as_bytes())]);
+        let tree = repo.find_commit(next).unwrap().tree().unwrap();
+        let signature = git2::Signature::now("test", "test@example.invalid").unwrap();
+        let head = repo
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "merge approval",
+                &tree,
+                &[
+                    &repo.find_commit(parent).unwrap(),
+                    &repo.find_commit(base).unwrap(),
+                ],
+            )
+            .unwrap();
+        let record = super::RecordView::parse(super::RecordKind::Spec, path, valid).unwrap();
+        let answer =
+            super::landing_paths(&repo, &base.to_string(), Some(&head.to_string()), &record);
+        assert!(
+            answer.is_err(),
+            "unreadable parent must not prove a narrowed landing: {answer:?}"
+        );
+    }
+}

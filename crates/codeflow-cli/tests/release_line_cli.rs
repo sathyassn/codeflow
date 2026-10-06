@@ -662,7 +662,7 @@ fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
         &[
             "work.criteria_frozen",
             &format!(
-                "TSK-003 changes its criteria on its line at {}, which also changes project-management/ref\\alias",
+                "TSK-003 changes its criteria on its line at {}, which also changes project-management/ref\\\\alias",
                 &landing[..9]
             ),
         ],
@@ -4214,7 +4214,7 @@ fn a_legacy_record_gets_no_relief_from_an_unapproved_records_cutoff() {
         &[
             &unapproved("release_records_baseline", LINE_A, &landing),
             "work.records",
-            "a complete record needs an acceptance block",
+            "cannot read the record range",
         ],
     );
     assert!(!result.1.contains("legacy record"), "{}", result.1);
@@ -4222,14 +4222,21 @@ fn a_legacy_record_gets_no_relief_from_an_unapproved_records_cutoff() {
     assert!(!written.contains("acceptance:"), "no block is written");
 
     let refused = |fx: &Fx, what: &str| {
+        // AC-10: an unapproved cutoff refuses before any ordinary-range
+        // acceptance judgment; it must not select a default cutoff or relief.
+        let result = agree(fx, what);
         blocks(
-            &agree(fx, what),
+            &result,
             what,
             &[
                 "work.records",
-                "a complete record needs an acceptance block",
+                "release_records_baseline",
+                "cannot read the record range",
             ],
         );
+        assert!(!result.1.contains("legacy record"), "{}", result.1);
+        let written = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+        assert!(!written.contains("acceptance:"), "no block is written");
     };
 
     // Another line's cutoff.

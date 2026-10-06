@@ -611,18 +611,44 @@ pub fn check_epic_line(
     base: &str,
     head: &str,
 ) -> Result<String, String> {
-    let suffix = branch
-        .strip_prefix("integration/")
-        .ok_or_else(|| format!("'{branch}' is not an integration line"))?;
+    match epic_line_proof(repo_root, branch, base_ref, base, head)? {
+        EpicLineProof::Verified(epic) => Ok(epic),
+        EpicLineProof::NotLine(reason) => Err(reason),
+    }
+}
+
+/// A readable line can fail the epic criteria without a reader failing.
+#[derive(Debug)]
+pub enum EpicLineProof {
+    Verified(String),
+    NotLine(String),
+}
+
+/// Obtain the epic-line evidence, preserving a negative proof as a value.
+///
+/// # Errors
+/// Repository, revision, record or history evidence could not be read.
+pub fn epic_line_proof(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<EpicLineProof, String> {
+    let Some(suffix) = branch.strip_prefix("integration/") else {
+        return Ok(EpicLineProof::NotLine(format!(
+            "'{branch}' is not an integration line"
+        )));
+    };
     let digits = suffix.strip_prefix("EPC-").map_or(0, |rest| {
         rest.chars().take_while(char::is_ascii_digit).count()
     });
     let epic_id = suffix.get(..4 + digits).unwrap_or_default();
     if digits == 0 || !is_valid_epic_format_id(epic_id) || !suffix[epic_id.len()..].starts_with('-')
     {
-        return Err(format!(
+        return Ok(EpicLineProof::NotLine(format!(
             "'{branch}' names no epic; an epic line is integration/EPC-NNN-<slug>"
-        ));
+        )));
     }
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let commit = |revision: &str| {
@@ -646,13 +672,20 @@ pub fn check_epic_line(
     // range and the first-parent walk.
     let at_base = records_at(target_tip)?;
     let at_head = records_at(head_commit.id())?;
-    let epic = at_base
+    let Some(epic) = at_base
         .get(epic_id)
         .or_else(|| at_head.get(epic_id))
         .filter(|record| record.kind == RecordKind::Epic)
-        .ok_or_else(|| format!("'{branch}' names {epic_id}, which has no epic record"))?;
+    else {
+        return Ok(EpicLineProof::NotLine(format!(
+            "'{branch}' names {epic_id}, which has no epic record"
+        )));
+    };
     if matches!(epic.status.as_str(), "cancelled" | "archived") {
-        return Err(format!("{epic_id} is {}", epic.status));
+        return Ok(EpicLineProof::NotLine(format!(
+            "{epic_id} is {}",
+            epic.status
+        )));
     }
     let bound = at_head.values().chain(at_base.values()).any(|record| {
         record.kind == RecordKind::Task
@@ -663,16 +696,18 @@ pub fn check_epic_line(
                 .is_some_and(|target| logical_target(target) == branch)
     });
     if !bound {
-        return Err(format!("no task of {epic_id} targets '{branch}'"));
+        return Ok(EpicLineProof::NotLine(format!(
+            "no task of {epic_id} targets '{branch}'"
+        )));
     }
     let destination = default_work_target(repo_root)
         .map_err(|error| error.to_string())?
         .ok_or("no main or master branch to land the line on")?;
     if logical_target(base_ref) != logical_target(&destination) {
-        return Err(format!(
+        return Ok(EpicLineProof::NotLine(format!(
             "'{branch}' lands on '{}', not '{base_ref}'",
             logical_target(&destination)
-        ));
+        )));
     }
     let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
     walk.push(head_commit.id())
@@ -686,13 +721,13 @@ pub fn check_epic_line(
             .map_err(|error| error.to_string())?
             .parent_count();
         if parents < 2 {
-            return Err(format!(
+            return Ok(EpicLineProof::NotLine(format!(
                 "'{branch}' has a commit made directly on the line ({}); land work on the line by classified pull requests",
                 &oid.to_string()[..9]
-            ));
+            )));
         }
     }
-    Ok(epic_id.to_string())
+    Ok(EpicLineProof::Verified(epic_id.to_string()))
 }
 
 /// Whether a stable target resolves to a real local or remote-tracking branch.

@@ -81,38 +81,57 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
             check_remote_transport(root, remote_transport_args(sub, rest).unwrap())
         }
         "fetch" | "pull" => fetch(root, rest, sub == "pull"),
-        "push" => {
-            let operands = operands(rest, false);
-            let destination = rest
-                .iter()
-                .enumerate()
-                .filter_map(|(i, arg)| {
-                    arg.strip_prefix("--repo=").or_else(|| {
-                        (arg == "--repo")
-                            .then(|| rest.get(i + 1).map(String::as_str))
-                            .flatten()
-                    })
-                })
-                .next_back()
-                .or_else(|| operands.first().map(String::as_str))?;
-            let repo = git2::Repository::discover(root).ok()?;
-            if repo.find_remote(destination).is_err()
-                && (destination == "."
-                    || destination == ".."
-                    || destination.starts_with('/')
-                    || destination.starts_with("./")
-                    || destination.starts_with("../")
-                    || destination.starts_with("file:")
-                    || (destination.contains('/') && !destination.contains(':'))
-                    || !crate::absence::proven_absent(&root.join(destination))
-                        .is_ok_and(|absent| absent))
-            {
-                Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
-            } else {
-                None
-            }
-        }
+        "push" => push(root, rest),
         _ => None,
+    }
+}
+
+fn push(root: &Path, rest: &[String]) -> Option<String> {
+    let operands = operands(rest, false);
+    let destination = rest
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arg)| {
+            arg.strip_prefix("--repo=").or_else(|| {
+                (arg == "--repo")
+                    .then(|| rest.get(i + 1).map(String::as_str))
+                    .flatten()
+            })
+        })
+        .next_back()
+        .or_else(|| operands.first().map(String::as_str))?;
+    let repo = match super::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(reason) => return Some(reason),
+    };
+    let names = match repo.remotes() {
+        Ok(names) => names,
+        Err(error) => return Some(format!("cannot enumerate configured remotes: {error}")),
+    };
+    let configured = names
+        .iter_bytes()
+        .any(|name| name == destination.as_bytes());
+    if configured {
+        if let Err(error) = repo.find_remote(destination) {
+            return Some(format!(
+                "cannot read configured remote {destination}: {error}"
+            ));
+        }
+    }
+    if !configured
+        && (destination == "."
+            || destination == ".."
+            || destination.starts_with('/')
+            || destination.starts_with("./")
+            || destination.starts_with("../")
+            || destination.starts_with("file:")
+            || (destination.contains('/') && !destination.contains(':'))
+            || !crate::absence::proven_absent(&root.join(destination)).is_ok_and(|absent| absent))
+    {
+        Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
+    } else {
+        None
     }
 }
 
@@ -338,9 +357,26 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     {
         return Some("fetch must use the configured remote's own mapping, without a destination ref or --refmap".into());
     }
-    let repo = git2::Repository::discover(root).ok()?;
+    let repo = match super::repo::open(root) {
+        Ok(Some(repo)) => repo,
+        Ok(None) => return None,
+        Err(reason) => return Some(reason),
+    };
+    fetch_from_repository(root, args, pull, &repo, repo.remotes())
+}
+
+fn fetch_from_repository(
+    root: &Path,
+    args: &[String],
+    pull: bool,
+    repo: &git2::Repository,
+    remotes: Result<git2::string_array::StringArray, git2::Error>,
+) -> Option<String> {
     let operands = operands(args, pull);
-    let names = repo.remotes().ok()?;
+    let names = match remotes {
+        Ok(names) => names,
+        Err(error) => return Some(format!("cannot enumerate configured remotes: {error}")),
+    };
     let names = match utf8_remote_names(&names) {
         Ok(names) => names,
         Err(reason) => return Some(reason),
@@ -355,19 +391,18 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         }
     });
     let selected = selected?;
-    let Some(remote) = repo.find_remote(selected).ok().or_else(|| {
-        names.iter().find_map(|name| {
-            repo.find_remote(name)
-                .ok()
-                .filter(|r| r.url().ok() == Some(selected))
-        })
-    }) else {
-        return Some("fetch source is not a configured remote or its URL".into());
+    let remote = match fetch_remote(repo, &names, selected) {
+        Ok(Some(remote)) => remote,
+        Ok(None) => return Some("fetch source is not a configured remote or its URL".into()),
+        Err(reason) => return Some(reason),
     };
     // OS text rule (issue 79): the remote is named in git config keys and
     // arguments below, which need text. A name that is not valid UTF-8
     // refuses instead of passing the fetch unchecked.
-    let remote_name = crate::git::GitName::from_bytes(remote.name_bytes()?);
+    let Some(name_bytes) = remote.name_bytes() else {
+        return Some("cannot read the configured fetch remote's name".into());
+    };
+    let remote_name = crate::git::GitName::from_bytes(name_bytes);
     let Ok(name) = remote_name.rule_text() else {
         return Some(format!(
             "the fetch remote's name is not valid UTF-8 ({}); the operator renames it",
@@ -409,6 +444,52 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
     None
 }
 
+/// Read every configured candidate needed to match a fetch URL. A failed
+/// candidate read never becomes "not this remote" and selects another one.
+fn fetch_remote<'repo>(
+    repo: &'repo git2::Repository,
+    names: &[&str],
+    selected: &str,
+) -> Result<Option<git2::Remote<'repo>>, String> {
+    let read = |name: &str| {
+        repo.find_remote(name)
+            .map_err(|error| format!("cannot read configured remote {name}: {error}"))
+    };
+    if names.contains(&selected) {
+        return read(selected).map(Some);
+    }
+    for name in names {
+        let remote = read(name)?;
+        let url = remote
+            .url()
+            .map_err(|error| format!("cannot read configured remote {name} URL: {error}"))?;
+        if url == selected {
+            return Ok(Some(remote));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether these Git arguments name a proven configured recovery fetch.
+/// Acquisition failures and missing repositories/remotes both withhold this
+/// exception; ordinary fetch checks keep proven absence separately.
+pub(super) fn recovery_args(root: &Path, args: &[String]) -> bool {
+    let Some(("fetch", rest)) = super::git_guard::git_subcommand(args) else {
+        return false;
+    };
+    if rest.len() > 1 {
+        return false;
+    }
+    let Ok(Some(repo)) = super::repo::open(root) else {
+        return false;
+    };
+    let configured = match rest.first() {
+        Some(name) => repo.find_remote(name).is_ok(),
+        None => repo.remotes().is_ok_and(|names| !names.is_empty()),
+    };
+    configured && check(root, args).is_none()
+}
+
 /// A recovery fetch must be a single plain configured-remote fetch.
 #[must_use]
 pub fn recovery_fetch(command: &str, root: &Path) -> bool {
@@ -420,14 +501,123 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
     words.first().is_some_and(|s| s == "git")
         && words.get(1).is_some_and(|s| s == "fetch")
         && words.len() <= 3
-        && words.get(2).is_none_or(|s| {
-            git2::Repository::discover(root).is_ok_and(|r| r.find_remote(s).is_ok())
-        })
-        && check(root, &words[1..]).is_none()
+        && recovery_args(root, &words[1..])
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_unreadable_remote_candidate_is_not_skipped() {
+        let root = repository_with_config(
+            b"[remote \"broken\"]\n\turl = https://example.invalid/broken.git\n\tfetch = +refs/heads/*:refs/remotes/broken/main\n",
+        );
+        let repo = git2::Repository::open(root.path()).unwrap();
+        assert!(repo.find_remote("broken").is_err());
+        let reason = fetch(
+            root.path(),
+            &["https://example.invalid/origin.git".into()],
+            false,
+        )
+        .expect("a failed candidate cannot select another remote");
+        assert!(
+            reason.contains("cannot read configured remote broken"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_refuses_fetch() {
+        let root = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(git2::Repository::discover(root.path()).is_err());
+        let report = r20_report(root.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_withholds_recovery() {
+        let root = repository_with_config(b"");
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+        std::fs::create_dir(root.path().join(".codeflow")).unwrap();
+        std::fs::write(root.path().join(".codeflow/policy.json"), b"{").unwrap();
+        assert!(super::super::landed_policy::load(root.path()).is_err());
+        let report = r20_report(root.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r21_remote_enumeration_error_refuses_fetch() {
+        let root = repository_with_config(b"");
+        let repo = git2::Repository::open(root.path()).unwrap();
+        // Deterministic failure at libgit2's remote-list boundary. Discovery
+        // normally reads the same config first, so a filesystem race is not a fixture.
+        let reason = fetch_from_repository(
+            root.path(),
+            &["origin".into()],
+            false,
+            &repo,
+            Err(git2::Error::from_str("remote enumeration failed")),
+        );
+        assert!(reason.is_some_and(|why| why.contains("remote enumeration failed")));
+    }
+
+    #[test]
+    fn r21_malformed_repository_config_refuses_local_push() {
+        let root = repository_with_config(b"");
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(check(root.path(), &["push".into(), ".".into()]).is_some());
+    }
+
+    #[test]
+    fn r21_unknown_fetch_target_cannot_skip_authority() {
+        let root = repository_with_config(b"");
+        let report = r21_report_command(
+            root.path(),
+            r#"git -C "$R21_UNKNOWN_REPOSITORY" fetch origin"#,
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+        let read_only =
+            r21_report_command(root.path(), r#"git -C "$R21_UNKNOWN_REPOSITORY" status"#);
+        assert!(read_only.violations.is_empty(), "{read_only:?}");
+    }
+
+    #[test]
+    fn r21_recovery_needs_an_existing_configured_remote() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+        git2::Repository::init(root.path()).unwrap();
+        assert!(!recovery_fetch("git fetch", root.path()));
+    }
+
+    #[test]
+    fn r21_absent_repository_and_empty_remote_controls() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(check(root.path(), &["fetch".into()]).is_none());
+        assert!(check(root.path(), &["push".into(), "origin".into()]).is_none());
+        git2::Repository::init(root.path()).unwrap();
+        assert!(check(root.path(), &["fetch".into()]).is_none());
+    }
 
     #[cfg(unix)]
     #[test]
@@ -497,6 +687,10 @@ mod tests {
     }
 
     fn r20_report(root: &Path) -> super::super::git_guard::Evaluation {
+        r21_report_command(root, "git fetch origin")
+    }
+
+    fn r21_report_command(root: &Path, command: &str) -> super::super::git_guard::Evaluation {
         let policy = super::super::policy::GitPolicy::default();
         let context = super::super::git_guard::GuardContext {
             policy: &policy,
@@ -509,7 +703,7 @@ mod tests {
             branch_lookup: None,
             root_checkout: None,
         };
-        super::super::git_guard::evaluate_report_at("git fetch origin", &context, root)
+        super::super::git_guard::evaluate_report_at(command, &context, root)
     }
 
     #[test]

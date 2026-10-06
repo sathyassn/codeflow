@@ -209,7 +209,7 @@ struct Added {
 
 /// The record texts a range's merge rule reads, fetched in one
 /// `git cat-file --batch` rather than a process per record.
-struct Texts(HashMap<String, Vec<u8>>);
+struct Texts(HashMap<String, String>);
 
 impl Texts {
     fn read(git: &Git, wanted: &[(&str, &str)]) -> Result<Texts, IdsError> {
@@ -217,13 +217,22 @@ impl Texts {
             .iter()
             .map(|(rev, path)| format!("{rev}:{path}"))
             .collect();
-        git.blobs(&specs).map(Texts)
+        git.blobs(&specs)?
+            .into_iter()
+            .map(|(key, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| {
+                    IdsError::Git(format!("record {key} is not valid UTF-8: {error}"))
+                })?;
+                Ok((key, text))
+            })
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map(Texts)
     }
 
     /// The `uid` of the record at `path` in `rev`, if it has one.
     fn uid_at(&self, rev: &str, path: &str) -> Option<String> {
         let text = self.0.get(&format!("{rev}:{path}"))?;
-        frontmatter_value(&String::from_utf8_lossy(text), "uid")
+        frontmatter_value(text, "uid")
     }
 }
 
@@ -474,4 +483,25 @@ fn scan(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_record_uid_cache_refuses_undecodable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nuid: caf\xff\n---\n",
+            )],
+        );
+        assert!(super::Texts::read(
+            &super::Git::new(dir.path()),
+            &[("HEAD", "project-management/tasks/TSK-001.md")]
+        )
+        .is_err());
+    }
 }

@@ -80,9 +80,15 @@ pub fn copies_at(git: &Git, rev: &str) -> Result<Vec<Copy>, IdsError> {
     let blobs: Vec<String> = copies.iter().map(|copy| copy.blob.clone()).collect();
     let texts = git.blobs(&blobs)?;
     for copy in &mut copies {
-        copy.uid = texts
-            .get(&copy.blob)
-            .and_then(|bytes| frontmatter_value(&String::from_utf8_lossy(bytes), "uid"));
+        copy.uid = match texts.get(&copy.blob) {
+            Some(bytes) => {
+                let text = std::str::from_utf8(bytes).map_err(|error| {
+                    IdsError::Git(format!("record {} is not valid UTF-8: {error}", copy.path))
+                })?;
+                frontmatter_value(text, "uid")
+            }
+            None => None,
+        };
     }
     Ok(copies)
 }
@@ -618,6 +624,20 @@ fn complete_history(git: &Git) -> Result<(), IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_record_inventory_refuses_undecodable_uid() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        crate::git::add_commit(
+            &repo,
+            &[(
+                b"project-management/tasks/TSK-001.md",
+                b"---\nid: TSK-001\nuid: caf\xff\n---\n",
+            )],
+        );
+        assert!(super::copies_at(&super::Git::new(dir.path()), "HEAD").is_err());
+    }
+
     #[test]
     fn r20_registry_failed_added_blob_is_not_unlanded() {
         let root = tempfile::tempdir().unwrap();

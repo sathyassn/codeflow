@@ -333,7 +333,11 @@ pub fn run(args: &CiArgs) -> i32 {
     let base_sha = match resolve_base(&root, &base_candidates) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!("codeflow ci: {error}");
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("cannot resolve the base: git refused it: {error}; nothing was verified"),
+                codeflow_core::remedy::CI_BASE_REFUSED.remedy(),
+            );
+            eprintln!("{}", finding.line("codeflow ci", "error"));
             return 2;
         }
     };
@@ -753,19 +757,12 @@ fn work_checks<'a>(
     // branch. The scope is asked once per run, under any release pattern
     // the default target's policy names, and only for a range that
     // resolves; the acceptance check asks it for that range anyway.
-    let release = match range_parts
+    let tracks = match range_parts
         .as_ref()
-        .map(|range| {
-            if !range_tracks_work(root, range)? {
-                return Ok(None);
-            }
-            acceptance::release_scope(root, names).map_err(str::to_string)
-        })
+        .map(|range| range_tracks_work(root, range))
         .transpose()
     {
-        Ok(value) => value
-            .flatten()
-            .map(|(_, scope)| (scope.head, scope.release())),
+        Ok(tracks) => tracks.unwrap_or(false),
         Err(error) => {
             tagged.push(TaggedViolation {
                 sha: None,
@@ -773,6 +770,20 @@ fn work_checks<'a>(
             });
             return false;
         }
+    };
+    let release = if tracks {
+        match acceptance::release_scope(root, names) {
+            Ok(scope) => scope.map(|(_, scope)| (scope.head, scope.release())),
+            Err(error) => {
+                tagged.push(TaggedViolation {
+                    sha: None,
+                    violation: acceptance::scope_refusal(error),
+                });
+                return false;
+            }
+        }
+    } else {
+        None
     };
     let release_head = release.is_some_and(|(head, _)| head);
     let release_range = release.is_some_and(|(_, range)| range);
@@ -870,28 +881,40 @@ fn record_checks(
             return;
         }
     };
-    let brought = match base
-        .map(|base| {
-            let range = classification::Range {
-                base: &base,
-                head,
-                target: line_target,
-            };
-            if !range_tracks_work(root, &range)? {
-                return Ok(None);
+    let brought = if let Some(base) = base {
+        let range = classification::Range {
+            base: &base,
+            head,
+            target: line_target,
+        };
+        let tracks = match range_tracks_work(root, &range) {
+            Ok(tracks) => tracks,
+            Err(error) => {
+                tagged.push(TaggedViolation {
+                    sha: None,
+                    violation: tracking_state_violation(error),
+                });
+                return;
             }
-            acceptance::brought(root, &range, names)
-        })
-        .transpose()
-    {
-        Ok(value) => value.flatten(),
-        Err(error) => {
-            tagged.push(TaggedViolation {
-                sha: None,
-                violation: tracking_state_violation(error),
-            });
-            return;
+        };
+        if tracks {
+            match acceptance::brought(root, &range, names) {
+                Ok(brought) => brought,
+                Err(error) => {
+                    tagged.push(TaggedViolation {
+                        sha: None,
+                        violation: work_records::block(format!(
+                            "cannot read the record range: {error}"
+                        )),
+                    });
+                    return;
+                }
+            }
+        } else {
+            None
         }
+    } else {
+        None
     };
     work_records::dispatch(
         root,
@@ -947,8 +970,13 @@ fn verified_epic_line(
     }
     let sha = resolve_base(root, base_candidates)?
         .ok_or_else(|| format!("cannot prove epic line {branch}: no base revision resolves"))?;
-    codeflow_core::workgraph::check_epic_line(root, branch, target, &sha, head)
-        .map(|_| true)
+    codeflow_core::workgraph::work_start::epic_line_proof(root, branch, target, &sha, head)
+        .map(|proof| {
+            matches!(
+                proof,
+                codeflow_core::workgraph::work_start::EpicLineProof::Verified(_)
+            )
+        })
         .map_err(|error| format!("cannot prove epic line {branch}: {error}"))
 }
 
@@ -2320,7 +2348,8 @@ fn parse_batch(stdout: &[u8], queried: &[&str]) -> Result<BTreeMap<String, Vec<u
             .iter()
             .position(|byte| *byte == b'\n')
             .ok_or("git cat-file: truncated output")?;
-        let header = String::from_utf8_lossy(&rest[..end]).into_owned();
+        let header = std::str::from_utf8(&rest[..end])
+            .map_err(|error| format!("git cat-file: header is not valid UTF-8: {error}"))?;
         rest = &rest[end + 1..];
         if header.ends_with(" missing") || header.ends_with(" ambiguous") {
             return Err(format!("git cat-file: cannot read blob {blob}: {header}"));
@@ -2708,6 +2737,11 @@ mod tests {
             "main"
         )
         .is_err());
+    }
+
+    #[test]
+    fn r21_batch_header_refuses_non_utf8() {
+        assert!(super::parse_batch(b"\xff blob 1\nx\n", &["blob"]).is_err());
     }
 
     #[test]

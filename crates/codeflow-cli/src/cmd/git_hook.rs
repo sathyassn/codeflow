@@ -138,7 +138,14 @@ pub fn run(args: &GitHookArgs) -> i32 {
         StageName::PrePush => {
             let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,
-                Err(error) => return refuse_hook("pre-push", &error),
+                Err(error) => {
+                    let finding = codeflow_core::remedy::Finding::new(
+                        format!("could not read hook stdin: {error}; operation blocked"),
+                        codeflow_core::remedy::HOOK_STDIN_UNREAD.remedy(),
+                    );
+                    eprintln!("{}", finding.line("codeflow pre-push", "error"));
+                    return 1;
+                }
             };
             let refs = git_hook::parse_push_refs(&stdin);
             let mut result = git_hook::pre_push(
@@ -230,7 +237,9 @@ fn sync_pending_ids(
             ));
         }
         Err(IdsError::Offline(error)) => report.notes.push(codeflow_core::remedy::Finding::new(
-            format!("id authority is offline, reservations stay pending: {error}"),
+            format!(
+                "ids sync skipped, reservations stay pending: id authority is offline: {error}"
+            ),
             codeflow_core::remedy::IDS_SYNC_FAILED.remedy(),
         )),
         Err(error) => report

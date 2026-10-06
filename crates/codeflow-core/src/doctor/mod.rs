@@ -2749,7 +2749,8 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 /// and its origin, a kept PR template's pending decision, and the release
 /// backend with any release tool that owns versions. WARN while a decision
 /// is pending, while policy provenance is unreadable, or while the release
-/// backend and a detected tool disagree; FAIL on an invalid backend.
+/// backend and a detected tool disagree; FAIL on unreadable policy or an
+/// invalid backend.
 fn check_adopter_fit(opts: &Options) -> CheckResult {
     use crate::hooks::adoption;
     let start = Instant::now();
@@ -2761,7 +2762,13 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
             return CheckResult {
                 name: "adopter-fit".into(),
                 status: Status::Fail,
-                message: format!("cannot read policy: {error}"),
+                message: format!(
+                    "cannot read policy: {error}\n      clear it: {}",
+                    remedy::DOCTOR_POLICY_DECISION.with(&[(
+                        "decision",
+                        "repair its syntax and values so the policy can be read",
+                    )])
+                ),
                 duration: start.elapsed(),
             }
         }
@@ -2933,7 +2940,10 @@ fn check_id_registry(opts: &Options) -> CheckResult {
         Err(error) => {
             return result(
                 Status::Fail,
-                format!("cannot read durable-work tracking state: {error}"),
+                format!(
+                    "durable-work tracking cannot be determined: {error}\n      clear it: {}",
+                    remedy::DOCTOR_TRACKING_UNKNOWN.remedy()
+                ),
             )
         }
     }
@@ -3563,10 +3573,13 @@ mod tests {
         assert!(
             result
                 .message
-                .starts_with("cannot read durable-work tracking state:"),
+                .starts_with("durable-work tracking cannot be determined:"),
             "{}",
             result.message
         );
+        assert!(result
+            .message
+            .contains("clear it: repair .codeflow/project.toml"));
     }
 
     #[test]

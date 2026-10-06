@@ -140,7 +140,11 @@ mod tests {
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("policy.json"), "{\"schema_version\": 1}\n").unwrap();
         std::fs::write(cf.join("manifest.json"), "{\"files\": {}}\n").unwrap();
-        std::fs::write(cf.join("project.toml"), "tier = \"standard\"\n").unwrap();
+        std::fs::write(
+            cf.join("project.toml"),
+            "schema_version = 1\ntier = \"standard\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = false\ngit_hooks = \"unwired\"\npermission_preset = \"acceptEdits\"\n",
+        )
+        .unwrap();
         let opts = Options {
             project_dir: dir.path().to_string_lossy().into_owned(),
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
@@ -234,6 +238,23 @@ mod tests {
             out.contains("permissions: file permissions correct"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn r21_incomplete_existing_project_refuses() {
+        let (dir, opts) = initialized_project();
+        std::fs::write(
+            dir.path().join(".codeflow/project.toml"),
+            "tier = \"standard\"\n",
+        )
+        .unwrap();
+        let (code, out) = run_to_string(&args(None, false), &opts);
+        assert_eq!(
+            code, 1,
+            "incomplete existing state cannot be healthy: {out}"
+        );
+        assert!(out.contains("cannot read existing CodeFlow state"), "{out}");
+        assert!(out.contains("project.toml"), "{out}");
     }
 
     #[test]

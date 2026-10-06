@@ -19,9 +19,10 @@ pub struct LandedPolicy {
 /// Read the authority without fetching or changing repository state.
 ///
 /// # Errors
-/// A populated tracking namespace must contain every required authority ref.
+/// Repository metadata or policy authority cannot be read. A populated
+/// tracking namespace must contain every required authority ref.
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
-    let Ok(repo) = Repository::discover(root) else {
+    let Some(repo) = super::repo::open(root)? else {
         return working(root, "working copy (unborn HEAD; no remote)");
     };
     let remotes = repo.remotes().map_err(|e| e.to_string())?;
@@ -393,6 +394,16 @@ pub fn diagnostic(root: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r21_landed_policy_discovery_error_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(super::load(root.path()).is_ok());
+        git2::Repository::init(root.path()).unwrap();
+        assert!(super::load(root.path()).is_ok());
+        std::fs::write(root.path().join(".git/config"), b"[broken\n").unwrap();
+        assert!(super::load(root.path()).is_err());
+    }
+
     use super::*;
 
     /// A repository with one commit, the remote `origin` and `extra` bytes

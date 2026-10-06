@@ -88,7 +88,16 @@ impl Ledger {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let blobs = git.blobs(&added)?;
+        let blobs = git
+            .blobs(&added)?
+            .into_iter()
+            .map(|(oid, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| {
+                    IdsError::Git(format!("registry blob {oid} is not valid UTF-8: {error}"))
+                })?;
+                Ok((oid, text))
+            })
+            .collect::<Result<std::collections::HashMap<_, _>, IdsError>>()?;
         let mut ledger = Ledger {
             tip: Some(tip.clone()),
             commits: commits.len(),
@@ -125,7 +134,7 @@ impl Ledger {
     /// The bookkeeping never depends on the verdict: a number a broken
     /// commit introduced (a counterfeit restore, a merge tree) stays used,
     /// so it can never be issued again (R-7, R-9).
-    fn apply(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
+    fn apply(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, String>) {
         let fresh: Vec<&Change> = commit
             .changes
             .iter()
@@ -135,7 +144,7 @@ impl Ledger {
         for change in fresh {
             let entry = blobs
                 .get(&change.blob)
-                .and_then(|bytes| Entry::parse(&change.path, &String::from_utf8_lossy(bytes)).ok());
+                .and_then(|text| Entry::parse(&change.path, text).ok());
             self.first.insert(
                 change.path.clone(),
                 FirstAdd {
@@ -147,7 +156,7 @@ impl Ledger {
         }
     }
 
-    fn judge(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
+    fn judge(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, String>) {
         let sha = commit.sha.as_str();
         if commit.parents > 1 {
             self.violations.push(Finding::new(
@@ -199,7 +208,7 @@ impl Ledger {
         &mut self,
         sha: &str,
         change: &Change,
-        blobs: &std::collections::HashMap<String, Vec<u8>>,
+        blobs: &std::collections::HashMap<String, String>,
     ) {
         let path = change.path.as_str();
         if RegId::from_registry_path(path).is_none() {
@@ -217,9 +226,9 @@ impl Ledger {
         }
         let text = blobs
             .get(&change.blob)
-            .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+            .map(String::as_str)
             .unwrap_or_default();
-        if let Err(problems) = Entry::parse(path, &text) {
+        if let Err(problems) = Entry::parse(path, text) {
             for problem in problems {
                 self.violations.push(Finding::new(sha, problem));
             }
@@ -230,7 +239,7 @@ impl Ledger {
         &self,
         commit: &RawCommit,
         named: &BTreeSet<&str>,
-        blobs: &std::collections::HashMap<String, Vec<u8>>,
+        blobs: &std::collections::HashMap<String, String>,
     ) -> Vec<String> {
         let mut problems = Vec::new();
         for change in &commit.changes {
@@ -257,9 +266,9 @@ impl Ledger {
             if change.blob != first.blob {
                 let text = blobs
                     .get(&change.blob)
-                    .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+                    .map(String::as_str)
                     .unwrap_or_default();
-                let rebinds = match (Entry::parse(path, &text).ok(), first.entry.as_ref()) {
+                let rebinds = match (Entry::parse(path, text).ok(), first.entry.as_ref()) {
                     (Some(new), Some(old)) => new.uid != old.uid,
                     _ => false,
                 };
@@ -439,4 +448,34 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         });
     }
     Ok(commits)
+}
+
+#[cfg(test)]
+mod r21_tests {
+    #[test]
+    fn r21_registry_refuses_undecodable_issuer() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let entry = super::Entry::issued(
+            super::RegId::canonical(super::Kind::Tsk, 1),
+            super::super::entry::new_uid(),
+            "task",
+            "RAW_ISSUER",
+            "main",
+        );
+        let mut bytes = entry.render().into_bytes();
+        let at = bytes
+            .windows(b"RAW_ISSUER".len())
+            .position(|part| part == b"RAW_ISSUER")
+            .unwrap();
+        bytes[at] = 0xff;
+        crate::git::add_commit(&repo, &[(b"ids/TSK/001.toml", &bytes)]);
+        match super::Ledger::read(&super::Git::new(dir.path()), "HEAD") {
+            Err(_) => {}
+            Ok(ledger) => assert!(
+                !ledger.violations.is_empty(),
+                "undecodable issuer must not be a valid registry entry"
+            ),
+        }
+    }
 }

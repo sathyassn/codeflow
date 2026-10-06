@@ -240,7 +240,13 @@ fn run_ci_ranges(
     }
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        let judged = judged_by(root, destination, steps)?;
+        let judged = match judged_by(root, destination, steps) {
+            Ok(judged) => judged,
+            Err(error) => {
+                refuse_authority(root, r, branch, destination, report, &error);
+                continue;
+            }
+        };
         let (policy, judging) = match &judged {
             Judged::Target {
                 target,
@@ -329,6 +335,33 @@ fn run_ci_ranges(
         }
     }
     Ok(())
+}
+
+fn refuse_authority(
+    root: &Path,
+    pushed: &PushRef,
+    branch: &str,
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+    error: &str,
+) {
+    // The scope reader retains the precise destination/fetch remedy.
+    // Both readers share cached acquisition results, so this never retries.
+    let first = report.violations.len();
+    if matches!(
+        release_base(root, pushed, branch, destination, report),
+        Scoped::Refused
+    ) {
+        for violation in &mut report.violations[first..] {
+            violation.message = format!("cannot prove push inputs: {}", violation.message);
+        }
+    } else {
+        report.violations.push(Violation::always_blocking(
+            "git.policy_authority",
+            format!("cannot prove push inputs: cannot prove the authority for '{branch}': {error}"),
+            "repair the destination or policy named above, then push again",
+        ));
+    }
 }
 
 /// Where a pushed branch's commit checks start, under the candidate
@@ -793,7 +826,7 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
         return Ok(None);
     };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
-    Ok((url != Some(upstream)).then(|| format!("the push goes to {}, not the configured upstream {upstream}; a pull request may target upstream", url.unwrap_or("an unnamed destination"))))
+    Ok((url != Some(upstream)).then(|| format!("the push goes to {}, not the configured upstream {upstream}; a pull request may target the upstream", url.unwrap_or("an unnamed destination"))))
 }
 
 /// What judges every pushed branch: the policy at the destination default

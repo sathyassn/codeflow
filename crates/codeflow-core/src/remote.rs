@@ -407,10 +407,11 @@ impl GithubProvider {
                 .wait_with_output()
                 .map_err(|e| format!("gh: {e}"))?,
         };
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if output.status.success() {
-            Ok(stdout)
+            String::from_utf8(output.stdout)
+                .map_err(|error| format!("gh output is not valid UTF-8: {error}"))
         } else {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(format!("{stdout}{stderr}").trim().to_string())
         }
@@ -620,6 +621,36 @@ impl RemoteProvider for GithubProvider {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r21_invalid_utf8_repository_identity_refuses_without_api_request() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("gh");
+        std::fs::write(
+            &shim,
+            r#"#!/bin/sh
+if [ "$1" = "repo" ]; then
+  printf '{"nameWithOwner":"owner/caf'
+  printf '\377'
+  printf '","isPrivate":false}'
+  exit 0
+fi
+: > api-called
+printf '{}'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        wait_until_executable(&shim);
+        let policy = write_policy(dir.path(), r#"["main"]"#);
+        let plan = ProtectionPlan::from_policy_file(&policy).unwrap();
+        let report = GithubProvider::with_gh(&shim, dir.path()).apply(&plan);
+        assert_eq!(report.status, ProtectStatus::Degraded);
+        assert!(!dir.path().join("api-called").exists());
+        assert!(report.lines.iter().any(|line| line.contains("UTF-8")));
+    }
 
     #[cfg(unix)]
     #[test]
