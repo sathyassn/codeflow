@@ -1,0 +1,11 @@
+id = "TSK-250"
+uid = "7ee76dec-aad7-4242-8a07-700cde864452"
+kind = "TSK"
+title = "Work start accepts a reviewed unlanded predecessor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-06T17:59:42Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
