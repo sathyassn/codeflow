@@ -1205,15 +1205,20 @@ fn note_lowered_security_levels(
             .as_ref()
             .and_then(|raw| raw.pointer(&pointer))
             .and_then(serde_json::Value::as_str);
-        match now {
-            None => println!(
-                "codeflow ci: note: this change removes git.{key} (it is {was} on the target); the security review fails closed without it once the change lands"
+        let text = match now {
+            None => format!(
+                "this change removes git.{key} (it is {was} on the target); the security review fails closed without it once the change lands"
             ),
-            Some(now) if security_rank(now) < security_rank(was) => println!(
-                "codeflow ci: note: this change lowers git.{key} from {was} to {now}; the security review keeps the target's {was} until the change lands"
+            Some(now) if security_rank(now) < security_rank(was) => format!(
+                "this change lowers git.{key} from {was} to {now}; the security review keeps the target's {was} until the change lands"
             ),
-            Some(_) => {}
-        }
+            Some(_) => continue,
+        };
+        let finding = codeflow_core::remedy::Finding::new(
+            text,
+            codeflow_core::remedy::CI_SECURITY_LEVEL_LOWERED.with(&[("key", key), ("was", was)]),
+        );
+        println!("{}", finding.line("codeflow ci", "note"));
     }
 }
 
@@ -1242,9 +1247,11 @@ fn note_changed_setup_hook(root: &Path, base: &str, head: &str) {
         (Some(a), Some(b)) if a != b => "edits",
         _ => return,
     };
-    println!(
-        "codeflow ci: note: this change {verb} {HOOK}, which runs in the gates job before `codeflow test` with the gate's authority; review it as you would the CI file"
+    let finding = codeflow_core::remedy::Finding::new(
+        format!("this change {verb} {HOOK}, which runs in the gates job before `codeflow test` with the gate's authority; review it as you would the CI file"),
+        codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
     );
+    println!("{}", finding.line("codeflow ci", "note"));
 }
 
 /// Report the ruleset actually enforced: the loader falls back to the

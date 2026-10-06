@@ -91,12 +91,20 @@ fn a_head_that_lowers_a_security_level_is_named() {
     let root = dir.path();
     write(root, POLICY, r#"{"git": {"security_review": "off"}}"#);
     commit(root, "chore: relax the security review");
-    let text = said(&ci(root));
+    let out = ci(root);
+    let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         text.contains("this change lowers git.security_review from block to off"),
         "{text}"
     );
     assert!(text.contains("this change removes git.dep_audit"), "{text}");
+    for (key, was) in [("security_review", "block"), ("dep_audit", "warn")] {
+        assert!(
+            text.contains(&format!("clear it: restore git.{key} to {was} in {POLICY}")),
+            "{text}"
+        );
+    }
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("this change"));
 
     let dir = fixture(Some(
         r#"{"git": {"security_review": "warn", "dep_audit": "warn"}}"#,
@@ -137,11 +145,17 @@ fn a_head_that_changes_the_setup_hook_is_named() {
     assert!(!text.contains("ci-setup.sh"), "{text}");
     write(root, ".codeflow/ci-setup.sh", "export X=1\n");
     commit(root, "ci: add the setup hook");
-    let text = said(&ci(root));
+    let out = ci(root);
+    let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         text.contains("this change adds .codeflow/ci-setup.sh"),
         "{text}"
     );
+    assert!(
+        text.contains("clear it: restore .codeflow/ci-setup.sh to its target state"),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("this change adds"));
 }
 
 #[test]

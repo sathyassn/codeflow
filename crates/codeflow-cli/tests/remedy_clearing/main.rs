@@ -155,6 +155,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_RANGE_UNREADABLE", Runs),
     ("CI_BRANCH_UNRESOLVED", Runs),
     ("CI_BODY_UNSUPPLIED", Runs),
+    ("CI_SECURITY_LEVEL_LOWERED", Runs),
+    ("CI_SETUP_HOOK_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
@@ -1031,6 +1033,87 @@ fn clears_ci_body_unsupplied() {
 // ---------------------------------------------------------------------------
 // `codeflow ci` itself.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn clears_ci_security_level_lowered() {
+    const POLICY: &str = ".codeflow/policy.json";
+    let original = r#"{"git":{"security_review":"block","dep_audit":"warn"}}"#;
+    for changed in [Some(r#"{"git":{"security_review":"off"}}"#), None] {
+        let dir = ci_repo(original);
+        let root = dir.path();
+        if let Some(changed) = changed {
+            write(root, POLICY, changed);
+        } else {
+            std::fs::remove_file(root.join(POLICY)).unwrap();
+        }
+        git(root, &["add", POLICY]);
+        git(
+            root,
+            &["commit", "-q", "-m", "chore: change security levels"],
+        );
+        let before = ci(root, &[]);
+        for (key, was) in [("security_review", "block"), ("dep_audit", "warn")] {
+            let verb = if changed.is_some() && key == "security_review" {
+                "lowers"
+            } else {
+                "removes"
+            };
+            let printed = block(&before, &format!("this change {verb} git.{key}"));
+            assert_prints_row(printed, "CI_SECURITY_LEVEL_LOWERED");
+            assert!(
+                printed.contains(&format!("restore git.{key} to {was}")),
+                "{printed}"
+            );
+        }
+        // Perform the printed edit and include it in the range CI judges.
+        write(root, POLICY, original);
+        git(root, &["add", POLICY]);
+        git(
+            root,
+            &["commit", "-q", "-m", "chore: restore security levels"],
+        );
+        let after = ci(root, &[]);
+        assert!(!after.contains("this change lowers git."), "{after}");
+        assert!(!after.contains("this change removes git."), "{after}");
+    }
+}
+
+#[test]
+fn clears_ci_setup_hook_changed() {
+    const HOOK: &str = ".codeflow/ci-setup.sh";
+    for verb in ["adds", "edits", "removes"] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if verb != "adds" {
+            git(root, &["switch", "-q", "main"]);
+            write(root, HOOK, "export X=1\n");
+            git(root, &["add", HOOK]);
+            git(root, &["commit", "-q", "-m", "ci: seed the setup hook"]);
+            git(root, &["switch", "-q", "feat/x"]);
+            git(root, &["merge", "--ff-only", "main"]);
+        }
+        if verb == "removes" {
+            std::fs::remove_file(root.join(HOOK)).unwrap();
+        } else {
+            write(root, HOOK, "export X=2\n");
+        }
+        git(root, &["add", HOOK]);
+        git(root, &["commit", "-q", "-m", "ci: change the setup hook"]);
+        let before = ci(root, &[]);
+        let finding = format!("this change {verb} {HOOK}");
+        assert_prints_row(block(&before, &finding), "CI_SETUP_HOOK_CHANGED");
+        // Restore the target state, including absence for a new hook.
+        if verb == "adds" {
+            std::fs::remove_file(root.join(HOOK)).unwrap();
+        } else {
+            write(root, HOOK, "export X=1\n");
+        }
+        git(root, &["add", HOOK]);
+        git(root, &["commit", "-q", "-m", "ci: restore the setup hook"]);
+        let after = ci(root, &[]);
+        assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
 
 #[test]
 fn clears_ci_base_unresolved() {

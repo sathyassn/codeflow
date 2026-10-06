@@ -431,6 +431,12 @@ catalog! {
     /// A pull request whose body the platform did not supply.
     CI_BODY_UNSUPPLIED = Step::Codeflow("codeflow ci"),
         "give the body to the check: `codeflow ci --pr-body-file <body.md>`, or set CODEFLOW_PR_BODY in the pipeline";
+    /// A change that lowers or removes a target security level.
+    CI_SECURITY_LEVEL_LOWERED = Step::Edit(".codeflow/policy.json"),
+        "restore git.{key} to {was} in .codeflow/policy.json, or have the operator review the policy change as the target's own before landing it";
+    /// A project setup hook change that runs with the gate's authority.
+    CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
+        "restore .codeflow/ci-setup.sh to its target state, or have the operator review the hook change as they would the CI file before landing it";
     /// A codeflow build whose embedded scaffold manifest does not load.
     SCAFFOLD_MANIFEST_BROKEN = Step::Codeflow("codeflow doctor"),
         "this codeflow build is damaged: install a release build, then `codeflow doctor` reports its managed files again";
