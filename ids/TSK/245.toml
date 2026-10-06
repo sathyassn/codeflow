@@ -1,0 +1,11 @@
+id = "TSK-245"
+uid = "9470e762-efa8-4fb9-bc15-198cf0ece171"
+kind = "TSK"
+title = "Keep CI green after new dependency advisories and a test clone race"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-06T04:39:07Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
