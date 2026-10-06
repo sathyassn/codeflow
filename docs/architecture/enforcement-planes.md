@@ -352,7 +352,8 @@ What stays open, by harness and platform:
   entries, following links to directories; in a larger one, a link to a
   startup file past that point is copied unseen, and a write through the
   copy in the same call is not refused, since the copy does not exist
-  when the call is judged. A home whose startup files are
+  when the call is judged. The guards do not read archive contents, so an archive
+  extracted outside the home can carry such a link in the same way. A home whose startup files are
   themselves links, as dotfile managers make them, sees `cp -a ~/.zshrc
   backup` refused; `cp ~/.zshrc backup` follows the link and passes.
 - **Claude Code.** The generated denies name the default locations. A

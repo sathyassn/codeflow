@@ -1591,25 +1591,23 @@ fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
             let mut letters = &a[1..];
             // `--target-directory` in any prefix GNU accepts, with the
             // value attached or next (review round six: `--target-dir=`).
-            let names_target = matches!(name, "cp" | "mv" | "ln" | "install")
-                && long_prefix(a, "target-directory");
-            if names_target || a == "-t" {
+            let gnu_target = matches!(name, "cp" | "mv" | "ln" | "install");
+            let names_target = gnu_target && long_prefix(a, "target-directory");
+            if names_target || (gnu_target && a == "-t") {
                 target = match a.split_once('=') {
                     Some((_, dir)) => Some(dir.to_string()),
                     None => iter.next().cloned(),
                 };
             } else if copy_value_option(name, a) {
                 iter.next();
-            } else if !a.starts_with("--") && matches!(name, "cp" | "mv" | "ln" | "install") {
+            } else if !a.starts_with("--") {
                 // A short cluster: the first option letter that takes a
-                // value takes the rest of the word, or the next word
-                // (`-t"$HOME"`, `-ft DIR`; review round three).
+                // value takes the rest of the word, or the next word, by
+                // each program's own table (`-t"$HOME"`, `-ft DIR`, rsync
+                // `-eL`; review rounds three and nine).
                 for (at, letter) in a[1..].char_indices() {
                     let value = a[1 + at + letter.len_utf8()..].to_string();
-                    let takes = letter == 'S'
-                        || letter == 't'
-                        || (name == "install" && matches!(letter, 'm' | 'o' | 'g' | 'l'));
-                    if !takes {
+                    if !short_takes_value(name, letter) {
                         continue;
                     }
                     letters = &a[1..=at];
@@ -1719,6 +1717,22 @@ impl LinkFlags {
             "install" => self.symbolic |= long("link"),
             _ => {}
         }
+    }
+}
+
+/// Whether a copier's short option letter takes a value, attached or in
+/// the next word. `-t` names the target directory only for the GNU
+/// copiers; rsync's `-t` keeps times (review round nine).
+fn short_takes_value(name: &str, letter: char) -> bool {
+    match name {
+        "cp" | "mv" | "ln" => matches!(letter, 'S' | 't'),
+        "install" => matches!(letter, 'S' | 't' | 'm' | 'o' | 'g' | 'l'),
+        "rsync" => matches!(letter, 'e' | 'f' | 'B' | 'T' | 'M' | '@'),
+        "scp" => matches!(
+            letter,
+            'i' | 'o' | 'P' | 'F' | 'c' | 'l' | 'S' | 'J' | 'D' | 'X'
+        ),
+        _ => false,
     }
 }
 

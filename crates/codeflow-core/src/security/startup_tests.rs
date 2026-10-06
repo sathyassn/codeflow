@@ -809,3 +809,34 @@ fn directory_links_in_copied_trees_are_followed() {
     assert!(refused(&f.judge("cp -P homelink out/")));
     assert!(!refused(&f.judge("cp -L -r homelink/work out/")));
 }
+
+/// Review round nine: rsync's option values and its `-t` are read by its
+/// own table, so a value never reads as a dereference flag.
+#[cfg(unix)]
+#[test]
+fn rsync_option_values_are_not_flags() {
+    let f = Fixture::new();
+    for dir in ["out", "links", "nested-links", "sub"] {
+        std::fs::create_dir_all(f.project.join(dir)).unwrap();
+    }
+    std::fs::write(f.project.join("sub/.envrc"), "x\n").unwrap();
+    std::os::unix::fs::symlink(f.home.join(".zshrc"), f.project.join("links/one")).unwrap();
+    std::os::unix::fs::symlink("../sub/.envrc", f.project.join("nested-links/one")).unwrap();
+    for command in [
+        "rsync -al -eL links/ out/",
+        "rsync -al -e L links/ out/",
+        "rsync -al --rsh=L links/ out/",
+        "rsync -aleL nested-links/ out/",
+        "rsync -a -t links/ out-time/",
+        "rsync -a -fL links/ out/",
+    ] {
+        assert!(refused(&f.judge(command)), "allowed: {command}");
+    }
+    for command in [
+        "rsync -aL links/ out/",
+        "rsync -a -e ssh notes.txt out/",
+        "rsync -at notes.txt out/",
+    ] {
+        assert!(!refused(&f.judge(command)), "refused: {command}");
+    }
+}
