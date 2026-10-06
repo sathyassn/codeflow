@@ -15,11 +15,11 @@ only) leaves out Testing; a light range (only Markdown under `docs/` or
 `project-management/`, outside every contract surface) needs only Summary
 and Changes. The rest appear only when their condition holds.
 
-Every PR names its work on a `Task:` line: `TSK-NNN` or `EPC-NNN` where
-durable tracking is active (judged from the tracking state, not the
-installed tier), and a non-empty unit name where it is not. It names its
-task, or its epic for the breakdown PR and the PR to main. A missing, empty,
-malformed, repeated or mismatched `Task:` line is refused.
+Every PR names its work on one `Task:` line. With durable tracking (judged
+from tracking state, not tier), use `TSK-NNN`, or `EPC-NNN` for the breakdown
+PR and the PR to main; a planning amendment names every epic it changes,
+`Task: EPC-001, EPC-002`. Without tracking, use a non-empty unit name.
+A missing, empty, malformed, repeated or mismatched `Task:` line is refused.
 
 | Section | When | Content |
 |---|---|---|

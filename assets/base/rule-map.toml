@@ -373,7 +373,7 @@ key = "pr"
 group = "delivery"
 tiers = ["full"]
 when = "open the PR"
-action = "one PR per task: code, tests, docs, criteria changes (a reason per removal), the acceptance completion last; update the truth it makes stale; checks follow effects, never labels; `Task: TSK-NNN` (the epic for the breakdown PR and the PR to main); the PR stays draft until its required evidence exists"
+action = "one PR per task: code, tests, docs, criteria changes (a reason per removal), the acceptance completion last; update the truth it makes stale; checks follow effects, never labels; `Task: TSK-NNN` (the epics for planning PRs and the PR to main); the PR stays draft until its required evidence exists"
 see = [
   { target = "cf-ship", note = "steps 2 to 4", must_open = true, reason = "truth updates and release impact" },
   { target = "cf-ship/references/pr-evidence.md", must_open = true, reason = "the body `codeflow ci` reads" },
