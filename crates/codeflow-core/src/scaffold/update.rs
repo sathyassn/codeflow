@@ -721,11 +721,12 @@ fn update_entry(
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);
+    let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
 
     match entry.ownership {
         Ownership::Managed => {
-            let current = if dest_path.exists() {
+            let current = if exists {
                 Some(
                     std::fs::read_to_string(&dest_path)
                         .map_err(|e| ScaffoldError::io(&dest_path, e))?,
@@ -835,7 +836,7 @@ fn update_entry(
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
             RegionFormat::Json => {
-                if !dest_path.exists() {
+                if !exists {
                     write_dest(root, entry, &rendered)?;
                     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                     Baseline::write(root, &entry.dest, &rendered)?;
@@ -867,7 +868,7 @@ fn update_entry(
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
                 record(installed, entry, hash::sha256_hex(block.as_bytes()));
                 Baseline::write(root, &entry.dest, &block)?;
-                if !dest_path.exists() {
+                if !exists {
                     let content = if region::extract_block(&rendered, format).is_some() {
                         rendered.clone()
                     } else {
@@ -907,7 +908,7 @@ fn update_entry(
             }
         },
         Ownership::UserOwned => {
-            if !dest_path.exists() {
+            if !exists {
                 write_dest(root, entry, &rendered)?;
                 record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
                 Baseline::write(root, &entry.dest, &rendered)?;

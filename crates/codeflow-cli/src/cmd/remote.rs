@@ -3,7 +3,7 @@
 
 use anyhow::Context;
 use clap::{Args, Subcommand};
-use codeflow_core::registry;
+
 use codeflow_core::remote::{provider_for, ProtectionPlan};
 
 /// Arguments for `codeflow remote`.
@@ -37,13 +37,13 @@ pub enum RemoteCommand {
 ///
 /// # Errors
 ///
-/// Returns an error only for environment problems (no repo, gh missing for
-/// the github provider outside dry-run).
+/// Returns an error for unreadable repository, policy or tracking state, or
+/// environment problems such as a missing gh outside dry-run.
 pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     let RemoteCommand::Protect { provider, dry_run } = &args.command;
 
     let cwd = std::env::current_dir().context("cannot resolve current directory")?;
-    let root = registry::find_repo_root(&cwd).unwrap_or(cwd);
+    let root = super::repo_root_from(&cwd).map_err(anyhow::Error::msg)?;
     let policy_path = root.join(".codeflow/policy.json");
     if !policy_path.is_file() {
         eprintln!(
@@ -57,7 +57,7 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     };
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
     // durable work is tracked; the rules of every other branch are unchanged.
-    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root).unwrap_or(false);
+    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root)?;
     if tracked {
         plan = plan.with_registry_profile();
     }

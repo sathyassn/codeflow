@@ -498,7 +498,7 @@ fn install_entry(
         return Ok(());
     };
     let dest_path = root.join(&entry.dest);
-    let exists = dest_path.exists();
+    let exists = super::path_exists(&dest_path)?;
     let version = ctx.get("SCAFFOLD_VERSION").unwrap_or("0");
 
     match entry.ownership {

@@ -61,19 +61,16 @@ pub enum IdsCommand {
 
 /// Run `codeflow ids`.
 pub fn run(args: &IdsArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     match &args.command {
         IdsCommand::Seed { map } => run_seed(&root, map.as_ref()),
-        IdsCommand::Backfill => match seed::backfill(&root) {
-            Ok(report) => {
-                println!("ids backfill: wrote {} uid(s)", report.written.len());
-                for refused in &report.refused {
-                    eprintln!("refused: {refused}");
-                }
-                i32::from(!report.refused.is_empty())
-            }
-            Err(error) => fail(&error),
-        },
+        IdsCommand::Backfill => run_backfill(&root),
         IdsCommand::Sync => match issue::sync(&root) {
             Ok(report) => {
                 if let Some(note) = &report.note {
@@ -156,6 +153,19 @@ pub fn run(args: &IdsArgs) -> i32 {
             }
             render(&report)
         }
+    }
+}
+
+fn run_backfill(root: &std::path::Path) -> i32 {
+    match seed::backfill(root) {
+        Ok(report) => {
+            println!("ids backfill: wrote {} uid(s)", report.written.len());
+            for refused in &report.refused {
+                eprintln!("refused: {refused}");
+            }
+            i32::from(!report.refused.is_empty())
+        }
+        Err(error) => fail(&error),
     }
 }
 

@@ -35,7 +35,13 @@ pub enum PolicyCommand {
 pub fn run(args: &PolicyArgs) -> i32 {
     match args.command {
         PolicyCommand::Explain => explain(),
-        PolicyCommand::Show => show(&super::repo_root()),
+        PolicyCommand::Show => match super::repo_root() {
+            Ok(root) => show(&root),
+            Err(error) => {
+                eprintln!("codeflow: {error}");
+                2
+            }
+        },
     }
 }
 

@@ -90,7 +90,13 @@ pub fn run(args: &TestArgs) -> i32 {
         return run_setup(setup_args);
     }
 
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let _lock = match guard_gate(&root, &args.mode) {
         Ok(lock) => lock,
         Err(message) => {
@@ -230,7 +236,13 @@ fn print_failure_report(report: &FailureReport) {
 /// `codeflow test setup`: deterministic, offline config mechanics over root
 /// detection, release-embedded templates, and explicit target append.
 fn run_setup(args: &SetupArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     if args.list_templates {
         for name in crate::embedded::test_template_names() {
             let content = match crate::embedded::read_test_template(&name) {

@@ -69,7 +69,13 @@ pub fn run(args: &WorkArgs) -> i32 {
 }
 
 fn next(epic: Option<&str>, as_json: bool) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let mut backlog = match readiness::backlog(&root) {
         Ok(backlog) => backlog,
         Err(error) => {
@@ -184,7 +190,13 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
 }
 
 fn claim(task_id: &str, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     if !on.is_empty() {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
             eprintln!("work claim: error: {error}");
@@ -227,7 +239,13 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
 /// the command succeeds; CI reports the same finding at the same level. An
 /// unreadable tracking state always blocks.
 fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     // An undeterminable tracking state blocks whatever the level says, as in
     // CI's `work.tracking_state`.
     if let Err(error) = durable_work_tracking_enabled(&root) {

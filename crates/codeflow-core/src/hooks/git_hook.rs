@@ -178,13 +178,24 @@ fn scan_staged(
             return;
         }
     };
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-    let Ok(diff) = repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None) else {
-        report.notes.push(crate::remedy::Finding::new(
-            "secret scan skipped: could not read the staged diff",
-            crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
-        ));
-        return;
+    let read_diff = || -> Result<_, git2::Error> {
+        let head_tree = match repo.head() {
+            Ok(head) => Some(head.peel_to_tree()?),
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+            Err(e) => return Err(e),
+        };
+        repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), None)
+    };
+    let diff = match read_diff() {
+        Ok(diff) => diff,
+        Err(error) => {
+            report.violations.push(Violation::always_blocking(
+                "git.secret_scan",
+                format!("staged secret scan incomplete: cannot read the staged diff: {error}"),
+                &crate::remedy::SECRET_SCAN_INCOMPLETE.remedy(),
+            ));
+            return;
+        }
     };
 
     for delta in diff.deltas() {
@@ -1009,39 +1020,32 @@ pub fn pre_push(
             ));
         }
 
-        // A protected branch moves only by a proven fast-forward: when the
-        // remote tip is not in this repository, ancestry cannot be judged,
-        // so the update is refused as a force push. Otherwise a push the
-        // integrate token or a human's override lets through could rewrite
-        // history unseen.
-        if protected && policy.force_push_protected.is_active() && ancestry_unknown(&repo, r) {
-            report.violations.push(Violation::new(
-                "git.force_push_protected",
+        let (force_level, force_rule, remedy) = if protected {
+            (
                 policy.force_push_protected,
-                format!(
-                    "push to protected branch '{branch}' cannot be proven a fast-forward: \
-                     its remote tip {} is not in this repository; fetch it first",
-                    r.remote_sha
-                ),
+                "git.force_push_protected",
                 crate::remedy::PROTECTED_BRANCH.remedy(),
-            ));
-        } else if is_force_update(&repo, r) {
-            if protected {
-                if policy.force_push_protected.is_active() {
-                    report.violations.push(Violation::new(
-                        "git.force_push_protected",
-                        policy.force_push_protected,
-                        format!("non-fast-forward (force) push to protected branch '{branch}'"),
-                        crate::remedy::PROTECTED_BRANCH.remedy(),
-                    ));
-                }
-            } else if policy.force_push_unprotected.is_active() {
-                report.violations.push(Violation::new(
-                    "git.force_push_unprotected",
-                    policy.force_push_unprotected,
-                    format!("non-fast-forward (force) push to branch '{branch}'"),
-                    crate::remedy::FORCE_PUSH.remedy(),
-                ));
+            )
+        } else {
+            (
+                policy.force_push_unprotected,
+                "git.force_push_unprotected",
+                crate::remedy::FORCE_PUSH.remedy(),
+            )
+        };
+        if force_level.is_active() {
+            match is_force_update(&repo, r) {
+                Ok(false) => {},
+                Ok(true) => report.violations.push(Violation::new(
+                    force_rule, force_level,
+                    format!("non-fast-forward (force) push to {}branch '{branch}'", if protected { "protected " } else { "" }),
+                    remedy,
+                )),
+                Err(reason) => report.violations.push(Violation::always_blocking(
+                    force_rule,
+                    format!("push to branch '{branch}' cannot be proven a fast-forward: {reason}; fetch it first"),
+                    &remedy,
+                )),
             }
         }
 
@@ -1079,12 +1083,20 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
         ));
         return;
     }
-    if is_force_update(repo, r) {
-        report.violations.push(block(
-            "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)"
-                .to_string(),
-        ));
-        return;
+    match is_force_update(repo, r) {
+        Ok(false) => {}
+        Ok(true) => {
+            report.violations.push(block(
+                "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)".to_string(),
+            ));
+            return;
+        }
+        Err(reason) => {
+            report.violations.push(block(format!(
+                "cannot prove registry push is append-only: {reason}; fetch its remote tip first"
+            )));
+            return;
+        }
     }
     let git = crate::ids::Git::new(root);
     let exclude =
@@ -1107,42 +1119,21 @@ fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut Stage
     }
 }
 
-/// `true` when the remote ref exists and the local sha does not descend from
-/// it (a history rewrite). Unknown objects (e.g. shallow clones) skip the
-/// check rather than guessing.
-fn is_force_update(repo: &Repository, r: &PushRef) -> bool {
+/// Whether the update rewrites history; unreadable ancestry is an error.
+fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
     if is_zero_sha(&r.remote_sha) || r.remote_sha.is_empty() {
-        return false; // new branch on the remote
+        return Ok(false); // new branch on the remote
     }
-    let (Ok(local), Ok(remote)) = (
-        git2::Oid::from_str(&r.local_sha),
-        git2::Oid::from_str(&r.remote_sha),
-    ) else {
-        return false;
-    };
+    let local =
+        git2::Oid::from_str(&r.local_sha).map_err(|e| format!("invalid local object id: {e}"))?;
+    let remote =
+        git2::Oid::from_str(&r.remote_sha).map_err(|e| format!("invalid remote object id: {e}"))?;
     if local == remote {
-        return false;
+        return Ok(false);
     }
-    match repo.graph_descendant_of(local, remote) {
-        Ok(descends) => !descends,
-        Err(_) => false, // remote sha unknown locally — cannot judge
-    }
-}
-
-/// `true` when an update of an existing remote branch cannot be classified:
-/// a sha does not parse, or the remote tip is not in this repository, so
-/// [`is_force_update`] could not judge it.
-fn ancestry_unknown(repo: &Repository, r: &PushRef) -> bool {
-    if is_zero_sha(&r.remote_sha) || r.remote_sha.is_empty() || r.local_sha == r.remote_sha {
-        return false;
-    }
-    let (Ok(local), Ok(remote)) = (
-        git2::Oid::from_str(&r.local_sha),
-        git2::Oid::from_str(&r.remote_sha),
-    ) else {
-        return true;
-    };
-    repo.graph_descendant_of(local, remote).is_err()
+    repo.graph_descendant_of(local, remote)
+        .map(|descends| !descends)
+        .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
 
 /// Time budget for the whole pre-push set. A push set that takes longer still
@@ -3278,5 +3269,104 @@ mod tests {
         assert!(!fake.violations.is_empty(), "fake merge must be checked");
         let real = commit_msg(&GitPolicy::default(), "Merge branch 'main'\n", true);
         assert!(real.violations.is_empty(), "real merge stays exempt");
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    #[test]
+    fn r22_unknown_force_update_refuses_unprotected_and_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"a")]);
+        let policy = GitPolicy {
+            force_push_unprotected: super::super::PolicyLevel::Block,
+            ..GitPolicy::default()
+        };
+        for branch in ["feat/example", "codeflow/registry"] {
+            for remote in ["1111111111111111111111111111111111111111", "invalid"] {
+                let r = PushRef {
+                    local_ref: format!("refs/heads/{branch}"),
+                    remote_ref: format!("refs/heads/{branch}"),
+                    local_sha: oid.to_string(),
+                    remote_sha: remote.into(),
+                };
+                let report = pre_push(dir.path(), &policy, &[r], false, false).unwrap();
+                assert!(
+                    report
+                        .violations
+                        .iter()
+                        .any(|v| v.message.contains("cannot")
+                            && v.level == super::super::PolicyLevel::Block),
+                    "{report:?}"
+                );
+            }
+        }
+        let r = PushRef {
+            local_ref: "refs/heads/feat/example".into(),
+            remote_ref: "refs/heads/feat/example".into(),
+            local_sha: oid.to_string(),
+            remote_sha: "0".repeat(40),
+        };
+        assert!(pre_push(dir.path(), &policy, &[r], false, false)
+            .unwrap()
+            .violations
+            .is_empty());
+        drop(repo);
+    }
+    #[test]
+    fn r22_force_update_does_not_report_unknown_as_fast_forward() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut r = PushRef {
+            local_ref: "refs/heads/codeflow/registry".into(),
+            remote_ref: "refs/heads/codeflow/registry".into(),
+            local_sha: "2".repeat(40),
+            remote_sha: "0".repeat(40),
+        };
+        assert!(format!("{:?}", is_force_update(&repo, &r)).contains("false"));
+        for unknown in ["1".repeat(40), "malformed".into()] {
+            r.remote_sha = unknown;
+            assert!(format!("{:?}", is_force_update(&repo, &r)).starts_with("Err("));
+        }
+    }
+    #[test]
+    fn r22_secret_scan_refuses_unreadable_head_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.index().unwrap().write().unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.is_empty(), "unborn HEAD: {report:?}");
+        let blob = repo.blob(b"not a tree").unwrap();
+        std::fs::write(repo.path().join("HEAD"), format!("{blob}\n")).unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.iter().any(|v| v.rule == "git.secret_scan" && v.level == super::super::PolicyLevel::Block), "{report:?}");
+    }
+    #[test]
+    fn r22_secret_scan_refuses_unreadable_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"nested/a", b"a")]);
+        repo.reference("HEAD", oid, true, "test").unwrap();
+        let tree = repo.find_commit(oid).unwrap().tree().unwrap();
+        let mut index = repo.index().unwrap();
+        index.read_tree(&tree).unwrap();
+        index.write().unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.is_empty(), "readable diff: {report:?}");
+        let subtree = tree.get_name("nested").unwrap().id().to_string();
+        std::fs::remove_file(
+            repo.path()
+                .join("objects")
+                .join(&subtree[..2])
+                .join(&subtree[2..]),
+        )
+        .unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let mut report = StageReport::default();
+        scan_staged(&repo, &GitPolicy::default(), &mut report, false);
+        assert!(report.violations.iter().any(|v| v.rule == "git.secret_scan" && v.level == super::super::PolicyLevel::Block), "{report:?}");
     }
 }

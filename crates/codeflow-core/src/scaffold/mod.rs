@@ -50,14 +50,20 @@ fn should_skip_initial_stack_adr(
     root: &std::path::Path,
     dest: &str,
 ) -> Result<bool, ScaffoldError> {
-    if dest != INITIAL_STACK_ADR || root.join(dest).exists() {
+    if dest != INITIAL_STACK_ADR || path_exists(&root.join(dest))? {
         return Ok(false);
     }
 
     let decisions = root.join("docs/decisions");
     let entries = match std::fs::read_dir(&decisions) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&decisions)
+                    .map_err(|error| ScaffoldError::io(&decisions, error))? =>
+        {
+            return Ok(false)
+        }
         Err(error) => return Err(ScaffoldError::io(&decisions, error)),
     };
 
@@ -70,20 +76,39 @@ fn should_skip_initial_stack_adr(
         {
             continue;
         }
-        // ADR files are named by this tool in ASCII (OS text rule, issue 79).
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        if name.starts_with("ADR-")
-            && std::path::Path::new(&name)
-                .extension()
-                .is_some_and(|extension| extension == "md")
-        {
+        if is_adr_name(&entry.file_name()) {
             return Ok(true);
         }
     }
 
     Ok(false)
+}
+
+fn is_adr_name(name: &std::ffi::OsStr) -> bool {
+    crate::git::GitName::from_os_str(name).starts_with(b"ADR-")
+        && std::path::Path::new(name)
+            .extension()
+            .is_some_and(|extension| extension == "md")
+}
+
+/// Existence is false only when the leaf and its ancestors prove absence.
+fn path_exists(path: &std::path::Path) -> Result<bool, ScaffoldError> {
+    match path
+        .try_exists()
+        .map_err(|error| ScaffoldError::io(path, error))?
+    {
+        true => Ok(true),
+        false
+            if crate::absence::proven_absent(path)
+                .map_err(|error| ScaffoldError::io(path, error))? =>
+        {
+            Ok(false)
+        }
+        false => Err(ScaffoldError::io(
+            path,
+            std::io::Error::other("path exists but its target cannot be resolved"),
+        )),
+    }
 }
 
 pub use assets::{AssetSource, DirSource};
@@ -125,5 +150,52 @@ impl ScaffoldError {
             path: path.into(),
             source,
         }
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_initial_adr_recognizes_non_utf8_names() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let decisions = dir.path().join("docs/decisions");
+        std::fs::create_dir_all(&decisions).unwrap();
+        assert!(!should_skip_initial_stack_adr(dir.path(), INITIAL_STACK_ADR).unwrap());
+        let name = std::ffi::OsStr::from_bytes(b"ADR-0002-\xff.md");
+        assert!(is_adr_name(name));
+        assert!(!is_adr_name(std::ffi::OsStr::from_bytes(b"other-\xff.md")));
+        // This macOS test environment rejects non-UTF-8 file names. Exercise creation on Linux.
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::write(decisions.join(name), "decision").unwrap();
+            assert!(should_skip_initial_stack_adr(dir.path(), INITIAL_STACK_ADR).unwrap());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_initial_adr_refuses_dangling_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!should_skip_initial_stack_adr(dir.path(), INITIAL_STACK_ADR).unwrap());
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("docs/decisions")).unwrap();
+        assert!(should_skip_initial_stack_adr(dir.path(), INITIAL_STACK_ADR).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_scaffold_existence_requires_resolvable_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!path_exists(&dir.path().join("missing/leaf")).unwrap());
+        std::fs::write(dir.path().join("file"), "existing").unwrap();
+        assert!(path_exists(&dir.path().join("file")).unwrap());
+        assert!(path_exists(&dir.path().join("file/leaf")).is_err());
+        std::os::unix::fs::symlink("missing", dir.path().join("link")).unwrap();
+        assert!(path_exists(&dir.path().join("link")).is_err());
+        assert!(path_exists(&dir.path().join("link/leaf")).is_err());
     }
 }

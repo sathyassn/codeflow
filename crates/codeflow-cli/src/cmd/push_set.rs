@@ -79,6 +79,26 @@ fn run_checked(
     url: Option<&str>,
     report: &mut StageReport,
 ) -> Result<(), String> {
+    run_checked_with_binary(
+        root,
+        policy,
+        refs,
+        remote,
+        url,
+        report,
+        std::env::current_exe,
+    )
+}
+
+fn run_checked_with_binary(
+    root: &Path,
+    policy: &GitPolicy,
+    refs: &[PushRef],
+    remote: Option<&str>,
+    url: Option<&str>,
+    report: &mut StageReport,
+    current_exe: impl FnOnce() -> std::io::Result<std::path::PathBuf>,
+) -> Result<(), String> {
     // A push of the id registry carries no code: it is judged by its own
     // rules (SPC-013 R-6), and checking it here would recurse through the
     // registry sync the hook runs.
@@ -97,13 +117,13 @@ fn run_checked(
         return Ok(());
     }
     let started = Instant::now();
-    let exe = match std::env::current_exe() {
+    let exe = match current_exe() {
         Ok(exe) => exe,
         Err(error) => {
-            report.violations.push(violation(
-                policy,
+            report.violations.push(Violation::always_blocking(
+                "git.test_gate_on_push",
                 format!("push set could not locate the codeflow binary: {error}"),
-                codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
+                &codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
             ));
             return Ok(());
         }
@@ -534,7 +554,7 @@ fn release_preflight(
         }
         Err(error) => report.notes.push(Finding::new(
             format!(
-                "release preflight did not run for '{branch}': {error}; the pull request job checks it"
+                "release preflight could not complete for '{branch}': {error}; the pull request job checks it"
             ),
             remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch", branch)]),
         )),

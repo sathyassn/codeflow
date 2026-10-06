@@ -4667,7 +4667,7 @@ impl Reader<'_> {
             }
             // OS text rule (issue 79): the reader works on path text, so a
             // home folder that is not valid UTF-8 cannot be placed (unproven).
-            let mut absolute = std::env::var_os("HOME")?;
+            let mut absolute = std::env::home_dir()?.into_os_string();
             absolute.push(rest);
             Some(PathBuf::from(absolute))
         } else if path.starts_with('/') {
@@ -4691,7 +4691,13 @@ impl Reader<'_> {
             return Ok(None);
         }
         let Some(absolute) = self.absolute(path) else {
-            return Ok(None);
+            // Bash falls back to the password database when HOME is unset.
+            // A home expression whose directory is still unavailable is unknown.
+            return if path == "~" || path.starts_with("~/") {
+                Err(())
+            } else {
+                Ok(None)
+            };
         };
         real_prefix_checked(&absolute)
     }
@@ -4710,7 +4716,11 @@ impl Reader<'_> {
         let Some(absolute) = self.absolute(path) else {
             // No concrete base/syntax to enumerate; no bytes were decoded.
             // Symbolic project-relative paths keep the spelling verdict.
-            return Some(Vec::new());
+            return if path == "~" || path.starts_with("~/") {
+                None
+            } else {
+                Some(Vec::new())
+            };
         };
         // A base that is not valid UTF-8 cannot be read as text: unproven.
         let absolute = absolute.to_str()?.to_string();
@@ -4757,9 +4767,9 @@ impl Reader<'_> {
                 let last = i + 1 == parts.len() && keep_last;
                 match std::fs::read_dir(listed) {
                     Ok(entries) => {
-                        for entry in entries.flatten() {
-                            if last && entry.file_type().is_ok_and(|t| t.is_symlink()) {
-                                continue;
+                        read_glob_entries(entries, |entry| {
+                            if last && entry.file_type().ok()?.is_symlink() {
+                                return Some(());
                             }
                             // OS text rule (issue 79): a name that is not valid
                             // UTF-8 cannot be placed as text. When the glob
@@ -4785,7 +4795,8 @@ impl Reader<'_> {
                                     }
                                 }
                             }
-                        }
+                            Some(())
+                        })?;
                     }
                     Err(_)
                         if crate::absence::proven_absent(Path::new(listed))
@@ -7290,8 +7301,8 @@ fn from_home(rest: &str) -> Result<String, String> {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    let home =
-                        std::env::var_os("HOME").ok_or_else(|| "cannot read HOME".to_string())?;
+                    let home = std::env::home_dir()
+                        .ok_or_else(|| "cannot read home directory".to_string())?;
                     let home = home
                         .to_str()
                         .ok_or_else(|| "cannot read HOME as UTF-8".to_string())?;
@@ -7314,6 +7325,17 @@ fn real_prefix(path: &Path) -> Option<String> {
     real_prefix_checked(path).ok().flatten()
 }
 
+/// Read every obtained directory entry; an error cannot become an empty match.
+fn read_glob_entries<T>(
+    entries: impl IntoIterator<Item = std::io::Result<T>>,
+    mut visit: impl FnMut(T) -> Option<()>,
+) -> Option<()> {
+    for entry in entries {
+        visit(entry.ok()?)?;
+    }
+    Some(())
+}
+
 fn real_prefix_checked(path: &Path) -> Result<Option<String>, ()> {
     // OS text rule (issue 79): a component that is not valid UTF-8 cannot be
     // placed as text, so the path is unplaced (unproven), never a lossy lookalike.
@@ -7331,12 +7353,13 @@ fn real_prefix_checked(path: &Path) -> Result<Option<String>, ()> {
         .unwrap_or(parts.len());
     for existing in (0..=globbed).rev() {
         let prefix = format!("/{}", parts[..existing].join("/"));
-        if std::fs::symlink_metadata(&prefix).is_err() {
+        if crate::absence::symlink_metadata_optional(Path::new(&prefix))
+            .map_err(|_| ())?
+            .is_none()
+        {
             continue;
         }
-        let Ok(real) = std::fs::canonicalize(&prefix) else {
-            return Ok(None);
-        };
+        let real = std::fs::canonicalize(&prefix).map_err(|_| ())?;
         let mut joined = real.to_str().ok_or(())?.to_string();
         for part in &parts[existing..] {
             if !joined.ends_with('/') {
@@ -7697,6 +7720,96 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+    // R22-DELETION-TESTS-BEGIN
+    #[test]
+    fn r22_glob_entry_failure_is_unproven() {
+        let mut seen = Vec::new();
+        let entries = [
+            Ok("first"),
+            Err(std::io::Error::other("injected mid-listing EIO")),
+            Ok("later"),
+        ];
+        assert!(super::read_glob_entries(entries, |entry| {
+            seen.push(entry);
+            Some(())
+        })
+        .is_none());
+        assert_eq!(seen, ["first"]);
+        assert_eq!(
+            super::read_glob_entries(std::iter::empty::<std::io::Result<()>>(), |()| Some(())),
+            Some(())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_deletion_unreadable_prefix_is_unproven() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken")).unwrap();
+        std::fs::write(dir.path().join("file"), "x").unwrap();
+        for target in ["broken", "broken/child", "file/child"] {
+            assert!(
+                super::real_prefix_checked(&dir.path().join(target)).is_err(),
+                "{target}"
+            );
+            let result = super::composed_deletion_in(&format!("rm -rf {target}"), Some(dir.path()));
+            assert!(
+                result.is_some_and(|found| found.unproven.is_some()),
+                "{target}"
+            );
+        }
+        assert!(
+            super::real_prefix_checked(&dir.path().join("missing/child"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(super::composed_deletion_in("rm -rf missing/child", Some(dir.path())).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_deletion_home_unset_matches_bash() {
+        const CHILD: &str = "CODEFLOW_R22_DELETION_HOME_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let reader = super::Reader {
+                base: None,
+                rooted_unplaced: false,
+                found: None,
+                depth: 0,
+                pipe_input: None,
+                jumps: vec![],
+                expanding: vec![],
+                traps: vec![],
+                in_trap: false,
+                status: None,
+            };
+            let output = std::process::Command::new("/bin/bash")
+                .args(["--noprofile", "--norc", "-c", "printf '%s' ~/ordinary"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let expected = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap());
+            assert_eq!(reader.absolute("~/ordinary"), Some(expected));
+            assert!(reader.absolute("~unknown_user/ordinary").is_none());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "security::deletion::tests::r22_deletion_home_unset_matches_bash",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("HOME")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    // R22-DELETION-TESTS-END
 
     #[test]
     fn r19_option_clusters_consume_values_and_refuse_unknown_modes() {

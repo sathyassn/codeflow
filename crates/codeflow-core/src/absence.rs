@@ -47,6 +47,15 @@ pub(crate) fn proven_absent(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Obtain leaf metadata, returning None only for proven absence through its ancestors.
+pub(crate) fn symlink_metadata_optional(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && proven_absent(path)? => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::proven_absent;
@@ -82,5 +91,22 @@ mod tests {
         std::fs::write(dir.path().join("file"), "x").unwrap();
         symlink(dir.path().join("file"), dir.path().join("file-link")).unwrap();
         assert!(proven_absent(&dir.path().join("file-link/child")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod optional_metadata_tests {
+    #[cfg(unix)]
+    #[test]
+    fn r22_optional_metadata_preserves_errors_and_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing/child");
+        assert!(super::symlink_metadata_optional(&missing)
+            .unwrap()
+            .is_none());
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("missing", &link).unwrap();
+        assert!(super::symlink_metadata_optional(&link).unwrap().is_some());
+        assert!(super::symlink_metadata_optional(&link.join("child")).is_err());
     }
 }

@@ -28,7 +28,9 @@ fn init_repo(root: &Path, name: &str) {
     .unwrap();
     fs::write(
         root.join(".codeflow/project.toml"),
-        format!("name = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\n"),
+        format!(
+            "schema_version = 1\nname = \"{name}\"\ntier = \"standard\"\nscaffold_version = \"2.0.0-dev\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
+        ),
     )
     .unwrap();
     fs::create_dir_all(root.join(".git")).unwrap();
@@ -320,4 +322,58 @@ fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("registry touch failed"), "{stderr}");
     assert_eq!(fs::read_to_string(&registry).unwrap(), before);
+}
+
+#[test]
+fn r22_remote_protect_refuses_unreadable_tracking_state() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "tracking-error");
+    fs::write(repo.path().join(".codeflow/project.toml"), b"\xff").unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read existing CodeFlow state"));
+}
+
+#[test]
+fn r22_remote_protect_absent_tracking_state_keeps_dry_run() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout(&out).contains("status: dry-run"));
+}
+
+#[cfg(unix)]
+#[test]
+fn r22_startup_refuses_missing_current_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    let gone = repo.path().join("gone");
+    fs::create_dir(&gone).unwrap();
+    let out = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "rmdir \"$1\"; exec \"$2\" policy show",
+            "codeflow-test",
+        ])
+        .arg(&gone)
+        .arg(env!("CARGO_BIN_EXE_codeflow"))
+        .current_dir(&gone)
+        .env("CODEFLOW_HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", stdout(&out));
 }

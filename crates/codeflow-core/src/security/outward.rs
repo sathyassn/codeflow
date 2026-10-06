@@ -41,7 +41,19 @@ pub(crate) fn evaluate_at(
         .map(|(_, root)| root.clone())
         .collect();
     families.retain(|(id, root)| *id != "configured_tag_push" || !release_roots.contains(root));
-    families
+    let mut violations: Vec<_> = parsed
+        .unreadable
+        .into_iter()
+        .chain(embedded.unreadable)
+        .map(|reason| {
+            Violation::always_blocking(
+                "git.policy_authority",
+                reason,
+                "restore the command repository and its readable policy authority",
+            )
+        })
+        .collect();
+    violations.extend(families
         .into_iter()
         .filter_map(|(id, root)| {
             let authority = root.as_deref().map(crate::hooks::landed_policy::load).transpose();
@@ -84,11 +96,13 @@ pub(crate) fn evaluate_at(
                 )
             })
         })
-        .collect()
+        .collect::<Vec<_>>());
+    violations
 }
 
 #[derive(Default)]
 struct Parsed {
+    unreadable: Vec<String>,
     families: Vec<(&'static str, Option<PathBuf>)>,
     code: Vec<String>,
     stdin_interpreter: usize,
@@ -185,7 +199,9 @@ fn argv(args: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
         }
     }
     record_interpreter(name, rest, out);
-    direct_family(name, rest, cwd, out);
+    if let Err(reason) = direct_family(name, rest, cwd, out) {
+        out.unreadable.push(reason);
+    }
     if name == "git" {
         git_alias(rest, cwd, depth, out);
     }
@@ -340,13 +356,19 @@ fn perl_attached_code(arg: &str) -> Option<&str> {
     None
 }
 
-fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Parsed) {
-    let source = (name == "git"
-        && rest
-            .iter()
-            .any(|s| s == "-C" || s == "--git-dir" || s.starts_with("--git-dir=")))
-    .then(|| git_policy_root(cwd, rest))
-    .flatten();
+fn direct_family(
+    name: &str,
+    rest: &[String],
+    cwd: Option<&Path>,
+    out: &mut Parsed,
+) -> Result<(), String> {
+    let source = || {
+        if name == "git" && has_explicit_git_directory(rest) {
+            git_policy_root(cwd, rest)
+        } else {
+            Ok(None)
+        }
+    };
     let mut canonical = vec![name.to_string()];
     canonical.extend(global_args(name, rest).iter().cloned());
     for family in &table().families {
@@ -355,7 +377,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
             .iter()
             .any(|rule| prefix(&canonical, &rule.pattern))
         {
-            out.families.push((family_id(&family.id), source.clone()));
+            out.families.push((family_id(&family.id), source()?));
         }
     }
     let sub = canonical.get(1).map_or("", String::as_str);
@@ -371,33 +393,33 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                 "-d" | "--delete" | "-l" | "--list" | "-v" | "--verify"
             )
         }) {
-            if let (Some(dir), Some(tag)) = (git_directory(cwd, rest), tag_args.first()) {
+            if let (Some(dir), Some(tag)) = (git_directory(cwd, rest)?, tag_args.first()) {
                 out.created_tags.push((dir, tag.clone()));
             }
         }
     }
     if name == "git" && sub == "update-ref" {
         if let (Some(dir), Some(tag)) = (
-            git_directory(cwd, rest),
+            git_directory(cwd, rest)?,
             body.iter().find_map(|a| a.strip_prefix("refs/tags/")),
         ) {
             out.created_tags.push((dir, tag.to_owned()));
         }
     }
     if name == "git" && sub == "config" && enables_follow_tags(body) {
-        out.families.push(("release", source.clone()));
+        out.families.push(("release", source()?));
     }
     if name == "git" && sub == "push" {
         if body.iter().any(|a| a == "--mirror") {
-            out.families.push(("account", source.clone()));
+            out.families.push(("account", source()?));
         }
         if body.iter().any(|a| {
             matches!(a.as_str(), "--tags" | "--follow-tags" | "tag") || a.contains("refs/tags/")
-        }) || tag_push(body, cwd, rest, &out.created_tags)
+        }) || tag_push(body, cwd, rest, &out.created_tags)?
         {
-            out.families.push(("release", source.clone()));
-        } else if follow_tags(cwd, rest) {
-            out.families.push(("configured_tag_push", source.clone()));
+            out.families.push(("release", source()?));
+        } else if follow_tags(cwd, rest)? {
+            out.families.push(("configured_tag_push", source()?));
         }
     }
     if name == "gh" {
@@ -407,7 +429,7 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                 .iter()
                 .any(|s| s == "--visibility" || s.starts_with("--visibility="))
         {
-            out.families.push(("account", source.clone()));
+            out.families.push(("account", source()?));
         }
         if sub == "api"
             && body.iter().enumerate().any(|(i, a)| {
@@ -419,16 +441,16 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                             .is_some_and(|v| v.eq_ignore_ascii_case("DELETE")))
             })
         {
-            out.families.push(("account", source.clone()));
+            out.families.push(("account", source()?));
         }
     }
     if name.starts_with("git-credential-") {
-        out.families.push(("account", source.clone()));
+        out.families.push(("account", source()?));
     }
     if matches!(name, "runuser" | "gsudo.exe" | "runas.exe")
         || (name == "osascript" && rest.join(" ").contains("with administrator privileges"))
     {
-        out.families.push(("privilege", source.clone()));
+        out.families.push(("privilege", source()?));
     }
     if name.eq_ignore_ascii_case("Set-ExecutionPolicy")
         || (name == "crontab"
@@ -436,8 +458,14 @@ fn direct_family(name: &str, rest: &[String], cwd: Option<&Path>, out: &mut Pars
                 .iter()
                 .any(|a| matches!(a.as_str(), "-l" | "--help" | "-h")))
     {
-        out.families.push(("persistence", source.clone()));
+        out.families.push(("persistence", source()?));
     }
+    Ok(())
+}
+
+fn has_explicit_git_directory(args: &[String]) -> bool {
+    args.iter()
+        .any(|s| s == "-C" || s == "--git-dir" || s.starts_with("--git-dir="))
 }
 
 fn family_id(id: &str) -> &'static str {
@@ -528,8 +556,10 @@ fn prefix(args: &[String], pattern: &[PatternToken]) -> bool {
         })
 }
 
-fn git_policy_root(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
-    let mut dir = cwd?.to_path_buf();
+fn git_policy_root(cwd: Option<&Path>, globals: &[String]) -> Result<Option<PathBuf>, String> {
+    let Some(mut dir) = cwd.map(Path::to_path_buf) else {
+        return Ok(None);
+    };
     let mut git_dir = None;
     let args = global_args("git", globals);
     let end = globals.len() - args.len();
@@ -537,11 +567,16 @@ fn git_policy_root(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
     while at < end {
         match globals[at].as_str() {
             "-C" => {
-                dir = dir.join(globals.get(at + 1)?);
+                dir = dir.join(globals.get(at + 1).ok_or("git -C has no directory")?);
                 at += 1;
             }
             "--git-dir" => {
-                git_dir = Some(globals.get(at + 1)?.clone());
+                git_dir = Some(
+                    globals
+                        .get(at + 1)
+                        .ok_or("git --git-dir has no directory")?
+                        .clone(),
+                );
                 at += 1;
             }
             value => {
@@ -553,21 +588,40 @@ fn git_policy_root(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
         at += 1;
     }
     let repo = if let Some(path) = git_dir {
-        git2::Repository::open(dir.join(path))
+        let path = dir.join(path);
+        // An explicit git directory must name that repository, never an ancestor.
+        match git2::Repository::open(&path) {
+            Ok(repo) => Some(repo),
+            Err(e)
+                if e.code() == git2::ErrorCode::NotFound
+                    && crate::absence::proven_absent(&path).map_err(|e| e.to_string())? =>
+            {
+                None
+            }
+            Err(e) => {
+                return Err(format!(
+                    "cannot open command repository {}: {e}",
+                    path.display()
+                ))
+            }
+        }
     } else {
-        git2::Repository::discover(dir)
-    }
-    .ok()?;
-    Some(repo.workdir().unwrap_or(repo.path()).to_path_buf())
+        crate::hooks::repo::open(&dir)?
+    };
+    Ok(repo.map(|repo| repo.workdir().unwrap_or(repo.path()).to_path_buf()))
 }
 
-fn git_directory(cwd: Option<&Path>, globals: &[String]) -> Option<PathBuf> {
-    let root = git_policy_root(cwd, globals)?;
-    git2::Repository::discover(root)
-        .ok()?
-        .commondir()
-        .canonicalize()
-        .ok()
+fn git_directory(cwd: Option<&Path>, globals: &[String]) -> Result<Option<PathBuf>, String> {
+    let Some(root) = git_policy_root(cwd, globals)? else {
+        return Ok(None);
+    };
+    let repo = crate::hooks::repo::open(&root)?.ok_or("command repository disappeared")?;
+    repo.commondir().canonicalize().map(Some).map_err(|e| {
+        format!(
+            "cannot resolve command repository {}: {e}",
+            repo.commondir().display()
+        )
+    })
 }
 
 fn tag_push(
@@ -575,32 +629,41 @@ fn tag_push(
     cwd: Option<&Path>,
     globals: &[String],
     created: &[(PathBuf, String)],
-) -> bool {
-    let Some(dir) = git_directory(cwd, globals) else {
-        return false;
+) -> Result<bool, String> {
+    let Some(dir) = git_directory(cwd, globals)? else {
+        return Ok(false);
     };
-    let Ok(repo) = git2::Repository::open(&dir) else {
-        return false;
-    };
-    args.iter().filter(|arg| !arg.starts_with('-')).any(|arg| {
-        arg.trim_start_matches('+').split(':').any(|part| {
+    let repo = crate::hooks::repo::open(&dir)?.ok_or("command repository disappeared")?;
+    for arg in args.iter().filter(|arg| !arg.starts_with('-')) {
+        for part in arg.trim_start_matches('+').split(':') {
             let shorthand = part
                 .strip_prefix("tags/")
                 .or_else(|| part.strip_prefix("refs/tags/"));
-            [Some(part), shorthand]
+            for tag_name in [Some(part), shorthand]
                 .into_iter()
                 .flatten()
-                .any(|tag_name| {
-                    !tag_name.is_empty()
-                        && (repo
-                            .find_reference(&format!("refs/tags/{tag_name}"))
-                            .is_ok()
-                            || created
-                                .iter()
-                                .any(|(at, tag)| at == &dir && tag == tag_name))
-                })
-        })
-    })
+                .filter(|s| !s.is_empty())
+            {
+                if created
+                    .iter()
+                    .any(|(at, tag)| at == &dir && tag == tag_name)
+                {
+                    return Ok(true);
+                }
+                let reference = format!("refs/tags/{tag_name}");
+                // A URL, wildcard or other invalid ref spelling cannot name a literal tag.
+                if !git2::Reference::is_valid_name(&reference) {
+                    continue;
+                }
+                match repo.find_reference(&reference) {
+                    Ok(_) => return Ok(true),
+                    Err(e) if e.code() == git2::ErrorCode::NotFound => {}
+                    Err(e) => return Err(format!("cannot read tag {tag_name}: {e}")),
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn truthy(value: &str) -> bool {
@@ -632,14 +695,14 @@ fn enables_follow_tags(args: &[String]) -> bool {
         .any(|p| p[0].eq_ignore_ascii_case("push.followTags") && truthy(&p[1]))
 }
 
-fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> bool {
+fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> Result<bool, String> {
     let sub = global_args("git", globals);
     if let Some(option) = sub
         .iter()
         .rev()
         .find(|s| matches!(s.as_str(), "--follow-tags" | "--no-follow-tags"))
     {
-        return option == "--follow-tags";
+        return Ok(option == "--follow-tags");
     }
     let end = globals.len() - sub.len();
     let override_value = globals[..end]
@@ -649,13 +712,21 @@ fn follow_tags(cwd: Option<&Path>, globals: &[String]) -> bool {
         .filter(|(key, _)| key.eq_ignore_ascii_case("push.followTags"))
         .map(|(_, value)| truthy(value))
         .next_back();
-    override_value.unwrap_or_else(|| {
-        git_directory(cwd, globals)
-            .and_then(|dir| git2::Repository::open(dir).ok())
-            .and_then(|repo| repo.config().ok())
-            .and_then(|config| config.get_bool("push.followTags").ok())
-            .unwrap_or(false)
-    })
+    if let Some(value) = override_value {
+        return Ok(value);
+    }
+    let Some(dir) = git_directory(cwd, globals)? else {
+        return Ok(false);
+    };
+    let repo = crate::hooks::repo::open(&dir)?.ok_or("command repository disappeared")?;
+    let config = repo
+        .config()
+        .map_err(|e| format!("cannot read command repository config: {e}"))?;
+    match config.get_bool("push.followTags") {
+        Ok(value) => Ok(value),
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(e) => Err(format!("cannot read push.followTags: {e}")),
+    }
 }
 
 fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed) {
@@ -668,6 +739,16 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
     }
     let Some(mut dir) = cwd.map(Path::to_path_buf) else {
         return;
+    };
+    let source = has_explicit_git_directory(rest)
+        .then(|| git_policy_root(cwd, rest))
+        .transpose();
+    let source = match source {
+        Ok(source) => source.flatten(),
+        Err(reason) => {
+            out.unreadable.push(reason);
+            return;
+        }
     };
     let end = rest.len() - sub.len();
     // Preserve the command's directory and configuration order, including
@@ -739,11 +820,6 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
         args.extend_from_slice(&sub[1..]);
         argv(&args, cwd, depth + 1, out);
     } else {
-        let source = rest
-            .iter()
-            .any(|s| s == "-C" || s == "--git-dir" || s.starts_with("--git-dir="))
-            .then(|| git_policy_root(cwd, rest))
-            .flatten();
         out.families.push(("release", source));
     }
 }
@@ -1327,5 +1403,98 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    #[test]
+    fn r22_outward_readonly_builtin_does_not_require_target_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("lib");
+        git2::Repository::init(&target).unwrap();
+        std::fs::remove_file(target.join(".git/HEAD")).unwrap();
+        let levels = SecuritySection::default();
+        for command in ["git -C lib status", "git --git-dir=lib/.git status"] {
+            let violations = evaluate_at(command, &levels, Some(dir.path()));
+            assert!(
+                violations.is_empty(),
+                "read-only builtin {command}: {violations:?}"
+            );
+        }
+    }
+    #[test]
+    fn r22_outward_refuses_unreadable_retarget_with_security_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("lib");
+        let repo = git2::Repository::init(&target).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("alias.unknown", "!git push origin v2.0")
+            .unwrap();
+        let levels = SecuritySection {
+            outward_actions: crate::hooks::PolicyLevel::Off,
+            ..SecuritySection::default()
+        };
+        assert!(
+            evaluate_at("git -C lib push origin feature", &levels, Some(dir.path())).is_empty()
+        );
+        std::fs::remove_file(target.join(".git/HEAD")).unwrap();
+        for command in [
+            "git -C lib push origin v2.0",
+            "git -C lib tag v2.0",
+            "git -C lib unknown",
+            "git -C lib missing-alias",
+        ] {
+            let violations = evaluate_at(command, &levels, Some(dir.path()));
+            assert!(
+                violations.iter().any(|v| v.rule == "git.policy_authority"
+                    && v.level == crate::hooks::PolicyLevel::Block),
+                "{command}: {violations:?}"
+            );
+        }
+    }
+    #[test]
+    fn r22_outward_refuses_unreadable_tag_and_follow_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        for command in [
+            "git push origin v2.0",
+            "git push https://example.invalid/repo.git HEAD~1:refs/heads/main",
+        ] {
+            assert!(
+                evaluate_at(command, &SecuritySection::default(), Some(dir.path())).is_empty(),
+                "{command}"
+            );
+        }
+        std::fs::write(repo.path().join("refs/tags/v2.0"), "invalid\n").unwrap();
+        assert!(!evaluate_at(
+            "git push origin v2.0",
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
+        std::fs::remove_file(repo.path().join("refs/tags/v2.0")).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("push.followTags", "invalid-bool")
+            .unwrap();
+        assert!(!evaluate_at(
+            "git push origin main",
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
+    }
+    #[test]
+    fn r22_outward_absent_repository_is_not_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(evaluate_at(
+            "git push origin main",
+            &SecuritySection::default(),
+            Some(dir.path())
+        )
+        .is_empty());
     }
 }

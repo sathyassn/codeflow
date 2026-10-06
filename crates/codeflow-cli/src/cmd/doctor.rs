@@ -21,7 +21,13 @@ pub fn run(args: &DoctorArgs) -> i32 {
     let home = registry::codeflow_home();
     // OS text rule (issue 79): doctor takes the project folder as text, so one
     // that is not valid UTF-8 is refused, not read as a lossy lookalike.
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let Some(project_dir) = root.to_str() else {
         eprintln!(
             "codeflow doctor: the project folder is not valid UTF-8, so it cannot be checked"

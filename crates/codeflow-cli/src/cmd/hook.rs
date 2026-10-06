@@ -363,14 +363,13 @@ fn grok_deny(
     let _ = out.flush();
 }
 
-/// The finding for a guard input it could not read. Fail open with a
-/// visible warning: an unread payload must not veto every shell call
-/// (charter principle 8: legible, not silent).
+/// The refusal for a guard input it could not read. Guards exit with code 2
+/// because an unread payload cannot establish that the operation is allowed.
 fn payload_finding(guard: &str, error: &git_guard::PayloadError) -> codeflow_core::remedy::Finding {
     let remedy = codeflow_core::remedy::GUARD_PAYLOAD_MALFORMED
         .with(&[("guard", guard), ("path", HARNESS_HOOK_FILES)]);
     codeflow_core::remedy::Finding::new(
-        format!("unreadable hook payload ({error}); allowing"),
+        format!("unreadable hook payload ({error}); refusing"),
         remedy,
     )
 }
@@ -659,6 +658,19 @@ mod tests {
         assert_eq!(super::git_guard("{"), 2);
         assert_eq!(super::exec_guard_canary("{").code, Some(2));
     }
+    #[test]
+    fn r22_unreadable_payload_message_reports_refusal() {
+        let error = codeflow_core::hooks::git_guard::PayloadError::Malformed("invalid JSON".into());
+        let finding = super::payload_finding("git-guard", &error).line("codeflow", "error");
+        assert!(finding.contains("refusing"), "{finding}");
+        assert!(!finding.contains("allowing"), "{finding}");
+    }
+
+    #[test]
+    fn r22_empty_payload_object_remains_valid() {
+        assert!(codeflow_core::hooks::git_guard::HookPayload::parse("{}").is_ok());
+    }
+
     use super::{base_from_answer, read_bounded_utf8};
     use std::io::Cursor;
 

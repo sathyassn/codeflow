@@ -57,7 +57,11 @@ pub fn configured_hooks_path(root: &Path) -> Result<Option<String>, ScaffoldErro
 /// Git cannot read the effective hook configuration.
 pub fn detect_hook_manager(root: &Path) -> Result<Option<HookManager>, ScaffoldError> {
     let configured = configured_hooks_path(root)?;
-    if root.join(".husky").is_dir() {
+    if super::path_exists(&root.join(".husky"))?
+        && std::fs::metadata(root.join(".husky"))
+            .map_err(|error| ScaffoldError::io(root.join(".husky"), error))?
+            .is_dir()
+    {
         return Ok(Some(HookManager::Husky));
     }
     for f in [
@@ -66,7 +70,7 @@ pub fn detect_hook_manager(root: &Path) -> Result<Option<HookManager>, ScaffoldE
         "lefthook.toml",
         ".lefthook.toml",
     ] {
-        if root.join(f).exists() {
+        if super::path_exists(&root.join(f))? {
             return Ok(Some(HookManager::Lefthook));
         }
     }
@@ -210,6 +214,23 @@ pub fn is_empty_dir(root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_hook_manager_refuses_unreadable_candidates() {
+        for name in [
+            ".husky",
+            "lefthook.yml",
+            ".lefthook.yml",
+            "lefthook.toml",
+            ".lefthook.toml",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(detect_hook_manager(dir.path()).unwrap(), None);
+            std::os::unix::fs::symlink("missing", dir.path().join(name)).unwrap();
+            assert!(detect_hook_manager(dir.path()).is_err(), "{name}");
+        }
+    }
 
     #[test]
     fn stack_detection() {

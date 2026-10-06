@@ -260,7 +260,13 @@ pub fn run(args: &CiArgs) -> i32 {
             return 2;
         }
     };
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     // An invalid policy cannot verify the consumer's intent — fail loudly,
     // naming each offending key, rather than silently verify against the
     // built-in defaults, which could pass a range the real (mistyped) policy
@@ -1200,6 +1206,16 @@ pub(super) fn tracking_state_violation(error: impl std::fmt::Display) -> Violati
     )
 }
 
+/// These variants include repository reads and record decoding/parsing. Their
+/// failure cannot establish that tracking state satisfies the configured rules.
+fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkStartError) -> bool {
+    use codeflow_core::workgraph::work_start::WorkStartError;
+    matches!(
+        error,
+        WorkStartError::Repository(_) | WorkStartError::InvalidGraph(_)
+    )
+}
+
 /// A work branch carrying a task id (any sanctioned prefix) may contain
 /// implementation only after its planning record is present on the
 /// declared integration target: the same read-only merge-base preflight as
@@ -1327,12 +1343,16 @@ fn evaluate_work_start(
             Err(error) => {
                 tagged.push(TaggedViolation {
                     sha: None,
-                    violation: Violation::new(
-                        "work.stable_planning_anchor",
-                        level,
-                        error.to_string(),
-                        codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", &task_id)]),
-                    ),
+                    violation: if work_start_reader_error(&error) {
+                        tracking_state_violation(error)
+                    } else {
+                        Violation::new(
+                            "work.stable_planning_anchor",
+                            level,
+                            error.to_string(),
+                            codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", &task_id)]),
+                        )
+                    },
                 });
                 return;
             }
@@ -1342,13 +1362,17 @@ fn evaluate_work_start(
         ) {
             tagged.push(TaggedViolation {
                 sha: None,
-                violation: Violation::new(
-                    "work.stable_planning_anchor",
-                    level,
-                    error.to_string(),
-                    codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                        .with(&[("target", &target), ("id", &task_id)]),
-                ),
+                violation: if work_start_reader_error(&error) {
+                    tracking_state_violation(error)
+                } else {
+                    Violation::new(
+                        "work.stable_planning_anchor",
+                        level,
+                        error.to_string(),
+                        codeflow_core::remedy::WORK_START_MERGE_PLANNING
+                            .with(&[("target", &target), ("id", &task_id)]),
+                    )
+                },
             });
         }
     } else {
@@ -1502,18 +1526,17 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
     })
 }
 
-/// Report the ruleset actually enforced: the loader falls back to the
-/// built-in charter defaults silently (fail-safe), so the banner must say
-/// which source is in effect rather than assert the project file blindly.
+/// Report the policy source. Loading refuses malformed or unreadable policy;
+/// those cases can appear here only if the file changes after loading.
 fn print_source_banner(root: &Path) {
     match Policy::source(root) {
         PolicySource::UnreadableFile(error) => println!("codeflow ci: cannot read policy: {error}"),
         PolicySource::ProjectFile => {
             println!("codeflow ci: verifying against .codeflow/policy.json");
         }
-        PolicySource::MalformedFile => println!(
-            "codeflow ci: .codeflow/policy.json is malformed — verifying against built-in charter defaults"
-        ),
+        PolicySource::MalformedFile => {
+            println!("codeflow ci: .codeflow/policy.json became malformed after loading");
+        }
         PolicySource::Absent => println!(
             "codeflow ci: no .codeflow/policy.json — verifying against built-in charter defaults"
         ),
@@ -2184,20 +2207,50 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
 }
 
 /// Enumerate the commits in `base..head`, newest first, as (sha, stored
-/// message) records flagged merge or not. Uses a NUL-delimited `git log` so
-/// multi-line bodies parse unambiguously.
+/// message) records flagged merge or not. Git log supplies revision identities;
+/// messages come from stored objects so Git cannot recode their bytes.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
-        .args(["log", "-z", "--format=%H %P%n%B"])
+        .args(["log", "-z", "--format=%H %P%n"])
         .arg(format!("{base}..{head}"))
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
+    let log = std::str::from_utf8(&out.stdout)
+        .map_err(|error| format!("cannot decode Git commit identities as UTF-8: {error}"))?;
+    let mut records = parse_log(log);
+    if !records.is_empty() {
+        let repo = codeflow_core::hooks::repo::open(root)?
+            .ok_or("cannot read stored commit messages: repository is absent")?;
+        let objects = repo.odb().map_err(|error| error.to_string())?;
+        for record in &mut records {
+            let commit = repo
+                .revparse_single(&record.sha)
+                .and_then(|object| object.peel_to_commit())
+                .map_err(|error| format!("cannot read commit {}: {error}", record.sha))?;
+            let object = objects
+                .read(commit.id())
+                .map_err(|error| format!("cannot read commit {}: {error}", record.sha))?;
+            let bytes = object.data();
+            let message = bytes
+                .windows(2)
+                .position(|pair| pair == b"\n\n")
+                .map(|index| &bytes[index + 2..])
+                .ok_or_else(|| {
+                    format!(
+                        "cannot read commit {}: missing message separator",
+                        record.sha
+                    )
+                })?;
+            record.message = std::str::from_utf8(message)
+                .map_err(|error| format!("cannot decode Git commit messages as UTF-8: {error}"))?
+                .to_string();
+        }
+    }
     // Populate each commit's touched files for the contract-surface tripwire
     // (ADR-0020), read apart from the log so its -z parse stays unambiguous.
     let singles: Vec<&str> = records
@@ -2623,6 +2676,123 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r22_own_preflight_reader_failures_block_with_planning_off() {
+        use std::ffi::OsStr;
+        for defect in ["none", "ref", "record"] {
+            let dir = tempfile::tempdir().unwrap();
+            repo_with_commit(dir.path(), &[b"seed"]);
+            run_git(
+                dir.path(),
+                &[OsStr::new("branch"), OsStr::new("-M"), OsStr::new("main")],
+                b"",
+            );
+            std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+            std::fs::write(dir.path().join("project-management/tasks/TSK-001.md"), "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- AC-1 repair verified\n").unwrap();
+            if defect == "record" {
+                std::fs::write(
+                    dir.path().join("project-management/tasks/TSK-002.md"),
+                    b"\xff",
+                )
+                .unwrap();
+            }
+            run_git(dir.path(), &[OsStr::new("add"), OsStr::new(".")], b"");
+            run_git(
+                dir.path(),
+                &[
+                    OsStr::new("commit"),
+                    OsStr::new("-qm"),
+                    OsStr::new("chore: plan"),
+                ],
+                b"",
+            );
+            let head = run_git(
+                dir.path(),
+                &[OsStr::new("rev-parse"), OsStr::new("HEAD")],
+                b"",
+            );
+            if defect == "ref" {
+                std::fs::write(dir.path().join(".git/refs/heads/main"), "invalid ref\n").unwrap();
+            }
+            let mut tagged = Vec::new();
+            evaluate_work_start(
+                dir.path(),
+                "task/TSK-001-fix",
+                &head,
+                PolicyLevel::Off,
+                &mut tagged,
+            );
+            if defect == "none" {
+                assert!(tagged
+                    .iter()
+                    .all(|finding| finding.violation.level != PolicyLevel::Block));
+            } else {
+                assert!(
+                    tagged
+                        .iter()
+                        .any(|finding| finding.violation.rule == "work.tracking_state"
+                            && finding.violation.level == PolicyLevel::Block),
+                    "{defect}"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_commit_message_invalid_utf8_is_refused() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let base = repo_with_commit(dir.path(), &[b"seed"]);
+        let tree = run_git(
+            dir.path(),
+            &[OsStr::new("rev-parse"), OsStr::new("HEAD^{tree}")],
+            b"",
+        );
+        for encoding in ["", "encoding ISO-8859-1\n"] {
+            let mut raw = format!("tree {tree}\nparent {base}\nauthor Test <test@example.invalid> 1 +0000\ncommitter Test <test@example.invalid> 1 +0000\n{encoding}\nfix: ").into_bytes();
+            raw.extend_from_slice(b"caf\xff\n");
+            let head = run_git(
+                dir.path(),
+                &[
+                    OsStr::new("hash-object"),
+                    OsStr::new("-t"),
+                    OsStr::new("commit"),
+                    OsStr::new("-w"),
+                    OsStr::new("--stdin"),
+                ],
+                &raw,
+            );
+            let error = enumerate_commits(dir.path(), &base, &head).err().unwrap();
+            assert!(error.contains("commit messages as UTF-8"), "{error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_commit_enumeration_preserves_empty_range_and_valid_message() {
+        use std::ffi::OsStr;
+        let dir = tempfile::tempdir().unwrap();
+        let base = repo_with_commit(dir.path(), &[b"seed"]);
+        assert!(enumerate_commits(dir.path(), &base, &base)
+            .unwrap()
+            .is_empty());
+        run_git(
+            dir.path(),
+            &[
+                OsStr::new("commit"),
+                OsStr::new("--allow-empty"),
+                OsStr::new("-qm"),
+                OsStr::new("fix: café"),
+            ],
+            b"",
+        );
+        let commits = enumerate_commits(dir.path(), &base, "HEAD").unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message.trim(), "fix: café");
+    }
+
     #[cfg(unix)]
     #[test]
     fn r20_protected_base_distinguishes_present_and_missing_remote_refs() {

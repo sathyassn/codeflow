@@ -1720,7 +1720,8 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
             "commit or stash them, then rerun codeflow init --workspace".to_string(),
         ));
     }
-    let exists = repo.find_branch(&target, git2::BranchType::Local).is_ok();
+    let exists = local_branch_exists(&repo, &target)
+        .map_err(|error| switch_failed(&repo_label, &target, &error.to_string()))?;
     let step = if exists {
         git_run(root, &["switch", "--quiet", &target])
             .map_err(|e| switch_failed(&repo_label, &target, &e))?;
@@ -1741,7 +1742,9 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
                 "give the root checkout a default branch whose name is valid UTF-8".to_string(),
             ));
         };
-        let start = if repo.find_branch(from_text, git2::BranchType::Local).is_ok() {
+        let start = if local_branch_exists(&repo, from_text)
+            .map_err(|error| switch_failed(&repo_label, &target, &error.to_string()))?
+        {
             from_text.to_string()
         } else {
             format!("origin/{from_text}")
@@ -1757,6 +1760,14 @@ pub fn prepare_branch(root: &Path, policy: &GitPolicy) -> Result<BranchStep, Wor
         }
     };
     Ok(step)
+}
+
+fn local_branch_exists(repo: &git2::Repository, name: &str) -> Result<bool, git2::Error> {
+    match repo.find_branch(name, git2::BranchType::Local) {
+        Ok(_) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn switch_failed(repo_label: &str, target: &str, reason: &str) -> WorkspaceError {

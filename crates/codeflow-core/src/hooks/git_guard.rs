@@ -197,8 +197,9 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
 /// effective git policy, which is the defaults when it has no policy file.
 /// A relative `spec.path` is taken from `cwd`. A git-dir spec opens exactly
 /// that git directory, as git does with `--git-dir`/`GIT_DIR`; any other
-/// path is discovered upward, as `-C` and `cd` are. `None` when the path does
-/// not exist or is not in a repository.
+/// path is discovered upward, as `-C` and `cd` are. `None` when the path or
+/// its repository state cannot be resolved. The caller treats that answer as
+/// unknown and refuses mutations regardless of the session policy.
 #[must_use]
 pub fn read_target(
     cwd: &std::path::Path,
@@ -228,16 +229,27 @@ pub fn read_target(
         } else {
             abs
         };
-        git2::Repository::discover(&start).ok()?
+        super::repo::open(&start).ok()??
     };
     // Empty on a detached HEAD, which no branch rule protects.
     let branch = super::repo::current_branch(&repo).ok()?;
-    let same = session_common.is_some_and(|s| same_path(s, repo.commondir()))
-        && git2::Repository::discover(cwd)
-            .ok()
-            .and_then(|session| session.workdir().map(Path::to_path_buf))
-            .zip(repo.workdir())
-            .is_some_and(|(session, target)| same_path(&session, target));
+    let same = if let Some(common) = session_common {
+        if same_path(common, repo.commondir()).ok()? {
+            let session = super::repo::open(cwd).ok()?;
+            match session
+                .as_ref()
+                .and_then(git2::Repository::workdir)
+                .zip(repo.workdir())
+            {
+                Some((session, target)) => same_path(session, target).ok()?,
+                None => false,
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     let policy = if same {
         None
     } else {
@@ -264,11 +276,8 @@ pub fn read_target(
     })
 }
 
-fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => a == b,
-    }
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> std::io::Result<bool> {
+    Ok(a.canonicalize()? == b.canonicalize()?)
 }
 
 /// Parsed `PreToolUse` hook payload (the fields the guard reads).
@@ -470,8 +479,17 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
 /// disclose how the verdict was reached.
 #[must_use]
 pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    evaluate_report_at(command, ctx, &cwd)
+    match std::env::current_dir() {
+        Ok(cwd) => evaluate_report_at(command, ctx, &cwd),
+        Err(error) => Evaluation {
+            violations: vec![Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read the working directory: {error}"),
+                "run the command from an existing readable checkout",
+            )],
+            notes: Vec::new(),
+        },
+    }
 }
 
 /// Evaluate a command using the tool payload's working directory for paths.
@@ -1331,7 +1349,7 @@ fn token_integrity_path_spelled(
                 let dir = &token[..slash];
                 if !dir.is_empty()
                     && unresolved_tail(dir).is_none()
-                    && in_enforcement_dir(&integrity_shell_path(dir, cwd))
+                    && in_enforcement_dir(&integrity_shell_path(dir, cwd)).unwrap_or(true)
                 {
                     return Some("repository enforcement files");
                 }
@@ -1350,18 +1368,19 @@ fn token_integrity_path_spelled(
 /// repository's enforcement directories (`.codeflow`, `.claude`, `.git`,
 /// `.github`, `.codex`, `.grok`), where any entry may be an enforcement
 /// file.
-fn in_enforcement_dir(dir: &Path) -> bool {
-    let Ok(real) = std::fs::canonicalize(dir) else {
-        return false;
+fn in_enforcement_dir(dir: &Path) -> Result<bool, String> {
+    if crate::absence::proven_absent(dir).map_err(|error| error.to_string())? {
+        return Ok(false);
+    }
+    let real = std::fs::canonicalize(dir).map_err(|error| error.to_string())?;
+    let Some(repo) = super::repo::open(&real)? else {
+        return Ok(false);
     };
-    let Some(root) = git2::Repository::discover(&real)
-        .ok()
-        .and_then(|repo| repo.workdir().map(Path::to_path_buf))
-        .and_then(|root| std::fs::canonicalize(root).ok())
-    else {
-        return false;
+    let Some(root) = repo.workdir() else {
+        return Ok(false);
     };
-    real.strip_prefix(&root).is_ok_and(|inside| {
+    let root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
+    Ok(real.strip_prefix(&root).is_ok_and(|inside| {
         inside.components().next().is_some_and(|first| {
             let name = first.as_os_str().to_string_lossy().to_lowercase();
             matches!(
@@ -1369,7 +1388,7 @@ fn in_enforcement_dir(dir: &Path) -> bool {
                 ".codeflow" | ".claude" | ".git" | ".github" | ".codex" | ".grok"
             )
         })
-    })
+    }))
 }
 
 /// What a recursive change of a directory the guard cannot resolve is
@@ -1422,8 +1441,12 @@ fn token_integrity_path_literal(
         Err(_) => return Some("repository enforcement paths (cannot read repository state)"),
     }
     integrity_target(&normalize_path(token)).or_else(|| {
-        let base = integrity_disk_case(payload_cwd);
-        let path = integrity_disk_case(&cwd.join(token));
+        let (Ok(base), Ok(path)) = (
+            integrity_disk_case(payload_cwd),
+            integrity_disk_case(&cwd.join(token)),
+        ) else {
+            return Some("repository enforcement paths (cannot read path case)");
+        };
         if let Some(protected) = root_dot_pattern_target(&path) {
             return Some(protected);
         }
@@ -2365,7 +2388,13 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
     let mut reached = Vec::new();
     for dir in &run.dirs {
         let path = if target == "~" {
-            std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
+            if let Some(home) = std::env::home_dir() {
+                home
+            } else {
+                run.unknown
+                    .get_or_insert_with(|| "cannot resolve the home directory".to_string());
+                continue;
+            }
         } else {
             integrity_shell_path(target, dir)
         };
@@ -2486,8 +2515,8 @@ fn integrity_write_in_run(
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
     if token == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = std::env::home_dir() {
+            return home;
         }
     }
     // `~+` is the directory the command runs in.
@@ -2498,8 +2527,8 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
         return cwd.join(relative);
     }
     if let Some(relative) = token.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(relative);
+        if let Some(home) = std::env::home_dir() {
+            return home.join(relative);
         }
     }
     for name in ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL"] {
@@ -2574,15 +2603,17 @@ fn integrity_glob_matches(pattern: &str, name: &str) -> bool {
     shell_pattern(pattern).matches(name)
 }
 
-fn integrity_disk_case(path: &Path) -> PathBuf {
+fn integrity_disk_case(path: &Path) -> Result<PathBuf, String> {
     let mut real = PathBuf::new();
     for component in path.components() {
         real.push(component);
-        if let Ok(metadata) = std::fs::symlink_metadata(&real) {
-            super::edit_guard::normalize_case(&mut real, &metadata);
+        if let Some(metadata) =
+            crate::absence::symlink_metadata_optional(&real).map_err(|error| error.to_string())?
+        {
+            super::edit_guard::normalize_case(&mut real, &metadata)?;
         }
     }
-    real
+    Ok(real)
 }
 
 fn integrity_target(path: &str) -> Option<&'static str> {
@@ -3185,11 +3216,12 @@ fn environment_value(name: &str, line: &str) -> Option<std::ffi::OsString> {
 
 /// The paths a destructive command's target word names, or `None` when
 /// the guard cannot resolve it: a command substitution, a variable the line
-/// sets or the guard cannot read, or a brace expansion. A glob is expanded
-/// against the file system.
-fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> {
+/// sets or a brace expansion. A glob is expanded against the file system.
+/// Failed glob reads and environment decoding return an error, which callers
+/// refuse even when no protected path is known.
+fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Result<Option<Vec<PathBuf>>, String> {
     if token.contains('`') || token.contains("$(") || has_substitution(token) {
-        return None;
+        return Ok(None);
     }
     let mut text = String::new();
     let mut rest = token;
@@ -3197,7 +3229,9 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
         text.push_str(&rest[..at]);
         let after = &rest[at + 1..];
         let (name, used) = if let Some(braced) = after.strip_prefix('{') {
-            let end = braced.find('}')?;
+            let Some(end) = braced.find('}') else {
+                return Ok(None);
+            };
             (&braced[..end], end + 2)
         } else {
             let end = after
@@ -3206,19 +3240,35 @@ fn resolve_targets(token: &str, cwd: &Path, line: &str) -> Option<Vec<PathBuf>> 
             (&after[..end], end)
         };
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return None;
+            return Ok(None);
         }
-        text.push_str(environment_value(name, line)?.to_str()?);
+        let Some(value) = environment_value(name, line) else {
+            return Ok(None);
+        };
+        text.push_str(
+            value
+                .to_str()
+                .ok_or_else(|| format!("environment value {name} is not valid UTF-8"))?,
+        );
         rest = &after[used..];
     }
     text.push_str(rest);
     if text.contains('{') && (text.contains(',') || text.contains("..")) {
-        return None;
+        return Ok(None);
     }
     if text.contains(['*', '?', '[']) {
-        return WordGlob::new(&text, cwd).expand().ok();
+        return WordGlob::new(&text, cwd)
+            .expand()
+            .map(Some)
+            .map_err(|error| match error {
+                GlobStop::Unreadable => format!("cannot read target glob `{text}`"),
+                GlobStop::TooManyEntries => format!("target glob `{text}` has too many entries"),
+            });
     }
-    Some(vec![integrity_shell_path(&text, cwd)])
+    if (text == "~" || text.starts_with("~/")) && std::env::home_dir().is_none() {
+        return Err("cannot resolve the home directory".to_string());
+    }
+    Ok(Some(vec![integrity_shell_path(&text, cwd)]))
 }
 
 /// A recursive delete of a registered worktree, or of a directory holding
@@ -3302,7 +3352,8 @@ fn worktree_delete_check(
     };
     for target in targets.iter().filter(|t| !t.is_empty()) {
         match resolve_targets(target, cwd, line) {
-            Some(paths) => {
+            Err(error) => return Some(hook_integrity_violation(level, error)),
+            Ok(Some(paths)) => {
                 if let Some(checkout) = paths
                     .iter()
                     .find_map(|path| checkout_under(path, cwd, payload_cwd, except))
@@ -3310,7 +3361,7 @@ fn worktree_delete_check(
                     return Some(checkout_delete_violation(level, what, &checkout));
                 }
             }
-            None if held || worktree_text(target).is_some() => {
+            Ok(None) if held || worktree_text(target).is_some() => {
                 return Some(Violation::new(
                     "git.hook_integrity",
                     level,
@@ -3320,7 +3371,7 @@ fn worktree_delete_check(
                     crate::remedy::WORKTREE_DELETE.remedy(),
                 ));
             }
-            None => {}
+            Ok(None) => {}
         }
     }
     None
@@ -3760,7 +3811,7 @@ fn find_action_violation(
             &starts
                 .iter()
                 .copied()
-                .filter(|start| resolve_targets(start, cwd, line).is_none())
+                .filter(|start| !matches!(resolve_targets(start, cwd, line), Ok(Some(_))))
                 .collect::<Vec<_>>(),
             level,
             cwd,
@@ -3999,8 +4050,15 @@ fn recursive_change_violation(
         .into_iter()
         .filter(|target| !target.is_empty())
     {
-        let Some(paths) = resolve_targets(target, cwd, line) else {
-            continue;
+        let paths = match resolve_targets(target, cwd, line) {
+            Ok(Some(paths)) => paths,
+            Ok(None) => continue,
+            Err(error) => {
+                return Some(hook_integrity_violation(
+                    level,
+                    format!("cannot read recursive-change targets: {error}"),
+                ))
+            }
         };
         for path in &paths {
             for root in [cwd, payload_cwd] {
@@ -5542,6 +5600,13 @@ fn check_git(
     // A plain checkout only moves HEAD; one that force-creates a branch
     // resets that branch and is judged below.
     if matches!(sub, "checkout" | "switch") && forced_branch_target(sub, rest).is_none() {
+        if let Some(why) = &judged.unresolved {
+            out.push(Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read target repository policy and root-checkout state: {why}"),
+                "use a readable explicit repository before changing it",
+            ));
+        }
         return;
     }
     // A branch expression is judged as the branch git resolves it to in the
@@ -5593,6 +5658,14 @@ fn check_git(
     }
     if let Some(why) = judged.unresolved {
         notes.push(disclose_unresolved(sub, &why, &mut found));
+        if !discard_readonly_git(sub, rest) && !found.iter().any(|v| v.level == PolicyLevel::Block)
+        {
+            found.push(Violation::always_blocking(
+                "git.policy_authority",
+                format!("cannot read target repository policy and root-checkout state: {why}"),
+                "use a readable explicit repository before changing it",
+            ));
+        }
     }
     if !found.is_empty() && ctx.dir_target_lookup.is_some() {
         if let Ok(specs) = compose_targets(args, moved) {
@@ -6202,7 +6275,8 @@ struct Judged<'p> {
 /// When every directory the shell could run the op in resolves to a readable
 /// repository, the op is judged against each of them, by that repository's
 /// branch and its own policy, and blocks if any of them is protected.
-/// Otherwise the target is unresolved: the op is judged as if it ran on a
+/// Otherwise the target is unresolved: mutation refuses independently of the
+/// session policy, and the op is also judged as if it ran on a
 /// protected branch under the session policy, so a mutation blocks, and the
 /// verdict says why and how to make the target resolvable.
 fn judge_target<'p>(
@@ -7225,7 +7299,11 @@ fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>)
         };
         match body {
             Ok(body) => scan_pr_body(&body, policy, out),
-            Err(error) if policy.ai_attribution.is_active() || policy.commit_emoji.is_active() => {
+            Err(error)
+                if policy.ai_attribution.is_active()
+                    || policy.commit_emoji.is_active()
+                    || policy.policy_characters.is_active() =>
+            {
                 out.push(Violation::new(
                     "git.pr_body",
                     PolicyLevel::Block,
@@ -8783,6 +8861,273 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    // R22-GUARD-TESTS-BEGIN
+    #[cfg(unix)]
+    #[test]
+    fn r22_recursive_glob_reader_error_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken")).unwrap();
+        let args = vec!["-R".to_string(), "uchg".to_string(), "*(D)".to_string()];
+        let result = recursive_change_violation(
+            "chflags",
+            &args,
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "chflags -R uchg *(D)",
+        );
+        assert!(result.is_some(), "an unreadable glob must refuse");
+        assert!(worktree_delete_check(
+            "rm",
+            &["*(D)"],
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "rm -rf *(D)",
+            None
+        )
+        .is_some());
+        std::fs::remove_file(dir.path().join("broken")).unwrap();
+        assert!(recursive_change_violation(
+            "chflags",
+            &args,
+            PolicyLevel::Block,
+            dir.path(),
+            dir.path(),
+            "chflags -R uchg *(D)"
+        )
+        .is_none());
+        assert_eq!(
+            resolve_targets("absent*", dir.path(), "").unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_target_environment_decode_error_refuses() {
+        use std::os::unix::ffi::OsStrExt;
+        const CHILD: &str = "CODEFLOW_R22_TARGET_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(resolve_targets("$CODEFLOW_R22_BAD_TARGET", dir.path(), "").is_err());
+            let args = vec![
+                "-R".to_string(),
+                "uchg".to_string(),
+                "$CODEFLOW_R22_BAD_TARGET".to_string(),
+            ];
+            assert!(recursive_change_violation(
+                "chflags",
+                &args,
+                PolicyLevel::Block,
+                dir.path(),
+                dir.path(),
+                "chflags -R uchg $CODEFLOW_R22_BAD_TARGET"
+            )
+            .is_some());
+            assert!(
+                resolve_targets("$CODEFLOW_R22_ABSENT_TARGET", dir.path(), "")
+                    .unwrap()
+                    .is_none()
+            );
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_target_environment_decode_error_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(
+                "CODEFLOW_R22_BAD_TARGET",
+                std::ffi::OsStr::from_bytes(b"bad\xff"),
+            )
+            .env_remove("CODEFLOW_R22_ABSENT_TARGET")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_enforcement_discovery_error_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
+        assert!(in_enforcement_dir(dir.path()).is_err());
+        let command = format!("{}/$unknown", dir.path().display());
+        assert!(token_integrity_path_spelled(&command, dir.path(), dir.path()).is_some());
+        std::fs::remove_file(dir.path().join(".git")).unwrap();
+        assert!(!in_enforcement_dir(dir.path()).unwrap());
+        assert!(!in_enforcement_dir(&dir.path().join("absent")).unwrap());
+    }
+
+    #[test]
+    fn r22_pr_body_policy_characters_alone_requires_readable_file() {
+        let policy = GitPolicy {
+            ai_attribution: PolicyLevel::Off,
+            commit_emoji: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Block,
+            ..default_policy()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.md");
+        let mut found = Vec::new();
+        check_gh_pr_body(
+            &["--body-file", missing.to_str().unwrap()],
+            &policy,
+            &mut found,
+        );
+        assert!(blocks(&found));
+        found.clear();
+        check_gh_pr_body(&[], &policy, &mut found);
+        assert!(
+            found.is_empty(),
+            "no body-file option does not require a file"
+        );
+        std::fs::write(&missing, "Plain body.").unwrap();
+        check_gh_pr_body(
+            &["--body-file", missing.to_str().unwrap()],
+            &policy,
+            &mut found,
+        );
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn r22_unresolved_target_refuses_with_session_protection_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = GitPolicy {
+            protected_branches: vec![],
+            commit_to_protected: PolicyLevel::Off,
+            root_checkout_commits: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let missing = |_: &Retarget<'_>| None;
+        let context = ctx_with_dir_branch(&policy, "feat/x", &missing);
+        for command in ["git -C . commit -m x", "git -C . switch topic"] {
+            let result = evaluate_report_at(command, &context, dir.path());
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.rule == "git.policy_authority" && v.level == PolicyLevel::Block),
+                "{command}: {:?}",
+                result.violations
+            );
+        }
+        assert!(evaluate_report_at("git -C . status", &context, dir.path())
+            .violations
+            .is_empty());
+        let readable = |_: &Retarget<'_>| same_repo("feat/x");
+        let context = ctx_with_dir_branch(&policy, "feat/x", &readable);
+        assert!(
+            evaluate_report_at("git -C . commit -m x", &context, dir.path())
+                .violations
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_home_unset_reaches_bash_home() {
+        const CHILD: &str = "CODEFLOW_R22_HOME_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let output = std::process::Command::new("/bin/bash")
+                .args(["--noprofile", "--norc", "-c", "printf '%s' ~"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let expected = PathBuf::from(String::from_utf8(output.stdout).unwrap());
+            let dir = tempfile::tempdir().unwrap();
+            let mut run = RunDirs {
+                dirs: vec![dir.path().to_path_buf()],
+                unknown: None,
+            };
+            assert_eq!(reach_dirs("~", &mut run), vec![expected.clone()]);
+            assert_eq!(
+                integrity_shell_path("~/ordinary", dir.path()),
+                expected.join("ordinary")
+            );
+            assert!(run.unknown.is_none());
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_home_unset_reaches_bash_home",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("HOME")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r22_missing_working_directory_refuses() {
+        const CHILD: &str = "CODEFLOW_R22_CWD_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempfile::tempdir().unwrap();
+            std::env::set_current_dir(dir.path()).unwrap();
+            std::fs::remove_dir(dir.path()).unwrap();
+            let policy = default_policy();
+            let result = evaluate_report("git status", &ctx(&policy, "feat/x"));
+            assert!(result
+                .violations
+                .iter()
+                .any(|v| v.level == PolicyLevel::Block
+                    && v.message.contains("cannot read the working directory")));
+            return;
+        }
+        let policy = default_policy();
+        assert!(evaluate_report("git status", &ctx(&policy, "feat/x"))
+            .violations
+            .is_empty());
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r22_missing_working_directory_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    #[test]
+    fn r22_target_identity_error_is_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        real_repo(dir.path(), "feat/x");
+        let missing_common = dir.path().join("missing-common");
+        let spec = Retarget {
+            path: ".",
+            git_dir: false,
+        };
+        assert!(read_target(dir.path(), Some(&missing_common), &spec).is_none());
+        assert!(read_target(dir.path(), None, &spec).is_some());
+        assert!(
+            read_target(dir.path(), Some(&dir.path().join(".git")), &spec)
+                .unwrap()
+                .policy
+                .is_none()
+        );
+    }
+    // R22-GUARD-TESTS-END
+
     #[cfg(unix)]
     #[test]
     fn r20_empty_branch_answer_refuses() {
@@ -11414,16 +11759,30 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("a1")).unwrap();
         let cwd = dir.path();
         assert_eq!(
-            resolve_targets("a*", cwd, "rm -rf a*").map(|p| p.len()),
+            resolve_targets("a*", cwd, "rm -rf a*")
+                .unwrap()
+                .map(|p| p.len()),
             Some(1)
         );
-        assert!(resolve_targets("$d", cwd, "d=x; rm -rf $d").is_none());
-        assert!(resolve_targets("$(pwd)", cwd, "rm -rf $(pwd)").is_none());
-        assert!(resolve_targets("{a,b}", cwd, "rm -rf {a,b}").is_none());
+        assert!(resolve_targets("$d", cwd, "d=x; rm -rf $d")
+            .unwrap()
+            .is_none());
+        assert!(resolve_targets("$(pwd)", cwd, "rm -rf $(pwd)")
+            .unwrap()
+            .is_none());
+        assert!(resolve_targets("{a,b}", cwd, "rm -rf {a,b}")
+            .unwrap()
+            .is_none());
         // `PATH` is set wherever the tests run.
-        assert!(resolve_targets("$PATH/x", cwd, "rm -rf $PATH/x").is_some());
-        assert!(resolve_targets("${PATH}/x", cwd, "rm -rf ${PATH}/x").is_some());
-        assert!(resolve_targets("$PATH/x", cwd, "PATH=/; rm -rf $PATH/x").is_none());
+        assert!(resolve_targets("$PATH/x", cwd, "rm -rf $PATH/x")
+            .unwrap()
+            .is_some());
+        assert!(resolve_targets("${PATH}/x", cwd, "rm -rf ${PATH}/x")
+            .unwrap()
+            .is_some());
+        assert!(resolve_targets("$PATH/x", cwd, "PATH=/; rm -rf $PATH/x")
+            .unwrap()
+            .is_none());
     }
 
     /// TSK-216 review findings 2 and 3, against the `sed` on this machine:

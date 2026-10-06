@@ -102,7 +102,10 @@ fn branch_rule_text(name: Option<&GitName>) -> String {
 /// Discovery fails, including an existing repository marker with malformed metadata.
 pub fn open(start: &Path) -> Result<Option<Repository>, String> {
     match Repository::discover(start) {
-        Ok(repo) => Ok(Some(repo)),
+        Ok(repo) => {
+            check_discovery_boundaries(start, &repo)?;
+            Ok(Some(repo))
+        }
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             // libgit2 also reports NotFound for an existing .git with an invalid
             // HEAD. Only an empty directory is proven to contain no repository;
@@ -158,8 +161,160 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
     }
 }
 
+/// libgit2 may ignore a broken inner marker and successfully discover an outer
+/// repository. Each marker below the reported boundary must either resolve to
+/// that repository (a gitfile can redirect outside this ancestry) or be empty.
+fn check_discovery_boundaries(start: &Path, repo: &Repository) -> Result<(), String> {
+    let start = start
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve repository search directory: {error}"))?;
+    let boundary = repo
+        .workdir()
+        .unwrap_or_else(|| repo.path())
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve discovered repository directory: {error}"))?;
+    let git_boundary = repo
+        .path()
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve discovered git directory: {error}"))?;
+    for ancestor in start.ancestors() {
+        if ancestor == boundary || ancestor == git_boundary {
+            return Ok(());
+        }
+        let marker = ancestor.join(".git");
+        if crate::absence::proven_absent(&marker)
+            .map_err(|error| format!("cannot inspect repository marker: {error}"))?
+        {
+            continue;
+        }
+        let open_error = match Repository::open(ancestor) {
+            Ok(local) => {
+                let local_directory = local.path().canonicalize().map_err(|error| {
+                    format!(
+                        "cannot resolve repository marker {}: {error}",
+                        marker.display()
+                    )
+                })?;
+                if local_directory == git_boundary {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "repository discovery skipped another repository at {}",
+                    marker.display()
+                ));
+            }
+            Err(error) => error,
+        };
+        let mut entries = std::fs::read_dir(&marker).map_err(|error| {
+            format!(
+                "cannot open repository marker {}: {open_error}; cannot inspect it: {error}",
+                marker.display()
+            )
+        })?;
+        if entries
+            .next()
+            .transpose()
+            .map_err(|error| format!("cannot inspect repository entry: {error}"))?
+            .is_some()
+        {
+            return Err(format!(
+                "cannot open repository marker {}: {open_error}",
+                marker.display()
+            ));
+        }
+    }
+    Err("discovered repository is outside the searched ancestry".to_string())
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_broken_nested_marker_cannot_select_outer_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::os::unix::fs::symlink(nested.join("missing"), nested.join(".git")).unwrap();
+        assert!(super::open(&nested).is_err());
+        std::fs::remove_file(nested.join(".git")).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: missing\n").unwrap();
+        assert!(super::open(&nested).is_err());
+    }
+
+    #[test]
+    fn r22_absent_and_empty_nested_markers_keep_parent_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        Repository::init(dir.path()).unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        for empty_marker in [false, true] {
+            if empty_marker {
+                std::fs::create_dir(nested.join(".git")).unwrap();
+            }
+            let repo = super::open(&nested).unwrap().unwrap();
+            assert_eq!(
+                repo.workdir().unwrap().canonicalize().unwrap(),
+                dir.path().canonicalize().unwrap()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_nested_bare_repository_stops_before_broken_outer_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
+        let nested = dir.path().join("nested.git");
+        Repository::init_bare(&nested).unwrap();
+        let repo = super::open(&nested).unwrap().unwrap();
+        assert!(repo.is_bare());
+        assert_eq!(
+            repo.path().canonicalize().unwrap(),
+            nested.canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_repository_discovery_from_symlinked_subdirectory_keeps_real_ancestry() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        Repository::init(&root).unwrap();
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&nested, &link).unwrap();
+        let repo = super::open(&link).unwrap().unwrap();
+        assert_eq!(
+            repo.workdir().unwrap().canonicalize().unwrap(),
+            root.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn r22_repository_discovery_accepts_separate_git_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("checkout");
+        let metadata = dir.path().join("metadata");
+        git(
+            dir.path(),
+            &[
+                "init",
+                "--separate-git-dir",
+                metadata.to_str().unwrap(),
+                root.to_str().unwrap(),
+            ],
+        );
+        for start in [&root, &metadata, &metadata.join("objects")] {
+            let repo = super::open(start).unwrap().unwrap();
+            assert_eq!(
+                repo.path().canonicalize().unwrap(),
+                metadata.canonicalize().unwrap()
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[test]

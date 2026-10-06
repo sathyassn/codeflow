@@ -203,7 +203,13 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             return run_status(RecordKind::Epic, id, target, details, None);
         }
     };
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let pm = root.join("project-management");
     let template = match load_template("base/pm/epic.md.tmpl") {
         Ok(template) => template,
@@ -232,7 +238,7 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
     if !integration {
         return 0;
     }
-    match light_paths::create_integration_branch(&super::repo_root(), &rec.id, title) {
+    match light_paths::create_integration_branch(&root, &rec.id, title) {
         Ok(branch) => {
             println!(
                 "{}  from {}{}",
@@ -327,7 +333,13 @@ fn new_task(
     integration_target: Option<&str>,
     title: &str,
 ) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let pm = root.join("project-management");
     let exists = match epic
         .map(|value| allocate::epic_exists(&pm, value))
@@ -395,7 +407,13 @@ fn resume_task(id: &str) -> i32 {
         eprintln!("error: '{id}' is not a task id (TSK-NNN)");
         return 2;
     };
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let unwritten = match issue::resume(&root, &parsed) {
         Ok(unwritten) => unwritten,
         Err(error) => {
@@ -467,7 +485,13 @@ fn run_follow_up(source: &str, title: &str) -> i32 {
             return 1;
         }
     };
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let request = serde_json::json!({ "kind": "task", "follow_up_of": source, "title": title });
     let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, title, request) else {
         return 1;
@@ -513,7 +537,13 @@ pub enum AdrCommand {
 /// tracked the number is issued from the registry (TSK-104 AC-4).
 pub fn run_adr(args: &AdrArgs) -> i32 {
     let AdrCommand::New { title } = &args.command;
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let template = match std::fs::read_to_string(root.join("docs/decisions/template.md")) {
         Ok(template) => Ok(template),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -641,7 +671,13 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
             );
         }
     };
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let pm = root.join("project-management");
     for work_item in work_item {
         let exists = match allocate::work_item_exists(&pm, work_item) {
@@ -707,7 +743,14 @@ fn run_status(
         by,
         acceptance,
     };
-    match set_status(&super::repo_root(), kind, id, &change) {
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
+    match set_status(&root, kind, id, &change) {
         Ok(outcome) => {
             for warning in &outcome.warnings {
                 eprintln!("warning: {warning}");
@@ -755,7 +798,7 @@ fn load_template(asset: &str) -> Result<String, String> {
     } else {
         RecordKind::Task
     };
-    let (text, source) = record_template::load(&super::repo_root(), kind, &embedded)?;
+    let (text, source) = record_template::load(&super::repo_root()?, kind, &embedded)?;
     if let TemplateSource::Fallback(reason) = source {
         eprintln!("warning: {reason}");
     }
