@@ -1,0 +1,11 @@
+id = "TSK-246"
+uid = "0a0a5f43-c183-425f-b4e3-9b7786532a52"
+kind = "TSK"
+title = "The docs portal takes fixed dependency releases"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-06T08:45:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
