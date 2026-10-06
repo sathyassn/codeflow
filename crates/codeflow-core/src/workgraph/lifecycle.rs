@@ -146,6 +146,26 @@ pub struct Graph {
     pub records: BTreeMap<String, RecordView>,
 }
 
+/// An undecodable epic directory can still hold a task whose identity is ASCII.
+/// Other non-record names remain outside the record inventory.
+fn record_path_text(name: &GitName) -> Result<Option<&str>, String> {
+    if let Ok(path) = name.rule_text() {
+        return Ok(Some(path));
+    }
+    let parts: Vec<_> = name.bytes().split(|byte| *byte == b'/').collect();
+    if let [b"project-management", b"epics", _, b"tasks", file] = parts.as_slice() {
+        // Every supported task filename is ASCII. A non-ASCII filename
+        // cannot be a task identity, but the enclosing epic name can.
+        if file.is_ascii() {
+            let file = std::str::from_utf8(file).map_err(|error| error.to_string())?;
+            if record_kind_for_tree_path(&format!("project-management/tasks/{file}")).is_some() {
+                return Err(format!("cannot decode work record path {}", name.display()));
+            }
+        }
+    }
+    Ok(None)
+}
+
 impl Graph {
     /// Read the checked-out records under `project-management/`.
     ///
@@ -165,6 +185,12 @@ impl Graph {
                     .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
                 let relative =
                     crate::portable_path::slashed(path.strip_prefix(repo_root).unwrap_or(&path));
+                if !crate::git::key_is_text(&relative) {
+                    return Err(format!(
+                        "cannot decode work record path {}",
+                        crate::git::display_key(&relative)
+                    ));
+                }
                 graph.insert(kind, &relative, &content)?;
             }
         }
@@ -187,9 +213,13 @@ impl Graph {
         let mut graph = Self::default();
         let mut failure = None;
         crate::git::walk_tree(repo, &tree, &mut |name, entry| {
-            // A record path is valid text; any other name is not a record.
-            let Ok(path) = name.rule_text() else {
-                return crate::git::Walk::Continue;
+            let path = match record_path_text(name) {
+                Ok(Some(path)) => path,
+                Ok(None) => return crate::git::Walk::Continue,
+                Err(error) => {
+                    failure = Some(error);
+                    return crate::git::Walk::Stop;
+                }
             };
             let Some(kind) = record_kind_for_tree_path(path) else {
                 return crate::git::Walk::Continue;
@@ -298,14 +328,28 @@ impl Baseline {
             Ok(entries) => entries,
             Err(error) => return Self::Refused(vec![error]),
         };
-        let Ok(repo) = Repository::discover(repo_root) else {
-            return if entries.is_empty() {
-                Self::NotRecorded
-            } else {
-                Self::Unavailable(entries)
-            };
+        let repo = match Repository::discover(repo_root) {
+            Ok(repo) => repo,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                return if entries.is_empty() {
+                    Self::NotRecorded
+                } else {
+                    Self::Unavailable(entries)
+                };
+            }
+            Err(error) => {
+                return Self::Refused(vec![format!(
+                    "cannot discover migration baseline repository: {error}"
+                )])
+            }
         };
-        let head = resolve_commit(&repo, "HEAD");
+        if entries.is_empty() {
+            return Self::NotRecorded;
+        }
+        let head = match resolve_commit(&repo, "HEAD") {
+            Ok(head) => head,
+            Err(error) => return Self::Refused(vec![error]),
+        };
         Self::from_entries(&repo, &entries, head)
     }
 
@@ -331,16 +375,30 @@ impl Baseline {
                 continue;
             };
             match repo.find_object(oid, None) {
-                Err(_) => missing.push(entry.clone()),
-                Ok(object) if object.kind() != Some(git2::ObjectType::Commit) => refused.push(format!(
-                    "{BASELINE_KEY} entry {entry} is not a commit"
-                )),
-                Ok(_) if !head.is_some_and(|head| contains(repo, head, oid)) => refused.push(format!(
-                    "{BASELINE_KEY} entry {entry} is not an ancestor of the commit being judged; every baseline must be a commit this history contains"
-                )),
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                    missing.push(entry.clone());
+                }
+                Err(error) => {
+                    refused.push(format!("cannot read {BASELINE_KEY} entry {entry}: {error}"));
+                }
+                Ok(object) if object.kind() != Some(git2::ObjectType::Commit) => {
+                    refused.push(format!("{BASELINE_KEY} entry {entry} is not a commit"));
+                }
                 Ok(_) => {
-                    if !resolved.iter().any(|(_, seen)| *seen == oid) {
-                        resolved.push((entry.clone(), oid));
+                    let contained = match head {
+                        Some(head) => contains(repo, head, oid),
+                        None => Ok(false),
+                    };
+                    match contained {
+                        Err(error) => refused.push(format!("cannot read ancestry of {BASELINE_KEY} entry {entry}: {error}")),
+                        Ok(false) => refused.push(format!(
+                            "{BASELINE_KEY} entry {entry} is not an ancestor of the commit being judged; every baseline must be a commit this history contains"
+                        )),
+                        Ok(true) => {
+                            if !resolved.iter().any(|(_, seen)| *seen == oid) {
+                                resolved.push((entry.clone(), oid));
+                            }
+                        }
                     }
                 }
             }
@@ -355,18 +413,28 @@ impl Baseline {
         for (entry, oid) in &resolved {
             match Graph::from_revision(repo, &oid.to_string()) {
                 Ok(graph) => graphs.push(graph),
-                Err(_) => return Self::Unavailable(vec![entry.clone()]),
+                Err(error) => {
+                    return Self::Refused(vec![format!(
+                        "cannot read {BASELINE_KEY} entry {entry}: {error}"
+                    )])
+                }
             }
         }
-        let ancestor = resolved
-            .iter()
-            .map(|(_, older)| {
-                resolved
-                    .iter()
-                    .map(|(_, newer)| older != newer && contains(repo, *newer, *older))
-                    .collect()
-            })
-            .collect();
+        let mut ancestor = Vec::new();
+        for (_, older) in &resolved {
+            let mut row = Vec::new();
+            for (_, newer) in &resolved {
+                match contains(repo, *newer, *older) {
+                    Ok(contains) => row.push(older != newer && contains),
+                    Err(error) => {
+                        return Self::Refused(vec![format!(
+                            "cannot read migration baseline ancestry: {error}"
+                        )])
+                    }
+                }
+            }
+            ancestor.push(row);
+        }
         Self::Available {
             commits: resolved.into_iter().map(|(entry, _)| entry).collect(),
             graphs,
@@ -515,16 +583,31 @@ pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     (removed && closed).then_some(out)
 }
 
-fn resolve_commit(repo: &Repository, revision: &str) -> Option<git2::Oid> {
-    repo.revparse_single(revision)
-        .and_then(|object| object.peel_to_commit())
-        .map(|commit| commit.id())
-        .ok()
+fn resolve_commit(repo: &Repository, revision: &str) -> Result<Option<git2::Oid>, String> {
+    // revparse reports NotFound for an unborn HEAD. The HEAD reader distinguishes
+    // that legitimate state from an unreadable reference or an unknown revision.
+    let commit = if revision == "HEAD" {
+        match repo.head() {
+            Ok(head) => head.peel_to_commit(),
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
+            Err(error) => return Err(format!("cannot resolve HEAD to a commit: {error}")),
+        }
+    } else {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+    };
+    commit
+        .map(|commit| Some(commit.id()))
+        .map_err(|error| format!("cannot resolve {revision} to a commit: {error}"))
 }
 
 /// Whether `commit` is `tip` or one of its ancestors.
-fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> bool {
-    tip == commit || repo.graph_descendant_of(tip, commit).unwrap_or(false)
+fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> Result<bool, String> {
+    if tip == commit {
+        return Ok(true);
+    }
+    repo.graph_descendant_of(tip, commit)
+        .map_err(|error| error.to_string())
 }
 
 /// The baseline entries of a parsed project config: a list, or a single
@@ -567,7 +650,12 @@ pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
     let path = repo_root.join(".codeflow/project.toml");
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(&path).map_err(|error| error.to_string())? =>
+        {
+            return Ok(Vec::new())
+        }
         Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
     };
     let config = text
@@ -613,12 +701,15 @@ fn range_baseline(
     target: git2::Oid,
     head: Option<&str>,
 ) -> (Baseline, Vec<Finding>) {
-    let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
     let refuse = |error: String| {
         (
             Baseline::Refused(vec![format!("cannot read migration baseline: {error}")]),
             Vec::new(),
         )
+    };
+    let head_commit = match resolve_commit(repo, head.unwrap_or("HEAD")) {
+        Ok(head) => head,
+        Err(error) => return refuse(error),
     };
     let base_list = match baseline_at(repo, target) {
         Ok(entries) => entries,
@@ -1625,10 +1716,8 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
         let Some(path) = fields.next() else {
             break;
         };
-        // A record path is valid text; a path with an invalid byte is not
-        // one, and is never read as a lossy lookalike of one (issue 79).
         let path = GitName::from_bytes(path);
-        let Ok(path) = path.rule_text() else {
+        let Some(path) = record_path_text(&path)? else {
             continue;
         };
         let Some(kind) = record_kind_for_tree_path(path) else {
@@ -1725,9 +1814,8 @@ fn shipped_specs(
 ) -> (BTreeSet<String>, Vec<(String, String)>) {
     let mut shipped = BTreeSet::new();
     let mut problems = Vec::new();
-    let Some(tip) = resolve_commit(repo, base) else {
-        return (shipped, problems);
-    };
+    let tip = resolve_commit(repo, base)
+        .and_then(|tip| tip.ok_or_else(|| format!("no commit at spec history base {base}")));
     for record in after.records.values() {
         let Some(old) = before.get(&record.id, RecordKind::Spec) else {
             continue;
@@ -1738,7 +1826,11 @@ fn shipped_specs(
         {
             continue;
         }
-        match shipped_in_history(repo, tip, &record.id) {
+        match tip
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|tip| shipped_in_history(repo, *tip, &record.id))
+        {
             Ok(true) => {
                 shipped.insert(record.id.clone());
             }
@@ -1861,7 +1953,7 @@ fn judge_range_against(
     brought: Option<&Brought>,
 ) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let target_commit = resolve_commit(&repo, target)
+    let target_commit = resolve_commit(&repo, target)?
         .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
     let (baseline, notices) = range_baseline(repo_root, &repo, target_commit, head);
     let base_graph = Graph::from_revision(&repo, base)?;
@@ -1970,8 +2062,8 @@ fn landing_paths(
     let Some(head) = head else {
         return Ok(None);
     };
-    let base = resolve_commit(repo, base).ok_or("cannot resolve spec landing base")?;
-    let tip = resolve_commit(repo, head).ok_or("cannot resolve spec landing head")?;
+    let base = resolve_commit(repo, base)?.ok_or("cannot resolve spec landing base")?;
+    let tip = resolve_commit(repo, head)?.ok_or("cannot resolve spec landing head")?;
     let mut commit = repo.find_commit(tip).map_err(|error| error.to_string())?;
     let status_at = |commit: &git2::Commit<'_>| -> Result<Option<String>, String> {
         let tree = commit.tree().map_err(|error| error.to_string())?;

@@ -97,10 +97,30 @@ impl ProjectPaths {
                 .map(ToString::to_string)
                 .collect()
         };
-        Ok(Self {
+        let paths = Self {
             product,
             watched: policy.git.breaking_watch_paths,
-        })
+        };
+        paths.validate()?;
+        Ok(paths)
+    }
+
+    /// Validate configured globs before they can classify a decision path.
+    ///
+    /// # Errors
+    /// Returns the invalid policy key and pattern, with a repair instruction.
+    pub fn validate(&self) -> Result<(), String> {
+        for (key, patterns) in [
+            ("product_paths", &self.product),
+            ("breaking_watch_paths", &self.watched),
+        ] {
+            for pattern in patterns {
+                glob::Pattern::new(pattern).map_err(|error| {
+                    format!("invalid git.{key} glob {pattern:?}: {error}; correct the path pattern in .codeflow/policy.json")
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn for_key(&self, key: &str) -> &[String] {
@@ -311,6 +331,18 @@ mod tests {
             for pattern in &member.patterns {
                 assert!(glob::Pattern::new(pattern).is_ok(), "bad glob {pattern}");
             }
+        }
+    }
+
+    #[test]
+    fn r22_project_paths_reject_invalid_globs_and_keep_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(ProjectPaths::load(dir.path()).is_ok());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        for key in ["product_paths", "breaking_watch_paths"] {
+            let policy = serde_json::json!({"schema_version": 1, "git": {key: ["src/["]}});
+            std::fs::write(dir.path().join(".codeflow/policy.json"), policy.to_string()).unwrap();
+            assert!(ProjectPaths::load(dir.path()).is_err(), "{key}");
         }
     }
 

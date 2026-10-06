@@ -129,6 +129,10 @@ fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsE
         for copy in &records.copies {
             let entry = ledger.entry(&copy.id);
             let verdict = match (&copy.uid, entry) {
+                (_, None) if ledger.holds(&copy.id) => format!(
+                    "{} on {name} is held by an invalid registry entry; repair the registry before landing it (R-8)",
+                    copy.id
+                ),
                 (_, None) => {
                     unplaced
                         .entry(copy.id.to_string())
@@ -503,5 +507,48 @@ mod r21_tests {
             &[("HEAD", "project-management/tasks/TSK-001.md")]
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+
+    #[test]
+    fn r22_uid_reader_missing_base_refuses_but_absent_uid_is_legacy() {
+        let (dir, repo, _) = repository(TASK, b"---\nid: TSK-001\n---\n");
+        let git = Git::new(dir.path());
+        let path = std::str::from_utf8(TASK).unwrap();
+        let texts = Texts::read(&git, &[("HEAD", path)]).unwrap();
+        assert!(texts.uid_at("HEAD", path).is_none());
+        remove_blob(&repo, b"---\nid: TSK-001\n---\n");
+        assert!(Texts::read(&git, &[("HEAD", path)]).is_err());
+    }
+
+    #[test]
+    fn r22_uid_edit_missing_base_cannot_be_backfill() {
+        let (dir, repo, base) = repository(TASK, b"---\nid: TSK-001\n---\n");
+        let head = crate::git::add_commit(&repo, &[(TASK, TEXT)]);
+        remove_blob(&repo, b"---\nid: TSK-001\n---\n");
+        assert!(matches!(
+            merge_rule(&Git::new(dir.path()), &base.to_string(), &head.to_string()),
+            Err(IdsError::Git(_))
+        ));
+    }
+
+    #[test]
+    fn r22_invalid_first_registry_entry_blocks_landing_copy() {
+        let (dir, repo, _) = repository(b"ids/TSK/001.toml", b"broken = [");
+        let git = Git::new(dir.path());
+        let ledger = Ledger::read(&git, "HEAD").unwrap();
+        crate::git::add_commit(&repo, &[(TASK, TEXT)]);
+        let mut report = Report::default();
+        reconcile(&git, &ledger, &mut report).unwrap();
+        assert!(!report.blocks.is_empty(), "{report:?}");
+        let mut absent = Report::default();
+        reconcile(&git, &Ledger::default(), &mut absent).unwrap();
+        assert!(absent.blocks.is_empty());
+        assert!(!absent.warns.is_empty());
     }
 }

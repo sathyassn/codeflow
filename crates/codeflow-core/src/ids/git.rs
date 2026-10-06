@@ -258,7 +258,9 @@ impl Git {
             })?;
             cursor += end + 1;
             if header.ends_with(" missing") {
-                continue;
+                return Err(IdsError::Git(format!(
+                    "git cat-file: requested blob {id} is missing; repair the repository objects, then retry"
+                )));
             }
             let size: usize = header
                 .rsplit(' ')
@@ -746,5 +748,20 @@ mod r16_core_regressions {
             records,
             vec![vec!["sha", ":meta", "\x1efile", ":meta", "\nfile"]]
         );
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    #[test]
+    fn r22_requested_missing_blob_refuses_and_empty_request_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let git = super::Git::new(dir.path());
+        assert!(git.blobs(&[]).unwrap().is_empty());
+        assert!(matches!(
+            git.blobs(&["1111111111111111111111111111111111111111".into()]),
+            Err(super::IdsError::Git(_))
+        ));
     }
 }

@@ -817,3 +817,53 @@ fn r16_historical_record_errors_do_not_equal_absence() {
         .is_none());
     assert!(super::landing_on_line(&repo, git2::Oid::ZERO_SHA1, &|_| Ok(false)).is_err());
 }
+
+#[test]
+fn r22_advertisement_refuses_invalid_oid_and_keeps_empty_remote() {
+    assert!(from_advertisement("fixture", "").unwrap().heads.is_empty());
+    let oid = "a".repeat(40);
+    assert!(from_advertisement(
+        "fixture",
+        &format!("ref: refs/heads/main\tHEAD\n{oid}\trefs/heads/main\n")
+    )
+    .is_ok());
+    for line in [
+        "bad\trefs/heads/main\n",
+        "bad\tHEAD\n",
+        "bad\trefs/tags/v1\n",
+        "malformed\n",
+    ] {
+        assert!(from_advertisement("fixture", line).is_err(), "{line:?}");
+    }
+}
+
+#[test]
+fn r22_checkout_scope_refuses_remote_lookup_error_and_keeps_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    assert!(checkout_scope(dir.path(), None).is_ok());
+    let mut config = repo.config().unwrap();
+    config.set_str("remote.origin.url", "unused").unwrap();
+    config
+        .set_str(
+            "remote.origin.fetch",
+            "refs/heads/*:refs/remotes/origin/main",
+        )
+        .unwrap();
+    assert!(repo.find_remote("origin").is_err());
+    assert!(checkout_scope(dir.path(), None).is_err());
+}
+
+#[test]
+fn r22_own_landing_ancestry_refuses_missing_object_and_keeps_unrelated() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+    assert!(own_review_reaches(&repo, oid, oid).unwrap());
+    let tree = repo.find_commit(oid).unwrap().tree().unwrap();
+    let signature = git2::Signature::now("test", "test@example.com").unwrap();
+    let unrelated = repo
+        .commit(None, &signature, &signature, "unrelated", &tree, &[])
+        .unwrap();
+    assert!(!own_review_reaches(&repo, unrelated, oid).unwrap());
+    assert!(own_review_reaches(&repo, Oid::from_str(&"a".repeat(40)).unwrap(), oid).is_err());
+}

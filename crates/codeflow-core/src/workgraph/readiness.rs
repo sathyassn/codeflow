@@ -229,14 +229,17 @@ fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<Strin
         "refs/heads/{}",
         declared.strip_prefix("refs/heads/").unwrap_or(declared)
     );
-    if repo.find_reference(&local).is_ok() {
-        return repo
-            .branch_upstream_remote(&local)
-            .ok()
-            .map(owned)
-            .transpose();
+    match repo.find_reference(&local) {
+        Ok(_) => match repo.branch_upstream_remote(&local) {
+            Ok(remote) => owned(remote).map(Some),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(error) => Err(format!(
+                "cannot read upstream remote for '{declared}': {error}"
+            )),
+        },
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(Some("origin".to_string())),
+        Err(error) => Err(format!("cannot read target branch '{declared}': {error}")),
     }
-    Ok(Some("origin".to_string()))
 }
 
 /// Every visible branch carrying a task id on a sanctioned work prefix, with
@@ -907,6 +910,14 @@ impl StackHints {
     }
 }
 
+fn origin_available(result: Result<git2::Remote<'_>, git2::Error>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(format!("cannot read origin remote: {error}")),
+    }
+}
+
 fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
     // A visible record owns its declaration; use the shared target resolver.
     if let Some(target) =
@@ -944,8 +955,10 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
                 .and_then(|s| s.split_once('/'))
                 .map(|(_, b)| b);
             if branch == Some(super::work_start::logical_target(target)) {
-                let preferred = target_fetch_remote(&repo, target)?
-                    .or_else(|| repo.find_remote("origin").ok().map(|_| "origin".into()));
+                let preferred = match target_fetch_remote(&repo, target)? {
+                    Some(remote) => Some(remote),
+                    None => origin_available(repo.find_remote("origin"))?.then(|| "origin".into()),
+                };
                 let remote = name
                     .strip_prefix("refs/remotes/")
                     .and_then(|s| s.split_once('/'))
@@ -1062,7 +1075,7 @@ pub fn claim_on(
     let declared = claim_target(repo_root, task_id)?
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let has_origin = repo.find_remote("origin").is_ok();
+    let has_origin = origin_available(repo.find_remote("origin"))?;
     let target_remote = target_fetch_remote(&repo, &declared)?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
@@ -1338,6 +1351,34 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r22_target_fetch_remote_refuses_malformed_local_ref() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        assert_eq!(
+            target_fetch_remote(&repo, "main").unwrap(),
+            Some("origin".into())
+        );
+        std::fs::write(repo.path().join("refs/heads/main"), "invalid object id\n").unwrap();
+        assert!(target_fetch_remote(&repo, "main").is_err());
+    }
+
+    #[test]
+    fn r22_origin_lookup_refuses_errors_but_keeps_missing_remote() {
+        assert!(!origin_available(Err(git2::Error::new(
+            git2::ErrorCode::NotFound,
+            git2::ErrorClass::Config,
+            "missing"
+        )))
+        .unwrap());
+        assert!(origin_available(Err(git2::Error::new(
+            git2::ErrorCode::Invalid,
+            git2::ErrorClass::Config,
+            "broken remote"
+        )))
+        .is_err());
+    }
 
     #[test]
     fn git_stdout_preserves_framing_and_refuses_failed_decoding() {

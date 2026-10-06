@@ -267,7 +267,9 @@ fn choose(git: &Git, ledgers: &[&Ledger], request: &Request) -> Result<RegId, Id
         .max()
         .unwrap_or(0);
     let refs = inventory::max_seq_on_refs(git, kind)?;
-    let worktree = inventory::max_seq_in_worktree(git.root(), kind);
+    let worktree = inventory::max_seq_in_worktree(git.root(), kind).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records before issuing an ID: {error}; restore readable record directories, then retry"))
+    })?;
     let next = history.max(refs).max(worktree) + 1;
     Ok(RegId::canonical(kind, next))
 }
@@ -645,7 +647,7 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
             "-z",
             commit,
         ])?;
-        for change in inventory::raw_changes(&changes) {
+        for change in inventory::raw_changes(&changes)? {
             if change.status != 'A' {
                 continue;
             }
@@ -1186,5 +1188,22 @@ mod tests {
             classify_push("remote: HTTP 403 Forbidden"),
             Pushed::Failed(IdsError::Permission(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    #[test]
+    fn r22_choose_refuses_unreadable_inventory_and_keeps_empty_root() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let git = super::Git::new(dir.path());
+        let request = super::Request::issue(crate::ids::Kind::Tsk, "task", "main");
+        assert_eq!(
+            super::choose(&git, &[], &request).unwrap().to_string(),
+            "TSK-001"
+        );
+        std::fs::write(dir.path().join("project-management"), b"not a directory").unwrap();
+        assert!(super::choose(&git, &[], &request).is_err());
     }
 }

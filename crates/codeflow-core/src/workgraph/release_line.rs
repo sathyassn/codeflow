@@ -196,17 +196,28 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
 pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String> {
     let mut symref = None;
     let mut heads = Vec::new();
-    for line in listed.split('\n') {
-        let Some((left, name)) = line.split_once('\t') else {
-            continue;
-        };
+    for line in listed.strip_suffix('\n').unwrap_or(listed).split('\n') {
+        if listed.is_empty() {
+            break;
+        }
+        let (left, name) = line.split_once('\t').ok_or_else(|| {
+            format!("cannot read the destination {url} advertisement: malformed ref record")
+        })?;
         if let Some(target) = left.strip_prefix("ref: ") {
             if name == "HEAD" {
                 symref = target.strip_prefix("refs/heads/").map(str::to_string);
             }
             continue;
         }
-        if let (Some(branch), Ok(oid)) = (name.strip_prefix("refs/heads/"), Oid::from_str(left)) {
+        if left.len() != 40 {
+            return Err(format!(
+                "cannot read the destination {url} advertisement: expected a full object ID"
+            ));
+        }
+        let oid = Oid::from_str(left).map_err(|error| {
+            format!("cannot read the destination {url} advertisement object ID: {error}")
+        })?;
+        if let Some(branch) = name.strip_prefix("refs/heads/") {
             heads.push((branch.to_string(), oid));
         }
     }
@@ -337,20 +348,9 @@ pub fn scope(
 /// As [`scope`], and when `origin` cannot be asked.
 pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let branch = repo
-        .head()
-        .ok()
-        .map(|head| crate::git::name::reference_shorthand(&head))
+    let branch = super::light_paths::current_branch(repo_root)
+        .map_err(|error| format!("the checked-out branch cannot be read: {error}"))?
         .unwrap_or_default();
-    // OS text rule (issue 79): the release pattern is a glob and needs text.
-    // Whether a branch is a release branch changes ownership and acceptance
-    // rules, so a name that is not valid UTF-8 refuses instead of guessing.
-    let branch = branch.rule_text().map_err(|error| {
-        format!(
-            "the checked-out branch is not valid UTF-8, so its release scope cannot be judged ({})",
-            error.display()
-        )
-    })?;
     // OS text rule (issue 79): an `origin` without a URL is absent, but one
     // whose URL is not valid UTF-8 names a destination this check cannot ask,
     // so it refuses instead of judging under another destination's policy.
@@ -364,10 +364,11 @@ pub fn checkout_scope(repo_root: &Path, into: Option<&str>) -> Result<Scope, Str
                 })?
                 .to_string(),
         ),
-        Err(_) => None,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+        Err(error) => return Err(format!("cannot read origin for release policy: {error}")),
     };
     let destination = ask_destination(repo_root, url.as_deref())?;
-    scope(repo_root, &destination, branch, into)
+    scope(repo_root, &destination, &branch, into)
 }
 
 /// The merge a pull request from `head` into `base` would create, written
@@ -1421,7 +1422,7 @@ fn judge(
                                 Landing::Commit(introduced),
                                 default_tip,
                                 Transport::TaskLanding,
-                                super::acceptance::source_landing_base(&repo, source, introduced),
+                                super::acceptance::source_landing_base(&repo, source, introduced)?,
                             );
                             // Where the task's own line landed it, when the
                             // import brings it from that line.
@@ -1967,12 +1968,19 @@ fn own_task_landing_read(
     {
         return Ok(false);
     }
-    let reaches =
-        |from: Oid| from == reviewed || repo.graph_descendant_of(from, reviewed).unwrap_or(false);
-    if !reaches(second) || reaches(first) {
+    if !own_review_reaches(repo, second, reviewed)? || own_review_reaches(repo, first, reviewed)? {
         return Ok(false);
     }
     is_clean_remerge(repo, landing).map_err(|error| error.to_string())
+}
+
+fn own_review_reaches(repo: &Repository, from: Oid, reviewed: Oid) -> Result<bool, String> {
+    if from == reviewed {
+        Ok(true)
+    } else {
+        repo.graph_descendant_of(from, reviewed)
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// What a commit's project config says of [`MARKER_KEY`]. Only config

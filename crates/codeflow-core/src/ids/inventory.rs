@@ -153,35 +153,50 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
 
 /// The highest canonical sequence of `kind` in the working tree, so an
 /// uncommitted record also counts.
-#[must_use]
-pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> u64 {
+///
+/// # Errors
+/// Returns an error when an existing record directory cannot be read.
+pub fn max_seq_in_worktree(root: &Path, kind: Kind) -> std::io::Result<u64> {
     let mut paths = Vec::new();
     for base in RECORD_ROOTS {
-        collect_files(root, &root.join(base), &mut paths, 0);
+        collect_files(root, &root.join(base), &mut paths, 0)?;
     }
-    max_seq_in(paths.iter().map(String::as_str), kind)
+    Ok(max_seq_in(paths.iter().map(String::as_str), kind))
 }
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>, depth: usize) {
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<String>,
+    depth: usize,
+) -> std::io::Result<()> {
     if depth > 4 {
-        return;
+        return Ok(());
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error)
+            if depth == 0
+                && error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(dir)? =>
+        {
+            return Ok(())
+        }
+        Err(error) => return Err(error),
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry?;
         let path = entry.path();
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
+        let kind = entry.file_type()?;
         if kind.is_dir() {
-            collect_files(root, &path, out, depth + 1);
+            collect_files(root, &path, out, depth + 1)?;
         } else if kind.is_file() {
             if let Ok(relative) = path.strip_prefix(root) {
                 out.push(crate::portable_path::slashed(relative));
             }
         }
     }
+    Ok(())
 }
 
 fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
@@ -217,7 +232,7 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     for record in z_records(&log) {
         let mut fields = record.iter().map(String::as_str);
         let sha = fields.next().unwrap_or_default().to_string();
-        for change in raw_fields(fields) {
+        for change in raw_fields(fields)? {
             if change.status != 'A' {
                 continue;
             }
@@ -453,7 +468,7 @@ pub(crate) fn added_records(git: &Git, commit: &str) -> Result<Vec<(String, Stri
         "-z",
         commit,
     ])?;
-    Ok(raw_changes(&changes)
+    Ok(raw_changes(&changes)?
         .into_iter()
         .filter(|change| change.status == 'A' && record_id_from_path(&change.path).is_some())
         .map(|change| (change.path, change.blob))
@@ -562,14 +577,16 @@ pub fn is_replica(
 }
 
 /// One entry of NUL-delimited raw diff output (`diff-tree -z`).
+#[derive(Debug)]
 pub(crate) struct RawChange {
+    pub mode: String,
     pub blob: String,
     pub status: char,
     pub path: String,
 }
 
 /// Parse `diff-tree --raw -z` output: a `:meta` field, then its path.
-pub(crate) fn raw_changes(output: &[u8]) -> Vec<RawChange> {
+pub(crate) fn raw_changes(output: &[u8]) -> Result<Vec<RawChange>, IdsError> {
     raw_fields(z_fields(output).iter().map(String::as_str))
 }
 
@@ -577,27 +594,46 @@ pub(crate) fn raw_changes(output: &[u8]) -> Vec<RawChange> {
 /// one colon per parent and carries one status letter per parent; it
 /// takes a letter only when every parent agrees on it, else `M`, so `A`
 /// means that no parent held the path. The blob is the result's.
-fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
+pub(super) fn raw_fields<'a>(
+    mut fields: impl Iterator<Item = &'a str>,
+) -> Result<Vec<RawChange>, IdsError> {
     let mut changes = Vec::new();
     while let Some(meta) = fields.next() {
         let body = meta.trim_start_matches(':');
         let parents = meta.len() - body.len();
-        if parents == 0 {
-            continue;
-        }
-        let Some(path) = fields.next() else {
-            break;
+        let malformed = || {
+            IdsError::Git(
+                "git raw diff returned a malformed record; repair the Git input, then retry".into(),
+            )
         };
+        if parents == 0 {
+            return Err(malformed());
+        }
+        let path = fields
+            .next()
+            .filter(|path| !path.is_empty())
+            .ok_or_else(malformed)?;
         let parts: Vec<&str> = body.split(' ').filter(|part| !part.is_empty()).collect();
-        if parts.len() != 2 * parents + 3 {
-            continue;
+        if parts.len() != 2 * parents + 3
+            || !parts[..=parents]
+                .iter()
+                .all(|mode| mode.len() == 6 && mode.bytes().all(|byte| matches!(byte, b'0'..=b'7')))
+            || !parts[parents + 1..=2 * parents + 1]
+                .iter()
+                .all(|oid| !oid.is_empty() && oid.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(malformed());
         }
         let letters = parts[2 * parents + 2];
+        if letters.len() != parents || !letters.bytes().all(|letter| b"ACDMRTUXB".contains(&letter))
+        {
+            return Err(malformed());
+        }
         let status = if parents == 1 {
-            letters.chars().next().unwrap_or('?')
+            letters.chars().next().ok_or_else(malformed)?
         } else {
             let mut chars = letters.chars();
-            let first = chars.next().unwrap_or('?');
+            let first = chars.next().ok_or_else(malformed)?;
             if chars.all(|letter| letter == first) {
                 first
             } else {
@@ -605,12 +641,13 @@ fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
             }
         };
         changes.push(RawChange {
+            mode: parts[parents].to_string(),
             blob: parts[2 * parents + 1].to_string(),
             status,
             path: path.to_string(),
         });
     }
-    changes
+    Ok(changes)
 }
 
 /// Fail on a shallow clone: its boundary commits look like adds, so an
@@ -857,6 +894,7 @@ mod tests {
              ::100644 100644 000000 eee fff {z} DD\0tasks/TSK-004.md\0"
         );
         let changes: Vec<(char, String, String)> = raw_changes(output.as_bytes())
+            .unwrap()
             .into_iter()
             .map(|change| (change.status, change.blob, change.path))
             .collect();
@@ -869,5 +907,47 @@ mod tests {
                 ('D', z.to_string(), "tasks/TSK-004.md".to_string()),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+
+    #[test]
+    fn r22_inventory_missing_blob_refuses_empty_tree_stays_empty() {
+        let (dir, repo, _) = repository(TASK, TEXT);
+        remove_blob(&repo, TEXT);
+        assert!(matches!(
+            copies_at(&Git::new(dir.path()), "HEAD"),
+            Err(IdsError::Git(_))
+        ));
+        let (dir, _, _) = repository(b"README.md", b"hello");
+        assert!(copies_at(&Git::new(dir.path()), "HEAD").unwrap().is_empty());
+    }
+
+    #[test]
+    fn r22_number_inventory_refuses_unreadable_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("project-management"), b"not a directory").unwrap();
+        assert!(max_seq_in_worktree(dir.path(), Kind::Tsk).is_err());
+    }
+
+    #[test]
+    fn r22_number_inventory_proven_missing_roots_stay_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(max_seq_in_worktree(dir.path(), Kind::Tsk).unwrap(), 0);
+    }
+
+    #[test]
+    fn r22_raw_diff_malformed_records_refuse() {
+        for bytes in [
+            b"garbage\0file\0".as_slice(),
+            b":000000 100644 old new\0file\0",
+            b":000000 100644 old new A\0",
+        ] {
+            assert!(raw_changes(bytes).is_err());
+        }
     }
 }

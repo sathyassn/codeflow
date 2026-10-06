@@ -323,7 +323,7 @@ fn decide(
     Ok(Ok(Entry {
         id: id.clone(),
         uid: uids.into_iter().next().cloned().unwrap_or_else(new_uid),
-        title: title_of(git, &chosen.intro, id).unwrap_or_default(),
+        title: title_of(git, &chosen.intro, id)?.unwrap_or_default(),
         issuer: "seed".to_string(),
         created: crate::workgraph::now_rfc3339(),
         target: chosen.refname.clone(),
@@ -336,27 +336,40 @@ fn decide(
     }))
 }
 
-fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let (_, blob) = inventory::added_records(git, commit)
-        .ok()?
+fn title_of(git: &Git, commit: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    let Some((_, blob)) = inventory::added_records(git, commit)?
         .into_iter()
-        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))?;
-    let text = git.run(&["cat-file", "blob", &blob]).ok()?;
-    frontmatter_value(&text, "title")
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))
+    else {
+        return Ok(None);
+    };
+    let text = git.run(&["cat-file", "blob", &blob])?;
+    Ok(frontmatter_value(&text, "title"))
 }
 
 /// The record files in the working tree, by id.
-fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
+fn worktree_records(root: &Path) -> std::io::Result<BTreeMap<RegId, Vec<PathBuf>>> {
     let mut out: BTreeMap<RegId, Vec<PathBuf>> = BTreeMap::new();
-    let mut stack: Vec<PathBuf> = RECORD_ROOTS.iter().map(|base| root.join(base)).collect();
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
+    let mut stack: Vec<(PathBuf, bool)> = RECORD_ROOTS
+        .iter()
+        .map(|base| (root.join(base), true))
+        .collect();
+    while let Some((dir, optional)) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error)
+                if optional
+                    && error.kind() == std::io::ErrorKind::NotFound
+                    && crate::absence::proven_absent(&dir)? =>
+            {
+                continue
+            }
+            Err(error) => return Err(error),
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
+        for entry in entries {
+            let path = entry?.path();
+            if std::fs::metadata(&path)?.is_dir() {
+                stack.push((path, false));
                 continue;
             }
             let Ok(relative) = path.strip_prefix(root) else {
@@ -368,7 +381,7 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Insert `key: value` after the frontmatter's `after` line.
@@ -421,7 +434,9 @@ pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
     let ledger = Ledger::read(&git, &registry)?;
     let mut report = BackfillReport::default();
     let mut intros = inventory::Introductions::default();
-    for (id, paths) in worktree_records(root) {
+    for (id, paths) in worktree_records(root).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
+    })? {
         for path in paths {
             let text = std::fs::read_to_string(&path)?;
             if frontmatter_value(&text, "uid").is_some() {
@@ -472,7 +487,9 @@ pub struct Retarget {
 /// `uid`, and a record the registry already binds to its number.
 pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     let git = Git::new(root);
-    let records = worktree_records(root);
+    let records = worktree_records(root).map_err(|error| {
+        IdsError::Invalid(format!("cannot inventory work records: {error}; restore readable record directories, then retry"))
+    })?;
     let paths = records
         .get(from)
         .ok_or_else(|| IdsError::Invalid(format!("{from} is not a record in this working tree")))?;
@@ -619,8 +636,12 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
             continue;
         };
         let path = git.root().join(relative);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => continue,
+            Err(error) => return Err(IdsError::Invalid(format!(
+                "cannot read {} while rewriting links: {error}; restore the tracked file, then retry", path.display()
+            ))),
         };
         if let Some(updated) = replace_id(&text, from, to) {
             std::fs::write(&path, updated)?;
@@ -664,5 +685,74 @@ mod tests {
         let map = SeedMap::parse("[ids.\"TSK-050\"]\ncopies = [\"a\", \"b\"]\n").unwrap();
         assert_eq!(map.copies[&RegId::parse("TSK-050").unwrap()].len(), 2);
         assert!(SeedMap::parse("[ids.\"nope\"]\ncopies = []\n").is_err());
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+
+    #[test]
+    fn r22_seed_title_read_failure_is_not_an_empty_title() {
+        let (dir, repo, commit) = repository(TASK, TEXT);
+        let git = Git::new(dir.path());
+        let id = RegId::parse("TSK-001").unwrap();
+        assert!(title_of(&git, &commit.to_string(), &id).unwrap().is_none());
+        remove_blob(&repo, TEXT);
+        assert!(title_of(&git, &commit.to_string(), &id).is_err());
+    }
+
+    #[test]
+    fn r22_seed_missing_copy_refuses_and_no_records_need_no_seed() {
+        let (dir, repo, _) = repository(TASK, TEXT);
+        remove_blob(&repo, TEXT);
+        assert!(matches!(
+            plan(&Git::new(dir.path()), &Ledger::default(), None),
+            Err(IdsError::Git(_))
+        ));
+        let (dir, _, _) = repository(b"README.md", b"hello");
+        assert!(plan(&Git::new(dir.path()), &Ledger::default(), None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn r22_retarget_missing_landed_blob_refuses_before_renumbering() {
+        let (dir, repo, _) = repository(TASK, TEXT);
+        let path = dir.path().join(std::str::from_utf8(TASK).unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, TEXT).unwrap();
+        remove_blob(&repo, TEXT);
+        assert!(matches!(
+            retarget(dir.path(), &RegId::parse("TSK-001").unwrap()),
+            Err(IdsError::Git(_))
+        ));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn r22_worktree_record_walk_refuses_bad_root_and_keeps_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(worktree_records(dir.path()).unwrap().is_empty());
+        std::fs::write(dir.path().join("project-management"), b"not a directory").unwrap();
+        assert!(worktree_records(dir.path()).is_err());
+    }
+
+    #[test]
+    fn r22_link_rewrite_refuses_missing_tracked_file_but_skips_binary() {
+        let (dir, repo, commit) = repository(b"docs/link.md", b"TSK-001");
+        let mut index = repo.index().unwrap();
+        index
+            .read_tree(&repo.find_commit(commit).unwrap().tree().unwrap())
+            .unwrap();
+        index.write().unwrap();
+        let from = RegId::parse("TSK-001").unwrap();
+        let to = RegId::parse("TSK-002").unwrap();
+        let git = Git::new(dir.path());
+        assert!(rewrite_links(&git, &from, &to).is_err());
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/link.md"), [0xff]).unwrap();
+        assert!(rewrite_links(&git, &from, &to).unwrap().is_empty());
     }
 }

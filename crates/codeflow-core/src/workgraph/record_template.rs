@@ -206,11 +206,11 @@ pub enum TemplateSource {
 }
 
 /// The template for `kind`: the project's checked template when present, or
-/// `embedded` when the project has no template.
+/// `embedded` when the project has no template or its readable template is invalid.
 ///
 /// # Errors
 ///
-/// Returns an error if the project template exists but cannot be read or validated.
+/// Returns an error if the project template cannot be read or its absence proven.
 pub fn load(
     root: &Path,
     kind: RecordKind,
@@ -222,13 +222,24 @@ pub fn load(
     match std::fs::read_to_string(&path) {
         Ok(text) => match check(kind, &text) {
             Ok(()) => Ok((text, TemplateSource::Project)),
-            Err(reason) => Err(format!(
-                "{PROJECT_TEMPLATES}/{}.md is not a usable template: {reason}",
-                name(kind)
+            Err(reason) => Ok((
+                embedded.to_string(),
+                TemplateSource::Fallback(format!(
+                    "{PROJECT_TEMPLATES}/{}.md is not a usable {} template ({reason}); used the embedded template",
+                    name(kind),
+                    name(kind)
+                )),
             )),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok((embedded.to_string(), TemplateSource::Embedded))
+            match crate::absence::proven_absent(&path) {
+                Ok(true) => Ok((embedded.to_string(), TemplateSource::Embedded)),
+                Ok(false) => Err(format!("cannot read {}: {e}", path.display())),
+                Err(error) => Err(format!(
+                    "cannot establish absence of {}: {error}",
+                    path.display()
+                )),
+            }
         }
         Err(e) => Err(format!(
             "cannot read {PROJECT_TEMPLATES}/{}.md: {e}",
@@ -247,6 +258,34 @@ mod tests {
         let folder = dir.path().join(PROJECT_TEMPLATES);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("task.md"), b"#\xff").unwrap();
+        assert!(load(dir.path(), RecordKind::Task, TASK).is_err());
+    }
+
+    #[test]
+    fn r22_readable_invalid_template_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join(PROJECT_TEMPLATES);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("task.md"), "# not a template\n").unwrap();
+        let (text, source) = load(dir.path(), RecordKind::Task, TASK).unwrap();
+        assert_eq!(text, TASK);
+        assert!(
+            matches!(source, TemplateSource::Fallback(reason) if reason.contains("not a usable task template"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_template_dangling_link_refuses_but_absence_keeps_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load(dir.path(), RecordKind::Task, TASK).is_ok());
+        let folder = dir.path().join(PROJECT_TEMPLATES);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::os::unix::fs::symlink("missing", folder.join("task.md")).unwrap();
+        assert!(load(dir.path(), RecordKind::Task, TASK).is_err());
+        std::fs::remove_file(folder.join("task.md")).unwrap();
+        std::fs::remove_dir(&folder).unwrap();
+        std::os::unix::fs::symlink("missing", &folder).unwrap();
         assert!(load(dir.path(), RecordKind::Task, TASK).is_err());
     }
 
@@ -348,7 +387,9 @@ mod tests {
             (custom, TemplateSource::Project)
         );
         std::fs::write(folder.join("task.md"), "# not a template\n").unwrap();
-        let error = load(dir.path(), RecordKind::Task, TASK).unwrap_err();
-        assert!(error.contains("not a usable template"));
+        assert!(matches!(
+            load(dir.path(), RecordKind::Task, TASK).unwrap().1,
+            TemplateSource::Fallback(_)
+        ));
     }
 }

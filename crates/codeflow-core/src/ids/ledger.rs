@@ -408,8 +408,12 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         "--format=%x1e%H%x1f%P%x1f%s",
         tip,
     ])?;
+    parse_raw_history(&log)
+}
+
+fn parse_raw_history(log: &[u8]) -> Result<Vec<RawCommit>, IdsError> {
     let mut commits = Vec::new();
-    for record in z_records(&log) {
+    for record in z_records(log) {
         let mut fields = record.iter().map(String::as_str);
         let header = fields.next().unwrap_or_default();
         let mut parts = header.split('\x1f');
@@ -422,22 +426,13 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
             .count();
         let subject = parts.next().unwrap_or_default().to_string();
         let mut changes = Vec::new();
-        while let Some(meta) = fields.next() {
-            let Some(meta) = meta.strip_prefix(':') else {
-                continue;
-            };
-            let Some(path) = fields.next() else {
-                break;
-            };
-            let meta: Vec<&str> = meta.split(' ').filter(|part| !part.is_empty()).collect();
-            let [_old_mode, mode, _old_blob, blob, status] = meta.as_slice() else {
-                continue;
-            };
+        for change in super::inventory::raw_fields(fields)? {
+            // Registry history uses first-parent diffs, never combined records.
             changes.push(Change {
-                mode: (*mode).to_string(),
-                blob: (*blob).to_string(),
-                status: status.chars().next().unwrap_or('?'),
-                path: path.to_string(),
+                mode: change.mode,
+                blob: change.blob,
+                status: change.status,
+                path: change.path,
             });
         }
         commits.push(RawCommit {
@@ -477,5 +472,31 @@ mod r21_tests {
                 "undecodable issuer must not be a valid registry entry"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    use crate::ids::r22_fixture::*;
+    #[test]
+    fn r22_ledger_missing_blob_refuses_and_missing_ref_is_empty() {
+        let (dir, repo, _) = repository(b"ids/TSK/001.toml", b"broken = [");
+        let git = Git::new(dir.path());
+        assert!(!Ledger::read(&git, "refs/heads/absent").unwrap().exists());
+        remove_blob(&repo, b"broken = [");
+        assert!(matches!(Ledger::read(&git, "HEAD"), Err(IdsError::Git(_))));
+    }
+    #[test]
+    fn r22_registry_malformed_raw_history_refuses() {
+        for record in [
+            "garbage\0path\0",
+            ":000000 100644 old new\0path\0",
+            ":000000 100644 old new A\0",
+        ] {
+            let log = format!("\x1eabc\x1f\x1fsubject\0{record}");
+            assert!(parse_raw_history(log.as_bytes()).is_err());
+        }
+        assert!(parse_raw_history(b"").unwrap().is_empty());
     }
 }

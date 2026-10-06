@@ -368,10 +368,10 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
         Ok(name) => name,
         Err(error) => return vec![error.to_string()],
     };
-    let default_target = default_name
-        .and_then(|target| repo.revparse_single(&target).ok())
-        .and_then(|object| object.peel_to_commit().ok())
-        .map(|commit| commit.id());
+    let default_target = match target_commit(&repo, default_name.as_deref()) {
+        Ok(target) => target,
+        Err(error) => return vec![error],
+    };
     let landing = super::acceptance::Landing::Worktree {
         head,
         changed: &changed,
@@ -448,6 +448,20 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     }
 }
 
+fn target_commit(
+    repo: &git2::Repository,
+    target: Option<&str>,
+) -> Result<Option<git2::Oid>, String> {
+    target
+        .map(|target| {
+            repo.revparse_single(target)
+                .and_then(|object| object.peel_to_commit())
+                .map(|commit| commit.id())
+                .map_err(|error| format!("cannot read acceptance target '{target}': {error}"))
+        })
+        .transpose()
+}
+
 /// The target tips a clean merge after the review may come from when the
 /// verb binds a completion. The verb has no run base, so it reads the
 /// task's target as `work start` anchors it, beside the default target. It
@@ -460,13 +474,14 @@ fn verb_authorities(
     default_target: Option<git2::Oid>,
 ) -> Result<super::acceptance::RunBases, String> {
     Ok(super::acceptance::RunBases::new(
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .map_err(|error| error.to_string())?
-            .and_then(|target| repo.revparse_single(&target).ok())
-            .and_then(|object| object.peel_to_commit().ok())
-            .map(|commit| commit.id())
-            .into_iter()
-            .chain(default_target),
+        target_commit(
+            repo,
+            super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+                .map_err(|error| error.to_string())?
+                .as_deref(),
+        )?
+        .into_iter()
+        .chain(default_target),
     ))
 }
 
@@ -724,6 +739,17 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r22_target_anchor_refuses_an_unpeelable_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        assert_eq!(target_commit(&repo, None).unwrap(), None);
+        let blob = repo.blob(b"not a commit").unwrap();
+        repo.reference("refs/tags/not-commit", blob, true, "test")
+            .unwrap();
+        assert!(target_commit(&repo, Some("refs/tags/not-commit")).is_err());
+    }
 
     #[test]
     fn frontmatter_value_keeps_the_comment_column() {

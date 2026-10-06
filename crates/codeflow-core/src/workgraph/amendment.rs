@@ -486,25 +486,29 @@ fn entry_at(repo: &Repository, commit: Oid, path: &str) -> Result<Option<(i32, V
 /// `git.product_paths`, else the default for the stack its project file
 /// records, and its `git.breaking_watch_paths`.
 fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
-    let list = |value: &serde_json::Value| -> Vec<String> {
-        value
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    let list =
+        |value: Option<&serde_json::Value>, key: &str| -> Result<Option<Vec<String>>, String> {
+            let Some(value) = value else { return Ok(None) };
+            let items = value
+                .as_array()
+                .ok_or_else(|| format!("git.{key} is not a list"))?;
+            items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| format!("git.{key} contains a non-string path"))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
+        };
     let policy: serde_json::Value = match entry_at(repo, commit, ".codeflow/policy.json")? {
         Some((_, bytes)) => serde_json::from_slice(&bytes).map_err(|error| error.to_string())?,
         None => serde_json::Value::Null,
     };
     let git = &policy["git"];
-    let product = if git["product_paths"].is_array() {
-        list(&git["product_paths"])
+    let product = if let Some(paths) = list(git.get("product_paths"), "product_paths")? {
+        paths
     } else {
         let project = entry_at(repo, commit, ".codeflow/project.toml")?
             .map(|(_, bytes)| {
@@ -528,10 +532,12 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
             .map(ToString::to_string)
             .collect()
     };
-    Ok(ProjectPaths {
+    let paths = ProjectPaths {
         product,
-        watched: list(&git["breaking_watch_paths"]),
-    })
+        watched: list(git.get("breaking_watch_paths"), "breaking_watch_paths")?.unwrap_or_default(),
+    };
+    paths.validate()?;
+    Ok(paths)
 }
 
 /// The path that keeps a criteria change landed by `landing` (on top of
@@ -586,6 +592,33 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r22_historical_project_paths_reject_invalid_globs_and_keep_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        assert!(project_at(&repo, first).is_ok());
+        for key in ["product_paths", "breaking_watch_paths"] {
+            let policy = serde_json::json!({"git": {key: ["src/["]}}).to_string();
+            let oid =
+                crate::git::add_commit(&repo, &[(b".codeflow/policy.json", policy.as_bytes())]);
+            assert!(project_at(&repo, oid).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn r22_historical_project_paths_reject_malformed_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, _) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"x")]);
+        for key in ["product_paths", "breaking_watch_paths"] {
+            for value in [serde_json::json!(42), serde_json::json!([42])] {
+                let policy = serde_json::json!({"git": {key: value}}).to_string();
+                let oid =
+                    crate::git::add_commit(&repo, &[(b".codeflow/policy.json", policy.as_bytes())]);
+                assert!(project_at(&repo, oid).is_err(), "{key}");
+            }
+        }
+    }
 
     #[test]
     fn unreadable_project_never_uses_default_product_paths() {
