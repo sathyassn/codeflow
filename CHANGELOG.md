@@ -22,6 +22,37 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **One planning amendment can span several epics.** A planning pull
+  request names every epic it changes on its one `Task:` line, such as
+  `Task: EPC-002, EPC-003`, so one reviewed plan change lands as one pull
+  request instead of one per epic (ADR-0078). It may also carry files under
+  `docs/` outside the adopter-facing paths and the project section of
+  `AGENTS.md`, as long as the managed block stays byte-identical to the
+  target's; a byte inside that block is refused by name, and product code,
+  `CLAUDE.md`, harness settings, skills, policy, hooks and CI still keep a
+  range out of the planning class, as do a hidden path, an instruction
+  file, a symbolic link or a submodule entry in any folder, judged
+  against the target's policy; docs and `AGENTS.md` ride only in a
+  repository with no symbolic link or submodule. A release brings such an amendment's
+  criteria change as a planning landing. `codeflow ci` prints the class as a
+  planning-only amendment of the named epics and adds a
+  `work.planning_amendment` note per change, grouped by epic: each task's
+  criteria delta, records added or removed, status changes, the doc and
+  instruction files touched, and a task record that changed on its
+  integration line since the line last merged the target. A change to a
+  record of an epic the line does not name is refused, a criteria change
+  to a complete task is flagged, and a standalone task or a spec is
+  listed. A task pull request still changes only its own
+  criteria, and the frozen message now names the planning amendment as the
+  route for another task's criteria. There is no policy key.
+  Migration: CodeFlow 3.0.0 reads `Task: EPC-001, EPC-002` as a malformed
+  `Task:` line and refuses the pull request, so run 3.1.0 locally and in
+  the CI that judges a multi-epic amendment; a single `Task: EPC-NNN` works
+  on both. A planning pull request that names one epic but changes another
+  epic's records, such as a breakdown that creates two epics, now fails
+  until its `Task:` line names both.
+
+<!-- codeflow:release-impact minor -->
 - **Guidance for working while something is uncertain (issue 70).** The
   managed instructions now say how dependent work keeps moving while an
   operator question is open, a fact cannot be verified yet, or operator
@@ -159,6 +190,30 @@ erratum below, never an edit of the section.
   Windows paths and `README` included, satisfies it. After `codeflow update`, an adopter's
   `project-management/templates/` carries the new section.
 
+<!-- codeflow:release-impact minor -->
+- **Reported defects are fixed by cause and class, with a written critical
+  path.** A new `cf-method` reference, `issue-handling.md`, takes a reported
+  defect from intake to closure: reproduce it and judge its severity, name
+  the cause and the defect class, search the tree for every site of the
+  class, group issues that share a cause into one unit with a design first
+  for guards, parsers, policy, acceptance rules, hooks and CI, fix the whole
+  class with a durable check where one can be written, and close the issue
+  with the sites fixed and deferred and the release. A review round that
+  finds a new instance of the same class stops the rounds and sends the
+  unit back to design. A critical defect (live in a release or blocking
+  current work, and blocking adopters, weakening a security boundary,
+  losing data or hanging a gate) gets interim guidance the same day, a
+  prioritized fix when that guidance does not clear the block, a recorded
+  release decision and a notice to affected adopters; moving another
+  epic's planned work for it is the operator's call. The lifecycle reference's repair bullet points a
+  reported defect at it, and `cf-reviewer` checks that the fix covers the
+  class and that the sweep is recorded. It adds no check, pull request,
+  approval or review round. Standard and full tiers receive it with
+  `codeflow update`; nothing else needs to change. For CodeFlow itself,
+  `docs/releasing.md` "Critical issues" states the routes and why releases
+  stay on `main` with no maintenance branch, and the bug report template
+  asks for a severity.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -248,6 +303,22 @@ erratum below, never an edit of the section.
   enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **`codeflow init` no longer hangs on a full pipe.** In a repository with
+  enough folders, `codeflow init` could block forever: it wrote all of the
+  folder names to `git check-ignore -v -n --stdin -z` before reading any
+  answer, while git wrote an answer per name, so once the output pipe
+  filled each side waited for the other. The input is now written from
+  its own thread while the output is read, through one module that is the
+  only place codeflow pipes a child's stdin: the nested-repository scan,
+  the `codeflow doctor` probes that pass input, the `gh` calls that pass a
+  request body, the ID registry, the pre-push and CI git reads, the
+  conflict-marker attribute check and the portal's git reads. Output of
+  any size completes, and a child that stops reading early is judged by
+  its exit status. A test that parses the Rust sources fails when new code names a child's
+  stdin outside that module; code inside macro invocations and raw file
+  descriptors are not covered.
 
 <!-- codeflow:release-impact patch -->
 - **Model evaluation trials launch Codex and Grok 1.0.46 again.** A
@@ -770,6 +841,45 @@ erratum below, never an edit of the section.
   and managed files you have not edited; a portal whose ownership was
   transferred, or whose managed test file was modified, is not updated.
   The portal's runtime and its claim identity check are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **exec-guard no longer refuses prose that only quotes a launcher word.**
+  The privilege, headless and dangerous checks matched a privileged word as a
+  substring of the raw line, so text such as "; supersedes", "; su" or "such
+  as" inside a heredoc, an `echo` or a `grep` pattern was blocked as a chained
+  `su`, `sudo` or `doas` (sathyassn/codeflow#66). A word-boundary edit to
+  those checks cannot be proved safe, because a shell reaches a launcher
+  through globs, extglob, zsh qualifiers and namerefs without its name
+  appearing as a word, so every 3.0.0 rule is unchanged and still decides
+  every line. Relief comes from a separate strict tokenizer that certifies a
+  line only when all of it is `echo`, `printf` (a format of `%s`, `%%`, `\n`, `\t` and `\\` only),
+  `grep` and `cat` with plain, single-quoted or double-quoted words (no
+  backslash, `$` or backtick), the separators `;`, `&&`, `||`, `|` and
+  newline, redirects to a document file (`.md`, `.markdown`, `.txt`, `.rst`,
+  `.log`) that is new or an existing plain, non-executable file with one
+  hard link (never a symbolic link, hard-linked file, pipe, device or
+  executable, or a path under `/dev`, `/proc` or `/sys`), and one quoted
+  heredoc for `cat`. A
+  certified line skips only the privilege, headless and dangerous checks;
+  every other guard still runs, PowerShell lines are never certified, and a
+  `run_terminal_command` call is certified only on a Unix host whose `SHELL`
+  names bash or zsh. The
+  issue's `printf`, `grep '; su'`, quoted-heredoc and `echo "...; supersedes
+  ..."` lines now pass. A heredoc needs a quoted delimiter (`cat <<'EOF'`);
+  with an unquoted one the line keeps the raw rules. Lines with a
+  double-quoted backslash, and `git commit -m` or `gh pr create --body` text,
+  are not certified and still refuse: write that text to a file with the
+  editor tool and pass the file by path. Two limits remain: a definition in
+  a shell startup file that changes how a certified line runs, such as an
+  alias or function shadowing `echo`, `printf`, `grep` or `cat` or a zsh
+  global alias that expands an argument, is not seen, as an alias for `ls`
+  was not seen before (agents are blocked from writing startup files where a
+  sandbox exists and the guard refuses it on a best-effort basis elsewhere,
+  issue 86); and a certified line can create a document that a later call runs
+  as a script, as a plain `printf` into a `.sh` file already could. Projects
+  need no change: this is a binary change with no policy default, scaffold or
+  managed file behind it, and it allows certified prose without refusing
+  anything allowed before.
 
 ## [3.0.0]
 

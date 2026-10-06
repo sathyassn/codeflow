@@ -2895,3 +2895,54 @@ fn brownfield_init_names_the_git_dir_hooks_it_stops_running() {
     let cleared = output_text(&codeflow(&adopt, &["doctor", "--check", "hooks"]));
     assert!(!cleared.contains("git does not run"), "{cleared}");
 }
+
+/// Issue 71 (journey): `codeflow init --standard --yes` finishes in a
+/// repository with enough folders that `git check-ignore -v -n --stdin -z`
+/// answers more than a pipe holds. A writer that sent all of its input before
+/// reading stdout left init and git blocked on each other forever; the wait
+/// here is bounded so a regression fails instead of hanging the suite.
+#[test]
+fn init_standard_completes_in_a_repository_with_many_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    git_with_binary(&root, &["init", "--quiet", "-b", "main"]);
+    let padding = "p".repeat(100);
+    for i in 0..12_000 {
+        std::fs::create_dir(root.join(format!("{padding}-{i:05}"))).unwrap();
+    }
+    let nested = root.join("nested-repo");
+    std::fs::create_dir(&nested).unwrap();
+    git_with_binary(&nested, &["init", "--quiet", "-b", "main"]);
+
+    let stdout = std::fs::File::create(tmp.path().join("init.out")).unwrap();
+    let stderr = std::fs::File::create(tmp.path().join("init.err")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["init", "--standard", "--yes"])
+        .current_dir(&root)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("codeflow binary runs");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("init did not finish in two minutes: it is blocked on a pipe");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let err = std::fs::read_to_string(tmp.path().join("init.err")).unwrap_or_default();
+    assert!(status.success(), "init failed: {err}");
+    assert!(root.join(".codeflow/policy.json").is_file());
+}

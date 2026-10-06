@@ -355,6 +355,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/skills/cf-method/references/issue-handling.md"
+dest = ".claude/skills/cf-method/references/issue-handling.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "claude/skills/cf-delegate/SKILL.md"
 dest = ".claude/skills/cf-delegate/SKILL.md"
 ownership = "managed"
@@ -1146,6 +1152,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-method/references/autonomy.md"
 dest = ".agents/skills/cf-method/references/autonomy.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-method/references/issue-handling.md"
+dest = ".agents/skills/cf-method/references/issue-handling.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
