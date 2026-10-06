@@ -558,7 +558,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
     if moving {
         tree.create_new(&new, content.as_bytes())?;
     }
-    let rewritten = match rewrite_links(&git, &tree, from, &to, &old) {
+    let rewritten = match rewrite_links(&git, &tree, from, &to, &[&old, &new]) {
         Ok(rewritten) => rewritten,
         Err(error) => {
             if moving {
@@ -630,7 +630,8 @@ fn replace_id(text: &str, from: &RegId, to: &RegId) -> Option<String> {
 }
 
 /// Rewrite links to `from` in tracked text under the record roots and docs,
-/// except `skip` (the record being renumbered). Every change is planned
+/// except `skip` (the record being renumbered, at its old and new paths,
+/// since a tracked path can be absent on disk). Every change is planned
 /// before any is written; a failed write puts back the files this call
 /// changed, the failing one included, and names any that could not be.
 fn rewrite_links(
@@ -638,7 +639,7 @@ fn rewrite_links(
     tree: &crate::contained::Tree,
     from: &RegId,
     to: &RegId,
-    skip: &str,
+    skip: &[&str],
 ) -> Result<Vec<PathBuf>, IdsError> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
@@ -647,7 +648,10 @@ fn rewrite_links(
     // A tracked link, or a file under one, is skipped like an unreadable
     // file: it is read and written only beneath the root (issue 94).
     let mut planned = Vec::new();
-    for file in files.into_iter().filter(|file| file != skip) {
+    for file in files
+        .into_iter()
+        .filter(|file| !skip.contains(&file.as_str()))
+    {
         let Some(text) = tree
             .read(&file, u64::MAX)
             .ok()

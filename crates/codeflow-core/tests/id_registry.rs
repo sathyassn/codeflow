@@ -2107,3 +2107,25 @@ fn retarget_refuses_an_existing_destination_before_changing_anything() {
     ];
     assert_eq!(after, before);
 }
+
+/// A destination that is tracked but absent on disk is not taken for a
+/// link: the renumbered record keeps its old id in `former_ids`.
+#[test]
+fn retarget_keeps_former_ids_when_the_destination_is_tracked_but_absent() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    let bound = task(&a, "bound").unwrap();
+    git(&a, &["checkout", "-q", "-b", "task/absent", "main"]);
+    write_record(&a, "TSK-005", Some(&bound.uid));
+    let destination = write_record(&a, "TSK-002", None);
+    commit_all(&a, "a record and a tracked destination");
+    std::fs::remove_file(&destination).unwrap();
+    let moved = seed::retarget(&a, &RegId::parse("TSK-005").unwrap()).unwrap();
+    assert_eq!(moved.to.to_string(), "TSK-002");
+    let text = std::fs::read_to_string(&destination).unwrap();
+    assert!(
+        text.contains("id: TSK-002") && text.contains("former_ids: [TSK-005]"),
+        "{text}"
+    );
+}
