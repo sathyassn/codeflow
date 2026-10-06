@@ -355,7 +355,8 @@ fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            // Never follow a link into or out of the record roots (issue 94).
+            // Never follow a link below a record root. A linked root itself
+            // is read here; its writes are refused (issue 94).
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
@@ -536,7 +537,6 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         let reservation = issue::reserve(root, &request)?;
         (reservation.id, reservation.standing)
     };
-    let rewritten = rewrite_links(&git, from, &to)?;
     let file = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -544,7 +544,9 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .replacen(&from.to_string(), &to.to_string(), 1);
     let new_path = path.with_file_name(file);
     // Read, write and delete beneath the root without following a link
-    // (issue 94); a renumbered record never replaces an existing file.
+    // (issue 94). The renumbered record is placed first and exclusively, so
+    // a file already at the new number refuses the retarget before any
+    // other file in the tree changes.
     let tree = crate::contained::Tree::open(root)?;
     let old = crate::contained::relative_to(root, path)?;
     let new = crate::contained::relative_to(root, &new_path)?;
@@ -552,11 +554,23 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .map_err(|error| IdsError::Invalid(format!("{old}: {error}")))?;
     let content = replace_id(&content, from, &to).unwrap_or(content);
     let content = add_former_id(&content, from);
-    if new == old {
-        tree.write(&new, content.as_bytes())?;
-    } else {
+    let moving = new != old;
+    if moving {
         tree.create_new(&new, content.as_bytes())?;
+    }
+    let rewritten = match rewrite_links(&git, &tree, from, &to, &old) {
+        Ok(rewritten) => rewritten,
+        Err(error) => {
+            if moving {
+                let _ = tree.remove(&new);
+            }
+            return Err(error);
+        }
+    };
+    if moving {
         tree.remove(&old)?;
+    } else {
+        tree.write(&new, content.as_bytes())?;
     }
     Ok(Retarget {
         from: from.clone(),
@@ -615,18 +629,25 @@ fn replace_id(text: &str, from: &RegId, to: &RegId) -> Option<String> {
     })
 }
 
-/// Rewrite links to `from` in tracked text under the record roots and docs.
-fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, IdsError> {
+/// Rewrite links to `from` in tracked text under the record roots and docs,
+/// except `skip` (the record being renumbered). Every change is planned
+/// before any is written; a failed write puts back the files this call
+/// changed, the failing one included, and names any that could not be.
+fn rewrite_links(
+    git: &Git,
+    tree: &crate::contained::Tree,
+    from: &RegId,
+    to: &RegId,
+    skip: &str,
+) -> Result<Vec<PathBuf>, IdsError> {
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
     let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
     // A tracked link, or a file under one, is skipped like an unreadable
     // file: it is read and written only beneath the root (issue 94).
-    let tree = crate::contained::Tree::open(git.root())?;
-    let mut changed = Vec::new();
-    for file in files {
-        let path = git.root().join(&file);
+    let mut planned = Vec::new();
+    for file in files.into_iter().filter(|file| file != skip) {
         let Some(text) = tree
             .read(&file, u64::MAX)
             .ok()
@@ -635,11 +656,29 @@ fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, Id
             continue;
         };
         if let Some(updated) = replace_id(&text, from, to) {
-            tree.write(&file, updated.as_bytes())?;
-            changed.push(path);
+            planned.push((file, text, updated));
         }
     }
-    Ok(changed)
+    for (index, (file, _, updated)) in planned.iter().enumerate() {
+        if let Err(error) = tree.write(file, updated.as_bytes()) {
+            let failed: Vec<String> = planned[..=index]
+                .iter()
+                .filter(|(file, original, _)| tree.write(file, original.as_bytes()).is_err())
+                .map(|(file, _, _)| file.clone())
+                .collect();
+            if failed.is_empty() {
+                return Err(error.into());
+            }
+            return Err(IdsError::Invalid(format!(
+                "{file}: {error}; restoring {} also failed",
+                failed.join(", ")
+            )));
+        }
+    }
+    Ok(planned
+        .into_iter()
+        .map(|(file, _, _)| git.root().join(file))
+        .collect())
 }
 
 #[cfg(test)]

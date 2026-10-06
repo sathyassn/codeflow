@@ -289,9 +289,11 @@ erratum below, never an edit of the section.
   follow-ups, `ids backfill` and `ids retarget`, and the folders that
   `codeflow status` and the orient digest create, which now say why the
   work summary is missing. A link at the old `<record>.tmp` name is no
-  longer written through. A replaced record keeps its Unix permission
-  bits, and `ids retarget` no longer replaces an existing file at the new
-  number. Migration: none; a project with no such link sees no change.
+  longer written through. Other visible changes: a replaced record keeps
+  its Unix permission bits and is synced to disk; `ids retarget` refuses a
+  file already at the new number before it changes anything; `codeflow
+  status` and the orient digest name a linked records folder instead of
+  reading through it. Migration: none.
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with

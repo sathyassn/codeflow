@@ -188,7 +188,10 @@ fn branch_line(root: &Path) -> Option<String> {
 
 fn work_line(root: &Path) -> Option<String> {
     let pm = root.join("project-management");
-    if !pm.join("epics").is_dir() && !pm.join("tasks").is_dir() {
+    if !crate::workgraph::layout::records_folder_is_linked(&pm)
+        && !pm.join("epics").is_dir()
+        && !pm.join("tasks").is_dir()
+    {
         return None;
     }
     // A store refused for a linked folder says so instead of dropping the
@@ -501,6 +504,24 @@ mod tests {
             "{line}"
         );
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+
+        // An empty or dangling target is named too, never silently skipped.
+        std::fs::remove_dir(outside.path().join("epics")).unwrap();
+        let empty = work_line(dir.path()).unwrap();
+        assert!(
+            empty.contains("project-management is a symbolic link"),
+            "{empty}"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        let dangling = dir.path().join("dangling");
+        std::fs::remove_file(dir.path().join("project-management")).unwrap();
+        std::os::unix::fs::symlink(&dangling, dir.path().join("project-management")).unwrap();
+        let line = work_line(dir.path()).unwrap();
+        assert!(
+            line.contains("project-management is a symbolic link"),
+            "{line}"
+        );
+        assert!(!dangling.exists());
     }
 
     #[test]

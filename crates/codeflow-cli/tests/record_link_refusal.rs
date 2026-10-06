@@ -1,7 +1,7 @@
 //! Journey (TSK-244, issue 94): on a fresh `codeflow init --full` project, a
-//! symbolic link committed at `project-management` or `docs/decisions`
-//! makes every record verb refuse with the link named, and nothing is
-//! written, created or deleted where the link points. The binary under test
+//! symbolic link at `project-management`, a kind folder or `docs/decisions`,
+//! as a branch could commit one, makes every record verb refuse with the
+//! link named, and nothing is written, created or deleted where it points. The binary under test
 //! is the one Cargo built; the installed `codeflow` on `PATH` is never used.
 
 #![cfg(unix)]

@@ -412,7 +412,7 @@ fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
 
 fn collect_work(repo_root: &Path, notes: &mut Vec<String>) -> Option<WorkSummary> {
     let pm = repo_root.join("project-management");
-    if !pm.is_dir() {
+    if !pm.is_dir() && !crate::workgraph::layout::records_folder_is_linked(&pm) {
         notes.push(
             "project-management/ absent — durable work tracking not enabled at this tier"
                 .to_string(),

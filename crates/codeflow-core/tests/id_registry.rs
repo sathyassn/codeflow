@@ -2074,3 +2074,36 @@ fn retarget_never_writes_through_a_tracked_link() {
     assert!(!a.join("project-management/tasks/TSK-005.md").exists());
     assert!(moved.path.is_file());
 }
+
+/// `ids retarget` refuses a file already at the new number before it
+/// changes any file in the tree.
+#[test]
+fn retarget_refuses_an_existing_destination_before_changing_anything() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    // The registry binds this record's uid to TSK-002, so retarget moves it
+    // there, where another file already sits.
+    let bound = task(&a, "bound").unwrap();
+    assert_eq!(bound.id.to_string(), "TSK-002");
+    git(&a, &["checkout", "-q", "-b", "task/collide", "main"]);
+    let source = write_record(&a, "TSK-005", Some(&bound.uid));
+    std::fs::create_dir_all(a.join("docs")).unwrap();
+    std::fs::write(a.join("docs/plain.md"), "see TSK-005\n").unwrap();
+    commit_all(&a, "a record and a link to it");
+    let occupied = a.join("project-management/tasks/TSK-002.md");
+    std::fs::write(&occupied, "someone else's file\n").unwrap();
+    let before = [
+        std::fs::read(&source).unwrap(),
+        std::fs::read(a.join("docs/plain.md")).unwrap(),
+        std::fs::read(&occupied).unwrap(),
+    ];
+    let error = seed::retarget(&a, &RegId::parse("TSK-005").unwrap()).unwrap_err();
+    assert!(error.to_string().contains("exists"), "{error}");
+    let after = [
+        std::fs::read(&source).unwrap(),
+        std::fs::read(a.join("docs/plain.md")).unwrap(),
+        std::fs::read(&occupied).unwrap(),
+    ];
+    assert_eq!(after, before);
+}

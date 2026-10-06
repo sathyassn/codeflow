@@ -254,6 +254,15 @@ fn direct_markdown_files(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Whether `project-management` or one of its kind folders is a symbolic
+/// link or junction. Summaries use it to name a refused records folder
+/// instead of treating an empty or dangling target as absent (issue 94).
+pub(crate) fn records_folder_is_linked(pm_root: &Path) -> bool {
+    std::iter::once(pm_root.to_path_buf())
+        .chain(["epics", "specs", "tasks"].map(|kind| pm_root.join(kind)))
+        .any(|path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()))
+}
+
 fn real_directory_entries(dir: &Path) -> Option<fs::ReadDir> {
     let Ok(metadata) = fs::symlink_metadata(dir) else {
         return None;

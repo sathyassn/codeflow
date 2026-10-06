@@ -432,13 +432,16 @@ pub fn create_spec_with(
             "a spec needs at least one consuming epic or task".to_string(),
         ));
     }
-    let targets = work_item_ids
-        .iter()
-        .map(|id| {
-            find_work_item_path(pm_root, id)
-                .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut targets: Vec<PathBuf> = Vec::new();
+    for id in work_item_ids {
+        let target = find_work_item_path(pm_root, id)
+            .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))?;
+        // A consumer named twice is linked once, so its first snapshot is
+        // the one a rollback restores.
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
     let (id, uid) = allocate(&planning_target(pm_root))?;
     let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
     let date = today();
@@ -1038,38 +1041,47 @@ mod tests {
     }
 
     /// A consumer write that fails part way restores every consumer already
-    /// linked and removes the new spec.
-    #[cfg(unix)]
+    /// linked, the failing one included even when its rename had landed,
+    /// and removes the new spec; a consumer named twice is linked once.
     #[test]
     fn spec_linking_failure_restores_every_consumer() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = project();
         let pm = dir.path().join("project-management");
         let epic = create_epic(&pm, EPIC_TEMPLATE, "Outcome").unwrap();
         let task = create_task(&pm, TASK_TEMPLATE, None, Some("fix"), Some("main"), "Fix").unwrap();
         let epic_before = fs::read(&epic.path).unwrap();
         let task_before = fs::read(&task.path).unwrap();
-        let tasks = pm.join("tasks");
-        fs::set_permissions(&tasks, fs::Permissions::from_mode(0o555)).unwrap();
-        let result = create_spec_for(
-            &pm,
-            SPEC_TEMPLATE,
-            &["EPC-001".to_string(), task.id.clone()],
-            "Contract",
+        // The task's write fails after its rename landed: its bytes already
+        // name the spec when the error returns.
+        crate::contained::fault::arm(
+            crate::contained::fault::Point::AfterRename,
+            &format!("project-management/tasks/{}.md", task.id),
         );
-        fs::set_permissions(&tasks, fs::Permissions::from_mode(0o755)).unwrap();
+        let consumers = [
+            "EPC-001".to_string(),
+            "EPC-001".to_string(),
+            task.id.clone(),
+        ];
+        let result = create_spec_for(&pm, SPEC_TEMPLATE, &consumers, "Contract");
         assert!(result.is_err(), "{result:?}");
         assert_eq!(
             fs::read(&epic.path).unwrap(),
             epic_before,
             "the epic is restored"
         );
-        assert_eq!(fs::read(&task.path).unwrap(), task_before);
+        assert_eq!(
+            fs::read(&task.path).unwrap(),
+            task_before,
+            "the task is restored"
+        );
         assert_eq!(
             fs::read_dir(pm.join("specs")).unwrap().count(),
             0,
             "the spec is removed"
         );
+        let spec = create_spec_for(&pm, SPEC_TEMPLATE, &consumers, "Contract").unwrap();
+        let linked = fs::read_to_string(&epic.path).unwrap();
+        assert_eq!(linked.matches(spec.id.as_str()).count(), 1, "{linked}");
     }
 
     #[test]

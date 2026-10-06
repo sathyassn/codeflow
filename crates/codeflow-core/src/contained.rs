@@ -199,8 +199,10 @@ impl Tree {
     /// to a new temporary file beside it, which takes an existing leaf's
     /// Unix permission bits before any byte is written, is synced, then
     /// renamed over the leaf, and the folder is synced. A failure before the
-    /// rename leaves the old content; one after it leaves the new content
-    /// and still returns the error.
+    /// rename leaves the old content and removes the temporary file when it
+    /// can (a failed removal leaves it behind); one after the rename leaves
+    /// the new content and still returns the error, so a caller that must
+    /// undo it writes the old bytes back.
     ///
     /// # Errors
     ///
@@ -239,6 +241,8 @@ impl Tree {
             drop(file);
             hook()?;
             platform::rename(&parent, &temporary, &parent, &name)?;
+            #[cfg(test)]
+            fault::check(fault::Point::AfterRename, relative)?;
             platform::sync(&parent)
         })();
         if result.is_err() {
@@ -249,7 +253,8 @@ impl Tree {
 
     /// Create the leaf exclusively, creating missing folders. An existing
     /// leaf of any kind, a link included, is refused; a failed write or
-    /// sync removes the new file.
+    /// sync removes the new file when it can (a failed removal leaves it
+    /// behind).
     ///
     /// # Errors
     ///
@@ -259,6 +264,8 @@ impl Tree {
             let (parent, name) = self.parent(relative, true)?;
             let mut file = platform::create_file(&parent, &name, true)?;
             let written = file.write_all(bytes).and_then(|()| file.sync_all());
+            #[cfg(test)]
+            let written = written.and_then(|()| fault::check(fault::Point::AfterCreate, relative));
             drop(file);
             let result = written.and_then(|()| platform::sync(&parent));
             if result.is_err() {
@@ -394,6 +401,43 @@ impl Tree {
         self.explained(relative, || {
             let (parent, name) = self.parent(relative, true)?;
             platform::create_file(&parent, &name, false)
+        })
+    }
+}
+
+/// Test-only failure injection at the points a disk error is otherwise hard
+/// to provoke: after a replacement's rename and after a new file's write.
+#[cfg(test)]
+pub(crate) mod fault {
+    use std::cell::RefCell;
+    use std::io;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) enum Point {
+        AfterRename,
+        AfterCreate,
+    }
+
+    thread_local! {
+        static ARMED: RefCell<Option<(Point, String)>> = const { RefCell::new(None) };
+    }
+
+    /// Fail the next operation on `relative` at `point` on this thread.
+    pub(crate) fn arm(point: Point, relative: &str) {
+        ARMED.with(|armed| *armed.borrow_mut() = Some((point, relative.to_string())));
+    }
+
+    pub(super) fn check(point: Point, relative: &str) -> io::Result<()> {
+        ARMED.with(|armed| {
+            let mut armed = armed.borrow_mut();
+            if armed
+                .as_ref()
+                .is_some_and(|(at, path)| *at == point && path == relative)
+            {
+                *armed = None;
+                return Err(io::Error::other(format!("injected failure at {point:?}")));
+            }
+            Ok(())
         })
     }
 }
@@ -1163,6 +1207,30 @@ mod tests {
                 .count(),
             0,
             "no temporary file is left behind"
+        );
+    }
+
+    #[test]
+    fn a_failure_after_the_write_or_rename_is_reported_and_cleaned_up() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = Tree::open(root.path()).unwrap();
+        fault::arm(fault::Point::AfterCreate, "docs/new.md");
+        assert!(tree.create_new("docs/new.md", b"new").is_err());
+        assert!(
+            !root.path().join("docs/new.md").exists(),
+            "the new file is removed"
+        );
+        tree.create_new("docs/new.md", b"old").unwrap();
+        fault::arm(fault::Point::AfterRename, "docs/new.md");
+        assert!(tree.write("docs/new.md", b"next").is_err());
+        assert_eq!(
+            std::fs::read(root.path().join("docs/new.md")).unwrap(),
+            b"next",
+            "after the rename the new bytes are in place and the error still returns"
+        );
+        assert_eq!(
+            std::fs::read_dir(root.path().join("docs")).unwrap().count(),
+            1
         );
     }
 
