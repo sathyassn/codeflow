@@ -1,0 +1,11 @@
+id = "TSK-249"
+uid = "70ffe075-35a3-4f41-8346-8a91a895266f"
+kind = "TSK"
+title = "Work claims read only the remotes that hold the target"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-06T17:52:12Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
