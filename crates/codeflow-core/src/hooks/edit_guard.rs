@@ -401,43 +401,69 @@ fn path_text(path: &Path) -> Result<String, EditError> {
 // APFS realpath retains the caller's case. Recover the directory entry's
 // spelling only when its identity matches, so suffix rules stay precise.
 #[cfg(target_os = "macos")]
-pub(crate) fn normalize_case(path: &mut PathBuf, metadata: &std::fs::Metadata) {
+pub(crate) fn normalize_case(
+    path: &mut PathBuf,
+    metadata: &std::fs::Metadata,
+) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
+    use unicode_normalization::UnicodeNormalization as _;
     let Some(parent) = path.parent() else {
-        return;
+        return Ok(());
     };
-    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-        return;
+    let Some(name) = path.file_name() else {
+        return Ok(());
     };
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case(name))
-            && std::fs::symlink_metadata(entry.path())
-                .is_ok_and(|m| m.dev() == metadata.dev() && m.ino() == metadata.ino())
-        {
-            *path = entry.path();
-            return;
+    let entries = std::fs::read_dir(parent)
+        .map_err(|e| format!("cannot read directory {}: {e}", parent.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot read directory entry: {e}"))?;
+        let entry_name = entry.file_name();
+        let same_name = entry_name
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(name.as_encoded_bytes())
+            || entry_name
+                .to_str()
+                .zip(name.to_str())
+                .is_some_and(|(actual, requested)| {
+                    actual.nfc().collect::<String>().to_lowercase()
+                        == requested.nfc().collect::<String>().to_lowercase()
+                });
+        if same_name {
+            let candidate = std::fs::symlink_metadata(entry.path())
+                .map_err(|e| format!("cannot inspect {}: {e}", entry.path().display()))?;
+            if candidate.dev() == metadata.dev() && candidate.ino() == metadata.ino() {
+                *path = entry.path();
+                return Ok(());
+            }
         }
     }
+    Err(format!(
+        "cannot recover directory entry spelling for {}",
+        path.display()
+    ))
 }
 
 // Windows names one entry by its long name, an 8.3 short name (`RUNNER~1`)
 // and any letter case; a harness cwd and git's paths often differ in that
 // way. The canonical path names it once, in the plain drive form git writes.
 #[cfg(windows)]
-pub(crate) fn normalize_case(path: &mut PathBuf, _metadata: &std::fs::Metadata) {
-    if let Ok(real) = crate::portable_path::canonicalize(path) {
-        *path = real;
-    }
+pub(crate) fn normalize_case(
+    path: &mut PathBuf,
+    _metadata: &std::fs::Metadata,
+) -> Result<(), String> {
+    *path = crate::portable_path::canonicalize(&*path)
+        .map_err(|e| format!("cannot resolve {}: {e}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-pub(crate) fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata) {}
+#[allow(clippy::unnecessary_wraps)] // The shared interface propagates platform-specific read failures.
+pub(crate) fn normalize_case(
+    _path: &mut PathBuf,
+    _metadata: &std::fs::Metadata,
+) -> Result<(), String> {
+    Ok(())
+}
 
 // Resolve one component at a time. Lexically deleting `alias/..` before
 // following `alias` is wrong when alias is a symlink into another directory.
@@ -469,7 +495,7 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
                             })?;
                         }
                         Ok(metadata) => {
-                            normalize_case(&mut result, &metadata);
+                            normalize_case(&mut result, &metadata).map_err(EditError)?;
                         }
                         Err(e) => {
                             return Err(EditError(format!(
@@ -581,10 +607,14 @@ fn checkout_roots(repo: &git2::Repository) -> Result<Vec<PathBuf>, String> {
     if let Some(workdir) = repo.workdir() {
         roots.push(workdir.to_path_buf());
     }
-    if let Ok(main) = git2::Repository::open(repo.commondir()) {
-        if let Some(workdir) = main.workdir() {
-            roots.push(workdir.to_path_buf());
-        }
+    let main = git2::Repository::open(repo.commondir()).map_err(|e| {
+        format!(
+            "cannot open main checkout {}: {e}",
+            repo.commondir().display()
+        )
+    })?;
+    if let Some(workdir) = main.workdir() {
+        roots.push(workdir.to_path_buf());
     }
     roots.extend(
         crate::git::linked_worktrees(repo)?
@@ -1377,5 +1407,48 @@ mod tests {
         let error = path_text(path).unwrap_err();
         assert!(error.0.contains("non-UTF-8"), "{}", error.0);
         assert!(path_text(Path::new("/repo/cafe.md")).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    #[test]
+    fn r22_checkout_roots_refuses_unreadable_main() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        assert!(!checkout_roots(&repo).unwrap().is_empty());
+        std::fs::remove_file(repo.path().join("HEAD")).unwrap();
+        assert!(checkout_roots(&repo).is_err());
+    }
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn r22_normalize_case_refuses_unreadable_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = dir.path().join("Present");
+        std::fs::write(&path, "").unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(!format!("{:?}", normalize_case(&mut path, &metadata)).starts_with("Err("));
+        assert!(path.ends_with("Present"));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(dir.path()).unwrap();
+        assert!(format!("{:?}", normalize_case(&mut path, &metadata)).starts_with("Err("));
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn r22_normalize_case_keeps_unicode_case_alias_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let actual = dir.path().join("CAFÉ");
+        std::fs::write(&actual, "").unwrap();
+        let mut alias = dir.path().join("café");
+        if let Ok(metadata) = std::fs::metadata(&alias) {
+            normalize_case(&mut alias, &metadata).unwrap();
+            assert_eq!(alias, actual);
+        }
+    }
+    #[test]
+    fn r22_normalized_missing_optional_path_is_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(normalized(&dir.path().join("missing/new.txt"), true).is_ok());
     }
 }

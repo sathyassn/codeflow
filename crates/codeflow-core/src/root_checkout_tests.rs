@@ -2224,3 +2224,46 @@ fn r19_dangling_registered_worktree_stays_visible() {
         .iter()
         .any(|f| f.message.contains("cannot inspect linked worktree")));
 }
+
+#[test]
+fn r22_prepare_branch_refuses_corrupt_default_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "--quiet", "-c", "task/example"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", &tip]);
+    git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    std::fs::write(root.join(".git/refs/heads/main"), "not an oid\n").unwrap();
+    let error = prepare_branch(&root, &GitPolicy::default()).unwrap_err();
+    assert!(error.to_string().contains("main"), "{error}");
+    assert_eq!(git(&root, &["branch", "--show-current"]), "task/example");
+}
+
+#[test]
+fn r22_prepare_branch_uses_remote_when_default_is_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("r"));
+    let tip = git(&root, &["rev-parse", "HEAD"]);
+    git(&root, &["switch", "--quiet", "-c", "task/example"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", &tip]);
+    git(
+        &root,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    git(&root, &["branch", "-D", "main"]);
+    assert!(matches!(
+        prepare_branch(&root, &GitPolicy::default()).unwrap(),
+        BranchStep::Created { .. }
+    ));
+}

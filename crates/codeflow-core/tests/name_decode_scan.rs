@@ -122,13 +122,13 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // the first is an error message; the second is `git log` text of commit ids and messages (content), whose files are read by commit_files as exact keys
+    // Only failed git-log stderr is displayed lossily; successful commit messages must be UTF-8, as in commit-msg.
     (
         "codeflow-cli/src/cmd/ci.rs",
         "enumerate_commits",
         "from_utf8_lossy",
-        2,
-        "grammar:git-log",
+        1,
+        "display",
     ),
     // an error message shown to a person
     (
@@ -2179,14 +2179,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:posix-shell",
     ),
-    // Native HOME bytes are retained in PathBuf; absent HOME is an unset expansion, never failed Unicode decoding.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "reach_dirs",
-        "obtain-absent:var_os",
-        1,
-        "grammar:environment",
-    ),
     // The invalid-byte branch returns AliasAnswer::Unreadable; expand_alias refuses execution of the unresolved alias.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
@@ -2219,7 +2211,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
-    // RootCheckout::read errors make the entire TargetLookup answer None; resolve_target passes None to judge_target, which marks the repository unresolved and judges mutations against a protected branch.
+    // RootCheckout::read errors mark the target unresolved; judge_target always blocks unresolved mutations with git.policy_authority independently of session policy levels.
     (
         "crates/codeflow-core/src/hooks/git_guard.rs",
         "read_target",
@@ -2234,14 +2226,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_start_matches",
         1,
         "grammar:shell-redirection",
-    ),
-    // environment_value returns native OsString bytes; an unrepresentable expansion is unresolved. worktree_delete_check and integrity checks refuse unresolved destructive targets when enforcement/worktree reach is possible.
-    (
-        "crates/codeflow-core/src/hooks/git_guard.rs",
-        "resolve_targets",
-        "obtain-absent:to_str",
-        1,
-        "unproven",
     ),
     // shell_blank explicitly accepts only space, tab and newline, matching the shell reader.
     (
@@ -3266,14 +3250,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_end_matches",
         1,
         "grammar:windows-path",
-    ),
-    // var_os retains native HOME bytes in PathBuf; None denotes genuinely unset HOME, not an obtaining or decoding error.
-    (
-        "crates/codeflow-core/src/security/deletion.rs",
-        "Reader::absolute",
-        "obtain-absent:var_os",
-        1,
-        "grammar:environment",
     ),
     // Arithmetic blank predicate is the explicit space/tab/newline set; Unicode identifier characters remain intact.
     (

@@ -694,6 +694,10 @@ fn tracked(
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
     let Anchor { branch, head, .. } = anchor;
+    // A spike branch's scope is known even when its records cannot be read.
+    if branch.starts_with("spike/") {
+        spike_paths(task_id, files, tagged);
+    }
     let added_records: Vec<_> = changes
         .iter()
         .filter(|(status, _)| status == "A")
@@ -731,6 +735,13 @@ fn tracked(
     // diverged target; this check reports it only for another task's claim.
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
+        Err(error) if super::work_start_reader_error(&error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
+            return;
+        }
         Err(_) if anchor.own_branch => return,
         Err(error) => {
             anchor_failure(
@@ -746,18 +757,15 @@ fn tracked(
         root, task_id, &target, branch, head,
     ) {
         Ok(report) => {
-            let spike =
-                report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");
-            if spike {
-                if let Some(path) = files.iter().find(|path| !is_spike_path(path, task_id)) {
-                    push(
-                        tagged,
-                        RULE,
-                        format!("spike {task_id} changes {path}; a spike lands only findings under docs/research/ and its own record"),
-                        "move the product change to a task of its own",
-                    );
-                }
+            if report.work_type.as_deref() == Some("spike") && !branch.starts_with("spike/") {
+                spike_paths(task_id, files, tagged);
             }
+        }
+        Err(error) if super::work_start_reader_error(&error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: super::tracking_state_violation(error),
+            });
         }
         Err(_) if anchor.own_branch => {}
         Err(error) => anchor_failure(
@@ -767,6 +775,17 @@ fn tracked(
             codeflow_core::remedy::WORK_START_MERGE_PLANNING
                 .with(&[("target", &target), ("id", task_id)]),
         ),
+    }
+}
+
+fn spike_paths(task_id: &str, files: &[String], tagged: &mut Vec<super::TaggedViolation>) {
+    if let Some(path) = files.iter().find(|path| !is_spike_path(path, task_id)) {
+        push(
+            tagged,
+            RULE,
+            format!("spike {task_id} changes {path}; a spike lands only findings under docs/research/ and its own record"),
+            "move the product change to a task of its own",
+        );
     }
 }
 
@@ -882,6 +901,136 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn r22_repo(malformed_record: bool) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        if malformed_record {
+            std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+            std::fs::write(
+                dir.path().join("project-management/tasks/TSK-002.md"),
+                b"\xff",
+            )
+            .unwrap();
+        }
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "test",
+            ],
+        ] {
+            assert!(codeflow_core::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let output = codeflow_core::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let head = String::from_utf8(output.stdout).unwrap().trim().to_string();
+        (dir, head)
+    }
+
+    #[test]
+    fn r22_tracking_reader_failures_block_own_and_other_branches() {
+        for malformed_record in [false, true] {
+            let (dir, head) = r22_repo(malformed_record);
+            if !malformed_record {
+                std::fs::write(dir.path().join(".git/refs/heads/main"), "invalid ref\n").unwrap();
+            }
+            for own_branch in [false, true] {
+                let mut tagged = Vec::new();
+                tracked(
+                    dir.path(),
+                    "TSK-001",
+                    Anchor {
+                        own_branch,
+                        level: PolicyLevel::Off,
+                        branch: "task/TSK-001-test",
+                        head: &head,
+                    },
+                    &[],
+                    &[],
+                    &mut tagged,
+                );
+                assert!(
+                    tagged
+                        .iter()
+                        .any(|finding| finding.violation.rule == "work.tracking_state"
+                            && (finding.violation.level == PolicyLevel::Block)),
+                    "own={own_branch}, malformed={malformed_record}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn r22_spike_branch_scope_survives_unreadable_tracking_state() {
+        let dir = tempfile::tempdir().unwrap();
+        for own_branch in [false, true] {
+            let mut tagged = Vec::new();
+            tracked(
+                dir.path(),
+                "TSK-001",
+                Anchor {
+                    own_branch,
+                    level: PolicyLevel::Off,
+                    branch: "spike/TSK-001-test",
+                    head: "HEAD",
+                },
+                &["src/lib.rs".into()],
+                &[],
+                &mut tagged,
+            );
+            assert!(tagged.iter().any(|finding| finding.violation.rule == RULE
+                && finding
+                    .violation
+                    .message
+                    .contains("a spike lands only findings")
+                && (finding.violation.level == PolicyLevel::Block)));
+        }
+    }
+
+    #[test]
+    fn r22_absent_task_and_research_only_spike_keep_existing_policy_levels() {
+        let (dir, head) = r22_repo(false);
+        for own_branch in [false, true] {
+            let mut tagged = Vec::new();
+            tracked(
+                dir.path(),
+                "TSK-001",
+                Anchor {
+                    own_branch,
+                    level: PolicyLevel::Off,
+                    branch: "spike/TSK-001-test",
+                    head: &head,
+                },
+                &["docs/research/findings.md".into()],
+                &[],
+                &mut tagged,
+            );
+            assert!(tagged
+                .iter()
+                .all(|finding| !(finding.violation.level == PolicyLevel::Block)));
+            assert!(tagged
+                .iter()
+                .all(|finding| finding.violation.rule != "work.tracking_state"));
+        }
+    }
 
     #[test]
     fn r15_root_branch_preserves_unicode_whitespace() {

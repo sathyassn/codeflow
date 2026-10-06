@@ -614,7 +614,7 @@ fn clears_release_preflight_unrun() {
     let row = "RELEASE_PREFLIGHT_UNRUN";
     prove(
         row,
-        "release preflight did not run for",
+        "release preflight could not complete for",
         || preflighted(&root),
         |printed| {
             let step = printed_command(printed, row, Some("python3"));

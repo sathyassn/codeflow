@@ -228,6 +228,14 @@ fn at(repo: &Repository, reference: &str) -> Result<(Policy, Option<toml::Value>
     Ok((policy, project))
 }
 
+fn readable_references<'repo>(
+    references: impl Iterator<Item = Result<git2::Reference<'repo>, git2::Error>>,
+) -> Result<Vec<git2::Reference<'repo>>, String> {
+    references
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("cannot read landed reference: {e}"))
+}
+
 fn declared_target(
     repo: &Repository,
     remote: &str,
@@ -251,20 +259,19 @@ fn declared_target(
     }
     // Discover only landed records. The record must live on the branch it declares.
     let mut targets = std::collections::BTreeSet::new();
-    for reference in repo
+    let references = repo
         .references_glob(&format!("refs/remotes/{remote}/*"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
+        .map_err(|e| e.to_string())?;
+    for reference in readable_references(references)? {
         // A record's `integration_target` is valid text, so a ref name that is
         // not valid UTF-8 can never be the branch a record declares.
         let reference_name = crate::git::name::reference_name(&reference);
         let Ok(name) = reference_name.rule_text() else {
             continue;
         };
-        let Ok(tree) = reference.peel_to_tree() else {
-            continue;
-        };
+        let tree = reference
+            .peel_to_tree()
+            .map_err(|e| format!("cannot read landed reference {name}: {e}"))?;
         let mut found = None;
         let mut unreadable = None;
         // A record path is valid text; a name that is not UTF-8 is never one.
@@ -491,5 +498,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(target.as_deref(), Some("integration/x"));
+    }
+}
+
+#[cfg(test)]
+mod r22_tests {
+    use super::*;
+    #[test]
+    fn r22_declared_target_refuses_unreadable_ref_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let mut policy = Policy::default();
+        policy.git.root_branch.clear();
+        assert!(declared_target(
+            &repo,
+            "origin",
+            "task/TSK-007-test",
+            &policy,
+            "refs/remotes/origin/main"
+        )
+        .unwrap()
+        .is_none());
+        let blob = repo.blob(b"not a tree").unwrap();
+        repo.reference("refs/remotes/origin/integration/x", blob, true, "test")
+            .unwrap();
+        assert!(declared_target(
+            &repo,
+            "origin",
+            "task/TSK-007-test",
+            &policy,
+            "refs/remotes/origin/main"
+        )
+        .is_err());
+    }
+    #[test]
+    fn r22_declared_target_refuses_unreadable_ref_entry() {
+        assert!(readable_references(std::iter::empty()).unwrap().is_empty());
+        // libgit2 silently omits malformed loose refs, so inject an iterator
+        // read error at the boundary whose old flatten() discarded it.
+        let entries = std::iter::once(Err(git2::Error::from_str("reference read failed")));
+        let error = readable_references(entries)
+            .err()
+            .expect("iterator failure refuses");
+        assert!(error.contains("reference read failed"), "{error}");
     }
 }

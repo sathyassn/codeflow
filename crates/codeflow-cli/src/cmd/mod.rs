@@ -246,19 +246,95 @@ pub fn touch_registry_best_effort() {
     }
 }
 
-/// Walk up from the current directory to the nearest git repository root.
-/// Falls back to the current directory when none is found (commands that
-/// don't need git still work there).
-pub(crate) fn repo_root() -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut dir = cwd.clone();
-    loop {
-        if dir.join(".git").exists() {
-            return dir;
+/// Discover the nearest repository, or keep the current directory when no
+/// repository exists. An unreadable directory or repository is not absence.
+pub(crate) fn repo_root() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|error| format!("cannot resolve current directory: {error}; run from an existing, readable working directory"))?;
+    repo_root_from(&cwd)
+}
+
+fn repo_root_from(cwd: &std::path::Path) -> Result<PathBuf, String> {
+    match codeflow_core::hooks::repo::open(cwd).map_err(|error| {
+        format!("{error}; repair repository metadata or run from a readable working directory")
+    })? {
+        Some(repo) => repo
+            .workdir()
+            .map(std::path::Path::to_path_buf)
+            .ok_or_else(|| "repository has no worktree; run from a working checkout".to_string()),
+        None => Ok(cwd.to_path_buf()),
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    #[cfg(unix)]
+    #[test]
+    fn r22_repository_root_missing_cwd_is_not_dot() {
+        const CHILD: &str = "CODEFLOW_R22_REMOVED_CWD";
+        if let Some(path) = std::env::var_os(CHILD) {
+            std::fs::remove_dir(path).unwrap();
+            // The baseline returned PathBuf("."). Check the result without
+            // depending on the changed return type so this test runs there too.
+            let result = format!("{:?}", super::repo_root());
+            assert!(result.starts_with("Err("), "{result}");
+            return;
         }
-        match dir.parent() {
-            Some(parent) => dir = parent.to_path_buf(),
-            None => return cwd,
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("gone");
+        std::fs::create_dir(&gone).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cmd::root_tests::r22_repository_root_missing_cwd_is_not_dot",
+                "--nocapture",
+            ])
+            .env(CHILD, &gone)
+            .current_dir(&gone)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r22_repository_root_refuses_dangling_nested_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::os::unix::fs::symlink(nested.join("missing"), nested.join(".git")).unwrap();
+        assert!(super::repo_root_from(&nested).is_err());
+    }
+
+    #[test]
+    fn r22_repository_root_preserves_real_absence_and_unborn_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(super::repo_root_from(dir.path()).unwrap(), dir.path());
+        assert!(codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        assert_eq!(
+            super::repo_root_from(&nested)
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
     }
 }

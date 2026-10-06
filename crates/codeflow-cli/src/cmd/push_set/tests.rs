@@ -556,3 +556,114 @@ fn r17_remote_query_exit_codes_keep_absence_distinct() {
     }
     assert!(git_answer(&["remote", "update"], output(2)).is_err());
 }
+
+#[test]
+fn r22_missing_binary_blocks_even_when_push_gate_is_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let policy = GitPolicy {
+        test_gate_on_push: codeflow_core::hooks::PolicyLevel::Off,
+        ..GitPolicy::default()
+    };
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let mut report = StageReport::default();
+    run_checked_with_binary(dir.path(), &policy, &refs, None, None, &mut report, || {
+        Err(std::io::Error::other("binary location unavailable"))
+    })
+    .unwrap();
+    assert!(codeflow_core::hooks::any_blocking(&report.violations));
+    assert!(report.violations[0]
+        .message
+        .contains("binary location unavailable"));
+}
+
+#[test]
+fn r22_empty_push_set_does_not_require_a_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut report = StageReport::default();
+    run_checked_with_binary(
+        dir.path(),
+        &GitPolicy::default(),
+        &[],
+        None,
+        None,
+        &mut report,
+        || panic!("an empty push set has no checks to launch"),
+    )
+    .unwrap();
+    assert!(report.violations.is_empty());
+}
+
+#[test]
+fn r22_release_preflight_errors_are_precise_nonblocking_notes() {
+    let dir = tempfile::tempdir().unwrap();
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let exe = std::env::current_exe().unwrap();
+    let run = |root: &Path| {
+        let mut report = StageReport::default();
+        release_preflight(
+            &exe,
+            root,
+            &refs[0],
+            "origin",
+            &GitPolicy::default(),
+            &mut report,
+            &mut Vec::new(),
+        );
+        assert!(report.violations.is_empty());
+        assert_eq!(report.notes.len(), 1);
+        let note = report.notes[0].line("codeflow", "note");
+        assert!(note.contains("could not complete"), "{note}");
+        assert!(note.contains("the pull request job checks it"), "{note}");
+        note
+    };
+    // The process cannot launch from an absent working directory.
+    let note = run(&dir.path().join("absent"));
+    assert!(note.contains("python3 scripts/release.py"), "{note}");
+    std::fs::create_dir(dir.path().join("scripts")).unwrap();
+    std::fs::write(dir.path().join("scripts/release.py"), "print('not JSON')\n").unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("preflight printed no result"), "{note}");
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "import sys\nprint('preflight failure', file=sys.stderr)\nsys.exit(3)\n",
+    )
+    .unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("preflight failure"), "{note}");
+}
+
+#[test]
+fn r22_release_preflight_valid_empty_notes_stay_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("scripts")).unwrap();
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "print('{\"status\":\"ok\",\"notes\":[]}')\n",
+    )
+    .unwrap();
+    let refs = git_hook::parse_push_refs(&format!(
+        "refs/heads/feat/test {} refs/heads/feat/test {}\n",
+        "a".repeat(40),
+        "b".repeat(40)
+    ));
+    let mut report = StageReport::default();
+    release_preflight(
+        &std::env::current_exe().unwrap(),
+        dir.path(),
+        &refs[0],
+        "origin",
+        &GitPolicy::default(),
+        &mut report,
+        &mut Vec::new(),
+    );
+    assert!(report.notes.is_empty());
+    assert!(report.violations.is_empty());
+}

@@ -31,7 +31,13 @@ pub struct ValidateArgs {
 }
 
 pub fn run(args: &ValidateArgs) -> i32 {
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let mut failed = false;
 
     failed |= !validate_policy(&root);

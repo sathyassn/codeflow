@@ -27,7 +27,13 @@ pub fn run(args: &EstimateArgs) -> i32 {
         forecast_path,
         json,
     } = &args.command;
-    let root = super::repo_root();
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}");
+            return 2;
+        }
+    };
     let input = if forecast_path.is_absolute() {
         forecast_path.clone()
     } else {
