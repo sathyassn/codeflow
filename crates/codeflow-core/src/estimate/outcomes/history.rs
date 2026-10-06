@@ -1,11 +1,13 @@
 //! Outcome timings derived from git history, never recorded.
 //!
-//! The task records are read from `HEAD`. Each record's status history is
-//! the sequence of non-merge commits, parents first, reachable from `HEAD`
-//! or a task's integration target, whose copy of the record differs from
-//! their parent's. A merge only carries edits made on its parents' lines,
-//! so a record edited only in a merge's conflict resolution is not seen.
-//! Times are author times, which a rebase keeps.
+//! The task records are read from `HEAD`. A record's lifecycle is the
+//! sequence of non-merge commits in `HEAD`'s history, parents first, whose
+//! status for that task id differs from their parent's, so a text edit or a
+//! move between record layouts is no transition, and a merge, which only
+//! carries edits made on its parents' lines, is never one. A record whose
+//! status changed only in a merge's conflict resolution is not seen. Each
+//! task's integration target is read only to place landings on its
+//! first-parent line. Times are author times, which a rebase keeps.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -78,7 +80,7 @@ struct Line {
 
 pub(super) struct History<'r> {
     repo: &'r Repository,
-    /// Per record path: each non-merge commit whose status differs from its
+    /// Per task id: each non-merge commit whose status differs from its
     /// parent's, with the status before and after (empty when the record is
     /// absent), parents first.
     changes: HashMap<String, Vec<(Oid, String, String)>>,
@@ -185,14 +187,20 @@ fn parse_record(path: &str, bytes: &[u8]) -> Option<Record> {
     })
 }
 
-fn status_of(bytes: &[u8]) -> String {
-    crate::validate::parse_frontmatter(bytes)
-        .map(|(data, _)| {
-            crate::validate::get_string_field(&data, "status")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_default()
+/// A record blob's task id and status, when its frontmatter names a task.
+fn id_and_status(bytes: &[u8]) -> Option<(String, String)> {
+    let (data, _) = crate::validate::parse_frontmatter(bytes).ok()?;
+    let field = |key: &str| {
+        crate::validate::get_string_field(&data, key)
+            .trim()
+            .to_string()
+    };
+    let id = Some(field("id"))
+        .filter(|id| crate::workgraph::is_valid_task_format_id(id))
+        .or_else(|| {
+            Some(field("format_id")).filter(|id| crate::workgraph::is_valid_task_format_id(id))
+        })?;
+    Some((id, field("status")))
 }
 
 impl<'r> History<'r> {
@@ -205,7 +213,11 @@ impl<'r> History<'r> {
                 .entry(record.target.clone())
                 .or_insert_with(|| line(repo, &record.target));
         }
-        let paths: BTreeSet<&str> = records.iter().map(|record| record.path.as_str()).collect();
+        let ids: BTreeSet<&str> = records.iter().map(|record| record.id.as_str()).collect();
+        // Only HEAD's history: the records were read at HEAD, so their
+        // lifecycle is the one HEAD holds. A target ahead of HEAD may carry
+        // another lifecycle (a reopen and re-completion); its line is used
+        // only to place landings, never to read transitions.
         let mut walk = repo
             .revwalk()
             .map_err(|error| error.message().to_string())?;
@@ -213,12 +225,7 @@ impl<'r> History<'r> {
             .map_err(|error| error.message().to_string())?;
         walk.push_head()
             .map_err(|error| error.message().to_string())?;
-        for line in lines.values().flatten() {
-            walk.push(line.tip)
-                .map_err(|error| error.message().to_string())?;
-        }
         let mut changes: HashMap<String, Vec<(Oid, String, String)>> = HashMap::new();
-        let mut statuses: HashMap<Oid, String> = HashMap::new();
         let mut homes = Homes::default();
         for oid in walk {
             let oid = oid.map_err(|error| error.message().to_string())?;
@@ -239,33 +246,22 @@ impl<'r> History<'r> {
             if now == before {
                 continue;
             }
-            let now = homes.blobs(repo, now, &paths);
-            let before = homes.blobs(repo, before, &paths);
-            for path in &paths {
-                let (after, prior) = (now.get(*path), before.get(*path));
-                if after == prior {
-                    continue;
-                }
-                let mut status = |blob: Option<&Oid>| {
-                    blob.map_or_else(String::new, |blob| {
-                        statuses
-                            .entry(*blob)
-                            .or_insert_with(|| {
-                                repo.find_blob(*blob)
-                                    .map(|blob| status_of(blob.content()))
-                                    .unwrap_or_default()
-                            })
-                            .clone()
-                    })
-                };
-                let (to, from) = (status(after), status(prior));
-                // A text-only edit keeps the status; it is no transition,
-                // whichever line it is on.
+            // Statuses by task id, so a record moved between the flat and
+            // nested layouts keeps its history.
+            let now = homes.statuses(repo, now);
+            let before = homes.statuses(repo, before);
+            for id in &ids {
+                let empty = String::new();
+                let to = now.get(*id).unwrap_or(&empty);
+                let from = before.get(*id).unwrap_or(&empty);
+                // A text-only edit or a move keeps the status; it is no
+                // transition, whichever line it is on.
                 if to != from {
-                    changes
-                        .entry((*path).to_string())
-                        .or_default()
-                        .push((oid, from, to));
+                    changes.entry((*id).to_string()).or_default().push((
+                        oid,
+                        from.clone(),
+                        to.clone(),
+                    ));
                 }
             }
         }
@@ -280,7 +276,7 @@ impl<'r> History<'r> {
     pub(super) fn timings(&self, record: &Record) -> Timings {
         let mut timings = Timings::default();
         let empty = Vec::new();
-        let changes = self.changes.get(&record.path).unwrap_or(&empty);
+        let changes = self.changes.get(&record.id).unwrap_or(&empty);
         let mut added = None;
         let mut open_block: Option<Point> = None;
         // Completions since the last reopen; parallel lines (a squash on the
@@ -526,12 +522,14 @@ fn line(repo: &Repository, target: &str) -> Option<Line> {
 /// The record homes of one commit: the `tasks` and `epics` subtree ids.
 type Subtrees = (Option<Oid>, Option<Oid>);
 
-/// Caches of record homes by commit and of record blobs by home, so each
-/// tree is read once however many commits share it.
+/// Caches of record homes by commit, of each record blob's id and status,
+/// and of the status map of each pair of homes, so each tree and blob is
+/// read once however many commits share it.
 #[derive(Default)]
 struct Homes {
     by_commit: HashMap<Oid, Subtrees>,
-    blobs: HashMap<Subtrees, std::rc::Rc<BTreeMap<String, Oid>>>,
+    blobs: HashMap<Oid, Option<(String, String)>>,
+    statuses: HashMap<Subtrees, std::rc::Rc<BTreeMap<String, String>>>,
 }
 
 impl Homes {
@@ -549,65 +547,74 @@ impl Homes {
         })
     }
 
-    fn blobs(
+    /// Each task id in these homes with its status; the first path in
+    /// layout order wins when two records claim one id.
+    fn statuses(
         &mut self,
         repo: &Repository,
         homes: Subtrees,
-        paths: &BTreeSet<&str>,
-    ) -> std::rc::Rc<BTreeMap<String, Oid>> {
-        self.blobs
-            .entry(homes)
-            .or_insert_with(|| std::rc::Rc::new(record_blobs(repo, homes, paths)))
-            .clone()
+    ) -> std::rc::Rc<BTreeMap<String, String>> {
+        if let Some(map) = self.statuses.get(&homes) {
+            return map.clone();
+        }
+        let mut map = BTreeMap::new();
+        for blob in record_blobs(repo, homes) {
+            let parsed = self
+                .blobs
+                .entry(blob)
+                .or_insert_with(|| {
+                    let blob = repo.find_blob(blob).ok()?;
+                    id_and_status(blob.content())
+                })
+                .clone();
+            if let Some((id, status)) = parsed {
+                map.entry(id).or_insert(status);
+            }
+        }
+        let map = std::rc::Rc::new(map);
+        self.statuses.insert(homes, map.clone());
+        map
     }
 }
 
-/// The blob of each wanted record path in these homes.
-fn record_blobs(
-    repo: &Repository,
-    homes: Subtrees,
-    paths: &BTreeSet<&str>,
-) -> BTreeMap<String, Oid> {
-    let mut out = BTreeMap::new();
-    let mut entries = |tree: Oid, prefix: &str| {
+/// The blob of every task record in these homes, flat layout first.
+fn record_blobs(repo: &Repository, homes: Subtrees) -> Vec<Oid> {
+    let mut out = Vec::new();
+    let mut entries = |tree: Oid| {
         if let Ok(tree) = repo.find_tree(tree) {
             for entry in &tree {
-                let Ok(name) = entry.name() else {
-                    continue;
-                };
-                let path = format!("{prefix}/{name}");
-                if paths.contains(path.as_str()) {
-                    out.insert(path, entry.id());
+                let is_record = entry.kind() == Some(git2::ObjectType::Blob)
+                    && entry.name().ok().is_some_and(|name| {
+                        name.strip_suffix(".md")
+                            .is_some_and(crate::workgraph::is_valid_task_format_id)
+                    });
+                if is_record {
+                    out.push(entry.id());
                 }
             }
         }
     };
     if let Some(tasks) = homes.0 {
-        entries(tasks, TASKS);
+        entries(tasks);
     }
-    let nested: Vec<(String, Oid)> = homes
+    let nested: Vec<Oid> = homes
         .1
         .and_then(|epics| repo.find_tree(epics).ok())
         .map(|epics| {
             epics
                 .iter()
                 .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
-                .filter_map(|entry| Some((entry.name().ok()?.to_string(), entry.id())))
+                .map(|entry| entry.id())
                 .collect()
         })
         .unwrap_or_default();
-    for (epic, tree) in nested {
-        let prefix = format!("{EPICS}/{epic}/tasks");
-        if !paths.iter().any(|path| path.starts_with(&prefix)) {
-            continue;
-        }
-        let Ok(tasks) = repo
+    for tree in nested {
+        if let Ok(tasks) = repo
             .find_tree(tree)
             .and_then(|tree| tree.get_path(std::path::Path::new("tasks")))
-        else {
-            continue;
-        };
-        entries(tasks.id(), &prefix);
+        {
+            entries(tasks.id());
+        }
     }
     out
 }

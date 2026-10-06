@@ -853,3 +853,68 @@ fn completion_before_landing_is_judged_by_ancestry() {
     let (_, report) = fx.report(&[]);
     assert_eq!(task(&report, "TSK-001")["elapsed_active_seconds"], 2000);
 }
+
+/// Review round 3: a HEAD behind its target reports the lifecycle HEAD
+/// holds, not a later reopen and re-completion on the target.
+#[test]
+fn a_stale_head_keeps_its_own_lifecycle() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    let [first, _, completion, landing] = fx.deliver("TSK-001", T0 + 1000, 2000);
+    fx.git(&["branch", "stale", "main"], T0 + 9000);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-again", "main"],
+        T0 + 10_000,
+    );
+    fx.record("TSK-001", "todo", None);
+    fx.commit("docs: reopen TSK-001", T0 + 10_000);
+    let again = fx.code("again.txt", T0 + 11_000);
+    fx.record("TSK-001", "complete", Some(&again));
+    fx.commit("docs: complete TSK-001 again", T0 + 12_000);
+    fx.merge("task/TSK-001-again", T0 + 13_000);
+    fx.git(&["checkout", "-q", "stale"], T0 + 14_000);
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    assert_eq!(at(&outcome["started"]).0, first, "{outcome:#}");
+    assert_eq!(at(&outcome["completed"]).0, completion, "{outcome:#}");
+    assert_eq!(at(&outcome["landed"]).0, landing, "{outcome:#}");
+    assert_eq!(outcome["elapsed_active_seconds"], 2000);
+}
+
+/// Review round 3: moving a record from the nested layout to the flat one
+/// keeps its history.
+#[test]
+fn a_moved_record_keeps_its_history() {
+    let fx = Fixture::new();
+    let nested_dir = fx.root.join("project-management/epics/EPC-001/tasks");
+    std::fs::create_dir_all(&nested_dir).unwrap();
+    let flat = fx.root.join("project-management/tasks/TSK-001.md");
+    let nested = nested_dir.join("TSK-001.md");
+    fx.git(&["checkout", "-q", "-b", "plan/TSK-001", "main"], T0 + 100);
+    fx.record("TSK-001", "todo", None);
+    std::fs::rename(&flat, &nested).unwrap();
+    fx.commit("docs: plan TSK-001", T0 + 100);
+    let planning = fx.merge("plan/TSK-001", T0 + 200);
+    fx.git(
+        &["checkout", "-q", "-b", "task/TSK-001-fixture", "main"],
+        T0 + 1000,
+    );
+    let first = fx.code("a.txt", T0 + 1000);
+    let reviewed = fx.code("b.txt", T0 + 2000);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    std::fs::rename(&flat, &nested).unwrap();
+    let completion = fx.commit("docs: complete TSK-001", T0 + 3000);
+    fx.merge("task/TSK-001-fixture", T0 + 4000);
+    std::fs::rename(&nested, &flat).unwrap();
+    fx.commit("chore: move TSK-001 to the flat layout", T0 + 20_000);
+    let (_, report) = fx.report(&[]);
+    let outcome = task(&report, "TSK-001");
+    assert_eq!(at(&outcome["planned"]), (planning, T0 + 200), "{outcome:#}");
+    assert_eq!(at(&outcome["started"]), (first, T0 + 1000), "{outcome:#}");
+    assert_eq!(
+        at(&outcome["completed"]),
+        (completion, T0 + 3000),
+        "{outcome:#}"
+    );
+    assert_eq!(outcome["elapsed_active_seconds"], 2000);
+}
