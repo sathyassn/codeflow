@@ -50,7 +50,9 @@ erratum below, never an edit of the section.
   the CI that judges a multi-epic amendment; a single `Task: EPC-NNN` works
   on both. A planning pull request that names one epic but changes another
   epic's records, such as a breakdown that creates two epics, now fails
-  until its `Task:` line names both.
+  until its `Task:` line names both. The "PR bodies" paragraph of the
+  managed `git-rules.md` names this form, so agents that follow the rule
+  use it.
 
 <!-- codeflow:release-impact minor -->
 - **Pull request Summaries open with a prose lead, then bullets.**
