@@ -2161,3 +2161,11 @@ fn r16_unreadable_origin_head_refuses_root_commit_judgment() {
     assert_eq!(finding.level, PolicyLevel::Block);
     assert!(finding.message.contains("cannot read"));
 }
+
+#[cfg(unix)]
+#[test]
+fn r18_dangling_git_marker_is_not_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
+    assert!(super::git_marker(dir.path()).is_err());
+}

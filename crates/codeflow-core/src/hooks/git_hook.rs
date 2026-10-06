@@ -18,6 +18,19 @@ use super::repo::current_branch;
 use super::scan;
 use super::{standards, Violation};
 
+/// Whether the Git directory holds the merge marker.
+///
+/// # Errors
+/// An existing marker or its ancestors cannot be inspected or resolved.
+pub fn merge_head_present(git_dir: &Path) -> Result<bool, HookError> {
+    let path = git_dir.join("MERGE_HEAD");
+    let unreadable = |error| HookError::Config(format!("cannot read merge state: {error}"));
+    if crate::absence::proven_absent(&path).map_err(unreadable)? {
+        return Ok(false);
+    }
+    std::fs::metadata(&path).map(|_| true).map_err(unreadable)
+}
+
 /// Identify the binary and compare its compiled input digest with this source tree.
 /// Installed consumer repositories do not contain the compiler's source inputs.
 #[must_use]
@@ -1256,6 +1269,22 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r18_merge_marker_absence_requires_resolved_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!super::merge_head_present(dir.path()).unwrap());
+        let marker = dir.path().join("MERGE_HEAD");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &marker).unwrap();
+        assert!(super::merge_head_present(dir.path()).is_err());
+        let ancestor = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &ancestor).unwrap();
+        assert!(super::merge_head_present(&ancestor).is_err());
+        std::fs::remove_file(marker).unwrap();
+        std::fs::write(dir.path().join("MERGE_HEAD"), "abc\n").unwrap();
+        assert!(super::merge_head_present(dir.path()).unwrap());
+    }
+
     #[test]
     fn r15_extra_packed_ref_framing_does_not_erase_cr() {
         let dir = tempfile::tempdir().unwrap();

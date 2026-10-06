@@ -551,9 +551,9 @@ fn canonical_operand(path: &str) -> Option<String> {
                 }
                 return Some(canonical);
             }
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound
-                    && std::fs::symlink_metadata(&prefix).is_err() => {}
+            Err(_)
+                if crate::absence::proven_absent(Path::new(&prefix)).is_ok_and(|absent| absent) => {
+            }
             Err(_) => return None,
         }
     }

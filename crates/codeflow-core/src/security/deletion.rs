@@ -4221,6 +4221,7 @@ impl Reader<'_> {
         let mut per_name: Vec<Values> = vec![Values::new(); names.len()];
         let mut elements = Values::new();
         for item in &items {
+            // `read` owns the first line delimiter, preserving CR and other data.
             let line = item.value.split('\n').next().unwrap_or_default();
             let mut lines = vec![line.to_string()];
             if !raw && line.contains('\\') {
@@ -4375,13 +4376,13 @@ impl Reader<'_> {
     /// `xargs CMD`: the command with each input value appended, or put in
     /// place of its `-I` token, and the command alone.
     fn judge_xargs(&mut self, args: &[String], st: &State, input: Option<&Fed>, ambiguous: bool) {
-        let (inner, replace, file_input) = after_xargs_options(args);
+        let (inner, replace, file_input, delimiter) = after_xargs_options(args);
         if inner.is_empty() {
             return;
         }
         self.exec(inner, st, None, false, ambiguous);
         let inputs = if file_input { None } else { input };
-        for item in items(inputs) {
+        for item in items(inputs, delimiter) {
             let line: Vec<String> = match &replace {
                 Some(token) => inner
                     .iter()
@@ -4419,6 +4420,7 @@ impl Reader<'_> {
             "--timeout",
             "--delay",
         ];
+        let mut delimiter = Delimiter::Char('\n');
         let mut at = 0;
         while let Some(arg) = args.get(at) {
             if arg == "--" {
@@ -4427,6 +4429,11 @@ impl Reader<'_> {
             }
             if !arg.starts_with('-') || arg.starts_with(":::") {
                 break;
+            }
+            if let Some((selected, consumed)) = delimiter_option(&args[at..]) {
+                delimiter = selected;
+                at += consumed;
+                continue;
             }
             at += if WITH_VALUE.contains(&arg.as_str()) {
                 2
@@ -4452,7 +4459,7 @@ impl Reader<'_> {
             })
             .collect();
         if sources.is_empty() {
-            entries.extend(items(input));
+            entries.extend(items(input, delimiter));
         }
         self.exec(command, st, None, false, ambiguous);
         for item in entries {
@@ -5463,10 +5470,7 @@ impl Reader<'_> {
                     // read it whole.
                     "echo" => {
                         for value in echo_output(&argv[1..]) {
-                            out.push(Input {
-                                value: value.trim_end_matches('\n').to_string(),
-                                tree: false,
-                            });
+                            out.push(Input { value, tree: false });
                         }
                     }
                     "printf" => match printf(&argv[1..]) {
@@ -6208,25 +6212,127 @@ fn heredoc_word(body: &str) -> Word {
     word
 }
 
-/// The items `xargs` or `parallel` reads from its input: each value split
-/// on blanks and NUL.
-fn items(fed: Option<&Fed>) -> Vec<Input> {
+/// The framing selected by the consuming command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delimiter {
+    Blanks,
+    Nul,
+    Char(char),
+}
+
+/// The items `xargs` or `parallel` reads, with framing removed here only.
+fn items(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
     let Some(fed) = fed else {
         return Vec::new();
     };
     fed.items
         .iter()
         .flat_map(|item| {
-            item.value
-                .split([' ', '\t', '\n', '\r', '\u{b}', '\u{c}', '\0'])
-                .filter(|v| !v.is_empty())
+            let values = match delimiter {
+                Delimiter::Blanks => xargs_words(&item.value),
+                Delimiter::Nul | Delimiter::Char(_) => {
+                    let separator = match delimiter {
+                        Delimiter::Char(ch) => ch,
+                        _ => '\0',
+                    };
+                    let mut values: Vec<_> =
+                        item.value.split(separator).map(str::to_owned).collect();
+                    // A terminating delimiter frames the preceding item; an
+                    // empty record between delimiters is still an argument.
+                    if values.last().is_some_and(String::is_empty) {
+                        values.pop();
+                    }
+                    values
+                }
+            };
+            values
+                .into_iter()
                 .map(|value| Input {
-                    value: value.to_string(),
+                    value,
                     tree: item.tree,
                 })
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Default xargs quoting. An unfinished quoted input aborts the invocation.
+fn xargs_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut started = false;
+    for ch in text.chars() {
+        if escaped {
+            word.push(ch);
+            escaped = false;
+        } else if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            } else {
+                word.push(ch);
+            }
+        } else {
+            match ch {
+                '\\' => escaped = true,
+                '\'' | '"' => quote = Some(ch),
+                ' ' | '\t' | '\n' => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                        started = false;
+                    }
+                    continue;
+                }
+                _ => word.push(ch),
+            }
+        }
+        started = true;
+    }
+    if quote.is_some() || escaped {
+        return Vec::new();
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// Decode the explicitly supported xargs/parallel delimiter spellings.
+fn delimiter_option(args: &[String]) -> Option<(Delimiter, usize)> {
+    let arg = args.first()?;
+    if matches!(arg.as_str(), "-0" | "--null") {
+        return Some((Delimiter::Nul, 1));
+    }
+    let (value, consumed) = if matches!(arg.as_str(), "-d" | "--delimiter") {
+        (args.get(1)?.as_str(), 2)
+    } else {
+        (
+            arg.strip_prefix("--delimiter=")
+                .or_else(|| arg.strip_prefix("-d"))?,
+            1,
+        )
+    };
+    let mut chars = value.chars();
+    let first = chars.next()?;
+    let ch = if first == '\\' {
+        match chars.next() {
+            Some('n') => '\n',
+            Some('t') => '\t',
+            Some('0') => '\0',
+            Some('\\') => '\\',
+            Some('x') => chars
+                .next()
+                .and_then(|hi| hi.to_digit(16))
+                .zip(chars.next().and_then(|lo| lo.to_digit(16)))
+                .and_then(|(hi, lo)| char::from_u32(hi * 16 + lo))
+                .unwrap_or(first),
+            _ => first,
+        }
+    } else {
+        first
+    };
+    Some((Delimiter::Char(ch), consumed))
 }
 
 /// A command after its launchers, with the environment and working
@@ -6535,7 +6641,7 @@ fn shell_script(args: &[String]) -> Option<(&str, &[String])> {
 
 /// The command `xargs` runs, its replacement token and whether it reads
 /// its input from a file instead.
-fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool) {
+fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool, Delimiter) {
     const WITH_VALUE: &[&str] = &[
         "-L",
         "-n",
@@ -6550,6 +6656,7 @@ fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool) {
         "--max-procs",
         "--max-chars",
     ];
+    let mut delimiter = Delimiter::Blanks;
     let mut replace = None;
     let mut file_input = false;
     let mut at = 0;
@@ -6561,7 +6668,10 @@ fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool) {
         if !arg.starts_with('-') || arg == "-" {
             break;
         }
-        if arg == "-I" {
+        if let Some((selected, consumed)) = delimiter_option(&args[at..]) {
+            delimiter = selected;
+            at += consumed;
+        } else if arg == "-I" {
             replace = args.get(at + 1).cloned();
             at += 2;
         } else if let Some(token) = arg.strip_prefix("-I") {
@@ -6587,7 +6697,12 @@ fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool) {
             };
         }
     }
-    (args.get(at..).unwrap_or_default(), replace, file_input)
+    (
+        args.get(at..).unwrap_or_default(),
+        replace,
+        file_input,
+        delimiter,
+    )
 }
 
 /// The commands a `find` expression runs with `-exec`, `-execdir`, `-ok`
@@ -7511,6 +7626,150 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+
+    #[test]
+    fn r18_delimiters_preserve_operand_bytes() {
+        use super::{Delimiter, Fed, Input};
+        for (text, delimiter, expected) in [
+            ("a b\nc\0d\0", Delimiter::Nul, vec!["a b\nc", "d"]),
+            ("a b\nc:d", Delimiter::Char(':'), vec!["a b\nc", "d"]),
+            ("\0x\0\0", Delimiter::Nul, vec!["", "x", ""]),
+            ("", Delimiter::Nul, vec![]),
+            (
+                r#""a b" 'c d' e\ f"#,
+                Delimiter::Blanks,
+                vec!["a b", "c d", "e f"],
+            ),
+            ("a 'unfinished", Delimiter::Blanks, vec![]),
+            ("a \"unfinished", Delimiter::Blanks, vec![]),
+            (
+                "'' \"\" x\r\u{b}\u{c}",
+                Delimiter::Blanks,
+                vec!["", "", "x\r\u{b}\u{c}"],
+            ),
+            ("'a\\b'\0", Delimiter::Nul, vec!["'a\\b'"]),
+            ("x\ny\n", Delimiter::Char('\n'), vec!["x", "y"]),
+        ] {
+            let fed = Fed {
+                complete: true,
+                items: vec![Input {
+                    value: text.into(),
+                    tree: true,
+                }],
+            };
+            let result = super::items(Some(&fed), delimiter);
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|item| item.value.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{text:?} {delimiter:?}"
+            );
+            assert!(result.iter().all(|item| item.tree));
+        }
+    }
+
+    #[test]
+    fn r18_delimiter_options_select_framing() {
+        use super::Delimiter;
+        for (options, expected) in [
+            (vec!["-0"], Delimiter::Nul),
+            (vec!["--null"], Delimiter::Nul),
+            (vec!["-d", r"\n"], Delimiter::Char('\n')),
+            (vec![r"-d\t"], Delimiter::Char('\t')),
+            (vec![r"--delimiter=\0"], Delimiter::Char('\0')),
+            (vec!["--delimiter", r"\\"], Delimiter::Char('\\')),
+            (vec![r"-d\x3a"], Delimiter::Char(':')),
+            (vec!["--delimiter= "], Delimiter::Char(' ')),
+            (vec!["-d", "colon"], Delimiter::Char('c')),
+            (vec!["-0", "-d:"], Delimiter::Char(':')),
+            (vec![], Delimiter::Blanks),
+        ] {
+            let args: Vec<String> = options
+                .iter()
+                .chain(["rm", "-rf"].iter())
+                .map(|s| (*s).into())
+                .collect();
+            let (command, _, _, delimiter) = super::after_xargs_options(&args);
+            assert_eq!(delimiter, expected, "{options:?}");
+            assert_eq!(command, ["rm", "-rf"]);
+        }
+    }
+    #[cfg(unix)]
+    fn r18_spaced_input(index: usize) {
+        let dir = tempfile::tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/", dir.path().join("space name")).unwrap();
+        let command = super::super::guard_forms::SPACED_INPUT_FORMS[index]
+            .replace("{fixture}", dir.path().to_str().unwrap());
+        let found = super::composed_deletion_in(&command, Some(dir.path()))
+            .expect("protected deletion must refuse");
+        assert!(
+            found.unproven.is_none(),
+            "must recognize the protected path: {found:?}"
+        );
+        assert_eq!(found.target, "system directory", "{command}: {found:?}");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r18_xargs_nul_preserves_spaced_path() {
+        r18_spaced_input(0);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r18_xargs_quotes_preserve_spaced_path() {
+        r18_spaced_input(1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r18_parallel_newline_preserves_spaced_path() {
+        r18_spaced_input(2);
+    }
+
+    #[test]
+    fn r18_echo_producer_preserves_newline() {
+        let mut reader = super::Reader {
+            base: None,
+            rooted_unplaced: false,
+            found: None,
+            depth: 0,
+            pipe_input: None,
+            jumps: Vec::new(),
+            expanding: Vec::new(),
+            traps: Vec::new(),
+            in_trap: false,
+            status: None,
+        };
+        let fed = reader.producer_values(&super::Parser::parse("echo x"), &super::State::start());
+        assert!(fed.complete);
+        assert_eq!(fed.items[0].value, "x\n");
+        assert_eq!(
+            super::items(Some(&fed), super::Delimiter::Nul)[0].value,
+            "x\n"
+        );
+        assert_eq!(
+            super::items(Some(&fed), super::Delimiter::Blanks)[0].value,
+            "x"
+        );
+        let input = super::Fed {
+            complete: true,
+            items: vec![super::Input {
+                value: "x\r\ny\n".into(),
+                tree: false,
+            }],
+        };
+        let mut state = super::State::start();
+        reader.read(
+            &["read".into(), "-r".into(), "value".into()],
+            Some(&input),
+            &mut state,
+        );
+        assert_eq!(state.var("value"), ["x\r".to_string()].into());
+    }
+
     #[cfg(unix)]
     #[test]
     fn r15_unreadable_deletion_base_remains_unproven() {
@@ -7612,7 +7871,10 @@ mod tests {
             }],
             complete: true,
         };
-        assert_eq!(super::items(Some(&fed))[0].value, "file\u{a0}tail");
+        assert_eq!(
+            super::items(Some(&fed), super::Delimiter::Blanks)[0].value,
+            "file\u{a0}tail"
+        );
         let fields = super::read_fields("\u{a0}x\u{a0}y", "\u{a0}", 3);
         assert!(fields[0].contains(""));
         assert!(fields[1].contains("x"));

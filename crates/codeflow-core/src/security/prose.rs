@@ -138,9 +138,13 @@ fn plain_target(target: &str, cwd: &std::path::Path) -> bool {
     {
         return false;
     }
-    match std::fs::symlink_metadata(parent.join(name)) {
-        Ok(meta) => meta.file_type().is_file() && !is_executable(&meta) && !is_linked(&meta),
-        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    let path = parent.join(name);
+    match crate::absence::proven_absent(&path) {
+        Ok(true) => true,
+        Ok(false) => std::fs::symlink_metadata(&path).is_ok_and(|meta| {
+            meta.file_type().is_file() && !is_executable(&meta) && !is_linked(&meta)
+        }),
+        Err(_) => false,
     }
 }
 

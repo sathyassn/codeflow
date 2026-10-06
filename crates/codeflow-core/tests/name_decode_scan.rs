@@ -850,6 +850,7 @@ fn trait_item_attributes(item: &syn::TraitItem) -> &[syn::Attribute] {
 /// One site: the enclosing item, the call, and the first line seen.
 #[derive(Default)]
 struct Sites {
+    absence: bool,
     whitespace: bool,
     /// The file uses git2, so a zero-argument `name()` may be its text.
     uses_git2: bool,
@@ -878,6 +879,9 @@ impl Sites {
     }
 
     fn flagged(&self, name: &str, arguments: usize) -> bool {
+        if self.absence {
+            return name == "try_exists";
+        }
         if self.whitespace {
             return UNICODE_WHITESPACE.contains(&name);
         }
@@ -888,6 +892,30 @@ impl Sites {
 
     /// The idents of a macro's tokens, so `format!("{}", f(x))` is read too.
     fn scan_tokens(&mut self, tokens: proc_macro2::TokenStream) {
+        if self.absence {
+            let tokens: Vec<_> = tokens.into_iter().collect();
+            for (at, token) in tokens.iter().enumerate() {
+                if let proc_macro2::TokenTree::Group(group) = token {
+                    self.scan_tokens(group.stream());
+                }
+                if let proc_macro2::TokenTree::Ident(ident) = token {
+                    let punct = |index: usize, ch: char| matches!(tokens.get(index), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == ch);
+                    if ident == "NotFound"
+                        && at >= 3
+                        && punct(at - 1, ':')
+                        && punct(at - 2, ':')
+                        && matches!(&tokens[at - 3], proc_macro2::TokenTree::Ident(kind) if kind == "ErrorKind")
+                    {
+                        self.note(ident.span(), "ErrorKind::NotFound");
+                    }
+                    if ident == "try_exists" && at > 0 && (punct(at - 1, '.') || punct(at - 1, ':'))
+                    {
+                        self.note(ident.span(), "try_exists");
+                    }
+                }
+            }
+            return;
+        }
         let mut previous: Option<proc_macro2::TokenTree> = None;
         let mut iter = tokens.into_iter().peekable();
         while let Some(token) = iter.next() {
@@ -1114,6 +1142,21 @@ impl<'ast> Visit<'ast> for Sites {
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
+        if self.absence {
+            if let Some(last) = path.segments.last() {
+                if last.ident == "try_exists" && path.segments.len() > 1 {
+                    self.note(last.ident.span(), "try_exists");
+                }
+                if last.ident == "NotFound"
+                    && path.segments.len() > 1
+                    && path.segments[path.segments.len() - 2].ident == "ErrorKind"
+                {
+                    self.note(last.ident.span(), "ErrorKind::NotFound");
+                }
+            }
+            syn::visit::visit_path(self, path);
+            return;
+        }
         // `String::from_utf8_lossy(x)` and `map(String::from_utf8_lossy)`.
         if let Some(last) = path.segments.last() {
             let name = last.ident.unraw().to_string();
@@ -1131,7 +1174,7 @@ impl<'ast> Visit<'ast> for Sites {
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         use syn::parse::Parser;
-        if self.whitespace {
+        if self.whitespace || self.absence {
             if let Ok(args) =
                 syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
                     .parse2(mac.tokens.clone())
@@ -3340,14 +3383,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
-    // Owns the outer shell command-substitution output framing after producer bytes are assembled; the shell removes all trailing LF exactly at this boundary.
-    (
-        "crates/codeflow-core/src/security/deletion.rs",
-        "Reader::producer_values",
-        "trim_end_matches",
-        1,
-        "framing:shell-producer-substitution",
-    ),
     // Owns evaluated command-substitution output framing; the shell removes all trailing LF at this boundary.
     (
         "crates/codeflow-core/src/security/deletion.rs",
@@ -4761,9 +4796,14 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "Reader::substitution",
     ),
     (
-        "shell-producer-substitution",
+        "xargs-delimiter",
         "crates/codeflow-core/src/security/deletion.rs",
-        "Reader::producer_values",
+        "items",
+    ),
+    (
+        "shell-read-line",
+        "crates/codeflow-core/src/security/deletion.rs",
+        "Reader::read",
     ),
     (
         "shell-quotes",
@@ -5019,4 +5059,119 @@ fn obtaining_scan_covers_every_operation_consumer_and_discard_shape() {
         "crates/codeflow-core/src/hooks/git_guard.rs",
         "evaluate"
     ));
+}
+
+/// Closed hook/guard scope: filesystem absence must be proven centrally.
+fn absence_scope(file: &str) -> bool {
+    file.starts_with("crates/codeflow-core/src/hooks/")
+        || file.starts_with("crates/codeflow-core/src/security/")
+        || matches!(
+            file,
+            "crates/codeflow-core/src/root_checkout.rs"
+                | "crates/codeflow-core/src/remote.rs"
+                | "crates/codeflow-cli/src/cmd/git_hook.rs"
+        )
+}
+
+fn absence_sites(source: &str) -> BTreeMap<(String, String), Vec<usize>> {
+    let mut sites = Sites {
+        absence: true,
+        ..Sites::default()
+    };
+    sites.visit_file(&syn::parse_file(source).expect("Rust source"));
+    sites.found
+}
+
+// (file, item, operation, count, proof). No raw absence decisions remain in scope.
+const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[];
+
+#[test]
+fn hook_and_guard_absence_is_proven() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    rust_files(&root.join("crates"), &mut files);
+    let mut actual = BTreeMap::new();
+    for file in files {
+        let name = relative(&root, &file);
+        if !absence_scope(&name) {
+            continue;
+        }
+        for ((item, call), lines) in absence_sites(&std::fs::read_to_string(&file).unwrap()) {
+            println!("{name} {item} {call} {} {lines:?}", lines.len());
+            actual.insert((name.clone(), item, call), lines.len());
+        }
+    }
+    let mut allowed = BTreeMap::new();
+    for (file, item, call, count, reason) in ABSENCE_EXCEPTIONS {
+        assert!(absence_scope(file));
+        assert!(matches!(*call, "ErrorKind::NotFound" | "try_exists"));
+        assert!(*count > 0 && !reason.trim().is_empty());
+        assert!(allowed
+            .insert(
+                (file.to_string(), item.to_string(), call.to_string()),
+                *count
+            )
+            .is_none());
+    }
+    assert_eq!(
+        actual, allowed,
+        "absence needs proven_absent or a counted proof with a reason"
+    );
+}
+
+#[test]
+fn absence_scan_is_scoped_and_counts_paths_methods_and_macros() {
+    for expression in [
+        "matches!(e.kind(), std::io::ErrorKind::NotFound)",
+        "if e.kind() == ErrorKind::NotFound {}",
+        "match e.kind() { io::ErrorKind::NotFound => (), _ => () }",
+        "p.try_exists()",
+        "Path::try_exists(p)",
+        "iter.map(Path::try_exists)",
+        "opaque!(p.try_exists(); ErrorKind::NotFound)",
+    ] {
+        let source = format!("fn f() {{ {expression}; }}");
+        assert_eq!(
+            absence_sites(&source).values().map(Vec::len).sum::<usize>(),
+            if expression.starts_with("opaque") {
+                2
+            } else {
+                1
+            },
+            "{expression}"
+        );
+    }
+    let source = "impl R { fn f() { a.try_exists(); b.try_exists(); } } #[cfg(test)] mod tests { fn t() { a.try_exists(); } }";
+    assert_eq!(
+        absence_sites(source)
+            .get(&("R::f".into(), "try_exists".into()))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(absence_sites(r#"fn f() { let try_exists = 1; let s = "ErrorKind::NotFound"; git2::ErrorCode::NotFound; s.split(' '); s.replace('x', "y"); }"#).is_empty());
+    for file in [
+        "hooks/policy.rs",
+        "security/prose.rs",
+        "root_checkout.rs",
+        "remote.rs",
+    ] {
+        assert!(absence_scope(&format!("crates/codeflow-core/src/{file}")));
+    }
+    assert!(absence_scope("crates/codeflow-cli/src/cmd/git_hook.rs"));
+    for file in [
+        "crates/codeflow-core/src/scaffold/state.rs",
+        "crates/codeflow-core/src/scaffold/pr_template.rs",
+        "crates/codeflow-cli/src/cmd/remote.rs",
+        "unrelated/remote.rs",
+    ] {
+        assert!(!absence_scope(file));
+    }
+    let actual = absence_sites("fn f() { a.try_exists(); }");
+    assert_ne!(actual, BTreeMap::new(), "new sites fail an empty allowance");
+    assert_ne!(
+        actual,
+        absence_sites("fn f() { a.try_exists(); b.try_exists(); }"),
+        "stale counts fail"
+    );
 }

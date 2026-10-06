@@ -451,6 +451,11 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
             Component::Normal(part) => {
                 result.push(part);
                 if resolve {
+                    if crate::absence::proven_absent(&result).map_err(|e| {
+                        EditError(format!("cannot inspect {}: {e}", result.display()))
+                    })? {
+                        continue;
+                    }
                     match std::fs::symlink_metadata(&result) {
                         Ok(metadata) if metadata.file_type().is_symlink() => {
                             result = crate::portable_path::canonicalize(&result).map_err(|e| {
@@ -460,7 +465,6 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
                         Ok(metadata) => {
                             normalize_case(&mut result, &metadata);
                         }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                         Err(e) => {
                             return Err(EditError(format!(
                                 "cannot inspect {}: {e}",
@@ -807,9 +811,13 @@ pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>,
             let mut stack = vec![path.clone()];
             let mut seen = 0;
             while let Some(dir) = stack.pop() {
+                if crate::absence::proven_absent(&dir).map_err(|error| {
+                    format!("cannot read protected directory {}: {error}", dir.display())
+                })? {
+                    continue;
+                }
                 let entries = match std::fs::read_dir(&dir) {
                     Ok(entries) => entries,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => {
                         return Err(format!(
                             "cannot read protected directory {}: {error}",

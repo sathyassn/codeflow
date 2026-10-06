@@ -3,6 +3,7 @@
 //! Modules arrive via the charter's import waves (docs/plan/v2/00-charter.md §3.2):
 //! testing, workgraph/ledger, guards, scaffold, recall.
 
+mod absence;
 mod bounded_file;
 pub mod capability;
 pub mod ceremony;

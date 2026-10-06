@@ -421,11 +421,7 @@ fn merge_in_progress(root: &Path) -> Result<bool, codeflow_core::error::HookErro
     )
     .os_path()
     .map_err(|error| unreadable(error.to_string()))?;
-    match std::fs::metadata(root.join(dir).join("MERGE_HEAD")) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(unreadable(error.to_string())),
-    }
+    codeflow_core::hooks::git_hook::merge_head_present(&root.join(dir))
 }
 
 /// Files staged for the pending commit (`git diff --cached --name-only`), for

@@ -837,9 +837,9 @@ pub fn validate_policy(root: &Path) -> Result<(), Vec<PolicyError>> {
 /// One [`PolicyError`] per finding, each naming the key, the offending value,
 /// and the valid set/format.
 pub fn validate_policy_file(path: &Path) -> Result<(), Vec<PolicyError>> {
-    match std::fs::read_to_string(path) {
-        Ok(data) => validate_policy_str(&data),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+    match super::policy::optional_text(path) {
+        Ok(Some(data)) => validate_policy_str(&data),
+        Ok(None) => Ok(()),
         Err(e) => Err(vec![PolicyError::file(format!(
             "policy.json exists but cannot be read: {e}"
         ))]),

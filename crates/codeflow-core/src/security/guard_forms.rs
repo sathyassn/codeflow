@@ -1810,3 +1810,11 @@ pub const HELP_PAIRS: &[(&str, &str)] = &[
         "codex exec --help; claude -p hi",
     ),
 ];
+
+/// Space-containing operands must reach deletion judgment as whole paths.
+#[allow(dead_code)] // Shared by several harnesses; fixture tests live in deletion.
+pub const SPACED_INPUT_FORMS: &[&str] = &[
+    r"printf '%s\0' '{fixture}/space name/../../../etc' | xargs -0 rm -rf --",
+    r#"printf '"{fixture}/space name/../../../etc"' | xargs rm -rf"#,
+    r"printf '{fixture}/space name/../../../etc\n' | parallel rm -rf",
+];

@@ -841,12 +841,18 @@ fn classify_source(repo: &git2::Repository, source: Option<&str>) -> Result<Igno
 /// file).
 fn git_marker(dir: &Path) -> Result<Option<(PathBuf, bool)>, String> {
     let marker = dir.join(".git");
-    let meta = match std::fs::symlink_metadata(&marker) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot read {}: {error}", marker.display())),
-    };
-    Ok((meta.is_dir() || meta.is_file()).then_some((marker, meta.is_file())))
+    let unreadable = |error| format!("cannot read {}: {error}", marker.display());
+    if crate::absence::proven_absent(&marker).map_err(unreadable)? {
+        return Ok(None);
+    }
+    let meta = std::fs::metadata(&marker).map_err(unreadable)?;
+    if !meta.is_dir() && !meta.is_file() {
+        return Err(format!(
+            "unsupported repository marker: {}",
+            marker.display()
+        ));
+    }
+    Ok(Some((marker, meta.is_file())))
 }
 
 /// Whether the `.git` file at `marker` points into `common_dir/worktrees/`:
@@ -866,9 +872,13 @@ fn is_own_worktree(marker: &Path, common_dir: &Path) -> Result<bool, String> {
     let target = target
         .canonicalize()
         .map_err(|error| format!("cannot resolve gitfile target: {error}"))?;
+    if crate::absence::proven_absent(&worktrees)
+        .map_err(|error| format!("cannot resolve common worktree directory: {error}"))?
+    {
+        return Ok(false);
+    }
     let worktrees = match worktrees.canonicalize() {
         Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(format!("cannot resolve common worktree directory: {error}")),
     };
     Ok(target.starts_with(worktrees))
@@ -1890,10 +1900,12 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
         .into_iter()
         .partition(shared_ignore);
     let gitignore = root.join(".gitignore");
-    let current = match std::fs::read_to_string(&gitignore) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(io("read .gitignore", error)),
+    let current = if crate::absence::proven_absent(&gitignore)
+        .map_err(|error| io("read .gitignore", error))?
+    {
+        String::new()
+    } else {
+        std::fs::read_to_string(&gitignore).map_err(|error| io("read .gitignore", error))?
     };
     if let Some(updated) = gitignore_with_nested(&current, &ignored) {
         std::fs::write(&gitignore, updated).map_err(|e| io("write .gitignore", e))?;

@@ -905,16 +905,16 @@ pub fn policy_armed(root: &Path) -> Result<bool, String> {
     }
 }
 
-/// Read an optional configuration file. `NotFound` is explicit schema absence;
-/// every other IO error, including invalid UTF-8, is an unreadable input.
+/// Read an optional configuration file. Only proven absence selects a default;
+/// existing entries and unresolved ancestors remain unreadable inputs.
 /// # Errors
 /// The file cannot be read as text.
 pub(crate) fn optional_text(path: &Path) -> Result<Option<String>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    let unreadable = |error| format!("cannot read {}: {error}", path.display());
+    if crate::absence::proven_absent(path).map_err(unreadable)? {
+        return Ok(None);
     }
+    std::fs::read_to_string(path).map(Some).map_err(unreadable)
 }
 
 /// Parse optional project settings without hiding obtaining errors.
@@ -932,6 +932,36 @@ pub fn read_project_toml(root: &Path) -> Result<Option<toml::Value>, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_dangling_policy_and_ancestor_refuse_defaults() {
+        for leaf in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = dir.path().join(".codeflow");
+            let path = config.join("policy.json");
+            if leaf {
+                std::fs::create_dir(&config).unwrap();
+            }
+            std::os::unix::fs::symlink(
+                dir.path().join("missing"),
+                if leaf { &path } else { &config },
+            )
+            .unwrap();
+            assert!(Policy::load_file(&path).is_err(), "leaf={leaf}");
+            assert!(super::super::policy_schema::validate_policy_file(&path).is_err());
+            assert!(super::super::adoption::raw_policy(dir.path()).is_err());
+            assert!(matches!(
+                Policy::source(dir.path()),
+                PolicySource::UnreadableFile(_)
+            ));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        assert!(Policy::load_file(&dir.path().join(".codeflow/policy.json")).is_ok());
+        assert_eq!(Policy::source(dir.path()), PolicySource::Absent);
+    }
+
     use super::*;
 
     #[test]

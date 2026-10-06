@@ -49,8 +49,7 @@ fn candidates(root: &Path) -> Result<Vec<String>, ScaffoldError> {
     let mut subtemplates = Vec::new();
     for dir in [".github", "", "docs"] {
         let directory = root.join(dir);
-        if !directory
-            .try_exists()
+        if crate::absence::proven_absent(&directory)
             .map_err(|error| ScaffoldError::io(&directory, error))?
         {
             continue;
@@ -80,29 +79,21 @@ fn candidates(root: &Path) -> Result<Vec<String>, ScaffoldError> {
                 && kind.is_dir()
                 && name.eq_ignore_ascii_case("pull_request_template")
             {
+                let text_name = |name: std::ffi::OsString| {
+                    name.into_string().map_err(|_| ScaffoldError::InvalidState {
+                        what: "PR template".into(),
+                        detail: "path is not valid UTF-8".into(),
+                    })
+                };
+                let dir_name = text_name(name)?;
                 let mut children = Vec::new();
                 for child in std::fs::read_dir(entry.path())
                     .map_err(|error| ScaffoldError::io(entry.path(), error))?
                 {
                     let child = child.map_err(|error| ScaffoldError::io(entry.path(), error))?;
-                    if child
-                        .path()
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                    {
-                        let path = child
-                            .path()
-                            .strip_prefix(root)
-                            .map_err(|error| ScaffoldError::InvalidState {
-                                what: "PR template".into(),
-                                detail: error.to_string(),
-                            })?
-                            .to_path_buf();
-                        let text = path.to_str().ok_or_else(|| ScaffoldError::InvalidState {
-                            what: "PR template".into(),
-                            detail: "path is not valid UTF-8".into(),
-                        })?;
-                        children.push(text.replace('\\', "/"));
+                    let child_name = text_name(child.file_name())?;
+                    if child_name.to_ascii_lowercase().ends_with(".md") {
+                        children.push(format!(".github/{dir_name}/{child_name}"));
                     }
                 }
                 children.sort();
@@ -126,7 +117,11 @@ pub fn find_kept(
     installed: &InstalledManifest,
 ) -> Result<Option<KeptTemplate>, ScaffoldError> {
     for path in candidates(root)? {
-        let text = read_beneath_root(root, &path)?.ok_or_else(|| ScaffoldError::InvalidState {
+        let text = match read_beneath_root(root, &path) {
+            Err(ScaffoldError::UnsafeSymlink { .. }) => continue,
+            result => result?,
+        }
+        .ok_or_else(|| ScaffoldError::InvalidState {
             what: path.clone(),
             detail: "template disappeared during reading".into(),
         })?;
@@ -554,6 +549,22 @@ pub fn record_decision(
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_template_backslash_name_keeps_its_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates = dir.path().join(".github/PULL_REQUEST_TEMPLATE");
+        std::fs::create_dir_all(templates.join("custom")).unwrap();
+        std::fs::write(templates.join(r"custom\name.md"), "## Literal backslash\n").unwrap();
+        std::fs::write(templates.join("custom/name.md"), "## Different file\n").unwrap();
+        let kept = find_kept(dir.path(), "shipped", &InstalledManifest::new("0"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.path, r".github/PULL_REQUEST_TEMPLATE/custom\name.md");
+        assert_eq!(kept.headings, ["Literal backslash"]);
+    }
+
     use super::*;
 
     const SHIPPED: &str = include_str!("../../../../assets/base/policy.json");
@@ -720,7 +731,11 @@ mod tests {
         .unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
         std::fs::remove_file(dir.path().join(MANAGED_TEMPLATE)).unwrap();
-        assert!(find_kept(dir.path(), "shipped", &InstalledManifest::new("0")).is_err());
+        assert!(
+            find_kept(dir.path(), "shipped", &InstalledManifest::new("0"))
+                .unwrap()
+                .is_none()
+        );
 
         let linked = KeptTemplate {
             path: "docs/PULL_REQUEST_TEMPLATE.md".into(),

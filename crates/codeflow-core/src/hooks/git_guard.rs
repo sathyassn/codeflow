@@ -2483,10 +2483,14 @@ fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
     if !bytes.starts_with(b".") || !bytes.iter().any(|b| b"*?[{".contains(b)) {
         return None;
     }
-    let parent = match path.parent()?.canonicalize() {
-        Ok(parent) => parent,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+    let parent = path.parent()?;
+    match crate::absence::proven_absent(parent) {
+        Ok(true) => return None,
+        Ok(false) => {}
         Err(_) => return Some("repository root pattern (cannot read directory)"),
+    }
+    let Ok(parent) = parent.canonicalize() else {
+        return Some("repository root pattern (cannot read directory)");
     };
     let info = match super::RepoInfo::discover(&parent) {
         Ok(info) => info?,
@@ -8726,6 +8730,23 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_root_dot_pattern_dangling_parent_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &link).unwrap();
+        assert_eq!(
+            super::root_dot_pattern_target(&link.join(".*")),
+            Some("repository root pattern (cannot read directory)")
+        );
+        assert_eq!(
+            super::root_dot_pattern_target(&dir.path().join("missing/.*")),
+            None
+        );
+    }
+
     #[test]
     fn r17_root_pattern_under_absent_directory_is_absent() {
         let dir = tempfile::tempdir().unwrap();

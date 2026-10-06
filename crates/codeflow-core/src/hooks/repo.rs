@@ -108,40 +108,44 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
             // HEAD. Only an empty directory is proven to contain no repository;
             // gitfiles, partial metadata and unreadable directories must refuse.
             for ancestor in start.ancestors() {
-                match std::fs::symlink_metadata(ancestor.join(".git")) {
-                    Ok(meta) if meta.is_dir() => {
-                        let mut entries =
-                            std::fs::read_dir(ancestor.join(".git")).map_err(|failure| {
-                                format!("cannot inspect repository directory: {failure}")
-                            })?;
-                        if entries
-                            .next()
-                            .transpose()
-                            .map_err(|failure| {
-                                format!("cannot inspect repository entry: {failure}")
-                            })?
-                            .is_some()
-                        {
-                            return Err(format!("cannot discover existing repository: {error}"));
+                let marker = ancestor.join(".git");
+                if !crate::absence::proven_absent(&marker)
+                    .map_err(|failure| format!("cannot inspect repository marker: {failure}"))?
+                {
+                    match std::fs::symlink_metadata(&marker) {
+                        Ok(meta) if meta.is_dir() => {
+                            let mut entries =
+                                std::fs::read_dir(ancestor.join(".git")).map_err(|failure| {
+                                    format!("cannot inspect repository directory: {failure}")
+                                })?;
+                            if entries
+                                .next()
+                                .transpose()
+                                .map_err(|failure| {
+                                    format!("cannot inspect repository entry: {failure}")
+                                })?
+                                .is_some()
+                            {
+                                return Err(format!(
+                                    "cannot discover existing repository: {error}"
+                                ));
+                            }
+                        }
+                        Ok(_) => {
+                            return Err(format!("cannot discover existing repository: {error}"))
+                        }
+                        Err(failure) => {
+                            return Err(format!("cannot inspect repository marker: {failure}"))
                         }
                     }
-                    Ok(_) => return Err(format!("cannot discover existing repository: {error}")),
-                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(failure) => {
-                        return Err(format!("cannot inspect repository marker: {failure}"))
-                    }
                 }
-                if ancestor
-                    .join("objects")
-                    .try_exists()
+                if !crate::absence::proven_absent(&ancestor.join("objects"))
                     .map_err(|failure| failure.to_string())?
                     && ["HEAD", "config", "refs"]
                         .iter()
                         .try_fold(false, |found, name| {
-                            ancestor
-                                .join(name)
-                                .try_exists()
-                                .map(|exists| found || exists)
+                            crate::absence::proven_absent(&ancestor.join(name))
+                                .map(|absent| found || !absent)
                         })
                         .map_err(|failure| failure.to_string())?
                 {
@@ -156,6 +160,15 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_repository_beneath_dangling_ancestor_is_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("broken");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &link).unwrap();
+        assert!(super::open(&link.join("child")).is_err());
+    }
 
     use super::*;
 

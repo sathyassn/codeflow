@@ -277,6 +277,13 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The deletion guard reads `xargs` and `parallel` input by its
+  delimiter.** A protected path containing a blank, passed through
+  `xargs -0`, `xargs -d`, quoted xargs input or `parallel`, was split on the
+  blank and not judged as one path, so the deletion was allowed. The guard
+  now splits by the delimiter the command selects and refuses it.
+
+<!-- codeflow:release-impact patch -->
 - **Text from the operating system or git that is not valid UTF-8 no
   longer stops `present`, `codeflow test` or the discard guard, and no
   guard reads such a name as a different one.** A project with a file name

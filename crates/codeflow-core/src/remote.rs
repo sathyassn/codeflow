@@ -173,12 +173,15 @@ impl ProtectionPlan {
     ///
     /// Returns an error when the policy cannot be read or its protection fields are invalid.
     pub fn from_policy_file(path: &Path) -> Result<Self, String> {
-        let policy: serde_json::Value = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
-            Err(error) => return Err(format!("cannot read policy {}: {error}", path.display())),
-        };
+        let unreadable = |error| format!("cannot read policy {}: {error}", path.display());
+        let policy: serde_json::Value =
+            if crate::absence::proven_absent(path).map_err(unreadable)? {
+                serde_json::json!({})
+            } else {
+                let bytes = std::fs::read(path).map_err(unreadable)?;
+                serde_json::from_slice(&bytes)
+                    .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?
+            };
         if !policy.is_object() {
             return Err("policy must be an object".into());
         }
@@ -617,6 +620,29 @@ impl RemoteProvider for GithubProvider {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r18_remote_dangling_policy_refuses() {
+        for leaf in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = dir.path().join(".codeflow");
+            let path = config.join("policy.json");
+            if leaf {
+                std::fs::create_dir(&config).unwrap();
+            }
+            std::os::unix::fs::symlink(
+                dir.path().join("missing"),
+                if leaf { &path } else { &config },
+            )
+            .unwrap();
+            assert!(
+                ProtectionPlan::from_policy_file(&path).is_err(),
+                "leaf={leaf}"
+            );
+        }
+    }
+
     use super::*;
 
     fn write_policy(dir: &Path, branches: &str) -> PathBuf {
