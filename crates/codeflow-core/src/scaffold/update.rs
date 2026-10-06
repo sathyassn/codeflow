@@ -377,7 +377,7 @@ fn update_writes(
         report.notes.push(note);
     }
     // The brownfield hook choice stays visible until the adopter makes it.
-    if super::detect::configured_hooks_path(root).as_deref()
+    if super::detect::configured_hooks_path(root)?.as_deref()
         == Some(super::detect::CODEFLOW_HOOKS_PATH)
     {
         if let Some(found) = super::detect::git_dir_hooks(root) {

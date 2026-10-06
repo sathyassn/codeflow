@@ -146,7 +146,7 @@ pub enum RebaseResult {
 ///
 /// Returns `GitError` if git commands fail for non-conflict reasons.
 pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseResult, GitError> {
-    let mut args: Vec<String> = fallback_identity_args(repo_path);
+    let mut args: Vec<String> = fallback_identity_args(repo_path)?;
     args.push("rebase".to_string());
     args.push(target_branch.to_string());
     let output = crate::git::command()
@@ -197,21 +197,40 @@ pub fn attempt_rebase(repo_path: &Path, target_branch: &str) -> Result<RebaseRes
 /// never set a global identity — hit exactly that. When a real identity IS
 /// configured (local, global, or system) it is left untouched so the rebase is
 /// attributed correctly.
-fn fallback_identity_args(repo_path: &Path) -> Vec<String> {
-    identity_args_for(has_git_identity(repo_path))
+fn fallback_identity_args(repo_path: &Path) -> Result<Vec<String>, GitError> {
+    Ok(identity_args_for(has_git_identity(repo_path)?))
 }
 
 /// Whether a committer identity (both `user.name` and `user.email`) is
 /// resolvable for `repo_path` via any config scope (local, global, system).
-fn has_git_identity(repo_path: &Path) -> bool {
-    let configured = |key: &str| {
-        crate::git::command()
-            .args(["config", key])
+fn has_git_identity(repo_path: &Path) -> Result<bool, GitError> {
+    let configured = |key: &str| -> Result<bool, GitError> {
+        let out = crate::git::command()
+            .args(["config", "--null", "--get", key])
             .current_dir(repo_path)
             .output()
-            .is_ok_and(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
+            .map_err(|error| GitError::MergeFailed(format!("cannot read {key}: {error}")))?;
+        if out.status.code() == Some(1) {
+            return Ok(false);
+        }
+        if !out.status.success() {
+            return Err(GitError::MergeFailed(format!(
+                "cannot read {key}: git config failed ({})",
+                out.status
+            )));
+        }
+        let value = out
+            .stdout
+            .strip_suffix(&[0])
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                GitError::MergeFailed(format!("cannot read {key}: empty or unframed identity"))
+            })?;
+        Ok(!value.is_empty())
     };
-    configured("user.name") && configured("user.email")
+    let name = configured("user.name")?;
+    let email = configured("user.email")?;
+    Ok(name && email)
 }
 
 /// The `-c` argument list: empty when an identity already exists, or a fallback
@@ -644,6 +663,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn r20_failed_identity_query_never_selects_scaffold_actor() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[broken\n").unwrap();
+        assert!(format!("{:?}", has_git_identity(dir.path())).starts_with("Err("));
+    }
+
     // -- attempt_rebase tests --
 
     #[test]
@@ -703,8 +730,8 @@ mod tests {
         let mut cfg = repo.config().unwrap();
         cfg.set_str("user.name", "Real Dev").unwrap();
         cfg.set_str("user.email", "real@example.com").unwrap();
-        assert!(has_git_identity(dir.path()));
-        assert!(fallback_identity_args(dir.path()).is_empty());
+        assert!(has_git_identity(dir.path()).unwrap());
+        assert!(fallback_identity_args(dir.path()).unwrap().is_empty());
     }
 
     #[test]

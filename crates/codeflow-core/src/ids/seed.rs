@@ -102,7 +102,7 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
     if git.is_shallow()? {
         return Err(IdsError::Shallow);
     }
-    let online = git.has_remote(AUTHORITY);
+    let online = git.has_remote(AUTHORITY)?;
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();
     for _ in 0..PUSH_ATTEMPTS {
@@ -413,7 +413,7 @@ pub struct BackfillReport {
 /// Returns an error when git fails or no registry is available.
 pub fn backfill(root: &Path) -> Result<BackfillReport, IdsError> {
     let git = Git::new(root);
-    let Some(registry) = super::check::registry_ref(&git) else {
+    let Some(registry) = super::check::registry_ref(&git)? else {
         return Err(IdsError::Invalid(
             "no `codeflow/registry` to backfill from; fetch it or seed it first".to_string(),
         ));
@@ -501,7 +501,7 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
             )));
         }
     }
-    let registry = super::check::registry_ref(&git);
+    let registry = super::check::registry_ref(&git)?;
     let ledger = match &registry {
         Some(registry) => Ledger::read(&git, registry)?,
         None => Ledger::default(),

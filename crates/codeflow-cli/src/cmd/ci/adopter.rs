@@ -211,19 +211,24 @@ pub(super) fn supply_sections(profile: Option<&AutomationProfile>, body: &str) -
 /// the two-step upgrade order, even when the checkout is the target and the
 /// head's own workflow no longer validates it. `Some(2)` stops the run.
 pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
-    let show = |path: &str| {
-        let out = codeflow_core::git::command()
-            .arg("-C")
-            .arg(root)
-            .args(["show", &format!("{head}:{path}")])
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    let read = || -> Result<_, String> {
+        let commit = super::rev_parse(root, head)?.ok_or_else(|| {
+            format!("cannot read head configuration: {head} does not name a commit")
+        })?;
+        Ok((
+            head_config(root, &commit, ".codeflow/policy.json")?,
+            head_config(root, &commit, ".codeflow/project.toml")?,
+        ))
+    };
+    let (policy, project) = match read() {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("codeflow ci: error: cannot read head configuration: {error}");
+            return Some(2);
+        }
     };
     let mut failed = false;
-    if let Some(text) = show(".codeflow/policy.json") {
+    if let Some(text) = policy {
         if let Err(errors) = policy_schema::validate_policy_str(&text) {
             for e in &errors {
                 eprintln!("codeflow ci: head policy error: {e}");
@@ -239,13 +244,45 @@ pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
             failed = true;
         }
     }
-    if let Some(text) = show(".codeflow/project.toml") {
+    if let Some(text) = project {
         if let Err(e) = adoption::release_backend_str(&text, "the head's .codeflow/project.toml") {
             eprintln!("codeflow ci: error: {e}");
             failed = true;
         }
     }
     failed.then_some(2)
+}
+
+/// A missing entry in a successfully read tree is optional. A failed Git
+/// process or unreadable present blob makes `check_head_config` refuse.
+fn head_config(root: &Path, commit: &str, path: &str) -> Result<Option<String>, String> {
+    let entries = super::git_bytes(root, &["ls-tree", "-z", commit, "--", path])?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let terminated = entries
+        .strip_suffix(b"\0")
+        .ok_or("cannot read head configuration tree entry")?;
+    let entry = std::str::from_utf8(terminated)
+        .map_err(|_| "cannot decode head configuration tree entry")?;
+    let (metadata, name) = entry
+        .split_once('\t')
+        .ok_or("cannot read head configuration tree entry")?;
+    let fields: Vec<_> = metadata.split(' ').collect();
+    let [mode, "blob", oid] = fields.as_slice() else {
+        return Err(format!("head configuration is not a blob: {path}"));
+    };
+    if name != path
+        || !matches!(*mode, "100644" | "100755" | "120000")
+        || !matches!(oid.len(), 40 | 64)
+        || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!("cannot read head configuration tree entry: {path}"));
+    }
+    let bytes = super::git_bytes(root, &["cat-file", "blob", oid])?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("head configuration is not valid UTF-8: {path}"))
 }
 
 /// Which optional checks this run includes.
@@ -352,6 +389,18 @@ fn print_levels(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r20_head_config_refuses_failed_git_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let initialized = codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(directory.path())
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        std::fs::write(directory.path().join(".git/config"), "[broken\n").unwrap();
+        assert_eq!(super::check_head_config(directory.path(), "HEAD"), Some(2));
+    }
 
     #[test]
     fn r17_absent_event_path_keeps_actor_untrusted() {

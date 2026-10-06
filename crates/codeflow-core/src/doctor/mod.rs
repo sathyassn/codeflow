@@ -495,7 +495,14 @@ fn check_hooks(opts: &Options) -> CheckResult {
 /// keeps the choice visible until the adopter makes it.
 fn git_dir_hooks_finding(root: &Path) -> Option<Finding> {
     use crate::scaffold::detect::{self, CODEFLOW_HOOKS_PATH};
-    if detect::configured_hooks_path(root).as_deref() != Some(CODEFLOW_HOOKS_PATH) {
+    // This optional note only names hooks displaced by a known setting.
+    // The authoritative wiring check below reports configuration read errors.
+    if detect::configured_hooks_path(root)
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some(CODEFLOW_HOOKS_PATH)
+    {
         return None;
     }
     let found = detect::git_dir_hooks(root)?;
@@ -541,7 +548,13 @@ fn hooks_wiring(root: &Path) -> Wiring {
     // Prefer the configured string: relative `.codeflow/git-hooks` is the
     // contract so each worktree uses its own shims. An absolute path (often
     // the main checkout) is a Warn even if the files happen to exist.
-    if let Some(configured) = crate::scaffold::detect::configured_hooks_path(root) {
+    let configured = match crate::scaffold::detect::configured_hooks_path(root) {
+        Ok(configured) => configured,
+        Err(error) => {
+            return Wiring::Unreadable(format!("cannot read Git hook configuration: {error}"))
+        }
+    };
+    if let Some(configured) = configured {
         if configured == CODEFLOW_HOOKS_PATH {
             return Wiring::Read;
         }
@@ -2939,7 +2952,16 @@ fn check_id_registry(opts: &Options) -> CheckResult {
     } else {
         Status::Warn(remedy::DOCTOR_ID_REGISTRY.remedy())
     };
-    if git.has_remote(crate::ids::AUTHORITY) {
+    let has_authority = match git.has_remote(crate::ids::AUTHORITY) {
+        Ok(present) => present,
+        Err(error) => {
+            return result(
+                Status::Fail,
+                format!("cannot read registry authority: {error}"),
+            )
+        }
+    };
+    if has_authority {
         let state = match crate::ids::state::load(&git) {
             Ok(state) => state,
             Err(error) => {

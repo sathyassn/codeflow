@@ -1,5 +1,81 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn r20_git_absence_statuses_are_command_specific() {
+    use std::os::unix::process::ExitStatusExt;
+    for args in [
+        vec!["merge-base", "--independent", "HEAD"],
+        vec!["rev-parse", "--is-shallow-repository"],
+        vec!["config", "--list"],
+    ] {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert!(git_answer(&args, output).is_err(), "{args:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_documented_absence_and_success_remain_supported() {
+    use std::os::unix::process::ExitStatusExt;
+    for args in [
+        vec!["merge-base", "first", "second"],
+        vec!["merge-base", "--is-ancestor", "first", "second"],
+        vec!["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        vec!["config", "--get", "remote.upstream.url"],
+        vec!["config", "--bool", "core.sparseCheckout"],
+        vec!["config", "-z", "--get-all", "remote.origin.fetch"],
+    ] {
+        for code in [1, 128] {
+            let output = std::process::Output {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            };
+            let answer = git_answer(&args, output);
+            if code == 1 {
+                assert_eq!(answer, Ok(None), "{args:?}");
+            } else {
+                assert!(answer.is_err(), "{args:?}");
+            }
+        }
+    }
+    let oid = format!("{}\n", "a".repeat(40));
+    assert_eq!(
+        git_answer(
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+            std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: oid.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            }
+        ),
+        Ok(Some(oid))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn r20_revision_success_requires_an_object_id() {
+    use std::os::unix::process::ExitStatusExt;
+    for stdout in [Vec::new(), b"not-an-object-id\n".to_vec()] {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout,
+            stderr: Vec::new(),
+        };
+        assert!(git_answer(
+            &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+            output
+        )
+        .is_err());
+    }
+}
+
 struct SelectedRange {
     base: String,
     note: Option<Finding>,

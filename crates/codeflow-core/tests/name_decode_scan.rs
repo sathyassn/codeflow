@@ -170,14 +170,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "ascii-marker",
     ),
-    // file or blob content, a format contract and not a name
-    (
-        "codeflow-cli/src/cmd/ci/adopter.rs",
-        "check_head_config",
-        "from_utf8_lossy",
-        1,
-        "format-contract",
-    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-cli/src/cmd/ci/classification.rs",
@@ -378,14 +370,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
-    // an object id or fixed ASCII word git prints, compared with ASCII only
-    (
-        "codeflow-core/src/ids/git.rs",
-        "Git::rev",
-        "from_utf8_lossy",
-        1,
-        "ascii-marker",
-    ),
     // git stderr in an error message shown to a person, never compared
     (
         "codeflow-core/src/ids/git.rs",
@@ -550,6 +534,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/root_checkout.rs",
         "git_run",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // Failed-process stderr is display-only; it never supplies a config value or an absence answer.
+    (
+        "codeflow-core/src/scaffold/gitutil.rs",
+        "failed",
         "from_utf8_lossy",
         1,
         "display",
@@ -3210,6 +3202,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
+    ),
+    // Only failed-process stderr is trimmed for a refusal diagnostic.
+    (
+        "crates/codeflow-core/src/scaffold/gitutil.rs",
+        "failed",
+        "trim",
+        1,
+        "display",
     ),
     // Trims stderr solely when producing an error for a failed Git command.
     (

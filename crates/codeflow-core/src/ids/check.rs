@@ -32,13 +32,15 @@ impl Report {
 
 /// The registry ref to read: the fetched authority copy, else the local
 /// branch (a repository with no remote).
-#[must_use]
-pub fn registry_ref(git: &Git) -> Option<String> {
+///
+/// # Errors
+/// Returns an error when Git cannot inspect either registry ref.
+pub fn registry_ref(git: &Git) -> Result<Option<String>, IdsError> {
     let tracking = tracking_ref(AUTHORITY);
-    if git.rev(&tracking).is_some() {
-        return Some(tracking);
+    if git.rev(&tracking)?.is_some() {
+        return Ok(Some(tracking));
     }
-    git.rev(REGISTRY_REF).map(|_| REGISTRY_REF.to_string())
+    Ok(git.rev(REGISTRY_REF)?.map(|_| REGISTRY_REF.to_string()))
 }
 
 /// `ids check`: the registry's growth and damage rules, reconciled with the
@@ -55,7 +57,10 @@ pub fn check(git: &Git, registry: Option<&str>) -> Result<Report, IdsError> {
         report.blocks.push(IdsError::Shallow.to_string());
         return Ok(report);
     }
-    let Some(registry) = registry.map(str::to_string).or_else(|| registry_ref(git)) else {
+    let Some(registry) = (match registry {
+        Some(value) => Some(value.to_string()),
+        None => registry_ref(git)?,
+    }) else {
         report.blocks.push(
             "no `codeflow/registry` found: CI fetches it explicitly; a maintainer seeds it once with `codeflow ids seed`"
                 .to_string(),
@@ -362,7 +367,7 @@ fn bind(
     added: &[Added],
     report: &mut Report,
 ) -> Result<(), IdsError> {
-    let Some(registry) = registry_ref(git) else {
+    let Some(registry) = registry_ref(git)? else {
         report.blocks.push(format!(
             "{} record(s) added but no `codeflow/registry` was fetched: CI must fetch it explicitly with full history (R-20)",
             added.len()
@@ -421,8 +426,8 @@ fn scan(
     added: &[Added],
     report: &mut Report,
 ) -> Result<(), IdsError> {
-    let head_sha = git.rev(head).unwrap_or_default();
-    let ledger = match registry_ref(git) {
+    let head_sha = git.rev(head)?.unwrap_or_default();
+    let ledger = match registry_ref(git)? {
         Some(registry) => Ledger::read(git, &registry)?,
         None => Ledger::default(),
     };

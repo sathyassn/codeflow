@@ -603,12 +603,21 @@ pub fn run(args: &CiArgs) -> i32 {
         // The hosted workflows pass the base as a commit id, so the branch
         // the pull request merges into (`--into`, or the host's PR-target
         // environment) decides protection as much as a named base does.
-        let protected = base_candidates
-            .iter()
-            .any(|base| protected_base(&root, git, base))
-            || into
-                .as_deref()
-                .is_some_and(|name| git.branch_is_protected(name));
+        let protected = match base_candidates.iter().try_fold(false, |found, base| {
+            if found {
+                Ok(true)
+            } else {
+                protected_base(&root, git, base)
+            }
+        }) {
+            Ok(protected) => protected,
+            Err(error) => {
+                eprintln!("codeflow ci: {error}");
+                return 2;
+            }
+        } || into
+            .as_deref()
+            .is_some_and(|name| git.branch_is_protected(name));
         tagged.extend(evaluate_pr_checks(
             git,
             &body,
@@ -1010,22 +1019,35 @@ fn is_pr_event(env: impl Fn(&str) -> Option<String>) -> bool {
         || env("CI_PIPELINE_SOURCE").as_deref() == Some("merge_request_event")
 }
 
-fn protected_base(root: &Path, git: &GitPolicy, base: &str) -> bool {
+fn protected_base(root: &Path, git: &GitPolicy, base: &str) -> Result<bool, String> {
     if let Some(name) = base.strip_prefix("refs/heads/") {
-        return git.branch_is_protected(name);
+        return Ok(git.branch_is_protected(name));
     }
-    let remote = base.strip_prefix("refs/remotes/").or_else(|| {
-        git_stdout(
-            root,
-            &["show-ref", "--verify", &format!("refs/remotes/{base}")],
-        )
-        .ok()
-        .map(|_| base)
-    });
+    let remote = if let Some(name) = base.strip_prefix("refs/remotes/") {
+        Some(name)
+    } else {
+        let out = codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["show-ref", "--verify", "--quiet"])
+            .arg(format!("refs/remotes/{base}"))
+            .output()
+            .map_err(|error| format!("cannot determine protection of base {base}: {error}"))?;
+        match out.status.code() {
+            Some(0) => Some(base),
+            Some(1) => None,
+            _ => {
+                return Err(format!(
+                    "cannot determine protection of base {base}: Git exited {}",
+                    out.status
+                ));
+            }
+        }
+    };
     let name = remote
         .and_then(|name| name.split_once('/').map(|(_, branch)| branch))
         .unwrap_or(base);
-    git.branch_is_protected(name)
+    Ok(git.branch_is_protected(name))
 }
 
 fn release_required(protected: bool, breaking: bool) -> bool {
@@ -2572,6 +2594,93 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r20_protected_base_distinguishes_present_and_missing_remote_refs() {
+        use std::ffi::OsStr;
+        let directory = tempfile::tempdir().unwrap();
+        let head = repo_with_commit(directory.path(), &[b"seed"]);
+        run_git(
+            directory.path(),
+            &[
+                OsStr::new("update-ref"),
+                OsStr::new("refs/remotes/origin/main"),
+                OsStr::new(&head),
+            ],
+            b"",
+        );
+        let policy = GitPolicy::default();
+        assert!(super::protected_base(directory.path(), &policy, "origin/main").unwrap());
+        assert!(!super::protected_base(directory.path(), &policy, "origin/missing").unwrap());
+        assert!(super::protected_base(directory.path(), &policy, "refs/heads/main").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_head_config_requires_readable_commit_and_present_blobs() {
+        use std::ffi::OsStr;
+        let directory = tempfile::tempdir().unwrap();
+        let head = repo_with_commit(directory.path(), &[b"seed"]);
+        assert_eq!(adopter::check_head_config(directory.path(), &head), None);
+        assert_eq!(
+            adopter::check_head_config(directory.path(), "missing"),
+            Some(2)
+        );
+        std::fs::create_dir(directory.path().join(".codeflow")).unwrap();
+        std::fs::write(directory.path().join(".codeflow/policy.json"), b"{}").unwrap();
+        run_git(
+            directory.path(),
+            &[OsStr::new("add"), OsStr::new(".codeflow")],
+            b"",
+        );
+        run_git(
+            directory.path(),
+            &[
+                OsStr::new("commit"),
+                OsStr::new("-qm"),
+                OsStr::new("policy"),
+            ],
+            b"",
+        );
+        assert_eq!(adopter::check_head_config(directory.path(), "HEAD"), None);
+        std::fs::write(directory.path().join(".codeflow/policy.json"), b"\xff").unwrap();
+        run_git(
+            directory.path(),
+            &[OsStr::new("add"), OsStr::new(".codeflow")],
+            b"",
+        );
+        run_git(
+            directory.path(),
+            &[
+                OsStr::new("commit"),
+                OsStr::new("-qm"),
+                OsStr::new("bad policy"),
+            ],
+            b"",
+        );
+        assert_eq!(
+            adopter::check_head_config(directory.path(), "HEAD"),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn r20_protected_base_refuses_unreadable_git_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let initialized = codeflow_core::git::command()
+            .args(["init", "--quiet"])
+            .arg(directory.path())
+            .status()
+            .unwrap();
+        assert!(initialized.success());
+        std::fs::write(directory.path().join(".git/config"), "[broken\n").unwrap();
+        let answer = super::protected_base(directory.path(), &GitPolicy::default(), "origin/main");
+        assert!(
+            answer.is_err(),
+            "unreadable reference inventory must refuse, got {answer:?}"
+        );
+    }
+
     #[test]
     fn r16_epic_line_requires_proof_and_generic_names_need_no_reader() {
         let directory = tempfile::tempdir().unwrap();

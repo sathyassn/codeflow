@@ -79,11 +79,13 @@ fn init_writes(
     let manifest = ScaffoldManifest::load(source)?;
 
     let was_empty = detect::is_empty_dir(root);
-    let had_repo = gitutil::is_repo(root);
+    let had_repo = gitutil::is_repo(root)?;
     if !had_repo {
         gitutil::init_repo(root)?;
     }
-    let fresh_repo = !had_repo || !gitutil::has_commits(root);
+    let fresh_repo = !had_repo || !gitutil::has_commits(root)?;
+    // Obtain the existing hook owner before writing scaffold state or assets.
+    let hook_manager = detect::detect_hook_manager(root)?;
 
     // Resolve tier / answers against any previous install.
     let previous = if ProjectState::exists(root) {
@@ -257,7 +259,6 @@ fn init_writes(
     // with a dirty, un-committable project.toml on the just-armed protected
     // branch: a post-commit re-store would otherwise flip git_hooks and dirty
     // the file that the armed policy now refuses to let them commit.
-    let hook_manager = detect::detect_hook_manager(root);
     state.git_hooks = if hook_manager.is_none() {
         GIT_HOOKS_WIRED.to_string()
     } else {

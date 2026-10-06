@@ -309,7 +309,9 @@ erratum below, never an edit of the section.
   refresh read paths and remote names exactly. A hosting remote or hooks
   path in the configuration that is not UTF-8 is refused or kept, never read
   as unset, so `codeflow init` does not overwrite an existing hooks path and
-  a review lookup does not fall back to another remote. The deletion guard
+  a review lookup does not fall back to another remote; failed Git queries now
+  refuse instead of selecting defaults, including hook wiring when an included
+  Git configuration cannot be read. The deletion guard
   and `find -name` keep a name that a `?` or `[..]` pattern may match, the
   structural check refuses a source or test folder that holds a name that
   is not UTF-8 instead of leaving it out, and the id registry reads name lists as bytes

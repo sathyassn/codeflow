@@ -29,6 +29,9 @@ pub fn ls_remote(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
     match run(root, &all, LS_REMOTE_DEADLINE) {
+        Ok(answer) if args.contains(&"--exit-code") && answer.is_empty() => {
+            Err("`git ls-remote --exit-code` returned success without a matching ref".into())
+        }
         Ok(answer) => Ok(answer),
         // With --exit-code, Git distinguishes an empty advertisement from a
         // transport failure. No matching refs is still a complete answer.
@@ -186,16 +189,22 @@ fn batch_ssh_command(root: &Path) -> Result<String, Failure> {
             .arg(root)
             .args(["config", "--null", "--get", "core.sshCommand"])
             .output()
-            .ok()
-            .filter(|out| out.status.success());
-        if let Some(out) = out {
+            .map_err(|error| Failure::Other(format!("cannot read core.sshCommand: {error}")))?;
+        if out.status.success() {
             // `--null` frames the value with a NUL, so a value that ends in a
             // carriage return keeps it.
-            let framed = out.stdout.strip_suffix(&[0]).unwrap_or(&out.stdout);
+            let framed = out.stdout.strip_suffix(&[0]).ok_or_else(|| {
+                Failure::Other("cannot read core.sshCommand: missing NUL framing".into())
+            })?;
             let value = std::str::from_utf8(framed)
                 .map_err(|_| not_utf8("core.sshCommand"))?
                 .to_string();
             configured = Some(value);
+        } else if out.status.code() != Some(1) {
+            return Err(Failure::Other(format!(
+                "cannot read core.sshCommand: git config failed ({})",
+                out.status
+            )));
         }
     }
     if configured.is_none() {
@@ -234,6 +243,82 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_empty_remote_advertisement_is_not_proven_absence() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_EMPTY_REMOTE";
+        if let Some(root) = std::env::var_os(CHILD) {
+            assert!(
+                ls_remote(Path::new(&root), &["--exit-code", "origin", "refs/heads/x"]).is_err()
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let git = bin.join("git");
+        std::fs::write(
+            &git,
+            "#!/bin/sh\nif [ \"$3\" = config ]; then exit 1; fi\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::remote_query::tests::r20_empty_remote_advertisement_is_not_proven_absence",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .env("PATH", bin)
+            .env_remove("GIT_SSH_COMMAND")
+            .env_remove("GIT_SSH")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    #[test]
+    fn r20_failed_ssh_config_query_never_selects_default() {
+        const CHILD: &str = "CODEFLOW_R20_SSH_QUERY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "git::remote_query::tests::r20_failed_ssh_config_query_never_selects_default",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove("GIT_SSH_COMMAND")
+                .env_remove("GIT_SSH")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        assert!(batch_ssh_command(dir.path()).is_ok());
+        let path = repo.path().join("config");
+        std::fs::write(path, "[broken\n").unwrap();
+        assert!(
+            batch_ssh_command(dir.path()).is_err(),
+            "failed config must not choose ssh"
+        );
+    }
 
     #[test]
     fn r17_remote_no_matching_ref_is_an_empty_answer() {

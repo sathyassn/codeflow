@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::gitutil;
+use super::{gitutil, ScaffoldError};
 
 /// Detected project stack, used for `{{STACK}}` and recorded in project.toml.
 #[must_use]
@@ -46,16 +46,19 @@ pub const CODEFLOW_HOOKS_PATH: &str = ".codeflow/git-hooks";
 /// Raw `core.hooksPath` as git stores it (relative or absolute) as a storage
 /// key: a value that is not valid UTF-8 is kept, as a key that never equals
 /// [`CODEFLOW_HOOKS_PATH`] (OS text rule, issue 79). `None` if unset.
-#[must_use]
-pub fn configured_hooks_path(root: &Path) -> Option<String> {
+/// # Errors
+/// Git cannot read the effective configuration.
+pub fn configured_hooks_path(root: &Path) -> Result<Option<String>, ScaffoldError> {
     gitutil::config_get_key(root, "core.hooksPath")
 }
 
 /// Detects an existing hook manager that owns this repo's hooks.
-#[must_use]
-pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {
+/// # Errors
+/// Git cannot read the effective hook configuration.
+pub fn detect_hook_manager(root: &Path) -> Result<Option<HookManager>, ScaffoldError> {
+    let configured = configured_hooks_path(root)?;
     if root.join(".husky").is_dir() {
-        return Some(HookManager::Husky);
+        return Ok(Some(HookManager::Husky));
     }
     for f in [
         "lefthook.yml",
@@ -64,15 +67,15 @@ pub fn detect_hook_manager(root: &Path) -> Option<HookManager> {
         ".lefthook.toml",
     ] {
         if root.join(f).exists() {
-            return Some(HookManager::Lefthook);
+            return Ok(Some(HookManager::Lefthook));
         }
     }
-    if let Some(path) = configured_hooks_path(root) {
+    if let Some(path) = configured {
         if path != CODEFLOW_HOOKS_PATH {
-            return Some(HookManager::HooksPath(path));
+            return Ok(Some(HookManager::HooksPath(path)));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Hook scripts in the repository's own hooks folder (`hooks/` in the
@@ -143,10 +146,14 @@ const GIT_HOOK_NAMES: &[&str] = &[
 /// that manager is reported instead).
 #[must_use]
 pub fn git_dir_hooks(root: &Path) -> Option<GitDirHooks> {
-    if configured_hooks_path(root).is_some_and(|path| path != CODEFLOW_HOOKS_PATH) {
+    // This function only supplies an advisory note; it never selects wiring.
+    if configured_hooks_path(root)
+        .ok()?
+        .is_some_and(|path| path != CODEFLOW_HOOKS_PATH)
+    {
         return None;
     }
-    let dir = gitutil::common_dir(root)?.join("hooks");
+    let dir = gitutil::common_dir(root).ok()??.join("hooks");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
         .ok()?
         .flatten()
@@ -220,7 +227,10 @@ mod tests {
     fn husky_detected() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".husky")).unwrap();
-        assert_eq!(detect_hook_manager(dir.path()), Some(HookManager::Husky));
+        assert_eq!(
+            detect_hook_manager(dir.path()).unwrap(),
+            Some(HookManager::Husky)
+        );
     }
 
     fn git(dir: &Path, args: &[&str]) {
@@ -312,7 +322,7 @@ mod tests {
             .write_all(format!("[core]\n\thooksPath = \"{CODEFLOW_HOOKS_PATH}\r\"\n").as_bytes())
             .unwrap();
         assert!(matches!(
-            detect_hook_manager(tmp.path()),
+            detect_hook_manager(tmp.path()).unwrap(),
             Some(HookManager::HooksPath(_))
         ));
     }
@@ -331,7 +341,7 @@ mod tests {
         config
             .write_all(b"[core]\n\thooksPath = hooks-\xff\n")
             .unwrap();
-        let found = detect_hook_manager(tmp.path()).expect("a manager");
+        let found = detect_hook_manager(tmp.path()).unwrap().expect("a manager");
         assert!(matches!(found, HookManager::HooksPath(_)), "{found:?}");
         assert_eq!(found.to_string(), "core.hooksPath=hooks-\\xff");
         assert_eq!(git_dir_hooks(tmp.path()), None);

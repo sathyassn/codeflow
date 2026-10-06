@@ -276,20 +276,31 @@ pub fn marker_sizes(
             },
         );
     }
-    // `-z` output is path, attribute, value, each ended by a NUL.
-    let fields: Vec<&[u8]> = out.stdout.split(|byte| *byte == 0).collect();
-    fields
-        .chunks_exact(3)
-        .map(|record| {
-            let value = std::str::from_utf8(record[2]).map_err(|error| {
-                AttrError::Failed(format!("conflict-marker-size is not valid UTF-8: {error}"))
-            })?;
-            Ok((
-                crate::git::GitName::from_bytes(record[0]).storage_key(),
-                size_from(value),
-            ))
-        })
-        .collect()
+    parse_marker_sizes(&out.stdout, paths)
+}
+
+fn parse_marker_sizes(answer: &[u8], paths: &[&str]) -> Result<BTreeMap<String, usize>, AttrError> {
+    let malformed =
+        || AttrError::Failed("git check-attr returned an incomplete or malformed answer".into());
+    // Every requested path has exactly one path/attribute/value triple.
+    let payload = answer.strip_suffix(b"\0").ok_or_else(malformed)?;
+    let fields: Vec<_> = payload.split(|byte| *byte == 0).collect();
+    if fields.len() != paths.len() * 3 {
+        return Err(malformed());
+    }
+    let mut sizes = BTreeMap::new();
+    for (record, requested) in fields.chunks_exact(3).zip(paths) {
+        if record[0] != crate::git::GitName::from_storage_key(requested).bytes()
+            || record[1] != ATTRIBUTE.as_bytes()
+        {
+            return Err(malformed());
+        }
+        let value = std::str::from_utf8(record[2]).map_err(|error| {
+            AttrError::Failed(format!("conflict-marker-size is not valid UTF-8: {error}"))
+        })?;
+        sizes.insert((*requested).to_string(), size_from(value));
+    }
+    Ok(sizes)
 }
 
 /// The findings for `files` at `level`, each file judged at its size in
@@ -418,6 +429,38 @@ pub fn incomplete(level: PolicyLevel, error: &str, remedy: crate::remedy::Remedy
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_malformed_attribute_answer_is_not_a_default() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_ATTRIBUTE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(marker_sizes(root.path(), AttrSource::Revision("HEAD"), &["a.rs"]).is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\nprintf malformed\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::conflict_markers::tests::r20_malformed_attribute_answer_is_not_a_default",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     #[test]
     fn r15_attribute_decode_failure_refuses() {
         let dir = tempfile::tempdir().unwrap();

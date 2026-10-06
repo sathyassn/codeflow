@@ -380,11 +380,18 @@ fn fetch(root: &Path, args: &[String], pull: bool) -> Option<String> {
         Err(error) => return Some(format!("cannot read raw remote.{name}.url: {error}; the operator inspects git config --show-origin --get remote.{name}.url")),
     };
     // Git applies includes and insteadOf at every scope; compare its resolved URL.
-    let effective = crate::git::command()
+    let effective = match crate::git::command()
         .current_dir(root)
         .args(["remote", "get-url", name])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return Some(format!(
+                "cannot read effective URL for {name}: git could not run: {error}"
+            ))
+        }
+    };
     // OS text rule (issue 79): a URL that is not valid UTF-8 differs from the
     // configured text, so it is a refusal.
     if !effective.status.success()
@@ -459,6 +466,109 @@ mod tests {
             .unwrap();
         config.write_all(extra).unwrap();
         dir
+    }
+
+    // PATH is changed only on the child test process, never in this test runner.
+    fn r20_without_git(test: &str) -> bool {
+        const CHILD: &str = "CODEFLOW_R20_REF_AUTHORITY_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            return true;
+        }
+        let missing = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("hooks::ref_authority::tests::{test}"),
+                "--nocapture",
+            ])
+            .env(CHILD, test)
+            .env("PATH", missing.path().join("no-programs"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
+    fn r20_report(root: &Path) -> super::super::git_guard::Evaluation {
+        let policy = super::super::policy::GitPolicy::default();
+        let context = super::super::git_guard::GuardContext {
+            policy: &policy,
+            current_branch: "topic",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
+            discard_lookup: None,
+            branch_lookup: None,
+            root_checkout: None,
+        };
+        super::super::git_guard::evaluate_report_at("git fetch origin", &context, root)
+    }
+
+    #[test]
+    fn r20_unlaunchable_git_refuses_rewritten_fetch() {
+        if !r20_without_git("r20_unlaunchable_git_refuses_rewritten_fetch") {
+            return;
+        }
+        let dir = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        let report = r20_report(dir.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_authority"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn r20_unlaunchable_git_withholds_recovery_exception() {
+        if !r20_without_git("r20_unlaunchable_git_withholds_recovery_exception") {
+            return;
+        }
+        let dir = repository_with_config(b"");
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let tree_oid = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/topic", oid, false, "fixture")
+            .unwrap();
+        assert!(super::super::landed_policy::load(dir.path()).is_err());
+        let report = r20_report(dir.path());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.message.contains("missing policy source")),
+            "{report:?}"
+        );
+        assert!(!recovery_fetch("git fetch origin", dir.path()));
+    }
+
+    #[test]
+    fn r20_fetch_mismatch_and_no_rewrite_controls() {
+        let rewritten = repository_with_config(
+            b"[url \"https://other.invalid/\"]\n\tinsteadOf = https://example.invalid/\n",
+        );
+        assert!(r20_report(rewritten.path())
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.policy_authority"));
+        let plain = repository_with_config(b"");
+        assert!(r20_report(plain.path()).violations.is_empty());
+        assert!(recovery_fetch("git fetch origin", plain.path()));
     }
 
     /// Round twelve on issue 79: an `insteadOf` rewrite that ends in a carriage

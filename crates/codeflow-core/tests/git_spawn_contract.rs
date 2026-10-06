@@ -33,6 +33,42 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-core/src/ids/git.rs",
+        "std::env::current_exe().unwrap()",
+        2,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/ids/issue.rs",
+        "std::env::current_exe().unwrap()",
+        2,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/hooks/ref_authority.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/hooks/git_guard.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/hooks/conflict_markers.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/git/remote_query.rs",
+        "std::env::current_exe().unwrap()",
+        2,
+        "a test re-running its own binary with an isolated process environment",
+    ),
+    (
         "codeflow-present/src/responses.rs",
         "std::env::current_exe().unwrap()",
         1,

@@ -455,12 +455,11 @@ pub(crate) fn added_records(git: &Git, commit: &str) -> Result<Vec<(String, Stri
 }
 
 /// The blob a commit added for `id`'s record file.
-fn added_blob(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    added_records(git, commit)
-        .ok()?
+fn added_blob(git: &Git, commit: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    Ok(added_records(git, commit)?
         .into_iter()
         .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))
-        .map(|(_, blob)| blob)
+        .map(|(_, blob)| blob))
 }
 
 /// The landing of a copy introduced by `intro` (R-27, R-111): the commit
@@ -505,10 +504,12 @@ pub(crate) fn landed_among(
     intro: &str,
     intros: &mut HashMap<String, BTreeMap<RegId, String>>,
 ) -> Result<Option<String>, IdsError> {
-    if tips.iter().any(|sha| git.is_ancestor(intro, sha)) {
-        return Ok(Some(intro.to_string()));
+    for sha in tips {
+        if git.is_ancestor(intro, sha)? {
+            return Ok(Some(intro.to_string()));
+        }
     }
-    let Some(blob) = added_blob(git, intro, id) else {
+    let Some(blob) = added_blob(git, intro, id)? else {
         return Ok(None);
     };
     for sha in tips {
@@ -516,7 +517,7 @@ pub(crate) fn landed_among(
             intros.insert(sha.clone(), introductions(git, sha)?);
         }
         if let Some(theirs) = intros[sha].get(id) {
-            if added_blob(git, theirs, id).as_deref() == Some(blob.as_str()) {
+            if added_blob(git, theirs, id)?.as_deref() == Some(blob.as_str()) {
                 return Ok(Some(theirs.clone()));
             }
         }
@@ -617,6 +618,38 @@ fn complete_history(git: &Git) -> Result<(), IdsError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r20_registry_failed_added_blob_is_not_unlanded() {
+        let root = tempfile::tempdir().unwrap();
+        let git = super::Git::new(&root.path().join("missing"));
+        let id = crate::ids::RegId::parse("TSK-001").unwrap();
+        assert!(super::landed_among(
+            &git,
+            &[],
+            &id,
+            "HEAD",
+            &mut std::collections::HashMap::new()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn r20_registry_failed_ancestry_is_not_unlanded() {
+        let root = tempfile::tempdir().unwrap();
+        let git = super::Git::new(&root.path().join("missing"));
+        let id = crate::ids::RegId::parse("TSK-001").unwrap();
+        assert!(super::landed_among(
+            &git,
+            &["main".into()],
+            &id,
+            "HEAD",
+            &mut std::collections::HashMap::new()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("merge-base"));
+    }
+
     use super::*;
 
     #[test]

@@ -183,7 +183,7 @@ fn a_moved_tip_is_retried_and_a_permission_or_transport_error_is_never_taken() {
     task(&b, "warm up").unwrap();
     let racer = {
         let git_b = Git::new(&b);
-        let tip = git_b.rev(REGISTRY_REF).unwrap();
+        let tip = git_b.rev(REGISTRY_REF).unwrap().unwrap();
         let entry = codeflow_core::ids::Entry::issued(
             RegId::parse("TSK-003").unwrap(),
             new_uid(),
@@ -241,7 +241,10 @@ fn a_moved_tip_is_retried_and_a_permission_or_transport_error_is_never_taken() {
         other => panic!("expected a permission error, got {other:?}"),
     }
     assert_eq!(world.remote_ledger().tip, before);
-    assert!(!issue::has_pending(&a), "a refusal leaves nothing pending");
+    assert!(
+        !issue::has_pending(&a).unwrap(),
+        "a refusal leaves nothing pending"
+    );
 
     // Transport: the fetch works but the push cannot reach the host.
     world.hook("pre-receive", "exit 0");
@@ -335,7 +338,7 @@ fn offline_issue_is_pending_and_sync_publishes_or_names_retarget() {
     let pending = task(&b, "offline one").unwrap();
     assert_eq!(pending.standing, Standing::Pending);
     assert_eq!(pending.id.to_string(), "TSK-002");
-    assert!(issue::has_pending(&b));
+    assert!(issue::has_pending(&b).unwrap());
     // Control: nobody else took TSK-002, so sync publishes it as is.
     git(&b, &["remote", "set-url", "origin", &url]);
     let synced = issue::sync(&b).unwrap();
@@ -344,7 +347,7 @@ fn offline_issue_is_pending_and_sync_publishes_or_names_retarget() {
         world.remote_ledger().entry(&pending.id).unwrap().uid,
         pending.uid
     );
-    assert!(!issue::has_pending(&b));
+    assert!(!issue::has_pending(&b).unwrap());
     // A second sync finds nothing and treats the same uid as reserved.
     assert!(issue::sync(&b).unwrap().published.is_empty());
 
@@ -404,7 +407,7 @@ fn offline_issue_is_pending_and_sync_publishes_or_names_retarget() {
         winner.uid
     );
     assert!(
-        !issue::has_pending(&b),
+        !issue::has_pending(&b).unwrap(),
         "the clashing pending reservation is gone"
     );
     issue::sync(&b).unwrap();
@@ -544,7 +547,7 @@ fn damage_refuses_issue_until_a_typed_restore_and_never_reissues_the_top() {
         report.blocks
     );
     // The binding stands in history even though the tip lost the file.
-    let ledger = Ledger::read(&git_a, &registry_ref(&git_a).unwrap()).unwrap();
+    let ledger = Ledger::read(&git_a, &registry_ref(&git_a).unwrap().unwrap()).unwrap();
     assert_eq!(ledger.entry(&top.id).unwrap().uid, top.uid);
 
     let restored = issue::restore(&a, std::slice::from_ref(&top.id)).unwrap();
@@ -739,6 +742,7 @@ fn a_deleted_and_pruned_registry_is_never_replaced() {
     git(&a, &["fetch", "-q", "--prune", "origin"]);
     assert!(Git::new(&a)
         .rev("refs/remotes/origin/codeflow/registry")
+        .unwrap()
         .is_none());
     let epic = a.join("project-management/epics/EPC-001.md");
     std::fs::create_dir_all(epic.parent().unwrap()).unwrap();
@@ -802,7 +806,7 @@ fn a_first_uid_backfill_must_be_the_registry_binding() {
     git(&a, &["push", "-q", "origin", "main"]);
     seed::seed(&a, None).unwrap();
     let git_a = Git::new(&a);
-    let bound = Ledger::read(&git_a, &registry_ref(&git_a).unwrap())
+    let bound = Ledger::read(&git_a, &registry_ref(&git_a).unwrap().unwrap())
         .unwrap()
         .entry(&RegId::parse("TSK-001").unwrap())
         .unwrap()
@@ -1911,7 +1915,7 @@ fn a_shallow_clone_neither_seeds_nor_checks_until_it_is_unshallowed() {
     assert!(matches!(refused, IdsError::Shallow), "{refused}");
     assert!(refused.to_string().contains("git fetch --unshallow"));
     assert!(world.remote_ledger().tip.is_none(), "nothing was written");
-    assert!(Git::new(&shallow).rev(REGISTRY_REF).is_none());
+    assert!(Git::new(&shallow).rev(REGISTRY_REF).unwrap().is_none());
     let report = check::check(&Git::new(&shallow), None).unwrap();
     assert!(
         report

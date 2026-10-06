@@ -75,7 +75,7 @@ impl Ledger {
     ///
     /// Returns an error when git fails on an existing history.
     pub fn read(git: &Git, rev: &str) -> Result<Ledger, IdsError> {
-        let Some(tip) = git.rev(rev) else {
+        let Some(tip) = git.rev(rev)? else {
             return Ok(Ledger::default());
         };
         let commits = raw_history(git, &tip)?;
@@ -355,7 +355,11 @@ impl Ledger {
         let Some(tip) = &self.tip else {
             return Ok(Vec::new());
         };
-        let Some(exclude) = exclude.filter(|sha| git.rev(sha).is_some()) else {
+        let resolved = match exclude {
+            Some(sha) => git.rev(sha)?.map(|_| sha),
+            None => None,
+        };
+        let Some(exclude) = resolved else {
             return Ok(self.violations.clone());
         };
         let in_range: HashSet<String> = git

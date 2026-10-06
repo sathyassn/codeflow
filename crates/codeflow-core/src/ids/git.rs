@@ -110,44 +110,56 @@ impl Git {
         checked(args, &output)
     }
 
-    /// The full sha of `rev`, `None` when it does not resolve.
-    #[must_use]
-    pub fn rev(&self, rev: &str) -> Option<String> {
-        let output = self
-            .output(&[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("{rev}^{{commit}}"),
-            ])
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| {
-                String::from_utf8_lossy(output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout))
-                    .to_string()
-            })
-            .filter(|sha| !sha.is_empty())
+    /// The full object ID of `rev`, or absence proven by quiet verification.
+    ///
+    /// # Errors
+    /// Returns an error if Git cannot read the revision or returns an invalid ID.
+    pub fn rev(&self, rev: &str) -> Result<Option<String>, IdsError> {
+        let name = format!("{rev}^{{commit}}");
+        let args = ["rev-parse", "--verify", "--quiet", &name];
+        let output = self.output(&args)?;
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        let text = checked(&args, &output)?;
+        let sha = text.strip_suffix('\n').unwrap_or(&text);
+        if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(IdsError::Git(
+                "git rev-parse returned an invalid object ID".into(),
+            ));
+        }
+        Ok(Some(sha.to_string()))
     }
 
     /// Whether this clone's history is shallow (fetched with `--depth`).
     ///
     /// # Errors
-    ///
-    /// Returns an error when git fails.
+    /// Returns an error when Git fails or does not return a boolean answer.
     pub fn is_shallow(&self) -> Result<bool, IdsError> {
-        Ok(self
+        match self
             .run(&["rev-parse", "--is-shallow-repository"])?
-            .as_bytes()
-            == b"true\n")
+            .as_str()
+        {
+            "true\n" => Ok(true),
+            "false\n" => Ok(false),
+            _ => Err(IdsError::Git(
+                "git rev-parse returned an invalid shallow answer".into(),
+            )),
+        }
     }
 
     /// Whether `ancestor` is an ancestor of (or equal to) `descendant`.
-    #[must_use]
-    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
-        self.output(&["merge-base", "--is-ancestor", ancestor, descendant])
-            .is_ok_and(|output| output.status.success())
+    ///
+    /// # Errors
+    /// Returns an error when Git cannot establish either answer.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, IdsError> {
+        let args = ["merge-base", "--is-ancestor", ancestor, descendant];
+        let output = self.output(&args)?;
+        if output.status.code() == Some(1) {
+            return Ok(false);
+        }
+        checked(&args, &output)?;
+        Ok(true)
     }
 
     /// The git directory shared by every worktree of this repository.
@@ -161,6 +173,11 @@ impl Git {
         // framing: a name may end in a space or a carriage return.
         let out = self.run_bytes(&["rev-parse", "--git-common-dir"])?;
         let bytes = out.strip_suffix(b"\n").unwrap_or(&out);
+        if bytes.is_empty() || bytes.contains(&0) {
+            return Err(IdsError::Git(
+                "git rev-parse returned an invalid common directory".into(),
+            ));
+        }
         let path = crate::git::GitName::from_bytes(bytes)
             .os_path()
             .map_err(|error| IdsError::Git(error.to_string()))?;
@@ -171,31 +188,33 @@ impl Git {
         })
     }
 
-    /// Whether `remote` is configured.
-    #[must_use]
-    pub fn has_remote(&self, remote: &str) -> bool {
-        self.output(&["remote", "get-url", remote])
-            .is_ok_and(|output| output.status.success())
+    /// Whether `remote` has a configured URL.
+    ///
+    /// # Errors
+    /// Returns an error when Git cannot read configuration.
+    pub fn has_remote(&self, remote: &str) -> Result<bool, IdsError> {
+        let key = format!("remote.{remote}.url");
+        let args = ["config", "--get", &key];
+        let output = self.output(&args)?;
+        if output.status.code() == Some(1) {
+            return Ok(false);
+        }
+        checked(&args, &output)?;
+        Ok(true)
     }
 
     /// `user.email`, or `unknown` when it is not set.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the value is not valid UTF-8: it is an issuer
-    /// identity, so two different values never both read as `unknown` (OS
-    /// text rule, issue 79).
+    /// Returns an error when Git fails or the issuer identity is not valid UTF-8.
     pub fn user_email(&self) -> Result<String, IdsError> {
-        let Ok(output) = self.output(&["config", "user.email"]) else {
-            return Ok("unknown".to_string());
-        };
-        if !output.status.success() {
+        let args = ["config", "--get", "user.email"];
+        let output = self.output(&args)?;
+        if output.status.code() == Some(1) {
             return Ok("unknown".to_string());
         }
-        let value = String::from_utf8(output.stdout).map_err(|_| {
-            IdsError::Git("git config user.email: the value is not valid UTF-8".to_string())
-        })?;
-        // Only git's own newline is framing: another value is another identity.
+        let value = checked(&args, &output)?;
+        // Only Git's own newline is framing; retain the existing empty-value policy.
         let value = value.strip_suffix('\n').unwrap_or(&value);
         Ok(if value.is_empty() {
             "unknown".to_string()
@@ -371,16 +390,28 @@ impl Git {
             "refs/heads",
             "refs/remotes",
         ])?;
-        Ok(listing
+        listing
             .split_terminator('\n')
-            .filter_map(|line| {
-                let mut parts = line.split(' ');
-                let name = parts.next()?.to_string();
-                let sha = parts.next()?.to_string();
-                let symref = parts.next().unwrap_or_default();
-                symref.is_empty().then_some((name, sha))
+            .map(|line| {
+                let malformed =
+                    || IdsError::Git("git for-each-ref returned a malformed branch record".into());
+                let parts: Vec<_> = line.split(' ').collect();
+                let [name, sha, symref] = parts.as_slice() else {
+                    return Err(malformed());
+                };
+                if !git2::Reference::is_valid_name(name)
+                    || !matches!(sha.len(), 40 | 64)
+                    || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    || (!symref.is_empty() && !git2::Reference::is_valid_name(symref))
+                {
+                    return Err(malformed());
+                }
+                Ok(symref
+                    .is_empty()
+                    .then(|| ((*name).to_string(), (*sha).to_string())))
             })
-            .collect())
+            .collect::<Result<Vec<_>, _>>()
+            .map(|rows| rows.into_iter().flatten().collect())
     }
 }
 
@@ -477,6 +508,103 @@ pub fn z_records(bytes: &[u8]) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn r20_malformed_answer_child(test: &str, body: &str) -> bool {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_IDS_ANSWER_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            return true;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("ids::git::tests::{test}"),
+                "--nocapture",
+            ])
+            .env(CHILD, test)
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_malformed_registry_branch_listing_refuses() {
+        if r20_malformed_answer_child(
+            "r20_malformed_registry_branch_listing_refuses",
+            "printf malformed",
+        ) {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Git::new(root.path()).branch_refs().is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_malformed_registry_common_dir_refuses() {
+        if r20_malformed_answer_child("r20_malformed_registry_common_dir_refuses", "printf '\\n'") {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Git::new(root.path()).common_dir().is_err());
+        }
+    }
+
+    #[test]
+    fn r20_registry_rev_failure_is_not_an_empty_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new(&dir.path().join("missing"));
+        assert!(crate::ids::Ledger::read(&git, "HEAD").is_err());
+    }
+
+    #[test]
+    fn r20_registry_email_failure_is_not_unknown() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new(&dir.path().join("missing"));
+        assert!(git.user_email().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r20_registry_malformed_shallow_answer_refuses() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_SHALLOW_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(Git::new(root.path()).is_shallow().is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\nprintf malformed\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ids::git::tests::r20_registry_malformed_shallow_answer_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     /// Issue 79: a name that is not valid UTF-8 keeps its exact bytes and
     /// differs from the lookalike with a replacement character.

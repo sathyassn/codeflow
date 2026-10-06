@@ -131,10 +131,19 @@ pub fn read_branch_name(
         // OS text rule (issue 79): the name is judged against protected
         // branch globs. One that is not valid UTF-8 reads as the sentinel
         // every branch rule treats as protected, as the hook plane does.
-        Ok(out) if out.status.success() => Ok(std::str::from_utf8(&out.stdout).map_or_else(
-            |_| crate::hooks::policy::NON_UTF8_BRANCH.to_string(),
-            |text| text.strip_suffix('\n').unwrap_or(text).to_string(),
-        )),
+        Ok(out) if out.status.success() => match std::str::from_utf8(&out.stdout) {
+            Err(_) => Ok(crate::hooks::policy::NON_UTF8_BRANCH.to_string()),
+            Ok(text) => {
+                let name = text.strip_suffix('\n').unwrap_or(text);
+                if name.starts_with('-')
+                    || !git2::Reference::is_valid_name(&format!("refs/heads/{name}"))
+                {
+                    Err("git check-ref-format --branch returned an invalid branch name".into())
+                } else {
+                    Ok(name.to_string())
+                }
+            }
+        },
         Ok(out) => Err(format!(
             "`git check-ref-format --branch` failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
@@ -8762,6 +8771,37 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r20_empty_branch_answer_refuses() {
+        use std::os::unix::fs::PermissionsExt as _;
+        const CHILD: &str = "CODEFLOW_R20_BRANCH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().unwrap();
+            assert!(super::read_branch_name(root.path(), None, "topic").is_err());
+            return;
+        }
+        let programs = tempfile::tempdir().unwrap();
+        let stub = programs.path().join("git");
+        std::fs::write(&stub, "#!/bin/sh\nprintf '\\n'\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hooks::git_guard::tests::r20_empty_branch_answer_refuses",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", programs.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[cfg(unix)]
     #[test]

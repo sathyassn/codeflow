@@ -1610,9 +1610,7 @@ fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>
         if out.status.code() == Some(2) && args.starts_with(&["remote", "get-url"]) {
             return Ok(None);
         }
-        if out.status.code() == Some(1)
-            && matches!(args.first(), Some(&"merge-base" | &"rev-parse" | &"config"))
-        {
+        if out.status.code() == Some(1) && missing_git_answer(args) {
             return Ok(None);
         }
         return Err(format!(
@@ -1621,9 +1619,28 @@ fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>
             out.status
         ));
     }
-    String::from_utf8(out.stdout)
-        .map(Some)
-        .map_err(|error| format!("cannot decode Git answer: {error}"))
+    let text = String::from_utf8(out.stdout)
+        .map_err(|error| format!("cannot decode Git answer: {error}"))?;
+    if args.starts_with(&["rev-parse", "--verify", "--quiet"]) {
+        let oid = text.strip_suffix('\n').unwrap_or(&text);
+        if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("cannot read Git revision id".into());
+        }
+    }
+    Ok(Some(text))
+}
+
+/// Only these lookup and predicate forms define exit 1 as absence/false.
+/// Other commands, including `merge-base --independent`, must succeed.
+fn missing_git_answer(args: &[&str]) -> bool {
+    match args {
+        ["rev-parse", "--verify", "--quiet", _]
+        | ["config", "--get" | "--bool", _]
+        | ["config", "-z", "--get-all", _]
+        | ["merge-base", "--is-ancestor", _, _] => true,
+        ["merge-base", first, second] => !first.starts_with('-') && !second.starts_with('-'),
+        _ => false,
+    }
 }
 
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {

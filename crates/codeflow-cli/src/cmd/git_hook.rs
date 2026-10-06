@@ -167,7 +167,8 @@ pub fn run(args: &GitHookArgs) -> i32 {
 /// `ids sync` in pre-push (SPC-013 R-15): publish pending reservations
 /// before code that may carry their records reaches the authority. It warns
 /// and continues when the authority is unreachable or is not the push
-/// target, blocks only on a number held by a different `uid`, and never runs
+/// target, blocks on unreadable registry inputs or a number held by a different
+/// `uid`, and never runs
 /// for a push of the registry itself, so it cannot recurse (R-6).
 fn sync_pending_ids(
     root: &Path,
@@ -181,8 +182,22 @@ fn sync_pending_ids(
             .is_some_and(|branch| branch != REGISTRY_BRANCH)
             && !r.is_delete()
     });
-    if !pushes_code || !issue::has_pending(root) {
+    if !pushes_code {
         return;
+    }
+    match issue::has_pending(root) {
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(error) => {
+            report
+                .violations
+                .push(codeflow_core::hooks::Violation::always_blocking(
+                    "registry.sync",
+                    format!("cannot read pending id reservations: {error}"),
+                    "repair the Git repository and registry state, then push again",
+                ));
+            return;
+        }
     }
     if remote != Some(AUTHORITY) {
         report.notes.push(codeflow_core::remedy::Finding::new(
@@ -214,10 +229,17 @@ fn sync_pending_ids(
                 "renumber the unmerged record with `codeflow ids retarget <id>`, then push again",
             ));
         }
-        Err(error) => report.notes.push(codeflow_core::remedy::Finding::new(
-            format!("ids sync skipped, reservations stay pending: {error}"),
+        Err(IdsError::Offline(error)) => report.notes.push(codeflow_core::remedy::Finding::new(
+            format!("id authority is offline, reservations stay pending: {error}"),
             codeflow_core::remedy::IDS_SYNC_FAILED.remedy(),
         )),
+        Err(error) => report
+            .violations
+            .push(codeflow_core::hooks::Violation::always_blocking(
+                "registry.sync",
+                format!("cannot verify pending id reservations: {error}"),
+                "repair the Git repository and registry state, then push again",
+            )),
     }
 }
 
@@ -480,6 +502,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn r20_pending_registry_read_failure_blocks_push() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .arg("-C")
+            .arg(directory.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(directory.path().join(".git/config"), "[invalid\n").unwrap();
+        let refs = git_hook::parse_push_refs(&format!(
+            "refs/heads/task/example {} refs/heads/task/example {}\n",
+            "1".repeat(40),
+            "0".repeat(40)
+        ));
+        let mut report = git_hook::StageReport::default();
+        sync_pending_ids(directory.path(), Some("origin"), &refs, &mut report);
+        assert!(report.violations.iter().any(|v| v.rule == "registry.sync"));
+    }
 
     struct FailingReader;
 
