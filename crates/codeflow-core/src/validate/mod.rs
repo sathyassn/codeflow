@@ -694,7 +694,7 @@ fn awaiting_selection_errors(
     repo_root: Option<&Path>,
 ) -> Vec<ValidationError> {
     let path = get_string_field(data, "awaiting_selection");
-    if path.trim().is_empty() {
+    if path.is_empty() {
         return Vec::new();
     }
     let mut errs = Vec::new();

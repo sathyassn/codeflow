@@ -278,16 +278,18 @@ pub fn marker_sizes(
     }
     // `-z` output is path, attribute, value, each ended by a NUL.
     let fields: Vec<&[u8]> = out.stdout.split(|byte| *byte == 0).collect();
-    Ok(fields
+    fields
         .chunks_exact(3)
         .map(|record| {
-            (
+            let value = std::str::from_utf8(record[2]).map_err(|error| {
+                AttrError::Failed(format!("conflict-marker-size is not valid UTF-8: {error}"))
+            })?;
+            Ok((
                 crate::git::GitName::from_bytes(record[0]).storage_key(),
-                // The value is a number or a word git prints in ASCII.
-                size_from(std::str::from_utf8(record[2]).unwrap_or("")),
-            )
+                size_from(value),
+            ))
         })
-        .collect())
+        .collect()
 }
 
 /// The findings for `files` at `level`, each file judged at its size in
@@ -416,6 +418,29 @@ pub fn incomplete(level: PolicyLevel, error: &str, remedy: crate::remedy::Remedy
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r15_attribute_decode_failure_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        std::fs::write(
+            dir.path().join(".gitattributes"),
+            b"a.txt conflict-marker-size=\xff\n",
+        )
+        .unwrap();
+        git(dir.path(), &["add", ".gitattributes"]);
+        let git_dir = dir.path().join(".git");
+        let index_file = git_dir.join("index");
+        let result = marker_sizes(
+            dir.path(),
+            AttrSource::Index {
+                git_dir: &git_dir,
+                index_file: &index_file,
+            },
+            &["a.txt"],
+        );
+        assert!(result.is_err(), "{result:?}");
+    }
+
     use super::*;
 
     /// A marker line built at run time, so this file holds none itself.

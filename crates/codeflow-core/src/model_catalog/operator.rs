@@ -67,7 +67,10 @@ pub fn anchored_override(
         .ok_or("missing Execution contract")?
         .1;
     let contract = contract.split("\n## ").next().unwrap_or(contract);
-    let lines: Vec<_> = contract.lines().map(str::trim).collect();
+    let lines: Vec<_> = contract
+        .lines()
+        .map(|line| line.trim_matches([' ', '\t']))
+        .collect();
     let starts: Vec<_> = lines
         .iter()
         .enumerate()
@@ -86,7 +89,9 @@ pub fn anchored_override(
             .split_once(':')
             .ok_or("invalid OPERATOR_OVERRIDE field")?;
         if !["task", "duty", "route", "effort", "plan", "instruction"].contains(&key)
-            || fields.insert(key, value.trim()).is_some()
+            || fields
+                .insert(key, value.trim_matches([' ', '\t']))
+                .is_some()
         {
             return Err("unknown or duplicate OPERATOR_OVERRIDE field".into());
         }

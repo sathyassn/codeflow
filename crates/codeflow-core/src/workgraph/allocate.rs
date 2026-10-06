@@ -325,7 +325,7 @@ pub fn create_task_with(
     let date = today();
     let epic_value = epic_id.unwrap_or("null");
     let repository_root = repository_root(pm_root);
-    if integration_target.is_some_and(|target| target.trim().is_empty()) {
+    if integration_target.is_some_and(str::is_empty) {
         return Err(StoreError::Invalid(
             "integration target cannot be empty".to_string(),
         ));
@@ -336,7 +336,6 @@ pub fn create_task_with(
         ));
     }
     let resolved_target = integration_target
-        .map(str::trim)
         .map(str::to_owned)
         .or_else(|| crate::workgraph::default_work_target(repository_root))
         .ok_or_else(|| {
@@ -574,7 +573,7 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             let open = value_start + open;
             let close = value_start + open.saturating_sub(value_start) + 1 + close;
             let existing = &yaml[open + 1..close];
-            let replacement = if existing.trim().is_empty() {
+            let replacement = if existing.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
                 value.to_string()
             } else {
                 format!("{existing}, {value}")
@@ -584,7 +583,9 @@ fn insert_yaml_sequence_value(yaml: &str, key: &str, value: &str) -> Result<Stri
             return Ok(updated);
         }
 
-        if after_key.trim().is_empty() || after_key.trim_start().starts_with('#') {
+        if after_key.trim_matches([' ', '\t', '\r', '\n']).is_empty()
+            || after_key.trim_start_matches([' ', '\t']).starts_with('#')
+        {
             let newline = if line_with_ending.ends_with("\r\n") {
                 "\r\n"
             } else {

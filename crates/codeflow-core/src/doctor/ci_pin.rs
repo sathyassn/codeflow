@@ -79,9 +79,9 @@ pub(super) fn recognized(content: &str) -> bool {
         lines
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.trim() == span[0])
+            .filter(|(_, line)| line.trim_matches([' ', '\t']) == span[0])
             .any(|(at, line)| {
-                let indent = &line[..line.len() - line.trim_start().len()];
+                let indent = &line[..line.len() - line.trim_start_matches([' ', '\t']).len()];
                 lines.len() >= at + span.len()
                     && lines[at..at + span.len()]
                         .iter()
@@ -97,7 +97,8 @@ fn span(template: &str, first: &str, last: &str) -> Option<Vec<String>> {
     let lines: Vec<&str> = template.lines().collect();
     let start = lines.iter().position(|line| line.contains(first))?;
     let end = start + lines[start..].iter().position(|line| line.contains(last))?;
-    let indent = &lines[start][..lines[start].len() - lines[start].trim_start().len()];
+    let indent =
+        &lines[start][..lines[start].len() - lines[start].trim_start_matches([' ', '\t']).len()];
     lines[start..=end]
         .iter()
         .map(|line| dedent(line, indent).map(str::to_string))
@@ -107,7 +108,7 @@ fn span(template: &str, first: &str, last: &str) -> Option<Vec<String>> {
 /// `line` without `indent`; a blank line is empty, and a line indented
 /// less than `indent` does not belong to the span.
 fn dedent<'a>(line: &'a str, indent: &str) -> Option<&'a str> {
-    if line.trim().is_empty() {
+    if line.trim_matches([' ', '\t']).is_empty() {
         return Some("");
     }
     line.strip_prefix(indent)
@@ -133,7 +134,15 @@ pub(super) fn report(root: &Path) -> PinReport {
             ),
         };
     };
-    let Some(target_pin) = show(STATE).as_deref().and_then(pinned) else {
+    let target_state = show(STATE).transpose();
+    let target_policy = show(POLICY).transpose();
+    let (Ok(target_state), Ok(target_policy)) = (target_state, target_policy) else {
+        return PinReport {
+            status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
+            message: format!("{target} contains a state or policy file that is not valid UTF-8; its CI pin is unproven"),
+        };
+    };
+    let Some(target_pin) = target_state.as_deref().and_then(pinned) else {
         return PinReport {
             status: Status::Warn(remedy::DOCTOR_CI_PIN_TARGET.with(&[("target", &target)])),
             message: format!(
@@ -161,9 +170,9 @@ pub(super) fn report(root: &Path) -> PinReport {
     }
     let carried = carried_upgrade(
         head_state.as_deref(),
-        show(STATE).as_deref(),
+        target_state.as_deref(),
         read(POLICY).as_deref(),
-        show(POLICY).as_deref(),
+        target_policy.as_deref(),
     );
     if carried.is_empty() {
         return PinReport {
@@ -193,7 +202,9 @@ fn pinned(state: &str) -> Option<String> {
 }
 
 /// The first target ref that exists, and a reader of files at its commit.
-fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> Option<String>)> {
+type TargetText = Option<Result<String, std::string::FromUtf8Error>>;
+
+fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> TargetText)> {
     let repo = git2::Repository::discover(root).ok()?;
     let (name, tree) = TARGETS.iter().find_map(|name| {
         let reference = repo.find_reference(name).ok()?;
@@ -218,7 +229,7 @@ fn target_files(root: &Path) -> Option<(String, impl Fn(&str) -> Option<String>)
         let tree = repo.find_tree(tree).ok()?;
         let entry = tree.get_path(&prefix.join(path)).ok()?;
         let blob = repo.find_blob(entry.id()).ok()?;
-        String::from_utf8(blob.content().to_vec()).ok()
+        Some(String::from_utf8(blob.content().to_vec()))
     };
     Some((name, show))
 }

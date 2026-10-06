@@ -196,7 +196,7 @@ pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
 pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String> {
     let mut symref = None;
     let mut heads = Vec::new();
-    for line in listed.lines() {
+    for line in listed.split('\n') {
         let Some((left, name)) = line.split_once('\t') else {
             continue;
         };
@@ -1084,7 +1084,7 @@ fn direct_criteria_changed(before: Option<&RecordView>, after: Option<&RecordVie
 fn uid_of(record: &RecordView) -> Option<String> {
     let (data, _) = crate::validate::parse_frontmatter(record.content.as_bytes()).ok()?;
     let uid = crate::validate::get_string_field(&data, "uid");
-    (!uid.trim().is_empty()).then_some(uid)
+    (!uid.is_empty()).then_some(uid)
 }
 
 fn criteria_changed(before: Option<&RecordView>, after: Option<&RecordView>) -> bool {
@@ -1341,8 +1341,7 @@ fn judge(
                                 let target = now
                                     .integration_target
                                     .as_deref()
-                                    .map(str::trim)
-                                    .filter(|line| !line.is_empty());
+                                                                        .filter(|line| !line.is_empty());
                                 let verdict = match (target, cutoffs.is_empty()) {
                                     (_, true) => Err(String::new()),
                                     (None, false) => Err(format!(
@@ -1405,7 +1404,6 @@ fn judge(
                             let target = now
                                 .integration_target
                                 .as_deref()
-                                .map(str::trim)
                                 .filter(|line| !line.is_empty());
                             let position = match target {
                                 Some(target) => own_line_position(
@@ -1732,7 +1730,6 @@ fn brought_records(
             let Some(line) = now
                 .integration_target
                 .as_deref()
-                .map(str::trim)
                 .filter(|line| !line.is_empty())
             else {
                 continue;
@@ -2071,10 +2068,10 @@ fn recorded_first_parent(odb: &git2::Odb<'_>, commit: Oid) -> Result<Option<Oid>
             break;
         }
         if let Some(parent) = line.strip_prefix(b"parent ") {
-            let parent = std::str::from_utf8(parent)
-                .ok()
-                .and_then(|hex| Oid::from_str(hex.trim()).ok())
-                .ok_or_else(|| format!("commit {commit} records a malformed parent"))?;
+            let hex = std::str::from_utf8(parent)
+                .map_err(|_| format!("commit {commit} records a malformed parent"))?;
+            let parent = Oid::from_str(hex)
+                .map_err(|_| format!("commit {commit} records a malformed parent"))?;
             return Ok(Some(parent));
         }
     }
@@ -2114,7 +2111,7 @@ pub(super) fn history_overlay(repo: &Repository) -> Result<Option<String>, Strin
     }
     for file in grafts {
         match std::fs::read_to_string(&file) {
-            Ok(text) if text.lines().any(|line| !line.trim().is_empty()) => {
+            Ok(text) if text.split('\n').any(|line| !line.is_empty()) => {
                 return Ok(Some(format!("the graft file {}", file.display())));
             }
             Ok(_) => {}
@@ -2171,8 +2168,7 @@ pub(super) fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String
         format!("this clone is shallow and its boundary cannot be read: {error}")
     })?;
     listed
-        .lines()
-        .map(str::trim)
+        .split('\n')
         .filter(|line| !line.is_empty())
         .map(|line| Oid::from_str(line).map_err(|error| error.message().to_string()))
         .collect()
@@ -2489,7 +2485,9 @@ fn parse_table(key: &str, value: &toml::Value) -> Result<BTreeMap<String, Oid>, 
     };
     let mut cutoffs = BTreeMap::new();
     for (line, value) in table {
-        let entry = value.as_str().unwrap_or_default().trim();
+        let entry = value
+            .as_str()
+            .ok_or_else(|| format!("{key} entry for {line} is not a string"))?;
         let full = entry.len() == 40
             && entry
                 .bytes()

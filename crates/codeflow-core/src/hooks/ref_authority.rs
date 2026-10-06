@@ -161,23 +161,23 @@ const UNREADABLE_VALUE: &str = "\0not-valid-utf8";
 /// no boolean, and as a `remotes.*` group member it names no remote, so a
 /// fetch of it is refused as not configured, while an unrelated key's value
 /// cannot refuse the command. A key is
-/// identity: it names a remote, so a key that is not valid UTF-8 is dropped
-/// and never decoded, because its lossy spelling could equal the key of a
-/// different, valid remote and replace that remote's setting. Such a remote
+/// identity: it names a remote, so every key is retained as a lossless storage
+/// key, including one that is not valid UTF-8. No lossy spelling can replace
+/// a different remote's setting. Such an unreadable remote
 /// is refused by name in [`utf8_remote_names`].
 fn config_entries(listing: &[u8]) -> Vec<(String, String)> {
     listing
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
-        .filter_map(|entry| {
+        .map(|entry| {
             let (key, value) = match entry.iter().position(|byte| *byte == b'\n') {
                 Some(split) => (&entry[..split], &entry[split + 1..]),
                 None => (entry, b"true".as_slice()),
             };
-            let key = String::from_utf8(key.to_vec()).ok()?;
+            let key = crate::git::GitName::from_bytes(key).storage_key();
             let value = std::str::from_utf8(value)
                 .map_or_else(|_| UNREADABLE_VALUE.to_string(), str::to_string);
-            Some((key, value))
+            (key, value)
         })
         .collect()
 }
@@ -401,6 +401,16 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r15_owned_config_keys_are_not_dropped_on_decode_failure() {
+        let entries = config_entries(b"remote.caf\xff.url\nurl\0remote.ok.url\nurl2\0");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            crate::git::GitName::from_storage_key(&entries[0].0).bytes(),
+            b"remote.caf\xff.url"
+        );
+    }
+
     use super::*;
 
     /// A repository with the remote `origin` and `extra` lines appended to its
@@ -470,6 +480,11 @@ mod tests {
         assert_eq!(
             parsed,
             [
+                (
+                    crate::git::GitName::from_bytes(b"remote.caf\xff.skipdefaultupdate")
+                        .storage_key(),
+                    "true".to_string()
+                ),
                 ("remote.ok.url".to_string(), "u".to_string()),
                 ("flag".to_string(), "true".to_string())
             ]

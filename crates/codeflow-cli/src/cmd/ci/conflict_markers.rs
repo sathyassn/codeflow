@@ -88,7 +88,11 @@ fn range_findings(
 /// leftover marker.
 fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, String> {
     let merge_base = super::git_stdout(root, &["merge-base", base, head])?;
-    let gitlinks = gitlinks(root, merge_base.trim(), head)?;
+    let gitlinks = gitlinks(
+        root,
+        merge_base.strip_suffix('\n').unwrap_or(&merge_base),
+        head,
+    )?;
     let diff = super::git_stdout(
         root,
         &[
@@ -109,7 +113,7 @@ fn added_text_lines(root: &Path, base: &str, head: &str) -> Result<AddedLines, S
             "--full-index",
             "--src-prefix=a/",
             "--dst-prefix=b/",
-            merge_base.trim(),
+            merge_base.strip_suffix('\n').unwrap_or(&merge_base),
             head,
         ],
     )?;
@@ -165,7 +169,7 @@ fn gitlinks(root: &Path, from: &str, to: &str) -> Result<BTreeSet<String>, Strin
         };
         // The header is git's ASCII; the path is kept as its storage key, as
         // the diff parse keys it (OS text rule, issue 79).
-        let header = std::str::from_utf8(header).unwrap_or("");
+        let header = std::str::from_utf8(header).map_err(|_| "gitlink header is not UTF-8")?;
         if header.split(' ').nth(1) == Some("160000") {
             out.insert(codeflow_core::git::GitName::from_bytes(path).storage_key());
         }

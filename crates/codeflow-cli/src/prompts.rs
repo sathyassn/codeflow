@@ -19,7 +19,10 @@ fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Resu
     std::io::stdout().flush()?;
     let mut line = String::new();
     input.read_line(&mut line)?;
-    let answer = line.trim();
+    let answer = line
+        .strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(&line);
     Ok(if answer.is_empty() {
         default.to_string()
     } else {
@@ -43,7 +46,11 @@ pub fn decide_pr_template(
             println!();
             return Ok(None);
         }
-        match line.trim().to_ascii_lowercase().as_str() {
+        match line
+            .trim_matches([' ', '\t', '\r', '\n'])
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "accept" | "accepted" => return Ok(Some(MappingState::Accepted)),
             "refuse" | "refused" => return Ok(Some(MappingState::Refused)),
             "custom" => return Ok(Some(MappingState::Custom)),
@@ -88,7 +95,7 @@ fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result
         areas: Some(
             areas
                 .split(',')
-                .map(|a| a.trim().to_string())
+                .map(|a| a.trim_matches([' ', '\t']).to_string())
                 .filter(|a| !a.is_empty())
                 .collect(),
         ),
@@ -98,6 +105,21 @@ fn gather_answers_from(input: &mut impl BufRead, root: &Path) -> std::io::Result
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_prompt_preserves_answer_identity() {
+        let mut input = "\u{a0}acceptEdits\u{a0}\n".as_bytes();
+        assert_eq!(
+            super::ask(&mut input, "preset", "default").unwrap(),
+            "\u{a0}acceptEdits\u{a0}"
+        );
+        let mut input = "answer\r".as_bytes();
+        assert_eq!(
+            super::ask(&mut input, "value", "default").unwrap(),
+            "answer\r"
+        );
+    }
+
     use super::*;
 
     fn gather(input: &str) -> InitAnswers {

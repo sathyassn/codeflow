@@ -55,7 +55,7 @@ fn field(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
     map.get(serde_yaml::Value::String(key.to_string()))
         .and_then(serde_yaml::Value::as_str)
         .map(str::to_owned)
-        .filter(|value| !value.trim().is_empty() && value != "null")
+        .filter(|value| !value.is_empty() && value != "null")
 }
 
 fn current_branch(repo_root: &Path) -> Option<String> {
@@ -199,7 +199,8 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
+        Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
@@ -223,7 +224,7 @@ pub fn create_integration_branch(
     let name = format!("integration/{epic_id}-{}", slug(title));
     git(repo_root, &["branch", &name, &from])?;
     let has_origin = git(repo_root, &["remote"])?
-        .lines()
+        .split('\n')
         .any(|remote| remote == "origin");
     if has_origin {
         git(repo_root, &["push", "-u", "origin", &name])
@@ -332,10 +333,10 @@ pub fn create_adr_with(
 /// template already carries a `uid:` line.
 fn with_uid(content: &str, uid: &str) -> Option<String> {
     let front = content.strip_prefix("---\n")?.split_once("\n---\n")?.0;
-    if front.lines().any(|line| line.starts_with("uid:")) {
+    if front.split('\n').any(|line| line.starts_with("uid:")) {
         return Some(content.replace("{{UID}}", uid));
     }
-    let at = front.lines().position(|line| line.starts_with("id:"))?;
+    let at = front.split('\n').position(|line| line.starts_with("id:"))?;
     let mut lines: Vec<&str> = content.split('\n').collect();
     let line = format!("uid: {uid}");
     lines.insert(at + 2, &line);
@@ -371,6 +372,21 @@ fn check_adr(content: &str, id: &str, title: &str) -> Result<(), StoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_stdout_preserves_framing_and_refuses_failed_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = repo.path().join("config");
+        let mut config = std::fs::read(&path).unwrap();
+        config.extend_from_slice(b"\n[test]\nvalue = \"name\\n\"\ninvalid = \xff\n");
+        std::fs::write(path, config).unwrap();
+        assert_eq!(
+            super::git(dir.path(), &["config", "--get", "test.value"]).unwrap(),
+            "name\n"
+        );
+        assert!(super::git(dir.path(), &["config", "--get", "test.invalid"]).is_err());
+    }
 
     #[test]
     fn adr_uid_goes_after_the_id_line_or_fills_the_placeholder() {

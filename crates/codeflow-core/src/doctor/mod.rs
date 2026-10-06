@@ -399,7 +399,7 @@ fn check_hooks(opts: &Options) -> CheckResult {
 
     if opts
         .do_exec(&codeflow_bin, &["git-hook", "capabilities"])
-        .map_or(true, |s| s.trim() != "hooks 3")
+        .map_or(true, |s| s.strip_suffix('\n').unwrap_or(&s) != "hooks 3")
     {
         return CheckResult {
             name: "hooks".into(),
@@ -614,7 +614,10 @@ fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
                 Ok(_) if !crate::scaffold::detect::is_executable(&hook) => "not executable",
                 Ok(text) => {
                     let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
-                    if text.lines().any(|line| shell_code(line).contains(&call)) {
+                    if text
+                        .split('\n')
+                        .any(|line| shell_code(line).contains(&call))
+                    {
                         return None;
                     }
                     "no live call"
@@ -629,7 +632,7 @@ fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
 fn shell_code(line: &str) -> &str {
     let mut previous = ' ';
     for (at, c) in line.char_indices() {
-        if c == '#' && previous.is_whitespace() {
+        if c == '#' && matches!(previous, ' ' | '\t' | '\n') {
             return &line[..at];
         }
         previous = c;
@@ -1681,8 +1684,10 @@ fn observe_binding_drift(
                 Ok(command) => {
                     match opts.do_exec_bounded(&command, probe.args, VERSION_PROBE_TIMEOUT) {
                         Ok(observed)
-                            if probe_version(probe_id, observed.trim())
-                                == Some(record.requested.harness_version.as_str()) => {}
+                            if probe_version(
+                                probe_id,
+                                observed.strip_suffix('\n').unwrap_or(&observed),
+                            ) == Some(record.requested.harness_version.as_str()) => {}
                         Ok(observed) => drift.push((
                             record.binding_id.clone(),
                             format!(
@@ -2539,7 +2544,7 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
                 "--is-bare-repository",
             ],
         )
-        .map(|s| s.trim() == "true")
+        .map(|s| s.strip_suffix('\n').unwrap_or(&s) == "true")
         .unwrap_or(false);
     if is_bare && root.join(".git").exists() {
         return fail(
@@ -2615,7 +2620,7 @@ struct WorktreeEntry {
 fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
     let mut out = Vec::new();
     let mut cur: Option<WorktreeEntry> = None;
-    for line in porcelain.lines() {
+    for line in porcelain.split('\n') {
         if let Some(path) = line.strip_prefix("worktree ") {
             if let Some(w) = cur.take() {
                 out.push(w);
@@ -6339,5 +6344,17 @@ mod tests {
         );
         fail.with(|flag| flag.set(false));
         assert!(run.unwrap_err().contains("injected"));
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_shell_comment_requires_shell_blank() {
+        assert_eq!(
+            super::shell_code("echo x\u{a0}#codeflow"),
+            "echo x\u{a0}#codeflow"
+        );
+        assert_eq!(super::shell_code("echo x #codeflow"), "echo x ");
     }
 }

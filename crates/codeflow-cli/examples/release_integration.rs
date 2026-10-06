@@ -71,7 +71,8 @@ fn command(root: &Path, program: &Path, args: &[&str]) -> Result<String, String>
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    command(root, Path::new("git"), args).map(|text| text.trim().to_string())
+    command(root, Path::new("git"), args)
+        .map(|text| text.strip_suffix('\n').unwrap_or(&text).to_string())
 }
 
 fn quote(value: &str) -> String {

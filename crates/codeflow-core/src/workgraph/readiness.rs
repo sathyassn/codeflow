@@ -362,7 +362,7 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
         repo_root,
         &["rev-list", "--merges", "--max-count=1", &range],
     );
-    if !merges.is_ok_and(|out| out.trim().is_empty()) {
+    if !merges.is_ok_and(|out| out.is_empty()) {
         return false;
     }
     cherry_all_equivalent(repo_root, target, tip)
@@ -370,7 +370,7 @@ fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
 
 fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
     git(repo_root, &["cherry", target, tip])
-        .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+        .is_ok_and(|out| !out.is_empty() && out.split('\n').all(|line| line.starts_with("- ")))
 }
 
 /// Whether `git cherry target tip` could find every commit of `tip`
@@ -758,7 +758,8 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        let text = String::from_utf8(out.stdout).map_err(|error| error.to_string())?;
+        Ok(text.strip_suffix('\n').unwrap_or(&text).to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
     }
@@ -1154,27 +1155,35 @@ fn remote_claims(
     // name that is not valid UTF-8 stays a claim and never reads as another.
     let listed = git_bytes(repo_root, &["ls-remote", "--heads", remote])
         .map_err(|error| format!("cannot list {remote}'s branches: {error}"))?;
-    Ok(listed
+    let mut claims = Vec::new();
+    for line in listed
         .split(|byte| *byte == b'\n')
-        .filter_map(|line| {
-            let tab = line.iter().position(|byte| *byte == b'\t')?;
-            let sha = std::str::from_utf8(&line[..tab]).ok()?;
-            let name = GitName::from_bytes(&line[tab + 1..]).strip_prefix(b"refs/heads/")?;
-            let suffix = work_suffix_name(prefixes, &name)?;
-            if !suffix.starts_with(format!("{task_id}-").as_bytes()) {
-                return None;
-            }
-            let oid = git2::Oid::from_str(sha).ok()?;
-            let known = repo.find_commit(oid).is_ok();
-            let shown = if remote == "origin" {
-                name
-            } else {
-                GitName::from_text(&format!("{remote}/")).joined(name.bytes())
-            };
-            // An unknown tip is never landed: keep it open with a null id.
-            Some((shown, if known { oid } else { git2::Oid::ZERO_SHA1 }))
-        })
-        .collect())
+        .filter(|line| !line.is_empty())
+    {
+        let tab = line
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or_else(|| format!("{remote} advertised a malformed branch"))?;
+        let sha = std::str::from_utf8(&line[..tab]).map_err(|error| error.to_string())?;
+        let oid = git2::Oid::from_str(sha).map_err(|error| error.to_string())?;
+        let Some(name) = GitName::from_bytes(&line[tab + 1..]).strip_prefix(b"refs/heads/") else {
+            continue;
+        };
+        let Some(suffix) = work_suffix_name(prefixes, &name) else {
+            continue;
+        };
+        if !suffix.starts_with(format!("{task_id}-").as_bytes()) {
+            continue;
+        }
+        let known = repo.find_commit(oid).is_ok();
+        let shown = if remote == "origin" {
+            name
+        } else {
+            GitName::from_text(&format!("{remote}/")).joined(name.bytes())
+        };
+        claims.push((shown, if known { oid } else { git2::Oid::ZERO_SHA1 }));
+    }
+    Ok(claims)
 }
 
 /// Whether `branch` (local, or `origin/<branch>`) holds an open claim: it
@@ -1301,6 +1310,22 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_stdout_preserves_framing_and_refuses_failed_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let path = repo.path().join("config");
+        let mut config = std::fs::read(&path).unwrap();
+        config.extend_from_slice(b"\n[test]\nvalue = \"name\\n\"\ninvalid = \xff\n");
+        std::fs::write(path, config).unwrap();
+        assert_eq!(
+            super::git(dir.path(), &["config", "--get", "test.value"]).unwrap(),
+            "name\n"
+        );
+        assert!(super::git(dir.path(), &["config", "--get", "test.invalid"]).is_err());
+    }
+
     use crate::workgraph::work_start::{AnchoredTask, WorkStartError};
     use std::fs;
 

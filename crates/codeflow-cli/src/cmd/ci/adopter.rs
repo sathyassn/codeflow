@@ -34,7 +34,6 @@ pub(super) fn trusted_actor(
     flag: &str,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> (String, Option<String>) {
-    let flag = flag.trim();
     if flag.is_empty() || flag == UNKNOWN_ACTOR {
         return (UNKNOWN_ACTOR.to_string(), None);
     }
@@ -346,6 +345,24 @@ fn print_levels(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_actor_requires_exact_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let event = temp.path().join("event.json");
+        std::fs::write(&event, r#"{"pull_request":{"head":{"repo":{"full_name":"o/r"}},"base":{"repo":{"full_name":"o/r"}}}}"#).unwrap();
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_EVENT_PATH" => Some(event.to_str().unwrap().into()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        let (actor, why) = super::trusted_actor("automation\u{a0}", &env);
+        assert_eq!(actor, "unknown");
+        assert!(why.is_some());
+    }
+
     #[test]
     fn only_a_same_repository_pull_request_event_carries_an_actor() {
         use super::trusted_actor;

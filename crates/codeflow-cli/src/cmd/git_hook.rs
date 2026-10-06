@@ -248,7 +248,10 @@ fn run_reference_transaction_with_reader(
     };
     // Fast path: no local-branch update in this transaction (e.g. a fetch that
     // only moved remote-tracking refs) — allow without loading policy.
-    if !stdin.lines().any(git_hook::ref_line_touches_local_branch) {
+    if !stdin
+        .split('\n')
+        .any(git_hook::ref_line_touches_local_branch)
+    {
         return 0;
     }
 
@@ -310,7 +313,7 @@ fn commit_msg(
         &message,
         &staged_files(root),
         merge_in_progress(root),
-        &git_hook::MessageSource::Pending(pending_cleanup(root)),
+        &git_hook::MessageSource::Pending(pending_cleanup(root)?),
     );
     // A commit has no pull request body to settle it with (TSK-147 AC-4).
     git_hook::note_watched_paths(&mut report);
@@ -326,36 +329,50 @@ fn commit_msg(
 /// `-v` or `--no-verbose` is not visible to a hook, so the inference can be
 /// wrong in either direction; `codeflow ci` scans the stored message and
 /// stays the authority.
-fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
+fn pending_cleanup(root: &Path) -> Result<git_hook::GitCleanup, codeflow_core::error::HookError> {
     let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
-    let mode = git_config_values(root, &["--get", "commit.cleanup"]).pop();
+    let mode = git_config_values(root, &["--get", "commit.cleanup"])?.pop();
     // core.commentString and core.commentChar set one value; the last wins.
-    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])
+    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])?
         .pop()
         .map(|entry| {
             entry
                 .split_once('\n')
                 .map_or(String::new(), |(_, v)| v.to_string())
         });
-    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, comment.as_deref())
+    Ok(git_hook::GitCleanup::resolve(
+        mode.as_deref(),
+        editor_used,
+        comment.as_deref(),
+    ))
 }
 
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
-/// bytes, value text unchanged; empty when unset or unreadable.
-fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    codeflow_core::git::command()
+/// bytes, value text unchanged; empty only when unset, refusal when unreadable.
+fn git_config_values(
+    root: &Path,
+    args: &[&str],
+) -> Result<Vec<String>, codeflow_core::error::HookError> {
+    let unreadable = |detail: String| {
+        codeflow_core::error::HookError::Config(format!(
+            "cannot read commit cleanup configuration: {detail}"
+        ))
+    };
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
         .args(args)
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        // OS text rule (issue 79): a value with an invalid byte is unreadable
-        // as text and reads as unset, never as a lossy spelling.
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|text| text.split_terminator('\0').map(str::to_string).collect())
-        .unwrap_or_default()
+        .map_err(|error| unreadable(error.to_string()))?;
+    if out.status.code() == Some(1) {
+        return Ok(Vec::new());
+    }
+    if !out.status.success() {
+        return Err(unreadable(out.status.to_string()));
+    }
+    let text = String::from_utf8(out.stdout).map_err(|error| unreadable(error.to_string()))?;
+    Ok(text.split_terminator('\0').map(str::to_string).collect())
 }
 
 /// True while git is creating a real merge commit — `MERGE_HEAD` exists in the
@@ -411,6 +428,33 @@ fn staged_files(root: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_unreadable_cleanup_config_refuses_commit_message() {
+        use std::io::Write as _;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(codeflow_core::git::command()
+            .arg("-C")
+            .arg(dir.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success());
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.path().join(".git/config"))
+            .unwrap();
+        config.write_all(b"[core]\ncommentString = \xff\n").unwrap();
+        let message = dir.path().join("message");
+        std::fs::write(&message, "fix: preserve names\n\nKeep identity.\n").unwrap();
+        assert!(super::commit_msg(
+            dir.path(),
+            &Policy::default(),
+            &[message.to_str().unwrap().to_string()]
+        )
+        .is_err());
+    }
+
     use super::*;
 
     struct FailingReader;

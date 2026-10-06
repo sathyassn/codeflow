@@ -362,7 +362,7 @@ impl RecordStore for MarkdownStore {
             let target = task
                 .integration_target
                 .as_deref()
-                .filter(|target| !target.trim().is_empty())
+                .filter(|target| !target.is_empty())
                 .ok_or_else(|| {
                     StoreError::Invalid(format!(
                         "{}: canonical task requires integration_target",

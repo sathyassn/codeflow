@@ -3520,11 +3520,13 @@ impl Reader<'_> {
                 let fed = self.pipe_input.clone().or_else(|| input.cloned());
                 let mut at = 1;
                 let mut modelled = true;
+                let mut strip_delimiter = false;
                 while let Some(arg) = argv.get(at) {
                     if !arg.starts_with('-') {
                         break;
                     }
                     modelled &= arg == "-t";
+                    strip_delimiter |= arg == "-t";
                     at += 1;
                 }
                 let name = argv.get(at).map_or("MAPFILE", String::as_str);
@@ -3532,7 +3534,19 @@ impl Reader<'_> {
                     Some(fed) if fed.complete && modelled => fed
                         .items
                         .iter()
-                        .flat_map(|i| i.value.lines().map(str::to_string).collect::<Vec<_>>())
+                        .flat_map(|i| {
+                            i.value
+                                .split_inclusive('\n')
+                                .map(|line| {
+                                    if strip_delimiter {
+                                        line.strip_suffix('\n').unwrap_or(line)
+                                    } else {
+                                        line
+                                    }
+                                })
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
                         .collect(),
                     _ => [taint(why::MAPFILE)].into(),
                 };
@@ -4578,18 +4592,38 @@ impl Reader<'_> {
                 continue;
             }
             let landed = |path: &str| {
-                dangerous_rm_target(path).or_else(|| {
-                    self.real_path(path)
-                        .and_then(|real| dangerous_rm_target(&real))
-                })
+                let real = self.real_path_checked(path);
+                let target = dangerous_rm_target(path).or_else(|| {
+                    real.as_ref()
+                        .ok()
+                        .and_then(|p| p.as_deref())
+                        .and_then(dangerous_rm_target)
+                });
+                (target, real.is_err())
             };
-            if let Some(target) = landed(&path) {
+            let (target, unplaced) = landed(&path);
+            if let Some(target) = target {
                 return Judged::Protected(target);
+            }
+            if unplaced {
+                pending.get_or_insert_with(|| Unproven {
+                    reason: why::NAME.to_string(),
+                    cwd: false,
+                });
             }
             match self.glob_paths(&path) {
                 Some(paths) => {
-                    if let Some(target) = paths.iter().find_map(|p| landed(p)) {
-                        return Judged::Protected(target);
+                    for candidate in &paths {
+                        let (target, unplaced) = landed(candidate);
+                        if let Some(target) = target {
+                            return Judged::Protected(target);
+                        }
+                        if unplaced {
+                            pending.get_or_insert_with(|| Unproven {
+                                reason: why::NAME.to_string(),
+                                cwd: false,
+                            });
+                        }
                     }
                 }
                 None => {
@@ -4614,8 +4648,9 @@ impl Reader<'_> {
             }
             // OS text rule (issue 79): the reader works on path text, so a
             // home folder that is not valid UTF-8 cannot be placed (unproven).
-            let home = std::env::var_os("HOME")?;
-            Some(PathBuf::from(format!("{}{rest}", home.to_str()?)))
+            let mut absolute = std::env::var_os("HOME")?;
+            absolute.push(rest);
+            Some(PathBuf::from(absolute))
         } else if path.starts_with('/') {
             Some(PathBuf::from(path))
         } else {
@@ -4626,13 +4661,20 @@ impl Reader<'_> {
     /// The real path of `path`'s longest existing prefix with the rest
     /// appended; `None` for a path the reader cannot place.
     fn real_path(&self, path: &str) -> Option<String> {
-        // On native Windows a path that starts with `/` names no fixed
-        // place, so this reader cannot place it, and `judge_path` refuses
-        // a deletion below one as unproven.
+        self.real_path_checked(path).ok().flatten()
+    }
+
+    /// Distinguish unreadable name bytes from ordinary unresolved syntax.
+    /// Only the former must turn an otherwise ordinary deletion into an
+    /// unproven one; e.g. an unset variable can still be an empty operand.
+    fn real_path_checked(&self, path: &str) -> Result<Option<String>, ()> {
         if self.rooted_unplaced && path.starts_with('/') {
-            return None;
+            return Ok(None);
         }
-        real_prefix(&self.absolute(path)?)
+        let Some(absolute) = self.absolute(path) else {
+            return Ok(None);
+        };
+        real_prefix_checked(&absolute)
     }
 
     /// Every path a glob in `path` may name: its matches on disk, and the
@@ -4647,6 +4689,8 @@ impl Reader<'_> {
             return Some(Vec::new());
         }
         let Some(absolute) = self.absolute(path) else {
+            // No concrete base/syntax to enumerate; no bytes were decoded.
+            // Symbolic project-relative paths keep the spelling verdict.
             return Some(Vec::new());
         };
         // A base that is not valid UTF-8 cannot be read as text: unproven.
@@ -4671,7 +4715,7 @@ impl Reader<'_> {
                 }
                 for dir in &dirs {
                     let listed = if dir.is_empty() { "/" } else { dir.as_str() };
-                    let real = real_prefix(Path::new(listed)).unwrap_or_else(|| listed.to_string());
+                    let real = real_prefix(Path::new(listed))?;
                     let real = real.trim_end_matches('/');
                     if real.is_empty() || dangerous_rm_target(&format!("{real}/deeper")).is_some() {
                         deeper.push(format!("{}/*", if real.is_empty() { "" } else { real }));
@@ -7067,12 +7111,16 @@ fn from_home(rest: &str) -> String {
 /// The real path of `path`'s longest existing prefix, with the rest
 /// appended; macOS's data-volume prefix is read as the path it serves.
 fn real_prefix(path: &Path) -> Option<String> {
+    real_prefix_checked(path).ok().flatten()
+}
+
+fn real_prefix_checked(path: &Path) -> Result<Option<String>, ()> {
     // OS text rule (issue 79): a component that is not valid UTF-8 cannot be
     // placed as text, so the path is unplaced (unproven), never a lossy lookalike.
     let mut parts: Vec<String> = Vec::new();
     for component in path.components() {
         match component {
-            std::path::Component::Normal(p) => parts.push(p.to_str()?.to_string()),
+            std::path::Component::Normal(p) => parts.push(p.to_str().ok_or(())?.to_string()),
             std::path::Component::ParentDir => parts.push("..".to_string()),
             _ => {}
         }
@@ -7086,8 +7134,10 @@ fn real_prefix(path: &Path) -> Option<String> {
         if std::fs::symlink_metadata(&prefix).is_err() {
             continue;
         }
-        let real = std::fs::canonicalize(&prefix).ok()?;
-        let mut joined = real.to_str()?.to_string();
+        let Ok(real) = std::fs::canonicalize(&prefix) else {
+            return Ok(None);
+        };
+        let mut joined = real.to_str().ok_or(())?.to_string();
         for part in &parts[existing..] {
             if !joined.ends_with('/') {
                 joined.push('/');
@@ -7100,9 +7150,9 @@ fn real_prefix(path: &Path) -> Option<String> {
             Some(rest) if rest.starts_with('/') => rest.to_string(),
             _ => joined,
         };
-        return Some(served);
+        return Ok(Some(served));
     }
-    None
+    Ok(None)
 }
 
 /// Brace expansion over a word's pieces: a `{a,b}` list or a `{x..y}`
@@ -7447,6 +7497,65 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r15_unreadable_deletion_base_remains_unproven() {
+        use std::os::unix::ffi::OsStrExt;
+        let base = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xff"));
+        let result = super::composed_deletion_in("rm -rf ./ordinary", Some(base))
+            .expect("unreadable base must refuse");
+        assert!(result.unproven.is_some());
+    }
+
+    #[test]
+    fn r15_owned_mapfile_preserves_record_bytes() {
+        let mut reader = super::Reader {
+            base: None,
+            rooted_unplaced: false,
+            found: None,
+            depth: 0,
+            pipe_input: None,
+            jumps: Vec::new(),
+            expanding: Vec::new(),
+            traps: Vec::new(),
+            in_trap: false,
+            status: None,
+        };
+        let input = super::Fed {
+            complete: true,
+            items: vec![super::Input {
+                value: "/etc\r\n/tmp\n".into(),
+                tree: false,
+            }],
+        };
+        #[cfg(unix)]
+        {
+            let mut expected = std::env::var_os("HOME").expect("home fixture");
+            expected.push("//ordinary");
+            assert_eq!(
+                reader.absolute("~//ordinary"),
+                Some(std::path::PathBuf::from(expected))
+            );
+        }
+        for (options, expected) in [
+            (vec!["mapfile", "-t", "a"], vec!["/etc\r", "/tmp"]),
+            (vec!["mapfile", "a"], vec!["/etc\r\n", "/tmp\n"]),
+        ] {
+            let mut state = super::State::start();
+            reader.builtin(
+                "mapfile",
+                &[],
+                &options.iter().map(|s| (*s).into()).collect::<Vec<_>>(),
+                Some(&input),
+                &mut state,
+            );
+            assert_eq!(
+                state.var("a"),
+                expected.into_iter().map(str::to_string).collect(),
+                "{options:?}"
+            );
+        }
+    }
 
     #[test]
     fn arithmetic_does_not_erase_unicode_between_name_and_assignment() {

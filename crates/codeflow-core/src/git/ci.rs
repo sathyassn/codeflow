@@ -290,7 +290,11 @@ pub async fn wait_for_ci_green(
     // Resolve required contexts from branch protection (best-effort; missing
     // protection is not fatal — we fall back to the include_checks filter
     // or "all reported checks" per cfg).
-    let required_contexts = fetch_required_contexts(pr_number).await.unwrap_or_default();
+    let required_contexts = match fetch_required_contexts(pr_number).await {
+        Ok(contexts) => contexts,
+        Err(error @ CiWaitError::Parse(_)) => return Err(error),
+        Err(_) => Vec::new(),
+    };
     wait_for_ci_green_with(
         pr_number,
         cfg,
@@ -532,7 +536,7 @@ where
         ".baseRefName".to_string(),
     ];
     let (base_success, base_stdout) = run(base_args).await?;
-    let Some(base) = parse_gh_single_string_output(base_success, &base_stdout) else {
+    let Some(base) = parse_gh_single_string_output(base_success, &base_stdout)? else {
         return Ok(Vec::new());
     };
 
@@ -546,7 +550,7 @@ where
         ".nameWithOwner".to_string(),
     ];
     let (repo_success, repo_stdout) = run(repo_args).await?;
-    let Some(repo) = parse_gh_single_string_output(repo_success, &repo_stdout) else {
+    let Some(repo) = parse_gh_single_string_output(repo_success, &repo_stdout)? else {
         return Ok(Vec::new());
     };
 
@@ -563,29 +567,20 @@ where
     ))
 }
 
-/// Parse a single-string `gh` output (e.g., `gh pr view --json baseRefName`).
-///
-/// Returns `Some(trimmed)` when the subprocess succeeded AND stdout is
-/// non-empty after trim. Otherwise returns `None` (empty stdout or failed
-/// exit), which the caller treats as "fallback to no-contexts".
-///
-/// Extracted from [`fetch_required_contexts`] so every branch — success,
-/// failure-exit, success-but-empty — can be exercised with synthetic bytes.
-fn parse_gh_single_string_output(success: bool, stdout: &[u8]) -> Option<String> {
+/// Read a branch or repository identity from `gh` with exactly one framing LF.
+/// Failed or empty queries are absent; undecodable identity is an error and
+/// must not select the no-contexts fallback.
+fn parse_gh_single_string_output(
+    success: bool,
+    stdout: &[u8],
+) -> Result<Option<String>, CiWaitError> {
     if !success {
-        return None;
+        return Ok(None);
     }
-    // OS text rule (issue 79): the answer names a branch or a repository that
-    // is then looked up, so it is read as exact text: one that is not valid
-    // UTF-8 reads as no answer (the caller falls back to every reported
-    // check), and only the answer's own newline is framing.
-    let s = std::str::from_utf8(stdout).ok()?;
-    let s = s.strip_suffix('\n').unwrap_or(s);
-    if s.is_empty() {
-        None
-    } else {
-        Some(s.to_string())
-    }
+    let text = std::str::from_utf8(stdout)
+        .map_err(|error| CiWaitError::Parse(format!("gh identity is not valid UTF-8: {error}")))?;
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    Ok((!text.is_empty()).then(|| text.to_string()))
 }
 
 /// Parse the output of `gh api repos/<repo>/branches/<base>/protection/required_status_checks/contexts`.
@@ -1251,28 +1246,32 @@ mod tests {
     #[test]
     fn test_parse_gh_single_string_success_returns_the_exact_text() {
         assert_eq!(
-            parse_gh_single_string_output(true, b"main\n"),
+            parse_gh_single_string_output(true, b"main\n").unwrap(),
             Some("main".to_string())
         );
         // Round fourteen on issue 79: the name is looked up as it is, so
         // whitespace that is part of it stays, and only the newline goes.
         assert_eq!(
-            parse_gh_single_string_output(true, "release\u{a0}\n".as_bytes()),
+            parse_gh_single_string_output(true, "release\u{a0}\n".as_bytes()).unwrap(),
             Some("release\u{a0}".to_string())
         );
-        assert!(parse_gh_single_string_output(true, b"caf\xe9\n").is_none());
+        assert!(parse_gh_single_string_output(true, b"caf\xe9\n").is_err());
     }
 
     #[test]
     fn test_parse_gh_single_string_success_but_empty_returns_none() {
-        assert!(parse_gh_single_string_output(true, b"\n").is_none());
-        assert!(parse_gh_single_string_output(true, b"").is_none());
+        assert!(parse_gh_single_string_output(true, b"\n")
+            .unwrap()
+            .is_none());
+        assert!(parse_gh_single_string_output(true, b"").unwrap().is_none());
     }
 
     #[test]
     fn test_parse_gh_single_string_failure_returns_none() {
         // Non-zero exit → None regardless of stdout content.
-        assert!(parse_gh_single_string_output(false, b"main\n").is_none());
+        assert!(parse_gh_single_string_output(false, b"main\n")
+            .unwrap()
+            .is_none());
     }
 
     // --- parse_gh_protected_contexts_output: branches of step 3 ---
@@ -1382,6 +1381,15 @@ mod tests {
                 }
             })
         }
+    }
+
+    #[tokio::test]
+    async fn r15_ci_unreadable_identity_refuses_required_context_lookup() {
+        let runner = scripted_gh_runner(vec![Ok((true, b"caf\xff\n".to_vec()))]);
+        assert!(matches!(
+            fetch_required_contexts_with(runner, 42).await,
+            Err(CiWaitError::Parse(_))
+        ));
     }
 
     #[tokio::test]

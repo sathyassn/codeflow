@@ -556,10 +556,7 @@ pub fn is_ci_environment() -> bool {
 }
 
 fn is_ci_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        let value = value.trim();
-        !value.is_empty() && value != "false" && value != "0"
-    })
+    value.is_some_and(|value| !value.is_empty() && value != "false" && value != "0")
 }
 
 fn resolve_cwd(project_dir: &Path, target_cwd: Option<&str>) -> Result<PathBuf, TestingError> {

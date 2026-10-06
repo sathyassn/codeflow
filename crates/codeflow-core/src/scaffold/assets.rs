@@ -39,8 +39,31 @@ impl AssetSource for DirSource {
 }
 
 /// Convenience: read an asset as UTF-8 text.
-pub(crate) fn read_text(source: &dyn AssetSource, path: &str) -> Option<String> {
+pub(crate) fn read_text(
+    source: &dyn AssetSource,
+    path: &str,
+) -> Result<Option<String>, super::ScaffoldError> {
     source
         .read(path)
-        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|bytes| {
+            String::from_utf8(bytes).map_err(|_| super::ScaffoldError::InvalidState {
+                what: format!("asset {path}"),
+                detail: "not valid UTF-8".into(),
+            })
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_invalid_asset_text_is_an_error_not_missing() {
+        struct Bad;
+        impl super::AssetSource for Bad {
+            fn read(&self, _: &str) -> Option<Vec<u8>> {
+                Some(vec![0xff])
+            }
+        }
+        assert!(super::read_text(&Bad, "base/bad").is_err());
+    }
 }

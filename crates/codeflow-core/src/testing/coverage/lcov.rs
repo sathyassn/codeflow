@@ -29,8 +29,8 @@ pub(crate) fn parse_lcov_str(
     let mut lines_found = 0u64;
     let mut lines_hit = 0u64;
 
-    for line in content.lines() {
-        let line = line.trim();
+    for line in content.split_terminator('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() {
             continue;
         }
@@ -178,5 +178,18 @@ SF:src/b.rs\nLF:20\nLH:20\nend_of_record\n";
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].lines_found, 2);
         assert_eq!(result[0].lines_hit, 1);
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_lcov_keeps_filename_unicode_space() {
+        let rows = super::parse_lcov_str(
+            "SF:file.rs\u{a0}\nDA:1,1\nend_of_record\n",
+            std::path::Path::new("coverage.info"),
+        )
+        .unwrap();
+        assert_eq!(rows[0].path, "file.rs\u{a0}");
     }
 }

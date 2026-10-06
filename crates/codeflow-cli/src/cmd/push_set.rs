@@ -362,7 +362,11 @@ fn commits_from(
         _ => return unknown(String::from_utf8_lossy(&out.stderr).trim(), report),
     }
     let shallow = git(root, &["rev-parse", "--is-shallow-repository"]);
-    if shallow.as_deref().map(str::trim) != Some("false") {
+    if shallow
+        .as_deref()
+        .map(|value| value.strip_suffix('\n').unwrap_or(value))
+        != Some("false")
+    {
         return unknown("this clone is shallow", report);
     }
     match release_line::history_overlay_at(root) {
@@ -593,7 +597,7 @@ fn run_check_with(
 fn relayed_findings(stderr: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut open = false;
-    for line in stderr.lines() {
+    for line in stderr.split_terminator('\n') {
         if line.starts_with("  ") {
             if open {
                 if let Some(last) = found.last_mut() {
@@ -636,7 +640,7 @@ impl RulesOut {
     fn read(&self) -> Vec<String> {
         std::fs::read_to_string(&self.0)
             .unwrap_or_default()
-            .lines()
+            .split_terminator('\n')
             .filter(|line| codeflow_core::hooks::is_rule_id(line))
             .map(str::to_string)
             .collect()
@@ -668,9 +672,9 @@ fn is_finding_header(line: &str) -> bool {
 /// destination has no local history of its own to compare with.
 fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     let key = format!("remote.{remote}.fetch");
-    let out = git(root, &["config", "--get-all", &key])?;
-    out.lines().find_map(|spec| {
-        let (_, dst) = spec.trim().trim_start_matches('+').split_once(':')?;
+    let out = git(root, &["config", "-z", "--get-all", &key])?;
+    out.split('\0').find_map(|spec| {
+        let (_, dst) = spec.strip_prefix('+').unwrap_or(spec).split_once(':')?;
         let prefix = dst.strip_suffix('*')?;
         prefix.starts_with("refs/").then(|| prefix.to_string())
     })
@@ -1062,8 +1066,8 @@ fn unresolved(branch: &str, destination: &Destination<'_>) -> Finding {
 /// here; nothing is fetched, even in a partial clone.
 fn advertised_commits(root: &Path, listed: &str) -> Advertised {
     let shas: Vec<&str> = listed
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
+        .split_terminator('\n')
+        .filter_map(|line| line.split_once('\t').map(|(sha, _)| sha))
         .filter(|sha| sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
         .collect();
     if shas.is_empty() {
@@ -1082,14 +1086,14 @@ fn advertised_commits(root: &Path, listed: &str) -> Advertised {
         return Advertised::Failed("its tips could not be looked up here".to_string());
     };
     let mut commits: Vec<String> = types
-        .lines()
+        .split_terminator('\n')
         .filter_map(|line| line.strip_suffix(" commit"))
         .map(ToString::to_string)
         .collect();
     commits.sort();
     commits.dedup();
     let branches = listed
-        .lines()
+        .split_terminator('\n')
         .filter_map(|line| line.split_once('\t'))
         .filter_map(|(sha, reference)| {
             let branch = reference.strip_prefix("refs/heads/")?;
@@ -1174,7 +1178,7 @@ fn range_base(
                     &reference,
                 ],
             )
-            .is_some_and(|out| !out.trim().is_empty());
+            .is_some_and(|out| !out.is_empty());
             if any {
                 known.push(format!("--glob={reference}"));
             }
@@ -1217,7 +1221,7 @@ fn target_base(
         if !codeflow_core::workgraph::is_stable_work_target(&target) {
             return None;
         }
-        let target = target.trim();
+        let target = target.as_str();
         let tip = tips.branches.get(target)?;
         if tips.commits.binary_search(tip).is_err() {
             notices.push(format!(
@@ -1227,7 +1231,10 @@ fn target_base(
             return None;
         }
         let base = git(root, &["merge-base", &r.local_sha, tip])?;
-        (base.trim().to_string(), target.to_string())
+        (
+            base.strip_suffix('\n').unwrap_or(&base).to_string(),
+            target.to_string(),
+        )
     };
     notices.push(format!(
         "range of '{branch}' uses advertised target '{target}': `codeflow ci --base {base} --head {}`",
@@ -1346,10 +1353,13 @@ fn bounded_by<'a>(
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
-    if listed.trim().is_empty() {
+    if listed.is_empty() {
         return Some(local_sha.to_string());
     }
-    let bounds: Vec<&str> = listed.lines().filter_map(|l| l.strip_prefix('-')).collect();
+    let bounds: Vec<&str> = listed
+        .split_terminator('\n')
+        .filter_map(|l| l.strip_prefix('-'))
+        .collect();
     if let (Some(line), [_, _, ..]) = (line, bounds.as_slice()) {
         let on_line: Vec<&str> = bounds
             .iter()
@@ -1360,7 +1370,13 @@ fn bounded_by<'a>(
             let mut args = vec!["merge-base", "--independent"];
             args.extend(&on_line);
             if let Some(newest) = git(root, &args) {
-                if let [only] = newest.split_whitespace().collect::<Vec<_>>().as_slice() {
+                if let [only] = newest
+                    .strip_suffix('\n')
+                    .unwrap_or(&newest)
+                    .split('\n')
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                {
                     return Some((*only).to_string());
                 }
             }
@@ -1393,7 +1409,7 @@ fn narrowest<'b>(
     }
     let count = |input: &str| {
         git_input(root, &["rev-list", "--count", "--stdin"], input)
-            .and_then(|n| n.trim().parse::<usize>().ok())
+            .and_then(|n| n.strip_suffix('\n').unwrap_or(&n).parse::<usize>().ok())
             .unwrap_or(usize::MAX)
     };
     boundaries.iter().copied().min_by_key(|base| {
@@ -1435,14 +1451,14 @@ fn own_line_tip(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Opti
 /// The base from `rev-list --boundary` output: its first boundary commit, or
 /// the pushed sha itself when no commit is new.
 fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<RangeBase> {
-    if listed.trim().is_empty() {
+    if listed.is_empty() {
         return Some(RangeBase {
             base: local_sha.to_string(),
             note,
         });
     }
     listed
-        .lines()
+        .split_terminator('\n')
         .find_map(|line| line.strip_prefix('-'))
         .map(|base| RangeBase {
             base: base.to_string(),
@@ -1455,7 +1471,7 @@ fn boundary(listed: &str, local_sha: &str, note: Option<Finding>) -> Option<Rang
 /// commit or conflicted.
 fn incomplete_checkout(root: &Path) -> Option<String> {
     let sparse =
-        git(root, &["config", "--bool", "core.sparseCheckout"]).is_some_and(|v| v.trim() == "true");
+        git(root, &["config", "--bool", "core.sparseCheckout"]).is_some_and(|v| v == "true\n");
     if sparse {
         return Some("the checkout is sparse".to_string());
     }
@@ -1465,7 +1481,7 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
     let Some(status) = git(root, &["submodule", "status", "--recursive"]) else {
         return Some("submodule state could not be read".to_string());
     };
-    status.lines().find_map(|line| {
+    status.split_terminator('\n').find_map(|line| {
         let path = line.get(1..)?.split_whitespace().nth(1).unwrap_or("?");
         match line.chars().next()? {
             '-' => Some(format!("submodule {path} is not initialized")),
@@ -1522,7 +1538,7 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
             &format!("{rev}^{{commit}}"),
         ],
     )
-    .map(|s| s.trim().to_string())
+    .map(|s| s.strip_suffix('\n').unwrap_or(&s).to_string())
     .filter(|s| !s.is_empty())
 }
 
@@ -1532,8 +1548,7 @@ fn is_commit(root: &Path, sha: &str) -> bool {
 
 /// `true` when no tracked file differs from the checked-out commit.
 fn tracked_tree_clean(root: &Path) -> bool {
-    git(root, &["status", "--porcelain", "--untracked-files=no"])
-        .is_some_and(|out| out.trim().is_empty())
+    git(root, &["status", "--porcelain", "--untracked-files=no"]).is_some_and(|out| out.is_empty())
 }
 
 fn short(sha: &str) -> &str {

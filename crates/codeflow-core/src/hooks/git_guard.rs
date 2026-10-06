@@ -2466,8 +2466,9 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
 // directories; ordinary root globs and patterns below other paths stay ordinary.
 // The pattern's own directory decides, wherever the command runs from.
 fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
-    let pattern = path.file_name()?.to_str()?;
-    if !pattern.starts_with('.') || !pattern.contains(['*', '?', '[', '{']) {
+    let pattern = path.file_name()?;
+    let bytes = pattern.as_encoded_bytes();
+    if !bytes.starts_with(b".") || !bytes.iter().any(|b| b"*?[{".contains(b)) {
         return None;
     }
     let parent = path.parent()?.canonicalize().ok()?;
@@ -2478,6 +2479,11 @@ fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
     if parent != root {
         return None;
     }
+    let Some(pattern) = pattern.to_str() else {
+        // The root pattern cannot be classified as text: refuse it as
+        // potentially reaching enforcement, never treat it as absent.
+        return Some(".codeflow/");
+    };
     INTEGRITY_PREFIXES
         .iter()
         .chain(INTEGRITY_FILES.iter())
@@ -7661,7 +7667,7 @@ fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
         }
     };
     for script in &scripts {
-        for line in script.lines() {
+        for line in script.split('\n') {
             for (at, _) in line.match_indices(['w', 'W']) {
                 let rest = &line[at + 1..];
                 add(rest);
@@ -8574,6 +8580,36 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r15_extra_unreadable_root_pattern_is_unproven() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let path = dir
+            .path()
+            .join(std::ffi::OsString::from_vec(b".[\xff]*".to_vec()));
+        assert!(root_dot_pattern_target(&path).is_some());
+    }
+
+    #[test]
+    fn r15_owned_sed_keeps_carriage_return_in_write_operand() {
+        let paths = sed_script_writes(&["w notes.md\r\nw other.md".into()], Path::new("."));
+        assert!(paths.contains(&"notes.md\r".to_string()), "{paths:?}");
+        assert!(!paths.contains(&"notes.md".to_string()), "{paths:?}");
+    }
+
+    #[test]
+    fn r15_environment_alias_is_refused_by_git_guard() {
+        for command in [
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0='push origin release' git ship",
+            "GIT_CONFIG_PARAMETERS=\"'alias.ship=push origin release'\" git ship",
+        ] {
+            let result = report(command, "task/work");
+            assert!(blocks(&result.violations), "{command}: {:?}", result.violations);
+            assert!(result.violations.iter().any(|v| v.message.contains("an alias the guard cannot resolve")), "{:?}", result.violations);
+        }
+    }
 
     #[test]
     fn alias_reader_removes_only_its_output_terminator() {

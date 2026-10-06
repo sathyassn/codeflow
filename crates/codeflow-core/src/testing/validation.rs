@@ -450,7 +450,8 @@ pub fn default_base_ref(project_dir: &Path) -> String {
         return "HEAD~1".to_string();
     }
 
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let sha =
+        String::from_utf8_lossy(out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout)).to_string();
     if sha.is_empty() {
         "HEAD~1".to_string()
     } else {

@@ -3060,14 +3060,17 @@ fn the_single_string_baseline_still_works() {
     );
     let commit = repo.commit("records");
     repo.set_baseline(&commit);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit.clone()]);
+    assert_eq!(
+        recorded_baseline(repo.root()).unwrap(),
+        vec![commit.clone()]
+    );
     assert!(matches!(
         Baseline::load(repo.root()),
         Baseline::Available { .. }
     ));
     assert!(validate_lifecycle(repo.root()).is_clean());
     repo.set_baselines(&[&commit, &commit]);
-    assert_eq!(recorded_baseline(repo.root()), vec![commit]);
+    assert_eq!(recorded_baseline(repo.root()).unwrap(), vec![commit]);
     assert!(validate_lifecycle(repo.root()).is_clean());
 }
 
@@ -3198,4 +3201,45 @@ fn changed_paths_keep_a_lookalike_name_apart() {
     assert_eq!(paths.len(), 2, "{paths:?}");
     assert!(paths.contains(&"caf\u{fffd}".to_string()));
     assert!(paths.contains(&GitName::from_bytes(b"caf\xe9").storage_key()));
+}
+
+#[test]
+fn baseline_entries_keep_exact_config_values() {
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::String("abc\u{a0}".into()),
+    );
+    let value = toml::Value::Table(table);
+    assert_eq!(
+        super::baseline_entries(Some(&value)).unwrap(),
+        ["abc\u{a0}"]
+    );
+}
+
+#[test]
+fn unreadable_baseline_config_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (repo, oid) =
+        crate::git::repo_with_tree(dir.path(), &[(b".codeflow/project.toml", b"#\xff")]);
+    assert!(super::baseline_at(&repo, oid).is_err());
+    assert!(matches!(
+        super::range_baseline(dir.path(), &repo, oid, Some("HEAD")).0,
+        Baseline::Refused(_)
+    ));
+}
+
+#[test]
+fn unreadable_checked_out_baseline_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(dir.path().join(".codeflow/project.toml"), b"#\xff").unwrap();
+    assert!(recorded_baseline(dir.path()).is_err());
+    assert!(matches!(Baseline::load(dir.path()), Baseline::Refused(_)));
+    let mut table = toml::Table::new();
+    table.insert(
+        super::BASELINE_KEY.into(),
+        toml::Value::Array(vec![toml::Value::Integer(1)]),
+    );
+    assert!(super::baseline_entries(Some(&toml::Value::Table(table))).is_err());
 }

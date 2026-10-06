@@ -85,9 +85,8 @@ pub fn preflight(
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT}: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
     match output.status.code() {
-        Some(0 | 1) => serde_json::from_str(stdout.trim())
+        Some(0 | 1) => serde_json::from_slice(&output.stdout)
             .map_err(|error| format!("{SCRIPT} preflight printed no result: {error}")),
         _ => Err(failure(&output)),
     }

@@ -139,7 +139,11 @@ fn gh(dir: &Path, args: &[&str]) -> Result<String, String> {
     };
     let stdout = out.join().unwrap_or_default();
     let stderr = err.join().unwrap_or_default();
-    if status.success() || stdout.trim_start().starts_with('{') {
+    if status.success()
+        || stdout
+            .trim_start_matches([' ', '\t', '\n', '\r'])
+            .starts_with('{')
+    {
         return Ok(stdout);
     }
     let reason = stderr

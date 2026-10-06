@@ -124,7 +124,10 @@ impl Git {
         output
             .status
             .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .then(|| {
+                String::from_utf8_lossy(output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout))
+                    .to_string()
+            })
             .filter(|sha| !sha.is_empty())
     }
 
@@ -134,7 +137,10 @@ impl Git {
     ///
     /// Returns an error when git fails.
     pub fn is_shallow(&self) -> Result<bool, IdsError> {
-        Ok(self.run(&["rev-parse", "--is-shallow-repository"])?.trim() == "true")
+        Ok(self
+            .run(&["rev-parse", "--is-shallow-repository"])?
+            .as_bytes()
+            == b"true\n")
     }
 
     /// Whether `ancestor` is an ancestor of (or equal to) `descendant`.
@@ -263,23 +269,28 @@ impl Git {
         // Each row is `mode SP type SP blob TAB path`. The meta is ASCII, so
         // the row is split on its first tab as bytes, and only the path is
         // read as a name (OS text rule, issue 79).
-        Ok(listing
+        listing
             .split(|byte| *byte == 0)
-            .filter_map(|row| {
-                let tab = row.iter().position(|byte| *byte == b'\t')?;
+            .filter(|row| !row.is_empty())
+            .map(|row| {
+                let malformed = || IdsError::Git("git ls-tree returned a malformed entry".into());
+                let tab = row
+                    .iter()
+                    .position(|byte| *byte == b'\t')
+                    .ok_or_else(malformed)?;
                 let (meta, path) = (&row[..tab], &row[tab + 1..]);
-                let meta = std::str::from_utf8(meta).ok()?;
-                let mut parts = meta.split_whitespace();
-                let mode = parts.next()?.to_string();
-                let _kind = parts.next()?;
-                let blob = parts.next()?.to_string();
-                Some((
-                    mode,
-                    blob,
+                let meta = std::str::from_utf8(meta).map_err(|_| malformed())?;
+                let parts: Vec<_> = meta.split(' ').collect();
+                let [mode, _kind, blob] = parts.as_slice() else {
+                    return Err(malformed());
+                };
+                Ok((
+                    (*mode).to_string(),
+                    (*blob).to_string(),
                     crate::git::GitName::from_bytes(path).storage_key(),
                 ))
             })
-            .collect())
+            .collect()
     }
 
     /// Write `content` as a blob and return its id.
@@ -290,7 +301,8 @@ impl Git {
     pub fn write_blob(&self, content: &[u8]) -> Result<String, IdsError> {
         Ok(self
             .run_input(&["hash-object", "-w", "--stdin"], content)?
-            .trim()
+            .strip_suffix('\n')
+            .unwrap_or("")
             .to_string())
     }
 
@@ -329,13 +341,21 @@ impl Git {
                 &env,
             )?;
         }
-        let tree = self.run_env(&["write-tree"], &env)?.trim().to_string();
+        let tree = self
+            .run_env(&["write-tree"], &env)?
+            .strip_suffix('\n')
+            .unwrap_or("")
+            .to_string();
         let mut args = vec!["commit-tree", tree.as_str(), "-m", message];
         if let Some(parent) = parent {
             args.push("-p");
             args.push(parent);
         }
-        Ok(self.run(&args)?.trim().to_string())
+        Ok(self
+            .run(&args)?
+            .strip_suffix('\n')
+            .unwrap_or("")
+            .to_string())
     }
 
     /// Every local and remote-tracking branch with its tip, excluding
@@ -352,7 +372,7 @@ impl Git {
             "refs/remotes",
         ])?;
         Ok(listing
-            .lines()
+            .split_terminator('\n')
             .filter_map(|line| {
                 let mut parts = line.split(' ');
                 let name = parts.next()?.to_string();

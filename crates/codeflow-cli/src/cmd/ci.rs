@@ -1823,7 +1823,8 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let sha = text.strip_suffix('\n').unwrap_or(&text).to_string();
     (!sha.is_empty()).then_some(sha)
 }
 
@@ -1872,7 +1873,7 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
 /// scanned.
 fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, String> {
     let merge_base = git_stdout(root, &["merge-base", base, head])?;
-    let merge_base = merge_base.trim();
+    let merge_base = merge_base.strip_suffix('\n').unwrap_or(&merge_base);
     let mut args = vec![
         // OS text rule (issue 79): paths are printed quoted with octal escapes,
         // so the header parse reads each path's exact bytes (`unquote_git_path`)
@@ -2036,7 +2037,7 @@ fn parse_added_lines(diff: &str) -> Vec<AddedLine> {
     let mut path: Option<String> = None;
     let mut blob: Option<String> = None;
     let (mut old_left, mut new_left, mut new_line) = (0usize, 0usize, 0usize);
-    for line in diff.lines() {
+    for line in diff.split('\n') {
         if old_left == 0 && new_left == 0 {
             if line.starts_with("diff --git ") {
                 (path, blob) = (None, None);
@@ -2140,7 +2141,7 @@ fn unquote_git_path(raw: &str) -> Option<String> {
 
 /// Parse `-a[,b] +c[,d] @@ ...` into (old count, new start, new count).
 fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
-    let mut parts = header.split_whitespace();
+    let mut parts = header.split(' ');
     let old = parts.next()?.strip_prefix('-')?;
     let new = parts.next()?.strip_prefix('+')?;
     let count = |range: &str| -> Option<(usize, usize)> {
@@ -2187,8 +2188,9 @@ fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
                     .push(codeflow_core::git::GitName::from_bytes(path).storage_key());
             }
         } else if let Ok(text) = std::str::from_utf8(field) {
-            if !text.trim().is_empty() {
-                commit = Some(text.trim().to_string());
+            let text = text.strip_suffix('\n').unwrap_or(text);
+            if !text.is_empty() {
+                commit = Some(text.to_string());
             }
         }
     }
@@ -2200,10 +2202,10 @@ fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
 fn parse_log(stdout: &str) -> Vec<CommitRecord> {
     stdout
         .split('\0')
-        .filter(|rec| !rec.trim().is_empty())
+        .filter(|rec| !rec.is_empty() && *rec != "\n")
         .filter_map(|rec| {
             let (header, message) = rec.split_once('\n')?;
-            let mut ids = header.split_whitespace();
+            let mut ids = header.split(' ');
             let sha = ids.next()?.to_string();
             Some(CommitRecord {
                 sha,
@@ -2259,6 +2261,14 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_diff_line_keeps_carriage_return() {
+        let lines =
+            super::parse_added_lines("diff --git a/a b/a\n+++ b/a\n@@ -0,0 +1 @@\n+payload\r\n");
+        assert_eq!(lines[0].text, "payload\r");
+    }
+
     /// The reader protocol `release.py` reads is the one this binary
     /// answers; raising one without the other fails here.
     #[test]

@@ -87,7 +87,10 @@ pub fn insert_member(text: &str, path: &[&str], key: &str, value: &str) -> Optio
     let open = object_open(text, path)?;
     let rest = &text[open..];
     let name = serde_json::to_string(key).ok()?;
-    let member = if rest.trim_start().starts_with('}') {
+    let member = if rest
+        .trim_start_matches([' ', '\t', '\n', '\r'])
+        .starts_with('}')
+    {
         format!("{name}: {value}")
     } else if let Some(next) = rest.strip_prefix('\n') {
         let indent: String = next
@@ -119,7 +122,10 @@ pub fn remove_member_line(text: &str, path: &[&str]) -> Option<String> {
     let comma = comma.strip_prefix(',')?;
     let line_end = comma.find('\n')?;
     let consumed = end + (after.len() - comma.len()) + line_end + 1;
-    if !text[consumed..].trim_start().starts_with('"') {
+    if !text[consumed..]
+        .trim_start_matches([' ', '\t', '\n', '\r'])
+        .starts_with('"')
+    {
         return None;
     }
     Some(format!("{}{}", &text[..line_start], &text[consumed..]))

@@ -214,7 +214,7 @@ pub fn select(
     ) else {
         return all("unproven base");
     };
-    let base_sha = base_sha.trim();
+    let base_sha = base_sha.strip_suffix('\n').unwrap_or(&base_sha);
     if !green_base(root, home, base_sha, config_digest) {
         return all("base has no green run with the same config digest");
     }
@@ -378,7 +378,7 @@ pub fn preflight(
                 continue;
             }
             if command
-                .split(|c: char| c.is_whitespace() || "'\";&|".contains(c))
+                .split(|c: char| matches!(c, ' ' | '\t' | '\n') || "'\";&|".contains(c))
                 .any(|word| word == tool)
             {
                 tools.insert(tool);
@@ -424,7 +424,10 @@ pub fn preflight(
     for t in targets {
         let command = &t.modes[mode].command;
         if let Some(rest) = command.strip_prefix("python3 -B scripts/with-node.py ") {
-            let pin = rest.split_whitespace().next().unwrap_or("");
+            let pin = rest
+                .split([' ', '\t', '\n'])
+                .find(|word| !word.is_empty())
+                .unwrap_or("");
             let mut probe = String::from("node --version");
             if command.contains("npm ") {
                 probe.push_str(" && npm --version");

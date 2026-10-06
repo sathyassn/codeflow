@@ -304,11 +304,10 @@ pub fn init_with_launch(
     Ok(settings_path)
 }
 
-/// A provenance value as recorded: trimmed, 1 to 128 characters, no control
+/// A provenance value as recorded: exact, nonblank, 1 to 128 bytes, no control
 /// characters.
 fn provenance_value(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
+    (!value.trim().is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
         .then(|| value.to_string())
 }
 
@@ -3849,5 +3848,17 @@ mod windows_tests {
             "native Windows is unsupported for delegate state; use WSL2"
         );
         assert!(!state.exists());
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_provenance_retains_unicode_identity() {
+        assert_eq!(
+            super::provenance_value("model\u{a0}"),
+            Some("model\u{a0}".into())
+        );
+        assert_eq!(super::provenance_value("\u{a0}"), None);
     }
 }

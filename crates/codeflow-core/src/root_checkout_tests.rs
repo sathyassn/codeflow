@@ -2034,3 +2034,11 @@ fn configured_root_branch_keeps_unicode_whitespace() {
         assert!(checkout.commit_on("release").is_some());
     }
 }
+
+#[test]
+fn r15_actor_unicode_marker_is_present() {
+    assert_eq!(
+        actor(&env_of(&[("CLAUDECODE", "\u{a0}")])),
+        Actor::Agent("CLAUDECODE")
+    );
+}

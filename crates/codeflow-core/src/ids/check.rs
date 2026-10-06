@@ -233,7 +233,11 @@ impl Texts {
 /// Returns an error when git fails.
 pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError> {
     let mut report = Report::default();
-    let merge_base = git.run(&["merge-base", base, head])?.trim().to_string();
+    let merge_base = git
+        .run(&["merge-base", base, head])?
+        .strip_suffix('\n')
+        .unwrap_or("")
+        .to_string();
     let mut args = vec![
         "diff",
         "--name-status",

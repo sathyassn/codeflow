@@ -75,7 +75,7 @@ pub(super) fn active_block(record: &RecordView) -> Option<AcceptanceBlock> {
 /// A commit named by its object id, never by a ref name: a branch named like
 /// the id cannot stand in for the reviewed commit or the amendment.
 pub(crate) fn commit_of(repo: &Repository, value: &str) -> Option<Oid> {
-    super::work_start::commit_by_object_id(repo, value.trim())
+    super::work_start::commit_by_object_id(repo, value)
         .ok()
         .map(|commit| commit.id())
 }
@@ -124,7 +124,7 @@ fn reviewed_part(content: &str) -> String {
         .map(|(_, line)| *line)
         .collect::<Vec<_>>()
         .join("\n")
-        .trim_end()
+        .trim_end_matches('\n')
         .to_string()
 }
 
@@ -488,7 +488,7 @@ fn epic_waiver_problem(
     evidence: &str,
     reviewed: Option<Oid>,
 ) -> Option<String> {
-    let named = evidence.trim();
+    let named = evidence;
     let Some(amendment) = commit_of(repo, named) else {
         return Some(format!("names {named}, which is not a commit here"));
     };
@@ -1051,7 +1051,6 @@ fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>
     match task
         .integration_target
         .as_deref()
-        .map(str::trim)
         .filter(|target| !target.is_empty())
     {
         Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
@@ -1190,7 +1189,7 @@ fn target_record(
     let mut index = RecordIndex::new(repo, &task.id, uid.clone());
     let mut targets = Vec::new();
     let mut add = |name: Option<&str>| {
-        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        let name = name.filter(|name| !name.is_empty());
         if let Some(name) = name {
             if !targets.iter().any(|known| known == name) {
                 targets.push(name.to_string());
@@ -1666,8 +1665,7 @@ fn own_file_name(task: &RecordView) -> String {
 fn record_uid(content: &str) -> Option<String> {
     let (data, _) = crate::validate::parse_frontmatter(content.as_bytes()).ok()?;
     let uid = crate::validate::get_string_field(&data, "uid");
-    let uid = uid.trim();
-    (!uid.is_empty()).then(|| uid.to_string())
+    (!uid.is_empty()).then(|| uid.clone())
 }
 
 /// Why a waiver's commit is not the planning amendment for this record and
@@ -1681,7 +1679,7 @@ fn waiver_problem(
     target_tip: Option<Oid>,
     own_range_base: Option<Oid>,
 ) -> Option<String> {
-    let Some(amendment) = commit_of(repo, evidence.trim()) else {
+    let Some(amendment) = commit_of(repo, evidence) else {
         return Some(format!(
             "names {}, which is not a commit here",
             evidence.trim()
@@ -2164,7 +2162,6 @@ fn with_own_line(
     let declared = task
         .integration_target
         .as_deref()
-        .map(str::trim)
         .filter(|target| !target.is_empty());
     if let (Some(head), Some(line), Some(declared)) = (line_head, line, declared) {
         if super::work_start::logical_target(declared) == super::work_start::logical_target(line) {
@@ -2387,6 +2384,38 @@ pub fn pull_request_findings_judged(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_record_requires_the_exact_declared_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = "project-management/tasks/TSK-001.md";
+        let text = "---\nid: TSK-001\nstatus: todo\nintegration_target: \"release\u{a0}\"\n---\n\n## Acceptance Criteria\n\n- AC-1 Preserve identity.\n";
+        let (repo, head) =
+            crate::git::repo_with_tree(dir.path(), &[(path.as_bytes(), text.as_bytes())]);
+        repo.reference("refs/heads/release", head, true, "fixture")
+            .unwrap();
+        let task = RecordView::parse(RecordKind::Task, path, text).unwrap();
+        let range = Range { anchor: head, head };
+        let result = target_record(&repo, &task, range, &task, &CriteriaBases::default());
+        assert!(
+            matches!(result, Presence::Unreadable(ref reason) if reason.contains("`release\u{a0}`")),
+            "a lookalike reference must not satisfy the declared target"
+        );
+        repo.reference("refs/heads/release\u{a0}", head, true, "fixture")
+            .unwrap();
+        assert!(matches!(
+            target_record(&repo, &task, range, &task, &CriteriaBases::default()),
+            Presence::Present(_)
+        ));
+    }
+
+    #[test]
+    fn record_uid_is_exact_after_yaml_decoding() {
+        assert_eq!(
+            record_uid("---\nuid: \"key\\u00a0\"\n---\n"),
+            Some("key\u{a0}".into())
+        );
+    }
 
     #[test]
     fn only_the_status_line_and_the_closeout_are_outside_review() {

@@ -760,7 +760,7 @@ pub fn reference_transaction(
     // (git layer only — the git-guard never trusts the human override).
     let sanctioned = integrate_token || human_override;
 
-    for line in stdin.lines() {
+    for line in stdin.split('\n') {
         let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
@@ -837,9 +837,9 @@ fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -
     }
     let loose = std::fs::read_to_string(common.join(refname)).ok();
     let packed = std::fs::read_to_string(common.join("packed-refs")).ok();
-    loose.is_some_and(|loose| loose.trim_end_matches('\n') == old_oid)
+    loose.is_some_and(|loose| loose.strip_suffix('\n').unwrap_or(&loose) == old_oid)
         && packed.is_some_and(|packed| {
-            packed.lines().any(|line| {
+            packed.split('\n').any(|line| {
                 line.split_once(' ')
                     .is_some_and(|(sha, name)| sha == old_oid && name == refname)
             })
@@ -921,7 +921,7 @@ fn is_zero_sha(sha: &str) -> bool {
 #[must_use]
 pub fn parse_push_refs(input: &str) -> Vec<PushRef> {
     input
-        .lines()
+        .split('\n')
         .filter_map(|line| {
             // pre-push's stdin separates the fields with single spaces, and a
             // ref name holds none, so another whitespace is part of the name.
@@ -1255,6 +1255,27 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r15_extra_packed_ref_framing_does_not_erase_cr() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        let name = "refs/heads/release";
+        repo.reference(name, oid, false, "fixture").unwrap();
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\r\n")).unwrap();
+        assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+    }
+
+    #[test]
+    fn r15_owned_push_protocol_keeps_carriage_return() {
+        let parsed = parse_push_refs("refs/heads/x abc refs/heads/y def\r\n");
+        assert_eq!(parsed[0].remote_sha, "def\r");
+    }
 
     #[test]
     fn packed_refs_keep_unicode_whitespace_in_names() {

@@ -51,7 +51,10 @@ pub fn merge_json(managed: &Value, user: &Value) -> Value {
 /// `/usr/local/bin/codeflow hook git-guard`.
 #[must_use]
 pub fn is_codeflow_command(command: &str) -> bool {
-    let Some(first) = command.split_whitespace().next() else {
+    let Some(first) = command
+        .split([' ', '\t', '\n'])
+        .find(|word| !word.is_empty())
+    else {
         return false;
     };
     let basename = first.rsplit('/').next().unwrap_or(first);
@@ -361,5 +364,14 @@ mod tests {
         let merged = merge_settings(&json!(null), &managed_settings());
         assert!(merged.is_object());
         assert!(merged.get("hooks").is_some());
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_command_word_keeps_unicode_space() {
+        assert!(!super::is_codeflow_command("codeflow\u{a0}hook git-guard"));
+        assert!(super::is_codeflow_command(" \tcodeflow hook git-guard"));
     }
 }

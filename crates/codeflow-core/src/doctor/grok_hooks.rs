@@ -366,7 +366,7 @@ pub(super) fn shipped_guard_group() -> String {
 /// Whether a guard's stdout is the deny answer Grok honours: a JSON object
 /// whose `decision` is `deny` with a nonempty `reason`.
 pub(super) fn is_deny_answer(stdout: &str) -> bool {
-    serde_json::from_str::<Value>(stdout.trim()).is_ok_and(|value| {
+    serde_json::from_str::<Value>(stdout).is_ok_and(|value| {
         value.get("decision").and_then(Value::as_str) == Some("deny")
             && value
                 .get("reason")

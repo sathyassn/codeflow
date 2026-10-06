@@ -262,11 +262,14 @@ pub fn default_work_target(repo_root: &Path) -> Option<String> {
 /// checkouts that expose only `origin/main` can verify the same task. A
 /// diverged local branch resolves to the local branch here; callers that
 /// anchor work use [`resolve_work_target_checked`], which refuses it.
+/// Any unreadable target state returns `None` (unproven), never the declared
+/// name as a usable fallback.
 #[must_use]
 pub fn resolve_work_target(repo_root: &Path, declared: Option<&str>) -> Option<String> {
     match resolve_work_target_checked(repo_root, declared) {
         Ok(resolved) => resolved.map(|resolved| resolved.target),
-        Err(_) => declared.map(str::to_owned),
+        Err(WorkStartError::DivergedTarget { .. }) => declared.map(str::to_owned),
+        Err(_) => None,
     }
 }
 
@@ -292,7 +295,7 @@ pub fn resolve_work_target_checked(
     repo_root: &Path,
     declared: Option<&str>,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
-    let Some(target) = declared.filter(|value| !value.trim().is_empty()) else {
+    let Some(target) = declared.filter(|value| !value.is_empty()) else {
         return Ok(default_work_target(repo_root).map(|target| ResolvedWorkTarget { target }));
     };
     let plain = |target: String| Ok(Some(ResolvedWorkTarget { target }));
@@ -345,15 +348,23 @@ fn local_or_upstream(
             target: local.to_string(),
         }))
     };
-    let Some(upstream_ref) = repo
-        .branch_upstream_name(local_ref)
-        .ok()
-        .and_then(|name| name.as_str().ok().map(str::to_owned))
-        .or_else(|| {
+    let upstream_ref = match repo.branch_upstream_name(local_ref) {
+        Ok(name) => Some(
+            name.as_str()
+                .map_err(|error| {
+                    WorkStartError::Repository(format!(
+                        "configured upstream is not valid UTF-8: {error}"
+                    ))
+                })?
+                .to_owned(),
+        ),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
             let remote = format!("refs/remotes/origin/{local}");
             repo.find_reference(&remote).ok().map(|_| remote)
-        })
-    else {
+        }
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
+    let Some(upstream_ref) = upstream_ref else {
         return keep();
     };
     let Some(upstream_id) = repo
@@ -391,7 +402,6 @@ fn local_or_upstream(
 /// durable records.
 #[must_use]
 pub fn is_stable_work_target(target: &str) -> bool {
-    let target = target.trim();
     target_reference_names(target).is_some()
         && !looks_like_full_object_id(target)
         && !logical_target(target).starts_with("task/")
@@ -727,8 +737,8 @@ pub fn declared_work_target_at_revision(
         .filter(|record| suffix.starts_with(&format!("{}-", record.id)))
         .max_by_key(|record| record.id.len())
         .and_then(|record| record.integration_target.as_deref())
-        .filter(|target| !target.trim().is_empty())
-        .map(|target| logical_target(target.trim()).to_owned()))
+        .filter(|target| !target.is_empty())
+        .map(|target| logical_target(target).to_owned()))
 }
 
 /// The `integration_target` the task record at `path` declares.
@@ -737,7 +747,7 @@ pub(crate) fn declared_work_target_at(path: &Path) -> Option<String> {
         .ok()
         .and_then(|content| parse_record(&content, RecordKind::Task).ok())
         .and_then(|record| record.integration_target)
-        .filter(|target| !target.trim().is_empty())
+        .filter(|target| !target.is_empty())
 }
 
 /// Branch prefixes that never carry a task id: planning branches create
@@ -1627,7 +1637,7 @@ fn validate_task_structure(
     match task
         .integration_target
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.is_empty())
     {
         Some(declared_target) if logical_target(declared_target) != logical_target(target) => {
             return Err(WorkStartError::TargetMismatch {
@@ -2063,8 +2073,7 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
         specs: strings(&data, "specs")?,
         depends_on: dependencies(&data)?,
         work_type: string(&data, "work_type"),
-        awaiting_selection: string(&data, "awaiting_selection")
-            .filter(|path| !path.trim().is_empty()),
+        awaiting_selection: string(&data, "awaiting_selection").filter(|path| !path.is_empty()),
         blocker_reason: blocker_reason(content),
     })
 }
@@ -2079,7 +2088,7 @@ pub(crate) fn target_reference<'repo>(
 }
 
 pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
-    if target.is_empty() || target.trim() != target || logical_target(target) == "HEAD" {
+    if target.is_empty() || logical_target(target) == "HEAD" {
         return None;
     }
     let candidates = if target.starts_with("refs/heads/") || target.starts_with("refs/remotes/") {
@@ -2739,6 +2748,45 @@ mod tests {
             );
         }
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_configured_upstream_never_falls_back_to_origin() {
+        let dir = tracking_fixture(false, true);
+        let repo = Repository::open(dir.path()).unwrap();
+        let oid = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let mut packed = format!("{oid} refs/heads/upstream-").into_bytes();
+        packed.extend_from_slice(b"\xff\n");
+        std::fs::write(repo.path().join("packed-refs"), packed).unwrap();
+        let config_path = repo.path().join("config");
+        let mut config = std::fs::read(&config_path).unwrap();
+        config.extend_from_slice(
+            b"\n[branch \"main\"]\nremote = .\nmerge = refs/heads/upstream-\xff\n",
+        );
+        std::fs::write(config_path, config).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let upstream = repo.branch_upstream_name("refs/heads/main").unwrap();
+        assert!(
+            upstream.as_str().is_err(),
+            "fixture must exercise failed decoding"
+        );
+        assert!(resolve_work_target_checked(dir.path(), Some("main")).is_err());
+        assert!(resolve_work_target(dir.path(), Some("main")).is_none());
+    }
+
+    #[test]
+    fn target_names_preserve_unicode_whitespace() {
+        let dir = fixture();
+        for name in ["release\u{a0}", "\u{a0}"] {
+            git(dir.path(), &["branch", name]);
+            assert!(is_stable_work_target(name));
+            let resolved = resolve_work_target_checked(dir.path(), Some(name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(resolved.target, name);
+            assert!(target_reference(&Repository::open(dir.path()).unwrap(), name).is_some());
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ use super::manifest::RegionFormat;
 
 /// Marker style for a region format. `Json` has no text markers.
 fn is_marker(line: &str, format: RegionFormat, terminator: &str) -> bool {
-    let trimmed = line.trim();
+    let trimmed = line.trim_matches([' ', '\t']);
     let well_formed = match format {
         RegionFormat::Markdown => trimmed.starts_with("<!--") && trimmed.ends_with("-->"),
         RegionFormat::Hash => trimmed.starts_with('#'),

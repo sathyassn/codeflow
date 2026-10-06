@@ -205,7 +205,7 @@ impl HtmlContainers {
             let tag = &token[..end];
             let name = tag
                 .trim_start_matches('/')
-                .split_whitespace()
+                .split([' ', '\t', '\r', '\n', '\u{c}'])
                 .next()
                 .unwrap_or_default()
                 .trim_end_matches('/')
@@ -217,7 +217,11 @@ impl HtmlContainers {
                         self.closed[id] = true;
                     }
                 }
-            } else if !tag.trim_end().ends_with('/') && html_container(&name) {
+            } else if !tag
+                .trim_end_matches([' ', '\t', '\r', '\n', '\u{c}'])
+                .ends_with('/')
+                && html_container(&name)
+            {
                 self.open.push((name, self.closed.len()));
                 self.closed.push(false);
             }
@@ -234,7 +238,10 @@ impl Section<'_> {
 
     fn matches(&self, name: &str) -> bool {
         matches!(self.depth, HeadingLevel::H2 | HeadingLevel::H3)
-            && self.name.trim().eq_ignore_ascii_case(name)
+            && self
+                .name
+                .trim_matches([' ', '\t', '\r', '\n'])
+                .eq_ignore_ascii_case(name)
     }
 }
 
@@ -368,7 +375,7 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         .any(|line| {
             let cells: Vec<_> = line
                 .split('|')
-                .map(str::trim)
+                .map(|part| part.trim_matches([' ', '\t', '\r', '\n']))
                 .filter(|cell| !cell.is_empty())
                 .collect();
             cells.len() >= 3
@@ -524,7 +531,9 @@ impl HtmlScan {
                     {
                         let name = rest[1..]
                             .trim_start_matches('/')
-                            .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                            .split(|c: char| {
+                                matches!(c, ' ' | '\t' | '\r' | '\n' | '\u{c}' | '/' | '>')
+                            })
                             .next()
                             .unwrap_or_default()
                             .to_ascii_lowercase();
@@ -795,9 +804,11 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, _protected: bool) -> Vec
     // checked mechanically under `git.pr_summary` (the note of 2026-10-03).
     for section in outline.sections {
         if section.matches("Testing")
-            && !visible_text(section.content(), false)
-                .lines()
-                .any(|line| line.trim().to_ascii_lowercase().starts_with("not tested:"))
+            && !visible_text(section.content(), false).lines().any(|line| {
+                line.trim_matches([' ', '\t', '\r', '\n'])
+                    .to_ascii_lowercase()
+                    .starts_with("not tested:")
+            })
         {
             warn("PR Testing has no Not tested: line".into());
         }
@@ -1155,8 +1166,14 @@ fn release_fields_under(body: &str, heading: &str) -> Option<Vec<(String, String
     Some(
         field_text(&content[..end])
             .lines()
-            .filter_map(|line| line.trim().split_once(':'))
-            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .filter_map(|line| line.trim_matches([' ', '\t', '\r', '\n']).split_once(':'))
+            .map(|(key, value)| {
+                (
+                    key.trim_matches([' ', '\t', '\r', '\n'])
+                        .to_ascii_lowercase(),
+                    value.trim_matches([' ', '\t', '\r', '\n']).to_string(),
+                )
+            })
             .collect(),
     )
 }
@@ -1373,7 +1390,8 @@ fn migration_guidance(parsed: &[Section<'_>], migration: &str) -> bool {
 fn guidance(value: &str) -> String {
     value
         .replace(['`', '"', '\''], "")
-        .split_whitespace()
+        .split([' ', '\t', '\r', '\n'])
+        .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()

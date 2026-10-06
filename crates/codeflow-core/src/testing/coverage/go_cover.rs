@@ -27,8 +27,8 @@ pub(crate) fn parse_go_cover_str(content: &str, _source_path: &Path) -> Vec<File
     // file:start_line.start_col,end_line.end_col num_stmts count
     let mut file_data: HashMap<String, (u64, u64)> = HashMap::new();
 
-    for line in content.lines() {
-        let line = line.trim();
+    for line in content.split_terminator('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() || line.starts_with("mode:") {
             continue;
         }
@@ -42,7 +42,7 @@ pub(crate) fn parse_go_cover_str(content: &str, _source_path: &Path) -> Vec<File
         let rest = &line[colon_pos + 1..];
 
         // Split rest by whitespace to get the last two fields
-        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let parts: Vec<&str> = rest.split(' ').filter(|part| !part.is_empty()).collect();
         if parts.len() < 2 {
             continue;
         }
@@ -134,5 +134,17 @@ mod tests {
         let result = parse_go_cover_str(content, &path("coverage.out"));
         assert_eq!(result[0].lines_found, 5);
         assert_eq!(result[0].lines_hit, 3);
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_go_coverage_keeps_filename_unicode_space() {
+        let rows = super::parse_go_cover_str(
+            "mode: set\n\u{a0}file.go:1.1,2.1 1 1\n",
+            std::path::Path::new("coverage.out"),
+        );
+        assert_eq!(rows[0].path, "\u{a0}file.go");
     }
 }

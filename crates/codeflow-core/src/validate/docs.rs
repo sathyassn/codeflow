@@ -909,7 +909,7 @@ fn optional_string(
     key: &str,
 ) -> Option<String> {
     let value = get_string_field(data, key);
-    (!value.trim().is_empty()).then_some(value)
+    (!value.is_empty()).then_some(value)
 }
 
 fn stable_record_id(

@@ -384,10 +384,8 @@ async fn bootstrap(
     if let Err(response) = require_host(&state, &headers) {
         return response;
     }
-    let origin = headers
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok());
-    if !matches!(origin, None | Some("null")) {
+    let origin = headers.get(header::ORIGIN);
+    if origin.is_some_and(|value| value.as_bytes() != b"null") {
         return plain(StatusCode::FORBIDDEN, "bootstrap Origin is not allowed");
     }
     let Ok(mut bootstrap_state) = state.bootstrap.lock() else {
@@ -1023,12 +1021,15 @@ fn require_application_request(
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let authenticated = cookie.split(';').map(str::trim).any(|part| {
-        part.split_once('=').is_some_and(|(name, value)| {
-            name == state.cookie_name.as_str()
-                && constant_time_equal(value.as_bytes(), state.cookie_value.as_bytes())
-        })
-    });
+    let authenticated = cookie
+        .split(';')
+        .map(|part| part.trim_matches([' ', '\t']))
+        .any(|part| {
+            part.split_once('=').is_some_and(|(name, value)| {
+                name == state.cookie_name.as_str()
+                    && constant_time_equal(value.as_bytes(), state.cookie_value.as_bytes())
+            })
+        });
     if !authenticated {
         return Err(plain(
             StatusCode::UNAUTHORIZED,
@@ -1102,7 +1103,7 @@ fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
                 let mut parts = item.split(';');
                 if !parts
                     .next()
-                    .is_some_and(|name| name.trim().eq_ignore_ascii_case(wanted))
+                    .is_some_and(|name| name.trim_matches([' ', '\t']).eq_ignore_ascii_case(wanted))
                 {
                     return false;
                 }
@@ -1112,13 +1113,14 @@ fn service_encoding(headers: &HeaderMap) -> Option<&'static str> {
                 if parts.next().is_some() {
                     return false;
                 }
-                let Some((name, value)) = parameter.trim().split_once('=') else {
+                let Some((name, value)) = parameter.trim_matches([' ', '\t']).split_once('=')
+                else {
                     return false;
                 };
                 if !name.eq_ignore_ascii_case("q") {
                     return false;
                 }
-                let value = value.trim();
+                let value = value.trim_matches([' ', '\t']);
                 let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
                 if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
                     return false;
@@ -1700,6 +1702,27 @@ fn change_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn r15_invalid_origin_is_not_absent() {
+        let (_temp, state) = app_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&state.authority).unwrap(),
+        );
+        headers.insert(header::ORIGIN, HeaderValue::from_bytes(b"\xff").unwrap());
+        let response = bootstrap(
+            State(state),
+            headers,
+            Form(BootstrapForm {
+                capability: "capability".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
     use crate::document::{Block, ParsedDocument, PresentationDocument, Provenance};
 
     fn parsed_with(block: Block) -> ParsedDocument {

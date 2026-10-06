@@ -547,7 +547,10 @@ pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
         .filter_map(|t| t.modes.get(&effective).map(|m| (t, m)))
         .any(|(t, m)| {
             matches!(t.runner, crate::testing::config::RunnerType::Cargo)
-                || m.command.split_whitespace().any(|word| word == "cargo")
+                || m.command
+                    .split([' ', '\t', '\n'])
+                    .filter(|word| !word.is_empty())
+                    .any(|word| word == "cargo")
         })
 }
 

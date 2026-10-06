@@ -55,8 +55,8 @@ impl Window {
     pub fn numbers(text: &str) -> Result<Self, String> {
         let bad = || format!("`{text}` is not a range of pull request numbers such as 568..644");
         let (first, last) = text.split_once("..").ok_or_else(bad)?;
-        let first: u64 = first.trim().parse().map_err(|_| bad())?;
-        let last: u64 = last.trim().parse().map_err(|_| bad())?;
+        let first: u64 = first.trim_matches([' ', '\t']).parse().map_err(|_| bad())?;
+        let last: u64 = last.trim_matches([' ', '\t']).parse().map_err(|_| bad())?;
         if first > last {
             return Err(bad());
         }

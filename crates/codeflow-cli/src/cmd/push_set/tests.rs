@@ -433,3 +433,14 @@ fn push_set_unfetched_declared_target_is_named_without_fetching() {
         .any(|text| text.contains(&tip) && text.contains("not fetched here")));
     assert!(!is_commit(h.local.path(), &tip));
 }
+
+#[test]
+fn r15_tracking_namespace_preserves_config_bytes() {
+    let history = History::new();
+    history.git(&[
+        "config",
+        "remote.fixture.fetch",
+        "+refs/heads/*:refs/remotes/fixture/*\u{a0}",
+    ]);
+    assert_eq!(tracking_namespace(history.local.path(), "fixture"), None);
+}

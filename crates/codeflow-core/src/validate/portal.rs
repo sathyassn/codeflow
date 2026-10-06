@@ -485,7 +485,7 @@ pub fn validate_portal_with(
             .push("repository commit is not a full Git object ID".into());
     }
     match git_text_bounded(repo_root, &["rev-parse", "--verify", "HEAD^{commit}"], 1024) {
-        Ok(head) if head.trim() == evidence.repository.commit => {}
+        Ok(head) if head.strip_suffix('\n').unwrap_or(&head) == evidence.repository.commit => {}
         Ok(_) => report
             .issues
             .push("evidence repository commit does not match HEAD".into()),
@@ -2839,7 +2839,6 @@ fn verify_pagefind_language(
     let hash = record
         .get("hash")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
         .filter(|hash| !hash.is_empty());
     if hash.is_none() {
         report.issues.push(format!(
@@ -2869,7 +2868,6 @@ fn verify_pagefind_language(
     if let Some(wasm) = record
         .get("wasm")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
         .filter(|wasm| !wasm.is_empty())
     {
         require_pagefind_artifact(
@@ -2992,6 +2990,10 @@ fn verify_portal_fragments(
             .get(&page.source_path)
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
         else {
+            report.issues.push(format!(
+                "{} fragment source is unreadable or not valid UTF-8",
+                page.source_path
+            ));
             continue;
         };
         let normalized = normalize_markdown_source(source);
@@ -3897,24 +3899,24 @@ fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> 
         .replace('\r', "\n")
         .lines()
     {
-        let Some(value) = line.trim_start().strip_prefix("id:") else {
+        let Some(value) = line.trim_start_matches([' ', '\t']).strip_prefix("id:") else {
             continue;
         };
-        let value = value.trim_start();
+        let value = value.trim_start_matches([' ', '\t']);
         let candidate =
             if let Some(quote) = value.chars().next().filter(|c| matches!(c, '\'' | '"')) {
                 let rest = &value[quote.len_utf8()..];
                 let Some(end) = rest.find(quote) else {
                     continue;
                 };
-                let trailing = rest[end + quote.len_utf8()..].trim();
+                let trailing = rest[end + quote.len_utf8()..].trim_matches([' ', '\t']);
                 if !trailing.is_empty() && !trailing.starts_with('#') {
                     continue;
                 }
                 &rest[..end]
             } else {
-                let end = value.find(char::is_whitespace).unwrap_or(value.len());
-                let trailing = value[end..].trim();
+                let end = value.find([' ', '\t']).unwrap_or(value.len());
+                let trailing = value[end..].trim_matches([' ', '\t']);
                 if !trailing.is_empty() && !trailing.starts_with('#') {
                     continue;
                 }
@@ -5902,7 +5904,7 @@ mod tests {
             ),
             (
                 r#"{"version":"1.5.2","languages":{"en":{"hash":"  ","page_count":165}}}"#,
-                "language en has no non-empty hash string",
+                "language en needs dist/pagefind/pagefind.  .pf_meta",
             ),
             (
                 r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7"}}}"#,
@@ -6131,5 +6133,20 @@ mod tests {
             "{:?}",
             report.issues
         );
+    }
+}
+
+#[cfg(test)]
+mod r15_text_regressions {
+    #[test]
+    fn r15_pagefind_artifact_names_keep_unicode_space() {
+        let value = serde_json::json!({"hash":"abc\u{a0}","wasm":"en\u{a0}","page_count":1});
+        let mut report = super::PortalValidationReport::default();
+        let artifacts = std::collections::BTreeSet::from([
+            "dist/pagefind/pagefind.abc.pf_meta".to_string(),
+            "dist/pagefind/wasm.en.pagefind".to_string(),
+        ]);
+        super::verify_pagefind_language("en", &value, &artifacts, &mut report);
+        assert_eq!(report.issues.len(), 2, "{:?}", report.issues);
     }
 }

@@ -179,7 +179,7 @@ fn init_writes(
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
     let policy_created = !root.join(".codeflow/policy.json").exists();
-    let kept_template = read_text(source, "base/ci/pull_request_template.md")
+    let kept_template = read_text(source, "base/ci/pull_request_template.md")?
         .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
@@ -389,9 +389,6 @@ pub(crate) fn build_context(
 /// Renders an entry's asset: read, UTF-8 check, optional template
 /// substitution. `None` (with a report line) when the asset is missing —
 /// parallel asset authoring must not break init.
-// Result kept for symmetry with the render/install pipeline (callers use `?`);
-// the body is infallible now that minimal-policy softening is gone.
-#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn render_entry(
     source: &dyn super::AssetSource,
     entry: &ManifestEntry,
@@ -399,14 +396,14 @@ pub(crate) fn render_entry(
     report: &mut Report,
 ) -> Result<Option<String>, ScaffoldError> {
     let asset_path = format!("base/{}", entry.src);
-    let Some(text) = read_text(source, &asset_path) else {
+    let Some(text) = read_text(source, &asset_path)? else {
         report.file_with_notes(
             &entry.dest,
             Action::MissingAsset,
             vec![format!("asset {asset_path} not shipped in this build")],
         );
         report.warnings.push(format!(
-            "asset {asset_path} missing (not authored yet, or not valid UTF-8) — {} skipped",
+            "asset {asset_path} missing (not authored yet) — {} skipped",
             entry.dest
         ));
         return Ok(None);

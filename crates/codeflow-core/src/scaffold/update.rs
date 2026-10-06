@@ -147,6 +147,7 @@ pub fn decide(
             )
         })?;
     let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+        .ok()?
         .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
     if let Some(note) = skip_note(root, entry, &ignore, kept_template.as_ref()).ok()? {
         return Some(Decision::Skipped(note));
@@ -304,7 +305,7 @@ fn update_writes(
         state.scaffold_version, opts.binary_version, state.tier
     ));
     let mut diffs = String::new();
-    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")?
         .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
 
     for entry in &manifest.entries {
@@ -497,7 +498,11 @@ fn scan_order(workflow: &str) -> ScanOrder {
 /// record, no commit, or a recorded baseline is left alone.
 fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
     use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
-    if !recorded_baseline(root).is_empty() || Graph::from_worktree(root).records.is_empty() {
+    if !recorded_baseline(root)
+        .map_err(ScaffoldError::Git)?
+        .is_empty()
+        || Graph::from_worktree(root).records.is_empty()
+    {
         return Ok(None);
     }
     let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {

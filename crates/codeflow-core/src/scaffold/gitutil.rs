@@ -39,8 +39,9 @@ fn git_ok(root: &Path, args: &[&str]) -> Result<(), ScaffoldError> {
 
 /// Is `root` inside a git work tree?
 pub fn is_repo(root: &Path) -> bool {
-    git(root, &["rev-parse", "--is-inside-work-tree"])
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+    git(root, &["rev-parse", "--is-inside-work-tree"]).is_ok_and(|o| {
+        o.status.success() && o.stdout.strip_suffix(b"\n").unwrap_or(&o.stdout) == b"true"
+    })
 }
 
 /// Does the repo have at least one commit?

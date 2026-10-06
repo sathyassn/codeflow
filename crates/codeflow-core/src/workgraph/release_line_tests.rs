@@ -779,3 +779,13 @@ fn a_release_scope_refuses_an_origin_url_that_is_not_utf8() {
     let error = checkout_scope(dir.path(), None).unwrap_err();
     assert!(error.contains("not valid UTF-8"), "{error}");
 }
+
+#[test]
+fn transition_oid_keeps_unicode_whitespace() {
+    let mut table = toml::Table::new();
+    table.insert(
+        "integration/EPC-001".into(),
+        toml::Value::String(format!("{}\u{a0}", "a".repeat(40))),
+    );
+    assert!(super::parse_table("cutoff", &toml::Value::Table(table)).is_err());
+}

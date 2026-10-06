@@ -73,7 +73,7 @@ impl RecordView {
             .map_err(|error| error.to_string())?;
         let field = |name: &str| {
             let value = crate::validate::get_string_field(&data, name);
-            (!value.trim().is_empty()).then_some(value)
+            (!value.is_empty()).then_some(value)
         };
         let valid = |id: &str| match kind {
             RecordKind::Task => super::is_valid_task_format_id(id),
@@ -281,8 +281,11 @@ impl Baseline {
     /// `HEAD` (the verbs and `validate --docs`).
     #[must_use]
     pub fn load(repo_root: &Path) -> Self {
+        let entries = match recorded_baseline(repo_root) {
+            Ok(entries) => entries,
+            Err(error) => return Self::Refused(vec![error]),
+        };
         let Ok(repo) = Repository::discover(repo_root) else {
-            let entries = recorded_baseline(repo_root);
             return if entries.is_empty() {
                 Self::NotRecorded
             } else {
@@ -290,7 +293,7 @@ impl Baseline {
             };
         };
         let head = resolve_commit(&repo, "HEAD");
-        Self::from_entries(&repo, &recorded_baseline(repo_root), head)
+        Self::from_entries(&repo, &entries, head)
     }
 
     /// Resolve baseline entries for judging the commit `head`. An entry is
@@ -479,14 +482,14 @@ impl Baseline {
 pub(super) fn without_backfilled_uid(content: &str) -> Option<String> {
     let mut lines = content.split_inclusive('\n');
     let first = lines.next()?;
-    if first.trim_end() != "---" {
+    if first.trim_end_matches([' ', '\t', '\r', '\n']) != "---" {
         return None;
     }
     let mut out = String::from(first);
     let (mut removed, mut closed) = (false, false);
     for line in lines {
         if !closed {
-            if line.trim_end() == "---" {
+            if line.trim_end_matches([' ', '\t', '\r', '\n']) == "---" {
                 closed = true;
             } else if !removed && line.starts_with("uid:") {
                 removed = true;
@@ -511,45 +514,73 @@ fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> bool {
 }
 
 /// The baseline entries of a parsed project config: a list, or a single
-/// string read as a one-item list. Entries are trimmed; their form is
+/// string read as a one-item list. Entries are exact strings; their form is
 /// checked when they are resolved.
-fn baseline_entries(config: Option<&toml::Value>) -> Vec<String> {
+fn baseline_entries(config: Option<&toml::Value>) -> Result<Vec<String>, String> {
     let values: Vec<&str> = match config.and_then(|config| config.get(BASELINE_KEY)) {
+        None => Vec::new(),
         Some(toml::Value::String(value)) => vec![value.as_str()],
-        Some(toml::Value::Array(items)) => items.iter().filter_map(toml::Value::as_str).collect(),
-        _ => Vec::new(),
+        Some(toml::Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or_else(|| format!("{BASELINE_KEY} entries must be strings"))
+            })
+            .collect::<Result<_, _>>()?,
+        Some(_) => {
+            return Err(format!(
+                "{BASELINE_KEY} must be a string or an array of strings"
+            ))
+        }
     };
     let mut entries: Vec<String> = Vec::new();
-    for value in values
-        .into_iter()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    for value in values {
         if !entries.iter().any(|seen| seen == value) {
             entries.push(value.to_string());
         }
     }
-    entries
+    Ok(entries)
 }
 
 /// The recorded migration baseline entries of the checked-out tree; empty
 /// when none.
-#[must_use]
-pub fn recorded_baseline(repo_root: &Path) -> Vec<String> {
-    baseline_entries(crate::hooks::policy::read_project_toml(repo_root).as_ref())
+///
+/// # Errors
+///
+/// Refuses an unreadable, non-UTF-8 or malformed project file, or a baseline
+/// field that is not a string or list of strings. Only a missing file is absent.
+pub fn recorded_baseline(repo_root: &Path) -> Result<Vec<String>, String> {
+    let path = repo_root.join(".codeflow/project.toml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let config = text
+        .parse::<toml::Value>()
+        .map_err(|error| error.to_string())?;
+    baseline_entries(Some(&config))
 }
 
 /// The baseline entries recorded in a commit's `.codeflow/project.toml`.
-fn baseline_at(repo: &Repository, commit: git2::Oid) -> Vec<String> {
-    let config = repo
+fn baseline_at(repo: &Repository, commit: git2::Oid) -> Result<Vec<String>, String> {
+    let tree = repo
         .find_commit(commit)
-        .ok()
-        .and_then(|commit| commit.tree().ok())
-        .and_then(|tree| tree.get_path(Path::new(".codeflow/project.toml")).ok())
-        .and_then(|entry| repo.find_blob(entry.id()).ok())
-        .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
-        .and_then(|text| text.parse::<toml::Value>().ok());
-    baseline_entries(config.as_ref())
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = match tree.get_path(Path::new(".codeflow/project.toml")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| error.to_string())?;
+    let text = std::str::from_utf8(blob.content()).map_err(|error| error.to_string())?;
+    let config = text
+        .parse::<toml::Value>()
+        .map_err(|error| error.to_string())?;
+    baseline_entries(Some(&config))
 }
 
 /// The baseline that governs a range, and the notices about it. Trust comes
@@ -569,12 +600,28 @@ fn range_baseline(
     head: Option<&str>,
 ) -> (Baseline, Vec<Finding>) {
     let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
-    let base_list = baseline_at(repo, target);
+    let refuse = |error: String| {
+        (
+            Baseline::Refused(vec![format!("cannot read migration baseline: {error}")]),
+            Vec::new(),
+        )
+    };
+    let base_list = match baseline_at(repo, target) {
+        Ok(entries) => entries,
+        Err(error) => return refuse(error),
+    };
     let head_list = match head {
-        Some(_) => head_commit
+        Some(_) => match head_commit
             .map(|commit| baseline_at(repo, commit))
-            .unwrap_or_default(),
-        None => recorded_baseline(repo_root),
+            .transpose()
+        {
+            Ok(entries) => entries.unwrap_or_default(),
+            Err(error) => return refuse(error),
+        },
+        None => match recorded_baseline(repo_root) {
+            Ok(entries) => entries,
+            Err(error) => return refuse(error),
+        },
     };
     let mut notices = Vec::new();
     if base_list.is_empty() {
@@ -1554,7 +1601,7 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
         let field = field.trim_start_matches('\n');
         if let Some(hash) = field.strip_prefix("commit ") {
             commits.push((
-                git2::Oid::from_str(hash.trim()).map_err(message)?,
+                git2::Oid::from_str(hash.strip_suffix('\n').unwrap_or(hash)).map_err(message)?,
                 Vec::new(),
             ));
             continue;
@@ -1578,7 +1625,7 @@ fn shipped_in_history(repo: &Repository, tip: git2::Oid, spec_id: &str) -> Resul
             paths.push(path.to_string());
         }
         let Some(blob) = meta
-            .split_whitespace()
+            .split(' ')
             .nth(3)
             .and_then(|hash| git2::Oid::from_str(hash).ok())
             .filter(|oid| !oid.is_zero())

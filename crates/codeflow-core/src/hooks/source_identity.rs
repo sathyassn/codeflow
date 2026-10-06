@@ -144,9 +144,7 @@ pub fn revision(
     .into_iter()
     .flatten()
     {
-        let Some(name) = metadata_path(name) else {
-            continue;
-        };
+        let name = metadata_path(name);
         if let Some(path) = git(
             root,
             &[
@@ -157,7 +155,7 @@ pub fn revision(
             ],
             make,
         )
-        .and_then(metadata_path)
+        .map(metadata_path)
         {
             paths.push(path);
         }
@@ -167,16 +165,17 @@ pub fn revision(
 
 // This module is also compiled into the build script, without the core crate.
 // Keep Git's path bytes intact on Unix; never manufacture a lossy path.
-#[allow(clippy::unnecessary_wraps)] // Non-Unix paths can reject invalid UTF-8.
-fn metadata_path(bytes: Vec<u8>) -> Option<PathBuf> {
+fn metadata_path(bytes: Vec<u8>) -> PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStringExt;
-        Some(std::ffi::OsString::from_vec(bytes).into())
+        std::ffi::OsString::from_vec(bytes).into()
     }
     #[cfg(not(unix))]
     {
-        String::from_utf8(bytes).ok().map(PathBuf::from)
+        // This helper feeds Cargo's rebuild dependencies. An unreadable path
+        // must stop the build, not silently remove a watched input.
+        PathBuf::from(String::from_utf8(bytes).expect("Git metadata path is not valid UTF-8"))
     }
 }
 
@@ -295,4 +294,11 @@ mod tests {
         assert!(out.status.success());
         assert_eq!(revision(&linked, None, &make).0, expected);
     }
+}
+
+#[cfg(all(test, not(unix)))]
+#[test]
+#[should_panic(expected = "Git metadata path is not valid UTF-8")]
+fn r15_unreadable_metadata_path_refuses_the_build() {
+    metadata_path(vec![0xff]);
 }

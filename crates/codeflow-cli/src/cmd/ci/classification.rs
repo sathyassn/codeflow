@@ -44,7 +44,7 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
     let mut in_fence = false;
     let mut lines = Vec::new();
     for raw in visible.lines() {
-        let line = raw.trim();
+        let line = raw.trim_matches([' ', '\t', '\r']);
         if line.starts_with("```") || line.starts_with("~~~") {
             in_fence = !in_fence;
             continue;
@@ -56,12 +56,12 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
         let Some(value) = line.strip_prefix("Task:") else {
             continue;
         };
-        let value = value.trim();
+        let value = value.trim_matches([' ', '\t', '\r']);
         let value = value
             .strip_prefix('`')
             .and_then(|value| value.strip_suffix('`'))
             .unwrap_or(value)
-            .trim();
+            .trim_matches([' ', '\t', '\r']);
         lines.push(if let Some(epics) = epic_list(value) {
             epics
         } else if value.is_empty()
@@ -92,7 +92,10 @@ fn epic_list(value: &str) -> Option<TaskLine> {
     if !value.contains(',') {
         return None;
     }
-    let items: Vec<&str> = value.split(',').map(str::trim).collect();
+    let items: Vec<&str> = value
+        .split(',')
+        .map(|value| value.trim_matches([' ', '\t']))
+        .collect();
     let distinct = items
         .iter()
         .collect::<std::collections::BTreeSet<_>>()
@@ -261,7 +264,7 @@ pub(super) fn root_branch_at(root: &Path, base: &str) -> Option<String> {
         .ok()
         .filter(|out| out.status.success())?;
     let policy: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let name = policy["git"]["root_branch"].as_str()?.trim();
+    let name = policy["git"]["root_branch"].as_str()?;
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -814,6 +817,42 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r15_root_branch_preserves_unicode_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            br#"{"git":{"root_branch":"release\u00a0"}}"#,
+        )
+        .unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["add", ".codeflow/policy.json"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-qm",
+                "test",
+            ],
+        ] {
+            assert!(codeflow_core::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        assert_eq!(
+            root_branch_at(dir.path(), "HEAD").as_deref(),
+            Some("release\u{a0}")
+        );
+    }
 
     /// Issue 79: a changed path that is not valid UTF-8 refuses the range and
     /// names the path; it is never matched as a lossy spelling of another.

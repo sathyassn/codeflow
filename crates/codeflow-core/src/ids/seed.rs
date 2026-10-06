@@ -549,7 +549,10 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
 
 fn add_former_id(text: &str, from: &RegId) -> String {
     if let Some(current) = frontmatter_value(text, "former_ids") {
-        let inner = current.trim_start_matches('[').trim_end_matches(']').trim();
+        let inner = current
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .trim_matches([' ', '\t']);
         let list = if inner.is_empty() {
             format!("[{from}]")
         } else {

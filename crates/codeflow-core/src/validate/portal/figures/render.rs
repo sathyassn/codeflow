@@ -578,8 +578,13 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
         .and_then(Value::as_array)
         .ok_or("a coverage layout has no columns")?
         .iter()
-        .map(|column| column.as_str().unwrap_or_default().to_string())
-        .collect();
+        .map(|column| {
+            column
+                .as_str()
+                .map(str::to_string)
+                .ok_or("coverage column is not a string")
+        })
+        .collect::<Result<_, _>>()?;
     let rows = layout
         .get("rows")
         .and_then(Value::as_array)
@@ -791,6 +796,13 @@ fn draw_item(
             .and_then(Value::as_str)
             .filter(|anchor| !anchor.is_empty() && *anchor != "start")
             .map_or(String::new(), |anchor| format!(" text-anchor=\"{anchor}\""));
+        if item
+            .get("for")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|id| !id.is_string()))
+        {
+            return Err("text label references must be strings".into());
+        }
         let labels = item
             .get("for")
             .and_then(Value::as_array)
@@ -1778,7 +1790,7 @@ fn to_fixed_6(value: f64) -> f64 {
             }
         }
     }
-    let text = String::from_utf8(digits).unwrap_or_default();
+    let text = String::from_utf8(digits).expect("decimal digit construction is ASCII");
     let split = text.len() - 6;
     let magnitude: f64 = format!("{}.{}", &text[..split], &text[split..])
         .parse()

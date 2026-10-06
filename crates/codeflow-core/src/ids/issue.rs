@@ -512,7 +512,9 @@ fn diagnostics(text: &str) -> String {
         .map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
             match fields.as_slice() {
-                [flag, _refs, summary] if flag.trim().len() <= 1 => (*summary).to_string(),
+                [flag, _refs, summary] if flag.trim_matches(' ').len() <= 1 => {
+                    (*summary).to_string()
+                }
                 _ => line.to_string(),
             }
         })
@@ -613,7 +615,7 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
     }
     let commits = git.run(&args)?;
     let mut entries = Vec::new();
-    for commit in commits.lines() {
+    for commit in commits.split_terminator('\n') {
         let changes = git.run_bytes(&[
             "diff-tree",
             "-r",

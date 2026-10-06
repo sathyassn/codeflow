@@ -108,7 +108,7 @@ pub fn actor(env: EnvLookup<'_>) -> Actor {
     }
     AGENT_MARKERS
         .iter()
-        .find(|name| env(name).is_some_and(|v| !v.trim().is_empty()))
+        .find(|name| env(name).is_some_and(|v| !v.is_empty()))
         .map_or(Actor::Unmarked, |name| Actor::Agent(name))
 }
 

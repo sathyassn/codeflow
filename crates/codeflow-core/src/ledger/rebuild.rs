@@ -86,8 +86,8 @@ fn read_events_from_file(path: &Path, events: &mut Vec<Event>) {
         }
     };
 
-    for (i, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
+    for (i, line) in content.split_terminator('\n').enumerate() {
+        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
         if trimmed.is_empty() {
             continue;
         }

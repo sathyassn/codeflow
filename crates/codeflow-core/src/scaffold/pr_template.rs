@@ -130,9 +130,12 @@ pub fn headings(text: &str) -> Vec<String> {
     visible
         .lines()
         .filter_map(|line| {
-            let t = line.trim_start();
+            let t = line.trim_start_matches([' ', '\t']);
             let body = t.strip_prefix("### ").or_else(|| t.strip_prefix("## "))?;
-            let name = body.trim().trim_end_matches('#').trim();
+            let name = body
+                .trim_matches([' ', '\t'])
+                .trim_end_matches('#')
+                .trim_matches([' ', '\t']);
             (!name.is_empty()).then(|| name.to_string())
         })
         .collect()

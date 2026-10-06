@@ -400,7 +400,6 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     let into = task
         .integration_target
         .as_deref()
-        .map(str::trim)
         .filter(|target| !target.is_empty());
     match super::release_line::checkout_scope(repo_root, into) {
         Ok(scope) if scope.release() => shown(at_head),
@@ -496,8 +495,8 @@ pub fn replace_if_unchanged(path: &Path, expected: &[u8], content: &str) -> Resu
 
 fn required<'a>(value: Option<&'a String>, flag: &str, why: &str) -> Result<&'a str, String> {
     value
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty() && !value.contains('\n'))
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty() && !value.contains('\n'))
         .ok_or_else(|| format!("{why} needs {flag} <one line>"))
 }
 
@@ -540,7 +539,7 @@ fn propose(record: &RecordView, change: &StatusChange) -> Result<String, String>
         }
         (RecordKind::Task | RecordKind::Epic, "complete") => {
             if let Some(block) = &change.acceptance {
-                let inner = block.trim_end();
+                let inner = block.trim_end_matches('\n');
                 content =
                     append_to_section(&content, "## Closeout", &format!("```yaml\n{inner}\n```\n"));
             }
@@ -571,13 +570,17 @@ fn propose(record: &RecordView, change: &StatusChange) -> Result<String, String>
 /// Returns a message when the frontmatter delimiters are missing.
 pub fn set_frontmatter_value(content: &str, key: &str, value: &str) -> Result<String, String> {
     let mut lines: Vec<String> = content.split('\n').map(str::to_owned).collect();
-    if lines.first().map(|line| line.trim_end()) != Some("---") {
+    if lines
+        .first()
+        .map(|line| line.trim_end_matches([' ', '\t', '\r']))
+        != Some("---")
+    {
         return Err("record has no frontmatter".into());
     }
     let close = lines
         .iter()
         .skip(1)
-        .position(|line| line.trim_end() == "---")
+        .position(|line| line.trim_end_matches([' ', '\t', '\r']) == "---")
         .map(|index| index + 1)
         .ok_or("record frontmatter is not closed")?;
     let prefix = format!("{key}:");
@@ -627,12 +630,16 @@ fn insert_section_before(content: &str, section: &str, before: &str) -> String {
                 .iter()
                 .map(|line| (*line).to_string())
                 .collect();
-            out.push(section.trim_end().to_string());
+            out.push(section.trim_end_matches('\n').to_string());
             out.push(String::new());
             out.extend(lines[start..].iter().map(|line| (*line).to_string()));
             out.join("\n")
         }
-        None => format!("{}\n\n{}\n", content.trim_end(), section.trim_end()),
+        None => format!(
+            "{}\n\n{}\n",
+            content.trim_end_matches('\n'),
+            section.trim_end_matches('\n')
+        ),
     }
 }
 
@@ -643,12 +650,15 @@ fn append_to_section(content: &str, heading: &str, text: &str) -> String {
     match section_range(&lines, heading) {
         Some((_, end)) => {
             let mut head: Vec<&str> = lines[..end].to_vec();
-            while head.last().is_some_and(|line| line.trim().is_empty()) {
+            while head
+                .last()
+                .is_some_and(|line| line.trim_matches([' ', '\t', '\r']).is_empty())
+            {
                 head.pop();
             }
             let mut out = head.join("\n");
             out.push_str("\n\n");
-            out.push_str(text.trim_end());
+            out.push_str(text.trim_end_matches('\n'));
             out.push('\n');
             if end < lines.len() {
                 out.push('\n');
@@ -658,8 +668,8 @@ fn append_to_section(content: &str, heading: &str, text: &str) -> String {
         }
         None => format!(
             "{}\n\n{heading}\n\n{}\n",
-            content.trim_end(),
-            text.trim_end()
+            content.trim_end_matches('\n'),
+            text.trim_end_matches('\n')
         ),
     }
 }
@@ -682,8 +692,11 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
         if scanned[body_end].kind != LineKind::FenceClose {
             return None;
         }
-        let header = (index..body_end).find(|&at| !scanned[at].visible.trim().is_empty());
-        if let Some(header) = header.filter(|&at| scanned[at].visible.trim_end() == "acceptance:") {
+        let header =
+            (index..body_end).find(|&at| !scanned[at].visible.trim_matches([' ', '\t']).is_empty());
+        if let Some(header) =
+            header.filter(|&at| scanned[at].visible.trim_end_matches([' ', '\t']) == "acceptance:")
+        {
             let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
             out[header] = "acceptance_superseded:".to_string();
             out.insert(header + 1, format!("  reason: {reason}"));

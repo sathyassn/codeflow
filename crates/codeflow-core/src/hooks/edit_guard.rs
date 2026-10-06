@@ -134,7 +134,14 @@ fn checked_path(path: &str) -> Result<PathBuf, EditError> {
 /// Extract every native apply-patch operation target, including rename sources
 /// and destinations. Hunk content is not searched for strings resembling paths.
 fn patch_paths(patch: &str) -> Result<Vec<PathBuf>, EditError> {
-    let mut lines = patch.lines();
+    // Native apply_patch accepts LF and CRLF records. Match that grammar
+    // explicitly so a CRLF header still names the path the tool will edit.
+    let mut lines = patch.split_inclusive('\n').map(|record| {
+        record
+            .strip_suffix("\r\n")
+            .or_else(|| record.strip_suffix('\n'))
+            .unwrap_or(record)
+    });
     if lines.next() != Some("*** Begin Patch") {
         return Err(EditError("patch has no Begin Patch marker".into()));
     }
@@ -871,6 +878,14 @@ pub(crate) fn holds_registered_worktrees(dir: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r15_patch_paths_match_native_crlf_framing() {
+        let paths =
+            patch_paths("*** Begin Patch\n*** Add File: notes.md\r\n+body\n*** End Patch\n")
+                .unwrap();
+        assert_eq!(paths, [PathBuf::from("notes.md")]);
+    }
+
     use super::*;
     use serde_json::json;
 

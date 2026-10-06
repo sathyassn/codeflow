@@ -389,10 +389,10 @@ fn stage_label(element: ElementRef<'_>, id: &str, elements: &[ElementRef<'_>]) -
     let for_text = elements
         .iter()
         .filter(|other| {
-            other
-                .value()
-                .attr("data-cf-for")
-                .is_some_and(|ids| ids.split_whitespace().any(|named| named == id))
+            other.value().attr("data-cf-for").is_some_and(|ids| {
+                ids.split([' ', '\t', '\r', '\n', '\u{c}'])
+                    .any(|named| named == id)
+            })
         })
         .map(|other| own_visible_text(*other))
         .filter(|text| !text.is_empty())
@@ -519,7 +519,7 @@ fn add_shape_extent(
             let numbers = value
                 .attr("points")
                 .unwrap_or_default()
-                .split(|character: char| character == ',' || character.is_whitespace())
+                .split([',', ' ', '\t', '\r', '\n'])
                 .filter(|part| !part.is_empty())
                 .map(parse_length)
                 .collect::<Option<Vec<_>>>()
@@ -542,7 +542,7 @@ fn add_shape_extent(
 }
 
 fn parse_length(raw: &str) -> Option<f64> {
-    let trimmed = raw.trim();
+    let trimmed = raw.trim_matches([' ', '\t', '\r', '\n']);
     let number = trimmed.strip_suffix("px").unwrap_or(trimmed);
     number.parse::<f64>().ok().filter(|value| value.is_finite())
 }
@@ -570,7 +570,7 @@ fn declares_geometry(css: &str, sheet: bool) -> bool {
         .flat_map(|block| block.split(';'))
         .any(|declaration| {
             declaration.split_once(':').is_some_and(|(property, _)| {
-                let property = property.trim();
+                let property = property.trim_matches([' ', '\t', '\r', '\n', '\u{c}']);
                 GEOMETRY_PROPERTIES.contains(&property) || property.starts_with("offset")
             })
         })
@@ -881,6 +881,14 @@ fn quadratic_extent(extent: &mut Extent, xs: [f64; 3], ys: [f64; 3]) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r15_svg_length_keeps_unicode_whitespace() {
+        assert_eq!(super::parse_length("\u{a0}12"), None);
+        assert_eq!(super::parse_length("12\u{a0}"), None);
+        assert_eq!(super::parse_length(" 12\t"), Some(12.0));
+    }
+
     use super::*;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {

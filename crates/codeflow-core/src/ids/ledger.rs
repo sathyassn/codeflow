@@ -164,7 +164,7 @@ impl Ledger {
             return;
         }
         if let Some(named) = commit.subject.strip_prefix("restore: ") {
-            let named: BTreeSet<&str> = named.split_whitespace().collect();
+            let named: BTreeSet<&str> = named.split(' ').filter(|part| !part.is_empty()).collect();
             let problems = self.restore_problems(commit, &named, blobs);
             for problem in problems {
                 self.violations.push(Finding::new(sha, problem));
@@ -360,7 +360,7 @@ impl Ledger {
         };
         let in_range: HashSet<String> = git
             .run(&["rev-list", tip, &format!("^{exclude}")])?
-            .lines()
+            .split_terminator('\n')
             .map(str::to_string)
             .collect();
         Ok(self
@@ -400,8 +400,17 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         let mut fields = record.iter().map(String::as_str);
         let header = fields.next().unwrap_or_default();
         let mut parts = header.split('\x1f');
-        let sha = parts.next().unwrap_or_default().trim().to_string();
-        let parents = parts.next().unwrap_or_default().split_whitespace().count();
+        let sha = parts
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('\n')
+            .to_string();
+        let parents = parts
+            .next()
+            .unwrap_or_default()
+            .split(' ')
+            .filter(|part| !part.is_empty())
+            .count();
         let subject = parts.next().unwrap_or_default().to_string();
         let mut changes = Vec::new();
         while let Some(meta) = fields.next() {
@@ -411,7 +420,7 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
             let Some(path) = fields.next() else {
                 break;
             };
-            let meta: Vec<&str> = meta.split_whitespace().collect();
+            let meta: Vec<&str> = meta.split(' ').filter(|part| !part.is_empty()).collect();
             let [_old_mode, mode, _old_blob, blob, status] = meta.as_slice() else {
                 continue;
             };

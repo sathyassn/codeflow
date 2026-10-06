@@ -320,8 +320,8 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
 /// Process groups named in a holder record that still have a live process.
 fn live_groups(record: &str) -> Vec<u32> {
     record
-        .lines()
-        .filter_map(|line| line.strip_prefix("group=")?.trim().parse::<u32>().ok())
+        .split_terminator('\n')
+        .filter_map(|line| line.strip_prefix("group=")?.parse::<u32>().ok())
         .filter(|&pgid| group_alive(pgid))
         .collect()
 }

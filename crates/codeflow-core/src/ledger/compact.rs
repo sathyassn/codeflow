@@ -209,10 +209,11 @@ fn find_completed_sessions(ledger_dir: &Path) -> std::collections::HashSet<Strin
     if let Ok(entries) = fs::read_dir(&sessions_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with("sessions-ses-")
-                && super::is_jsonl_file(name)
-                && !super::is_lock_file(name)
+            let name = entry.file_name();
+            if name.as_encoded_bytes().starts_with(b"sessions-ses-")
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
             {
                 scan_for_session_ends(&path, &mut completed);
             }
@@ -227,8 +228,8 @@ fn scan_for_session_ends(path: &Path, completed: &mut std::collections::HashSet<
     let Ok(content) = fs::read_to_string(path) else {
         return;
     };
-    for line in content.lines() {
-        let trimmed = line.trim();
+    for line in content.split_terminator('\n') {
+        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
         if trimmed.is_empty() {
             continue;
         }
@@ -295,10 +296,14 @@ fn count_active_fragments(
 
     if let Ok(entries) = fs::read_dir(subdir) {
         for entry in entries.flatten() {
-            let name = entry.file_name().to_str().unwrap_or("").to_string();
+            let filename = entry.file_name();
+            let Some(name) = filename.to_str() else {
+                count += 1;
+                continue;
+            };
             if !name.starts_with(&prefix)
-                || !super::is_jsonl_file(&name)
-                || super::is_lock_file(&name)
+                || !super::is_jsonl_file(name)
+                || super::is_lock_file(name)
             {
                 continue;
             }
@@ -354,8 +359,8 @@ fn acquire_file_locks(
 /// (which would be permanent ledger data loss).
 fn read_events_from_file(path: &Path, events: &mut Vec<Event>) -> Result<(), LedgerError> {
     let content = fs::read_to_string(path)?;
-    for (i, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
+    for (i, line) in content.split_terminator('\n').enumerate() {
+        let trimmed = line.trim_matches([' ', '\t', '\r', '\n']);
         if trimmed.is_empty() {
             continue;
         }
@@ -433,7 +438,7 @@ mod tests {
 
         // Base should contain both events, sorted.
         let content = fs::read_to_string(&base).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
+        let lines: Vec<&str> = content.split_terminator('\n').collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("task_created"));
         assert!(lines[1].contains("task_status_changed"));

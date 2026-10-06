@@ -150,7 +150,6 @@ fn owners(before: Option<&RecordView>, after: Option<&RecordView>) -> BTreeSet<S
                 if let Some(epic) = record
                     .epic_id
                     .as_deref()
-                    .map(str::trim)
                     .filter(|epic| !epic.is_empty() && *epic != "null")
                 {
                     owners.insert(epic.to_string());
@@ -223,7 +222,7 @@ fn newer_on_line(repo: &Repository, target_tip: Oid, record: &RecordView) -> Opt
     if record.kind != RecordKind::Task {
         return None;
     }
-    let line = record.integration_target.as_deref()?.trim();
+    let line = record.integration_target.as_deref()?;
     if !line.starts_with("integration/") {
         return None;
     }
@@ -484,16 +483,24 @@ fn project_at(repo: &Repository, commit: Oid) -> Result<ProjectPaths, String> {
     let product = if git["product_paths"].is_array() {
         list(&git["product_paths"])
     } else {
-        let stack = entry_at(repo, commit, ".codeflow/project.toml")
-            .and_then(|(_, bytes)| String::from_utf8(bytes).ok())
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|table| {
-                table
-                    .get("stack")
-                    .and_then(|stack| stack.as_str().map(str::to_string))
+        let project = entry_at(repo, commit, ".codeflow/project.toml")
+            .map(|(_, bytes)| {
+                let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+                text.parse::<toml::Table>()
+                    .map_err(|error| error.to_string())
             })
+            .transpose()?;
+        let stack = project
+            .as_ref()
+            .and_then(|table| table.get("stack"))
+            .map(|stack| {
+                stack
+                    .as_str()
+                    .ok_or_else(|| "project stack is not a string".to_string())
+            })
+            .transpose()?
             .unwrap_or_default();
-        super::classify::stack_product_paths(&stack)
+        super::classify::stack_product_paths(stack)
             .iter()
             .map(ToString::to_string)
             .collect()
@@ -556,6 +563,16 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_project_never_uses_default_product_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, oid) = crate::git::repo_with_tree(
+            dir.path(),
+            &[(b".codeflow/project.toml", b"stack = \"rust\"\n#\xff")],
+        );
+        assert!(project_at(&repo, oid).is_err());
+    }
 
     /// Issue 79: a landing that changes a path that is not valid UTF-8 is not
     /// a plain planning amendment, and the path is named by its exact bytes.

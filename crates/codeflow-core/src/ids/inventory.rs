@@ -210,7 +210,11 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     let mut out: AddLog = BTreeMap::new();
     for record in z_records(&log) {
         let mut fields = record.iter().map(String::as_str);
-        let sha = fields.next().unwrap_or_default().trim().to_string();
+        let sha = fields
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('\n')
+            .to_string();
         for change in raw_fields(fields) {
             if change.status != 'A' {
                 continue;
@@ -367,8 +371,11 @@ fn lifetime_start(
     let listing = git.run(&args)?;
     let mut parents: HashMap<String, Vec<String>> = HashMap::new();
     let mut order = Vec::new();
-    for line in listing.lines() {
-        let mut shas = line.split_whitespace().map(str::to_string);
+    for line in listing.split_terminator('\n') {
+        let mut shas = line
+            .split(' ')
+            .filter(|part| !part.is_empty())
+            .map(str::to_string);
         let Some(commit) = shas.next() else {
             continue;
         };
@@ -578,7 +585,7 @@ fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
         let Some(path) = fields.next() else {
             break;
         };
-        let parts: Vec<&str> = body.split_whitespace().collect();
+        let parts: Vec<&str> = body.split(' ').filter(|part| !part.is_empty()).collect();
         if parts.len() != 2 * parents + 3 {
             continue;
         }
