@@ -1,8 +1,3 @@
 # osv-scanner reads this file for package-lock.json in this directory only.
 # Each entry names one advisory, why it cannot be reached here, and when it
 # must be triaged again.
-
-[[IgnoredVulns]]
-id = "GHSA-ch52-4w7c-c8xp"
-ignoreUntil = 2026-11-30
-reason = "http-cache-semantics is used only by Astro's build to time its cache of remote images (astro/dist/assets/build/remote.js). A static docs build serves no shared cache and takes no client max-stale, so the cross-user disclosure cannot happen. No fixed version exists yet; recheck by the expiry date."
