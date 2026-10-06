@@ -341,7 +341,15 @@ fn run_release_structure(
     original: &str,
     tested: &str,
 ) -> Result<(), IntegrateError> {
-    if !crate::release_local::adopted(repo_root) {
+    let adopted = crate::release_local::adopted(repo_root).map_err(|message| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::TestGateFailed {
+            summary: format!(
+                "  release state: {message}; repair release configuration before integrating"
+            ),
+        }
+    })?;
+    if !adopted {
         return Ok(());
     }
     crate::release_local::structural(repo_root, tested).map_err(|message| {
@@ -1088,5 +1096,20 @@ mod tests {
         let dir = repo_with_feature_branch();
         let _ = integrate(dir.path(), "feat/x", "main");
         assert!(dir.path().join(".git/codeflow/integrate.lock").exists());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_unreadable_release_adoption_refuses_integration() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(run_release_structure(dir.path(), "main", "HEAD").is_ok());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/project.toml"), "invalid = [").unwrap();
+        let error = run_release_structure(dir.path(), "main", "HEAD").unwrap_err();
+        assert!(error.to_string().contains("repair release configuration"));
     }
 }

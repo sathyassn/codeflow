@@ -143,9 +143,39 @@ fn tier_installs_docs(repo_root: &Path) -> bool {
         .is_ok_and(|state| matches!(state.tier, Tier::Standard | Tier::Full))
 }
 
+// Only proven absence removes a layer from the graph. An unreadable layer
+// remains owed and the report carries a blocking issue.
+fn input_present(path: &Path, report: &mut DocsLintReport) -> bool {
+    match crate::absence::proven_absent(path) {
+        Ok(true) => false,
+        Ok(false) => {
+            if let Err(error) = std::fs::metadata(path) {
+                cannot_read(report, path, error);
+            }
+            true
+        }
+        Err(error) => {
+            cannot_read(report, path, error);
+            true
+        }
+    }
+}
+
+fn directory_present(path: &Path, report: &mut DocsLintReport) -> bool {
+    if !input_present(path, report) {
+        return false;
+    }
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => cannot_read(report, path, "expected a directory"),
+        Err(error) => cannot_read(report, path, error),
+    }
+    true
+}
+
 fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintReport) {
     let capabilities_path = repo_root.join("docs/capabilities.md");
-    if !capabilities_path.try_exists().unwrap_or(true) {
+    if !input_present(&capabilities_path, report) {
         return;
     }
     let content = match std::fs::read_to_string(&capabilities_path) {
@@ -234,7 +264,7 @@ fn lint_capability_epic_reciprocity(repo_root: &Path, report: &mut DocsLintRepor
 fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     // Capability ids.
     let caps_path = repo_root.join("docs/capabilities.md");
-    let capabilities = if caps_path.try_exists().unwrap_or(true) {
+    let capabilities = if input_present(&caps_path, report) {
         match std::fs::read_to_string(&caps_path) {
             Ok(content) => {
                 let (entries, _) = parse_capabilities(&content);
@@ -258,7 +288,7 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     // ADR ids: from frontmatter `id` and from the filename stem prefix
     // (ADR-0001-stack-choice.md resolves ADR-0001).
     let decisions = repo_root.join("docs/decisions");
-    let adrs = if decisions.is_dir() {
+    let adrs = if directory_present(&decisions, report) {
         let mut ids = BTreeSet::new();
         for path in inventory_files(adr_files(&decisions), &decisions, report) {
             if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -293,7 +323,7 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
 
     // Epic ids from project-management/epics file stems.
     let epics_dir = repo_root.join("project-management/epics");
-    let epics = if epics_dir.is_dir() {
+    let epics = if directory_present(&epics_dir, report) {
         Some(
             inventory_files(
                 crate::workgraph::layout::epic_record_files(&repo_root.join("project-management")),
@@ -310,7 +340,7 @@ fn build_graph(repo_root: &Path, report: &mut DocsLintReport) -> DocGraph {
     };
 
     let specs_dir = repo_root.join("project-management/specs");
-    let specs = if specs_dir.is_dir() {
+    let specs = if directory_present(&specs_dir, report) {
         Some(
             inventory_files(
                 crate::workgraph::layout::spec_record_files(&repo_root.join("project-management")),
@@ -430,7 +460,7 @@ fn lint_capabilities(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintRe
 
 fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
     let decisions = repo_root.join("docs/decisions");
-    if !decisions.is_dir() {
+    if !directory_present(&decisions, report) {
         return; // absence already noted
     }
 
@@ -492,7 +522,7 @@ fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
 
 fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
     let epics_dir = repo_root.join("project-management/epics");
-    if !epics_dir.is_dir() {
+    if !directory_present(&epics_dir, report) {
         return; // absence already noted
     }
 
@@ -938,18 +968,19 @@ fn adr_id_prefix(stem: &str) -> Option<String> {
 fn adr_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(md_files(dir)?
         .into_iter()
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("ADR-"))
-        })
+        .filter(|p| adr_filename(p))
         .collect())
+}
+
+fn adr_filename(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.as_encoded_bytes().starts_with(b"ADR-"))
 }
 
 /// All `.md` files directly in a directory, sorted.
 fn md_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    if !dir.try_exists()? {
+    if crate::absence::proven_absent(dir)? {
         return Ok(paths);
     }
     for entry in std::fs::read_dir(dir)? {
@@ -1937,5 +1968,89 @@ mod tests {
         }
 
         visit(nodes, graph, &mut Vec::new(), &mut BTreeSet::new())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    fn unreadable_layer(layer: &str, check: fn(&Path, &mut DocsLintReport)) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut absent = DocsLintReport::default();
+        check(dir.path(), &mut absent);
+        assert!(absent.is_clean(), "{absent:?}");
+        let path = dir.path().join(layer);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("missing", &path).unwrap();
+        let mut report = DocsLintReport::default();
+        check(dir.path(), &mut report);
+        assert!(!report.is_clean(), "{layer}: {report:?}");
+    }
+    fn graph(root: &Path, report: &mut DocsLintReport) {
+        build_graph(root, report);
+    }
+    #[test]
+    fn r22_graph_adrs() {
+        unreadable_layer("docs/decisions", graph);
+    }
+    #[test]
+    fn r22_graph_epics() {
+        unreadable_layer("project-management/epics", graph);
+    }
+    #[test]
+    fn r22_graph_specs() {
+        unreadable_layer("project-management/specs", graph);
+    }
+    #[test]
+    fn r22_lint_adrs() {
+        unreadable_layer("docs/decisions", lint_adrs);
+    }
+    #[test]
+    fn r22_lint_epics() {
+        unreadable_layer("project-management/epics", |root, report| {
+            let graph = build_graph(root, &mut DocsLintReport::default());
+            lint_epics(root, &graph, report);
+        });
+    }
+    #[test]
+    fn r22_graph_capabilities() {
+        unreadable_layer("docs/capabilities.md", graph);
+    }
+    #[test]
+    fn r22_reciprocity_capabilities() {
+        unreadable_layer("docs/capabilities.md", lint_capability_epic_reciprocity);
+    }
+    #[test]
+    fn r22_doc_capabilities_dangling_ancestor_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join("docs")).unwrap();
+        for check in [graph, lint_capability_epic_reciprocity] {
+            let mut report = DocsLintReport::default();
+            check(dir.path(), &mut report);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.file.ends_with("capabilities.md")),
+                "{report:?}"
+            );
+        }
+    }
+    #[test]
+    fn r22_adr_prefix_is_checked_as_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(adr_files(dir.path()).unwrap().is_empty());
+        let path = dir
+            .path()
+            .join(std::ffi::OsStr::from_bytes(b"ADR-0001-\xff.md"));
+        assert!(adr_filename(&path));
+        assert!(!adr_filename(&dir.path().join("other.md")));
+        // Some filesystems and sandbox profiles cannot create non-UTF-8 names.
+        // The exact-byte predicate above still runs on those hosts.
+        if std::fs::write(&path, "bad ADR").is_ok() {
+            assert_eq!(adr_files(dir.path()).unwrap(), vec![path]);
+        }
     }
 }

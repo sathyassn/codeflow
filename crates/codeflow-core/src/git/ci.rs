@@ -129,7 +129,9 @@ impl CiWaitConfig {
     /// safe range.
     pub fn load(project_dir: &std::path::Path) -> Result<Self, CiWaitError> {
         let path = project_dir.join(".codeflow").join("ci-wait.json");
-        if !path.exists() {
+        if crate::absence::proven_absent(&path)
+            .map_err(|error| CiWaitError::ReadConfig(format!("{}: {error}", path.display())))?
+        {
             return Ok(Self::default());
         }
         let body = std::fs::read_to_string(&path)
@@ -1550,5 +1552,18 @@ mod tests {
         let required = vec!["ci".to_string()];
         let outcome = classify_checks(&checks, &required, &cfg);
         assert_eq!(outcome, CiOutcome::NoRequiredChecks);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_ci_config_requires_proven_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(CiWaitConfig::load(dir.path()).is_ok());
+        std::os::unix::fs::symlink("missing", dir.path().join(".codeflow")).unwrap();
+        assert!(CiWaitConfig::load(dir.path()).is_err());
     }
 }

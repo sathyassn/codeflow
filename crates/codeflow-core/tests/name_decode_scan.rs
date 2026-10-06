@@ -514,14 +514,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // The parser takes &str after parse_cobertura read_to_string; quick_xml attribute slices come from that validated UTF-8 source, including filename. No undecoded external bytes reach this conversion.
-    (
-        "codeflow-core/src/testing/coverage/cobertura.rs",
-        "parse_cobertura_str",
-        "from_utf8_lossy",
-        2,
-        "format-contract",
-    ),
     // output of a sandbox probe, shown in a report
     (
         "codeflow-core/src/testing/delivery.rs",

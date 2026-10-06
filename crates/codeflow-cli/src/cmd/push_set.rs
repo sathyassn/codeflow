@@ -71,6 +71,16 @@ pub(super) fn run(
     }
 }
 
+/// Whether the project adopted the local release check; an unreadable
+/// release configuration refuses the push rather than skipping the preflight.
+fn release_adopted(root: &Path) -> Result<bool, String> {
+    codeflow_core::release_local::adopted(root).map_err(|error| {
+        format!(
+            "release preflight unavailable: {error}; repair release configuration before pushing"
+        )
+    })
+}
+
 fn run_checked(
     root: &Path,
     policy: &GitPolicy,
@@ -142,7 +152,7 @@ fn run_checked(
     if !policy.test_gate_on_push.is_active() {
         return Ok(());
     }
-    if codeflow_core::release_local::adopted(root) {
+    if release_adopted(root)? {
         let remote = remote.unwrap_or("origin");
         for r in &pushed {
             release_preflight(&exe, root, r, remote, policy, report, &mut steps);

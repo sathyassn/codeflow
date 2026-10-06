@@ -66,7 +66,9 @@ pub fn run(args: &RecallArgs) -> anyhow::Result<()> {
             .collect()
     } else {
         let cwd = std::env::current_dir().context("cannot resolve current directory")?;
-        let Some(root) = registry::find_repo_root(&cwd) else {
+        let Some(root) = registry::find_repo_root(&cwd)
+            .context("cannot locate repository; repair .codeflow paths before recalling records")?
+        else {
             bail!(
                 "not inside a codeflow repo (no .codeflow/ found); \
                  use --all to search registered repos"

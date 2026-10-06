@@ -111,13 +111,20 @@ pub(crate) fn find_target_ref<'r>(
     target_branch: &str,
 ) -> Result<git2::Reference<'r>, GitError> {
     let remote_ref = format!("refs/remotes/origin/{target_branch}");
-    if let Ok(reference) = repo.find_reference(&remote_ref) {
-        return Ok(reference);
+    match repo.find_reference(&remote_ref) {
+        Ok(reference) => return Ok(reference),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
 
     let local_ref = format!("refs/heads/{target_branch}");
-    repo.find_reference(&local_ref)
-        .map_err(|_| GitError::RefNotFound(format!("neither {remote_ref} nor {local_ref} exists")))
+    repo.find_reference(&local_ref).map_err(|error| {
+        if error.code() == git2::ErrorCode::NotFound {
+            GitError::RefNotFound(format!("neither {remote_ref} nor {local_ref} exists"))
+        } else {
+            error.into()
+        }
+    })
 }
 
 /// Result of a rebase attempt.
@@ -796,5 +803,26 @@ mod tests {
         let index = repo.index().unwrap();
         let paths = collect_conflict_paths(&index);
         assert!(paths.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_target_ref_only_notfound_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        assert_eq!(find_target_ref(&repo, "main").unwrap().target(), Some(oid));
+        std::fs::create_dir_all(repo.path().join("refs/remotes/origin")).unwrap();
+        std::fs::write(repo.path().join("refs/remotes/origin/main"), "broken ref\n").unwrap();
+        assert!(find_target_ref(&repo, "main").is_err());
     }
 }

@@ -192,7 +192,9 @@ fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, St
     if mode != "full" {
         return Ok(None);
     }
-    let dirs = lock_dirs(root, codeflow_home().as_deref());
+    let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
+        format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
+    })?;
     let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| {
         let mut message = held.to_string();
         if message.contains("gate lock unavailable") {

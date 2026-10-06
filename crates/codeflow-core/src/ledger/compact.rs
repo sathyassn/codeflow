@@ -34,7 +34,7 @@ pub fn compact_ledger_type(
     current_session_id: Option<&str>,
 ) -> Result<CompactionResult, LedgerError> {
     let subdir = ledger_dir.join(type_name);
-    if !subdir.is_dir() {
+    if crate::absence::proven_absent(&subdir)? {
         return Ok(CompactionResult {
             type_name: type_name.to_string(),
             merged_count: 0,
@@ -97,7 +97,7 @@ pub fn compact_ledger_type(
     // here, BEFORE the write/delete below, so a corrupt or partially written
     // source is never merged-and-deleted (permanent data loss).
     let mut all_events: Vec<Event> = Vec::new();
-    if base_path.exists() {
+    if !crate::absence::proven_absent(&base_path)? {
         read_events_from_file(&base_path, &mut all_events)?;
     }
     for frag_path in &fragments {
@@ -199,11 +199,11 @@ fn find_completed_sessions(
 ) -> Result<std::collections::HashSet<String>, LedgerError> {
     let mut completed = std::collections::HashSet::new();
     let sessions_dir = ledger_dir.join("sessions");
-    if !sessions_dir.try_exists()? {
+    if crate::absence::proven_absent(&sessions_dir)? {
         return Ok(completed);
     }
     let base = sessions_dir.join("sessions.jsonl");
-    if base.try_exists()? {
+    if !crate::absence::proven_absent(&base)? {
         scan_for_session_ends(&base, &mut completed)?;
     }
     for entry in fs::read_dir(&sessions_dir)? {
@@ -597,5 +597,56 @@ mod tests {
         assert_eq!(result.merged_count, 1);
         assert!(!frag.exists(), "fragment is merged and removed");
         assert!(frag_lock.exists(), "sidecar lock must not be unlinked");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_compaction_directory_and_session_inputs_refuse() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            compact_ledger_type(dir.path(), "work-graph", None)
+                .unwrap()
+                .merged_count,
+            0
+        );
+        let subdir = dir.path().join("work-graph");
+        std::os::unix::fs::symlink("missing", &subdir).unwrap();
+        assert!(compact_ledger_type(dir.path(), "work-graph", None).is_err());
+        std::fs::remove_file(&subdir).unwrap();
+        std::fs::create_dir(&subdir).unwrap();
+        assert!(find_completed_sessions(dir.path()).unwrap().is_empty());
+        let sessions = dir.path().join("sessions");
+        std::os::unix::fs::symlink("missing", &sessions).unwrap();
+        assert!(find_completed_sessions(dir.path()).is_err());
+        std::fs::remove_file(&sessions).unwrap();
+        std::fs::create_dir(&sessions).unwrap();
+        std::os::unix::fs::symlink("missing", sessions.join("sessions.jsonl")).unwrap();
+        assert!(find_completed_sessions(dir.path()).is_err());
+    }
+    #[test]
+    fn r22_compaction_refuses_unreadable_base_preserving_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["sessions", "work-graph"] {
+            std::fs::create_dir(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(dir.path().join("sessions/sessions.jsonl"), "{\"event\":\"session_end\",\"timestamp\":\"2026-01-01T01:00:00Z\",\"session_id\":\"ses-done\"}\n").unwrap();
+        let fragment = dir.path().join("work-graph/work-graph-ses-done.jsonl");
+        let bytes = "{\"event\":\"task_created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"session_id\":\"ses-done\"}\n";
+        std::fs::write(&fragment, bytes).unwrap();
+        let base = dir.path().join("work-graph/work-graph.jsonl");
+        std::os::unix::fs::symlink("missing", &base).unwrap();
+        assert!(compact_ledger_type(dir.path(), "work-graph", None).is_err());
+        assert_eq!(std::fs::read_to_string(&fragment).unwrap(), bytes);
+        std::fs::remove_file(base).unwrap();
+        assert_eq!(
+            compact_ledger_type(dir.path(), "work-graph", None)
+                .unwrap()
+                .merged_count,
+            1
+        );
     }
 }

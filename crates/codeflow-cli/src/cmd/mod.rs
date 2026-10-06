@@ -227,7 +227,14 @@ pub fn touch_registry_best_effort() {
     let Ok(cwd) = std::env::current_dir() else {
         return;
     };
-    if let Some(root) = registry::find_repo_root(&cwd) {
+    let root = match registry::find_repo_root(&cwd) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: warning: cannot locate repository for registry touch: {error}; repair .codeflow paths");
+            return;
+        }
+    };
+    if let Some(root) = root {
         if let Err(e) = registry::touch_registry(&home, &root) {
             let path = registry::registry_path(&home).display().to_string();
             let finding = codeflow_core::remedy::Finding::new(

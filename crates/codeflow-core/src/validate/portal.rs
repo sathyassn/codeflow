@@ -3918,9 +3918,22 @@ fn collect_ids(pages: &[Page], source_blobs: &BTreeMap<String, Vec<u8>>) -> Auth
 }
 
 fn recover_unavailable_ids(bytes: &[u8], source_path: &str) -> BTreeSet<String> {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return BTreeSet::new();
-    };
+    // IDs and their delimiters are ASCII. Preserve those bytes exactly and
+    // mark every non-ASCII byte with a character strict_id cannot accept.
+    // Damage in the body therefore cannot hide an intact id or create one.
+    let text: String = bytes
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(bytes)
+        .iter()
+        .map(|&byte| {
+            if byte.is_ascii() {
+                char::from(byte)
+            } else {
+                '\u{fffd}'
+            }
+        })
+        .collect();
+    let text = text.as_str();
     let mut recovered = BTreeSet::new();
     let mut first_recovered = None;
     for line in text
@@ -6179,5 +6192,23 @@ mod r15_text_regressions {
         ]);
         super::verify_pagefind_language("en", &value, &artifacts, &mut report);
         assert_eq!(report.issues.len(), 2, "{:?}", report.issues);
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_unavailable_ids_keep_filename_and_valid_lines() {
+        assert!(recover_unavailable_ids(b"", "docs/capabilities.md").is_empty());
+        assert!(
+            recover_unavailable_ids(b"\xff", "project-management/tasks/TSK-238.md")
+                .contains("TSK-238")
+        );
+        assert!(
+            recover_unavailable_ids(b"id: CAP-001\n\xff", "docs/capabilities.md")
+                .contains("CAP-001")
+        );
     }
 }
