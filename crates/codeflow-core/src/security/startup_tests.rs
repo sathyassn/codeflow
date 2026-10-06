@@ -745,6 +745,10 @@ fn review_round_seven_forms() {
     if cfg!(unix) {
         refuse.extend([
             "cp -RH links out/; echo tree >> out/links/one",
+            // A later `-H` cancels an earlier `-L` (review round eight).
+            "cp -R -L -H links out/",
+            "cp -RLH links out/",
+            "cp -R --dereference --dereference-command-line links out/",
             "rsync -l --copy-unsafe-links safe-links/one out2/copy; echo rsync >> out2/copy",
         ]);
     }
@@ -767,7 +771,11 @@ fn review_round_seven_forms() {
             ));
         }
     }
-    for command in ["cp -RL links out/", "rsync -aL links/ out/"] {
+    for command in [
+        "cp -RL links out/",
+        "rsync -aL links/ out/",
+        "cp -R -H -L links out/",
+    ] {
         let found = f.judge(command);
         if refused(&found) {
             wrong.push(format!("refused: {command}: {}", found[0].message));

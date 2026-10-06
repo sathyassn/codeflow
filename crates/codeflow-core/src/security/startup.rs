@@ -1695,13 +1695,16 @@ impl LinkFlags {
                 // relaxes the judgment (review round seven).
                 if a == "--dereference" {
                     self.follow = true;
-                } else if long("no-dereference") || long("archive") {
+                } else if long("no-dereference")
+                    || long("archive")
+                    || long("dereference-command-line")
+                {
                     self.follow = false;
                 } else if short {
                     for letter in letters.chars() {
                         match letter {
                             'L' => self.follow = true,
-                            'P' | 'd' | 'a' => self.follow = false,
+                            'P' | 'd' | 'a' | 'H' => self.follow = false,
                             _ => {}
                         }
                     }
@@ -1779,11 +1782,14 @@ fn source_link_violation(
         // where it lands: the named links, and those inside a tree the
         // call copies or moves whole, walked within the budget (review
         // round six: `rsync -a links/ out/`).
-        let mut kept: Vec<(PathBuf, Vec<PathBuf>)> = paths
-            .iter()
-            .filter(|p| is_link(p))
-            .map(|p| (p.clone(), landing.to_vec()))
-            .collect();
+        // The named links first, so a link to the home refuses before any
+        // walk (security review F-8).
+        for link in paths.iter().filter(|p| is_link(p)) {
+            if let Some(v) = kept_link_violation(name, source, link, landing, line) {
+                return Some(v);
+            }
+        }
+        let mut kept: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
         // A tree copied or moved whole, and a named link to a directory,
         // whose contents a write through the copied link reaches.
         let roots = paths

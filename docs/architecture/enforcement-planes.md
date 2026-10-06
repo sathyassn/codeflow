@@ -325,7 +325,8 @@ level:
   the link reaches the file, and a copy or move that keeps a source link
   to one, or whose text reaches one from where the copy lands (`cp -P`,
   `cp -a`, `rsync -l`, `mv`); long options are read with the prefixes GNU
-  accepts (`cp --sym`), and `-L` and `-P` in the order cp reads them;
+  accepts (`cp --sym`), and `-L`, `-H` and `-P` in the order cp reads
+  them, the last one deciding;
   `-H` and rsync's `--copy-unsafe-links` keep some links, so they do not
   relax the check; a copied link to the home or another directory that
   holds startup files refuses too;
