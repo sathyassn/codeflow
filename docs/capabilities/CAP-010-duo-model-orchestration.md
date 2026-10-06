@@ -335,9 +335,13 @@ A pin left out keeps the edge unmet.
 - `work claim` fetches, refuses a task a visible branch already carries, and
   pushes `task/TSK-NNN-<slug>` as an advisory claim.
 - `work claim` and `work start` accept a code predecessor that is reviewed but
-  not complete only through `--on TSK-NNN@<sha>`. The pin must be one that a
-  review of the predecessor names and that still equals the predecessor
-  branch's tip.
+  not complete only through `--on TSK-NNN@<sha>`. The pin must equal the predecessor branch's tip. The Reviews
+  section must approve that tip or an ancestor whose later commits change
+  only the predecessor's own record path, read from the pinned work graph.
+  Every commit is checked, including merged commits and changes later
+  reverted. A review may name a full revision or a uniquely resolved
+  hexadecimal abbreviation of at least 7 characters. Repository owner,
+  name and branch must match, and a cross-repository pull request is refused.
   - `claim` checks the pins and cuts the branch from the pin that contains the
     others. Incomparable pins refuse.
   - `start` checks each pin is an ancestor of HEAD.

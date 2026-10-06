@@ -438,7 +438,7 @@ fn is_transient(err: &CiWaitError) -> bool {
     }
 }
 
-/// Invoke `gh pr checks <pr> --json name,state,conclusion,status`.
+/// Invoke `gh pr checks <pr> --json name,state`.
 ///
 /// Fails loud when `gh` is missing or the command exits non-zero with stderr
 /// on the clipboard (rate-limits, auth failures, PR not found).
@@ -449,7 +449,7 @@ async fn fetch_pr_checks(pr_number: u64) -> Result<Vec<GhCheck>, CiWaitError> {
             "checks",
             &pr_number.to_string(),
             "--json",
-            "name,state,conclusion,status",
+            "name,state",
         ])
         .output()
         .await
@@ -1207,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_parse_pr_checks_success_valid_json() {
-        let stdout = br#"[{"name":"ci","state":"SUCCESS","conclusion":"","status":""}]"#;
+        let stdout = br#"[{"name":"ci","state":"SUCCESS"}]"#;
         let checks = parse_pr_checks_output(42, true, stdout, b"").unwrap();
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].name, "ci");

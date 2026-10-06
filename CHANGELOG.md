@@ -277,6 +277,17 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Reviewed predecessor pins accept task closeout commits.** `work start`
+  and `work claim` read the repository owner and name that `gh pr view`
+  returns. A pin still names the predecessor branch tip. A review may name
+  that tip or an ancestor whose later commits touch only the predecessor's
+  own task record. Every intervening commit is checked, including merged
+  commits and changes later reverted. The visible Reviews table may use a
+  scope column or an approving prose verdict with a uniquely resolved
+  abbreviated revision. Other changes require a new review. The CI reader
+  also requests only the supported `name,state` fields from `gh pr checks`.
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any

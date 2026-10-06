@@ -329,22 +329,44 @@ fn reviewed(
     sha: &str,
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
+    // review_repository returns HOST/OWNER/NAME for gh's --repo argument.
+    let mut parts = repository.rsplit('/');
+    let name = parts.next().unwrap_or_default();
+    let owner = parts.next().unwrap_or_default();
+    if name.is_empty() || owner.is_empty() {
+        return Err("predecessor has no repository identity".into());
+    }
     if proof["headRefName"].as_str() != Some(branch)
         || proof["headRefOid"].as_str() != Some(sha)
         || proof["isCrossRepository"].as_bool() != Some(false)
-        || proof["headRepository"]["nameWithOwner"].as_str()
-            != repository.split_once('/').map(|(_, repo)| repo)
+        || proof["headRepository"]["name"].as_str() != Some(name)
+        || proof["headRepositoryOwner"]["login"].as_str() != Some(owner)
     {
-        return Err("predecessor PR identity or tip differs from the pin; rebase on its new reviewed head and recheck".into());
+        return Err(format!("predecessor PR identity or tip differs from the pin {sha}; rebase on its new reviewed head and recheck"));
     }
     let (policy, _) = Policy::load_effective(root);
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
-    Ok(super::ci::pr_body::review_names_revision(
+    let revisions = super::ci::pr_body::reviewed_revisions(
         proof["body"].as_str().unwrap_or_default(),
         &headings[0],
-        sha,
-    ))
+    );
+    for revision in &revisions {
+        if codeflow_core::workgraph::work_start::review_covers_pin(root, branch, revision, sha)
+            .map_err(|error| {
+                format!("cannot verify reviewed revision {revision} for pin {sha}: {error}")
+            })?
+        {
+            return Ok(true);
+        }
+    }
+    if !revisions.is_empty() {
+        return Err(format!(
+            "no review names pin {sha}; judged revisions {} are not ancestors with only the predecessor's own record changed; cannot verify review for this pin",
+            revisions.join(", ")
+        ));
+    }
+    Ok(false)
 }
 
 /// Bound provider lifetime and response size; a regular output file means a
@@ -367,7 +389,7 @@ fn pr_review(
             "--repo",
             repository,
             "--json",
-            "body,headRefName,headRefOid,isCrossRepository,headRepository",
+            "body,headRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner",
         ])
         .current_dir(root)
         .stdin(Stdio::null())

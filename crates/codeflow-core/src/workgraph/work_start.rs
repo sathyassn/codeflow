@@ -1018,6 +1018,84 @@ pub struct ReviewedPin {
     pub revision: git2::Oid,
 }
 
+/// Whether an approved revision covers this predecessor branch's pinned tip.
+/// A uniquely resolved hexadecimal abbreviation is accepted. Every commit
+/// after review, including merged commits, must touch only the task record
+/// path read from the pinned graph. Comparing just the endpoints would miss
+/// a source change followed by a revert.
+///
+/// # Errors
+/// Returns the reason the repository, graph, history or diff cannot be read.
+pub fn review_covers_pin(
+    root: &Path,
+    branch: &str,
+    reviewed: &str,
+    tip: &str,
+) -> Result<bool, String> {
+    if !(7..=40).contains(&reviewed.len()) || !reviewed.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let Ok(review) = repo.find_commit_by_prefix(reviewed) else {
+        return Ok(false);
+    };
+    let pin = Oid::from_str(tip).map_err(|e| e.to_string())?;
+    if review.id() == pin {
+        return Ok(true);
+    }
+    if !repo
+        .graph_descendant_of(pin, review.id())
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(false);
+    }
+    let task_id = task_id_from_branch_at(root, branch, tip)
+        .ok_or_else(|| format!("{tip}: predecessor branch has no task record"))?;
+    let graph = super::lifecycle::Graph::from_revision(&repo, tip)?;
+    let record = graph
+        .records
+        .get(&task_id)
+        .filter(|record| record.kind == RecordKind::Task)
+        .ok_or_else(|| format!("{tip}: predecessor has no task record"))?;
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(pin).map_err(|e| e.to_string())?;
+    walk.hide(review.id()).map_err(|e| e.to_string())?;
+    for revision in walk {
+        let commit = repo
+            .find_commit(revision.map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let tree = commit.tree().map_err(|e| e.to_string())?;
+        // A merged side history may have a root commit of its own.
+        let parents = commit.parent_count().max(1);
+        for index in 0..parents {
+            let parent = if commit.parent_count() == 0 {
+                None
+            } else {
+                Some(
+                    commit
+                        .parent(index)
+                        .and_then(|p| p.tree())
+                        .map_err(|e| e.to_string())?,
+                )
+            };
+            let mut options = git2::DiffOptions::new();
+            options.include_typechange(true);
+            let diff = repo
+                .diff_tree_to_tree(parent.as_ref(), Some(&tree), Some(&mut options))
+                .map_err(|e| e.to_string())?;
+            if diff.deltas().any(|delta| {
+                [delta.old_file(), delta.new_file()].iter().any(|file| {
+                    file.path_bytes()
+                        .is_some_and(|path| path != record.path.as_bytes())
+                })
+            }) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Resolve explicit pins against predecessor branches and review evidence.
 ///
 /// # Errors

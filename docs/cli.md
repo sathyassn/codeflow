@@ -205,6 +205,12 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
 | | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
 
+A `--on` pin names the predecessor branch tip. Its Reviews section must
+approve that tip or an ancestor whose later commits touch only the
+predecessor's own task record. Every intervening commit is checked, so a
+change followed by a revert still requires review. The repository owner,
+name and branch must match; cross-repository pull requests are refused.
+
 ### Remember
 
 | Command | Argument or flag | What it does |

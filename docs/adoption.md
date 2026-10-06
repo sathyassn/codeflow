@@ -310,7 +310,7 @@ the table below gives the commands.
 | Spec (SPC) | `codeflow spec new --for <epic-or-task>`, when a contract consumers rely on must be pinned; approved once it has no open questions |
 | Task (TSK) in an epic | `codeflow task new` on the epic's `plan/` branch; the record is anchored in that planning change |
 | Standalone task | `codeflow task new --standalone-reason <why>` on the task's own branch; the record and the code land in the same reviewed PR |
-| Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor's reviewed head before it lands |
+| Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor before it lands; pin its tip, reviewed directly or followed only by commits to its own task record |
 | A later change of scope | One batched epic amendment on a `plan/` branch, reviewed once; a task changes only its own criteria, in its own PR, and CI prints the change for the reviewer |
 | A team tracker already owns the portfolio | Link its ids in `external_refs`; do not mirror its status, specs or task trees |
 
