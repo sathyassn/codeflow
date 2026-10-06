@@ -177,6 +177,7 @@ fn json_string(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
             c => out.push(c),
         }
     }
@@ -1875,6 +1876,277 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
         );
         assert!(out.status.success(), "should allow: {command}");
     }
+}
+
+/// The exec-guard's answer to `command` sent as a `tool` payload from `dir`.
+fn exec_guard_tool(dir: &Path, tool: &str, command: &str) -> Output {
+    exec_guard_tool_in_shell(dir, tool, command, Some("/bin/zsh"))
+}
+
+/// [`exec_guard_tool`] with the hook's `SHELL` set to `shell`, or removed.
+fn exec_guard_tool_in_shell(dir: &Path, tool: &str, command: &str, shell: Option<&str>) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": tool,
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    let mut hook = codeflow();
+    match shell {
+        Some(shell) => hook.env("SHELL", shell),
+        None => hook.env_remove("SHELL"),
+    };
+    run_with_stdin(hook.args(["hook", "exec-guard"]).current_dir(dir), &payload)
+}
+
+#[test]
+fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
+    // TSK-233 (sathyassn/codeflow#66), through the real hook. A line the strict
+    // prose tokenizer certifies (echo, printf, grep and cat with quoted words)
+    // is not refused for launcher text inside its data; every other line keeps
+    // the 3.0.0 raw matching, including each form the design reviews found.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let allowed = [
+        "printf '%s\\n' 'first; such as this' > note.md",
+        "grep -n '; su' file.txt",
+        "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
+        "echo \"(...; supersedes A3's ...)\"",
+        "echo 'a; doasync b' && grep -c 'su' f",
+        "cat <<'EOF'\n$(sudo id)\n`su -`\ntrue; sudo id\nEOF\n",
+    ];
+    for tool in ["Bash", "run_terminal_command"] {
+        // `run_terminal_command` runs in the user's own shell, so it is
+        // certified only on a Unix host; on Windows the 3.0.0 floor applies.
+        let certified = tool == "Bash" || cfg!(unix);
+        for command in allowed {
+            let out = exec_guard_tool(dir.path(), tool, command);
+            if certified {
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tool}: should allow: {command}"
+                );
+                assert!(
+                    out.stderr.is_empty(),
+                    "{tool}: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            } else {
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tool}: keeps the 3.0.0 floor off Unix: {command}"
+                );
+            }
+        }
+    }
+    // PowerShell reads `1,2` and `@name` differently, so nothing is certified.
+    let out = exec_guard_tool(dir.path(), "PowerShell", allowed[1]);
+    assert_eq!(out.status.code(), Some(2), "PowerShell is never certified");
+}
+
+#[test]
+fn exec_guard_certifies_run_terminal_command_only_in_a_shell_shown_to_be_posix() {
+    // `run_terminal_command` runs in the user's own shell, so it is certified
+    // only when SHELL names bash or zsh on a Unix host; otherwise the line
+    // keeps the 3.0.0 floor. The Bash tool is bash by name.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = "grep -n '; su' file.txt";
+    let code = |tool: &str, shell: Option<&str>| {
+        exec_guard_tool_in_shell(dir.path(), tool, line, shell)
+            .status
+            .code()
+    };
+    let unix = cfg!(unix);
+    for (shell, certified) in [
+        (Some("/bin/zsh"), true),
+        (Some("/usr/local/bin/bash"), true),
+        (Some("bash"), true),
+        (Some("/usr/bin/fish"), false),
+        (Some("/bin/dash"), false),
+        (Some("C:\\Windows\\System32\\cmd.exe"), false),
+        (Some("pwsh"), false),
+        (Some(""), false),
+        (None, false),
+    ] {
+        let want = if certified && unix { 0 } else { 2 };
+        assert_eq!(
+            code("run_terminal_command", shell),
+            Some(want),
+            "run_terminal_command with SHELL={shell:?}"
+        );
+        assert_eq!(code("Bash", shell), Some(0), "Bash with SHELL={shell:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_guard_does_not_certify_a_write_that_reaches_a_link_pipe_or_executable() {
+    // A `.md` name proves nothing about what the write reaches. Review 07: a
+    // link named `note.md` to a script, a named pipe and an executable were
+    // all certified by their extension alone.
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = |target: &str| format!("printf '%s\\n' 'true; sudo -n id' > {target}");
+    // The same line into a new document is certified and allowed.
+    let out = exec_guard_tool(dir.path(), "Bash", &line("new.md"));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(dir.path().join("job.sh"), "true\n").unwrap();
+    std::fs::set_permissions(
+        dir.path().join("job.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    symlink("job.sh", dir.path().join("note.md")).unwrap();
+    std::fs::hard_link(dir.path().join("job.sh"), dir.path().join("hard.md")).unwrap();
+    std::fs::write(dir.path().join("plain.py"), "true\n").unwrap();
+    std::fs::hard_link(dir.path().join("plain.py"), dir.path().join("py.md")).unwrap();
+    assert!(Command::new("mkfifo")
+        .arg(dir.path().join("pipe.md"))
+        .status()
+        .unwrap()
+        .success());
+    for target in [
+        "note.md",
+        "hard.md",
+        "py.md",
+        "pipe.md",
+        "/dev/example.md",
+        "/./dev/example.md",
+        "//dev/example.md",
+        "/./proc/example.md",
+    ] {
+        let out = exec_guard_tool(dir.path(), "Bash", &line(target));
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "must refuse a write to {target}"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.privilege_escalation"),
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn exec_guard_keeps_the_3_0_0_floor_on_every_line_it_cannot_certify() {
+    // Each form the design reviews found, plus the other raw rules, through the
+    // real hook; every one keeps the 3.0.0 verdict.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let blocked = [
+        // The issue's own pattern with a backslash in double quotes, an
+        // unquoted heredoc delimiter, and tools off the list.
+        (
+            "grep -rn -i \"chained su\\|; su\" docs/",
+            "security.privilege_escalation",
+        ),
+        (
+            "cat <<EOF\nsupersedes; summary\nEOF",
+            "security.privilege_escalation",
+        ),
+        ("git commit -m 'a; su b'", "security.privilege_escalation"),
+        ("rg --no-config '; su' src", "security.privilege_escalation"),
+        // Real launches, plain and through every bypass form the reviews found.
+        ("true; su -", "security.privilege_escalation"),
+        ("true; sudo -i", "security.privilege_escalation"),
+        ("true; doas sh", "security.privilege_escalation"),
+        ("true; su\t-", "security.privilege_escalation"),
+        (
+            "printf '%s\\n' \"\\\"\"; sudo id",
+            "security.privilege_escalation",
+        ),
+        (
+            "awk 'BEGIN { system(\"true; sudo id\") }'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '%s\\n' '; su'; s??? -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; supersedes -n id", "security.privilege_escalation"),
+        (
+            "true; runas.exe /user:x cmd",
+            "security.privilege_escalation",
+        ),
+        ("touch sudo; su?? -n id", "security.privilege_escalation"),
+        ("touch sudo; su[d]o -n id", "security.privilege_escalation"),
+        (
+            "shopt -s extglob\ntouch sudo; su@(do) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa# -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa(#c0,1) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "touch supersedes; supersedes(e:'REPLY=sudo':) -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; sudoedit /etc/hosts", "security.privilege_escalation"),
+        ("true; super id", "security.privilege_escalation"),
+        (
+            "printf '%n' 'a[$(true; sudo id)]'",
+            "security.privilege_escalation",
+        ),
+        // zsh decodes a numeric escape in the format before it reads conversions.
+        (
+            "printf '\\u0025n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\x25n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\045n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf -v x '%s' 'a; sudo id'",
+            "security.privilege_escalation",
+        ),
+        ("echo 'x; sudo id' > s.sh", "security.privilege_escalation"),
+        ("echo a; sudo id", "security.privilege_escalation"),
+        (
+            "cat <<'EOF' > a.md\nA3\nEOF\nls; sudo id",
+            "security.privilege_escalation",
+        ),
+        ("LD_PRELOAD=example true", "security.privilege_escalation"),
+        ("export PATH=/usr/bin:/tmp", "security.privilege_escalation"),
+        ("env -S 'sudo -n id'", "security.privilege_escalation"),
+        // The other raw rules stay on the floor too.
+        ("true; claude -p x", "security.headless_peer_runs"),
+        ("echo a; mkfs.ext4 /dev/sda1", "security.dangerous_commands"),
+        (
+            "echo x > /dev/sda; echo '; su'",
+            "security.dangerous_commands",
+        ),
+        ("cmd /c \"format C: /Q\"", "security.dangerous_commands"),
+    ];
+    for (command, rule) in blocked {
+        let out = exec_guard_tool(dir.path(), "Bash", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        assert!(err.contains(rule), "{command}: {err}");
+    }
+    // The privilege refusal says how to write prose that is not refused.
+    let out = exec_guard_tool(dir.path(), "Bash", "git commit -m 'a; su b'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("quoted heredoc delimiter"), "{err}");
 }
 
 /// Run the exec-guard on `command` with `TMPDIR` set, from `repo`.
