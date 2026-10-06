@@ -483,6 +483,26 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
 }
 
 fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    let validate_globs = |patterns: &[String]| -> Result<(), TestingError> {
+        for pattern in patterns {
+            glob::Pattern::new(pattern).map_err(|error| TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!("invalid glob {pattern:?}: {error}; repair the test config"),
+            })?;
+        }
+        Ok(())
+    };
+    validate_globs(&config.execution.run_everything)?;
+    for rule in config.defaults.coverage.iter().chain(
+        config
+            .targets
+            .iter()
+            .filter_map(|target| target.coverage.as_ref())
+            .flat_map(|coverage| &coverage.rules),
+    ) {
+        validate_globs(&rule.include)?;
+        validate_globs(&rule.exclude)?;
+    }
     if config.execution.max_parallel == Some(0) {
         return Err(TestingError::ConfigInvalid {
             path: path.to_path_buf(),
@@ -491,6 +511,7 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     }
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
+        validate_globs(&target.narrow)?;
         if !seen_names.insert(&target.name) {
             return Err(TestingError::DuplicateTarget(target.name.clone()));
         }
@@ -1244,5 +1265,50 @@ mod tests {
             }
             other => panic!("expected ConfigInvalid, got: {other}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    fn invalid_glob(pointer: &str, value: serde_json::Value) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let mut config = serde_json::json!({"schema_version":"1.0","execution":{},"defaults":{},"targets":[{"name":"t","runner":"custom","narrow":[],"coverage":null,"modes":{"quick":{"command":"true"}}}]});
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(load_test_config(&path).is_ok());
+        *config.pointer_mut(pointer).unwrap() = value;
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(load_test_config(&path).is_err(), "{pointer}");
+    }
+    #[test]
+    fn r22_run_everything_glob() {
+        invalid_glob("/execution", serde_json::json!({"run_everything":["["]}));
+    }
+    #[test]
+    fn r22_narrow_glob() {
+        invalid_glob("/targets/0/narrow", serde_json::json!(["["]));
+    }
+    #[test]
+    fn r22_default_include_glob() {
+        invalid_glob(
+            "/defaults",
+            serde_json::json!({"coverage":[{"scope":"global","minimum":80,"include":["["]}]}),
+        );
+    }
+    #[test]
+    fn r22_default_exclude_glob() {
+        invalid_glob(
+            "/defaults",
+            serde_json::json!({"coverage":[{"scope":"global","minimum":80,"exclude":["["]}]}),
+        );
+    }
+    #[test]
+    fn r22_target_coverage_glob() {
+        invalid_glob(
+            "/targets/0/coverage",
+            serde_json::json!({"format":"lcov","path":"cov.info","rules":[{"scope":"global","minimum":80,"include":["["]}]}),
+        );
     }
 }

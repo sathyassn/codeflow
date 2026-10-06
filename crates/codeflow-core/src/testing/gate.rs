@@ -279,7 +279,7 @@ fn run_gate_resolved(
         &target_dir,
         &run_dir,
         options.all,
-    );
+    )?;
     let before = delivery::tracked(project_dir)?;
     let raw = run_dependency_targets(
         &targets,
@@ -435,7 +435,7 @@ fn configure_run_targets(
     target_dir: &Path,
     run_dir: &Path,
     with_repeat: bool,
-) {
+) -> Result<(), TestingError> {
     let binary = targets
         .iter()
         .find(|t| t.name == "codeflow-bin")
@@ -484,13 +484,23 @@ fn configure_run_targets(
         target.outputs = target
             .outputs
             .iter()
-            .map(|p| text(&resolve_output(p, root, target_dir)).unwrap_or_else(|| p.clone()))
-            .collect();
+            .map(|p| {
+                let resolved = resolve_output(p, root, target_dir);
+                text(&resolved).ok_or_else(|| TestingError::ConfigInvalid {
+                    path: resolved,
+                    message: "resolved output path is not UTF-8; use a UTF-8 output directory"
+                        .into(),
+                })
+            })
+            .collect::<Result<_, _>>()?;
         if let Some(report) = &mut target.report {
             if report.path.starts_with("target/") {
-                if let Some(path) = text(&resolve_output(&report.path, root, target_dir)) {
-                    report.path = path;
-                }
+                let resolved = resolve_output(&report.path, root, target_dir);
+                report.path = text(&resolved).ok_or_else(|| TestingError::ConfigInvalid {
+                    path: resolved,
+                    message: "resolved report path is not UTF-8; use a UTF-8 output directory"
+                        .into(),
+                })?;
             }
         }
         if with_repeat {
@@ -502,6 +512,7 @@ fn configure_run_targets(
             }
         }
     }
+    Ok(())
 }
 
 fn resolve_output(output: &str, root: &Path, target_dir: &Path) -> std::path::PathBuf {
@@ -1240,7 +1251,7 @@ mod tests {
         let root = Path::new("/project");
         let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xe9"));
         let run_dir = Path::new("/project/target/run-1");
-        configure_run_targets(&mut targets, root, odd, run_dir, false);
+        configure_run_targets(&mut targets, root, odd, run_dir, false).unwrap();
         assert!(!targets[0].env.contains_key("CARGO_LLVM_COV_TARGET_DIR"));
         assert_eq!(
             targets[0]
@@ -1249,5 +1260,20 @@ mod tests {
                 .map(String::as_str),
             Some("run-1")
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_resolved_non_utf8_output_refuses() {
+        use std::os::unix::ffi::OsStrExt;
+        let target: TargetConfig = serde_json::from_str(r#"{"name":"t","runner":"custom","outputs":["target/out"],"modes":{"quick":{"command":"true"}}}"#).unwrap();
+        let root = Path::new("/repo");
+        let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/odd\xff"));
+        assert!(configure_run_targets(&mut [target.clone()], root, odd, root, false).is_err());
+        assert!(configure_run_targets(&mut [target], root, root, root, false).is_ok());
     }
 }

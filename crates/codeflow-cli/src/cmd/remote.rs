@@ -43,7 +43,9 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
     let RemoteCommand::Protect { provider, dry_run } = &args.command;
 
     let cwd = std::env::current_dir().context("cannot resolve current directory")?;
-    let root = registry::find_repo_root(&cwd).unwrap_or(cwd);
+    let root = registry::find_repo_root(&cwd)
+        .context("cannot locate repository; repair .codeflow paths before applying protection")?
+        .unwrap_or(cwd);
     let policy_path = root.join(".codeflow/policy.json");
     if !policy_path.is_file() {
         eprintln!(

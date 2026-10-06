@@ -24,9 +24,29 @@ const PYTHON: &str = "python3";
 
 /// Whether the project at `root` adopted `CodeFlow`'s release calculator and
 /// carries it.
-#[must_use]
-pub fn adopted(root: &Path) -> bool {
-    matches!(release_backend(root), Ok(ReleaseBackend::Codeflow)) && root.join(SCRIPT).is_file()
+/// # Errors
+/// Refuses unreadable adoption settings or script metadata.
+pub fn adopted(root: &Path) -> Result<bool, String> {
+    if release_backend(root)? != ReleaseBackend::Codeflow {
+        return Ok(false);
+    }
+    let path = root.join(SCRIPT);
+    if crate::absence::proven_absent(&path).map_err(|error| {
+        format!(
+            "cannot inspect {}: {error}; repair the release script path",
+            path.display()
+        )
+    })? {
+        return Ok(false);
+    }
+    std::fs::metadata(&path)
+        .map(|metadata| metadata.is_file())
+        .map_err(|error| {
+            format!(
+                "cannot inspect {}: {error}; repair the release script path",
+                path.display()
+            )
+        })
 }
 
 /// How `release.py preflight` opens the note that reports a valid release
@@ -163,10 +183,10 @@ mod tests {
 
     #[test]
     fn only_a_project_that_adopted_and_carries_the_calculator_runs_it() {
-        assert!(adopted(project("codeflow", Some("")).path()));
-        assert!(!adopted(project("codeflow", None).path()));
-        assert!(!adopted(project("none", Some("")).path()));
-        assert!(!adopted(project("external", Some("")).path()));
+        assert!(adopted(project("codeflow", Some("")).path()).unwrap());
+        assert!(!adopted(project("codeflow", None).path()).unwrap());
+        assert!(!adopted(project("none", Some("")).path()).unwrap());
+        assert!(!adopted(project("external", Some("")).path()).unwrap());
     }
 
     fn python_available() -> bool {
@@ -226,5 +246,25 @@ mod tests {
             structural(bad.path(), "HEAD").unwrap_err(),
             "release error: stamps disagree"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_release_adoption_refuses_unreadable_settings_and_script() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!adopted(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        let project = dir.path().join(".codeflow/project.toml");
+        std::fs::write(&project, "invalid = [").unwrap();
+        assert!(adopted(dir.path()).is_err());
+        std::fs::write(&project, "[release]\nbackend = 'codeflow'\n").unwrap();
+        assert!(!adopted(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        std::os::unix::fs::symlink("missing", dir.path().join(SCRIPT)).unwrap();
+        assert!(adopted(dir.path()).is_err());
     }
 }

@@ -129,7 +129,15 @@ pub fn evaluate_target_thresholds(
         threshold::evaluate_aggregate_thresholds(&cov_config.rules, file_coverages)
             .into_iter()
             .map(|aggregate| threshold::ThresholdResult {
-                file: format!("<{:?}>", aggregate.scope).to_lowercase(),
+                file: if aggregate.measured_lines == 0 {
+                    format!(
+                        "<{:?}: no measured lines; check coverage includes>",
+                        aggregate.scope
+                    )
+                    .to_lowercase()
+                } else {
+                    format!("<{:?}>", aggregate.scope).to_lowercase()
+                },
                 coverage_percent: aggregate.coverage_percent,
                 threshold: aggregate.threshold,
                 pass: aggregate.pass,

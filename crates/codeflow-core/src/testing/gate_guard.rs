@@ -146,16 +146,19 @@ pub const HOME_EVIDENCE_DIR: &str = "gate-runs";
 /// Lock directories for a project: the machine-wide one under `home` (when
 /// known) and the repository one under the git common directory (when the
 /// project is in a git repository).
-#[must_use]
-pub fn lock_dirs(project_dir: &Path, home: Option<&Path>) -> Vec<PathBuf> {
+/// # Errors
+/// Refuses repository discovery failures; only `NotFound` means no repository.
+pub fn lock_dirs(project_dir: &Path, home: Option<&Path>) -> Result<Vec<PathBuf>, git2::Error> {
     let mut dirs = Vec::new();
     if let Some(home) = home {
         dirs.push(home.join(HOME_LOCK_DIR));
     }
-    if let Ok(repo) = git2::Repository::discover(project_dir) {
-        dirs.push(repo.commondir().join("codeflow"));
+    match git2::Repository::discover(project_dir) {
+        Ok(repo) => dirs.push(repo.commondir().join("codeflow")),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        Err(error) => return Err(error),
     }
-    dirs
+    Ok(dirs)
 }
 
 /// The directories a full gate writes outside the worktree that this
@@ -169,7 +172,16 @@ pub fn unwritable_gate_dirs(
     home: Option<&Path>,
 ) -> Vec<(PathBuf, std::io::Error)> {
     let mut unwritable = Vec::new();
-    for dir in lock_dirs(project_dir, home) {
+    let dirs = match lock_dirs(project_dir, home) {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            return vec![(
+                project_dir.to_path_buf(),
+                std::io::Error::other(error.to_string()),
+            )]
+        }
+    };
+    for dir in dirs {
         if let Err(error) = open_lock_file(&dir.join(LOCK_FILE)) {
             unwritable.push((dir, error));
         }
@@ -250,7 +262,11 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
             path: path.clone(),
             running_groups: Vec::new(),
         })?;
-        let running_groups = live_groups(&previous);
+        let running_groups = live_groups(&previous).map_err(|error| LockHeld {
+            holder: format!("cannot reclaim gate lock: {error}; inspect and repair the lock record after verifying its processes"),
+            path: path.clone(),
+            running_groups: Vec::new(),
+        })?;
         if !running_groups.is_empty() {
             // The gate that wrote this record is gone but its targets are
             // not: the lock is still in use. Leave the record for the next
@@ -323,12 +339,22 @@ fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
 }
 
 /// Process groups named in a holder record that still have a live process.
-fn live_groups(record: &str) -> Vec<u32> {
-    record
-        .split_terminator('\n')
-        .filter_map(|line| line.strip_prefix("group=")?.parse::<u32>().ok())
-        .filter(|&pgid| group_alive(pgid))
-        .collect()
+fn live_groups(record: &str) -> Result<Vec<u32>, String> {
+    let mut groups = Vec::new();
+    for line in record.split_terminator('\n') {
+        if let Some(value) = line.strip_prefix("group=") {
+            let pgid = value
+                .parse::<u32>()
+                .map_err(|error| format!("invalid group record {line:?}: {error}"))?;
+            if pgid <= 1 {
+                return Err(format!("invalid target process group {pgid}"));
+            }
+            if group_alive(pgid) {
+                groups.push(pgid);
+            }
+        }
+    }
+    Ok(groups)
 }
 
 #[cfg(unix)]
@@ -726,7 +752,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         git2::Repository::init(tmp.path()).unwrap();
         let home = tmp.path().join("home");
-        let found = lock_dirs(tmp.path(), Some(&home));
+        let found = lock_dirs(tmp.path(), Some(&home)).unwrap();
         assert_eq!(found[0], home.join("locks"));
         assert!(found[1].ends_with(".git/codeflow"), "{found:?}");
     }
@@ -793,5 +819,31 @@ mod tests {
         // A relative escape resolves against the working directory.
         let escape = check_cargo_target_dir(&root, &root, Some(std::ffi::OsStr::new("../x")));
         assert!(escape.is_some());
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_lock_dirs_refuse_corrupt_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(lock_dirs(dir.path(), None).unwrap().is_empty());
+        std::fs::write(dir.path().join(".git"), "broken gitdir").unwrap();
+        assert!(lock_dirs(dir.path(), None).is_err());
+    }
+    #[test]
+    fn r22_invalid_group_record_cannot_be_reclaimed() {
+        let dir = tempfile::tempdir().unwrap();
+        for group in ["oops", "4294967296", "0", "1"] {
+            let path = dir.path().join(LOCK_FILE);
+            std::fs::write(&path, format!("pid=999999\ngroup={group}\n")).unwrap();
+            let result = acquire_full_gate_lock(&[dir.path().to_path_buf()], dir.path());
+            assert!(result.is_err(), "{group}");
+            assert!(std::fs::read_to_string(path).unwrap().contains(group));
+        }
+        std::fs::write(dir.path().join(LOCK_FILE), "pid=999999\n").unwrap();
+        assert!(acquire_full_gate_lock(&[dir.path().to_path_buf()], dir.path()).is_ok());
     }
 }

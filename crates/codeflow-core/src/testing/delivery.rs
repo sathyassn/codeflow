@@ -96,8 +96,10 @@ fn link_target_bytes(target: &Path) -> Vec<u8> {
 
 /// Snapshot the bytes and modes of every tracked path, including dirty edits.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
-    let Ok(repo) = git2::Repository::discover(root) else {
-        return Ok(BTreeMap::new());
+    let repo = match git2::Repository::discover(root) {
+        Ok(repo) => repo,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(invalid(root, format!("cannot discover repository: {error}; repair repository metadata before rerunning the gate"))),
     };
     let mut result = BTreeMap::new();
     for entry in repo
@@ -113,19 +115,30 @@ pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
             );
             continue;
         };
-        let bytes = if path.is_symlink() {
+        let unreadable = |error: std::io::Error| {
+            TestingError::Io(std::io::Error::new(error.kind(), format!("cannot snapshot {}: {error}; restore a readable tracked path before rerunning the gate", path.display())))
+        };
+        let metadata = if crate::absence::proven_absent(&path).map_err(unreadable)? {
+            None
+        } else {
+            Some(std::fs::symlink_metadata(&path).map_err(unreadable)?)
+        };
+        let bytes = if metadata
+            .as_ref()
+            .is_some_and(|m| m.file_type().is_symlink())
+        {
             // The exact target bytes: a lossy spelling would give two
             // different targets one hash and hide a change of the link.
-            link_target_bytes(&std::fs::read_link(&path)?)
-        } else if path.exists() {
-            std::fs::read(&path)?
+            link_target_bytes(&std::fs::read_link(&path).map_err(unreadable)?)
+        } else if metadata.is_some() {
+            std::fs::read(&path).map_err(unreadable)?
         } else {
             b"<deleted>".to_vec()
         };
         #[cfg(unix)]
         let mode = {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::symlink_metadata(&path).map_or(0, |m| m.permissions().mode())
+            metadata.map_or(0, |m| m.permissions().mode())
         };
         #[cfg(not(unix))]
         let mode = entry.mode;
@@ -657,5 +670,33 @@ mod tests {
         let first = tracked(dir.path()).unwrap();
         target(b"caf\xfe").unwrap();
         assert_ne!(first, tracked(dir.path()).unwrap());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_tracked_refuses_corrupt_repository_but_allows_no_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(tracked(dir.path()).unwrap().is_empty());
+        std::fs::write(dir.path().join(".git"), "not a gitdir\n").unwrap();
+        assert!(tracked(dir.path()).is_err());
+    }
+    #[test]
+    fn r22_tracked_refuses_stat_failure_but_records_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/file"), "x").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("sub/file")).unwrap();
+        index.write().unwrap();
+        std::fs::remove_file(dir.path().join("sub/file")).unwrap();
+        assert_eq!(tracked(dir.path()).unwrap().len(), 1);
+        std::fs::remove_dir(dir.path().join("sub")).unwrap();
+        std::os::unix::fs::symlink("sub", dir.path().join("sub")).unwrap();
+        assert!(tracked(dir.path()).is_err());
     }
 }

@@ -45,7 +45,7 @@ pub fn run_interactive(
     project_dir: &Path,
     prompts: &dyn PromptProvider,
 ) -> Result<SetupResult, SetupError> {
-    let config_path = config_path(project_dir);
+    let config_path = config_path(project_dir)?;
     let existing = config_path.exists();
 
     let config = wizard::run_wizard(project_dir, prompts, existing).map_err(SetupError::Wizard)?;
@@ -82,7 +82,7 @@ pub fn run_interactive(
 ///
 /// Returns `SetupError` on I/O or config-write failure.
 pub fn run_auto(project_dir: &Path) -> Result<SetupResult, SetupError> {
-    let config_path = config_path(project_dir);
+    let config_path = config_path(project_dir)?;
     write_schema_next_to(&config_path)?;
     if config_path.exists()
         && !config::load_test_config(&config_path)
@@ -164,7 +164,7 @@ pub fn run_template_content(
     force: bool,
 ) -> Result<SetupResult, SetupError> {
     validate_template_name(template_name)?;
-    let config_path = config_path(project_dir);
+    let config_path = config_path(project_dir)?;
     write_schema_next_to(&config_path)?;
 
     if config_path.exists() && !force {
@@ -192,7 +192,7 @@ pub fn run_add_target(
     project_dir: &Path,
     prompts: &dyn PromptProvider,
 ) -> Result<SetupResult, SetupError> {
-    let config_path = config_path(project_dir);
+    let config_path = config_path(project_dir)?;
     write_schema_next_to(&config_path)?;
 
     if !config_path.exists() {
@@ -268,7 +268,7 @@ pub fn get_template_list(template_dir: &Path) -> Result<Vec<(String, String)>, S
 ///
 /// Returns `SetupError` on I/O or config-write failure.
 pub fn write_minimal_config(project_dir: &Path) -> Result<(), SetupError> {
-    let config_path = config_path(project_dir);
+    let config_path = config_path(project_dir)?;
     write_schema_next_to(&config_path)?;
 
     // Init is additive: any existing config, including one that currently
@@ -319,10 +319,8 @@ pub fn template_description(content: &str) -> String {
         .to_string()
 }
 
-fn config_path(project_dir: &Path) -> std::path::PathBuf {
-    canonicalize_project_dir(project_dir)
-        .join(".codeflow")
-        .join("test-config.json")
+fn config_path(project_dir: &Path) -> std::io::Result<std::path::PathBuf> {
+    Ok(canonicalize_project_dir(project_dir)?.join(".codeflow/test-config.json"))
 }
 
 /// Normalise a candidate project directory to avoid writing config into a
@@ -342,30 +340,46 @@ fn config_path(project_dir: &Path) -> std::path::PathBuf {
 /// `codeflow init` creation path.
 ///
 /// Ancestor check is bounded by filesystem root, so the walk always terminates.
-fn canonicalize_project_dir(project_dir: &Path) -> std::path::PathBuf {
+fn canonicalize_project_dir(project_dir: &Path) -> std::io::Result<std::path::PathBuf> {
     // Caller's own marker takes priority — this is a fresh or canonical root.
-    if is_project_root(project_dir) {
-        return project_dir.to_path_buf();
+    if is_project_root(project_dir)? {
+        return Ok(project_dir.to_path_buf());
     }
 
     // Walk ancestors until we find a marker or run out of parents.
     let mut cursor = project_dir;
     while let Some(parent) = cursor.parent() {
-        if is_project_root(parent) {
-            return parent.to_path_buf();
+        if is_project_root(parent)? {
+            return Ok(parent.to_path_buf());
         }
         cursor = parent;
     }
 
     // No ancestor marker — caller is a fresh project being initialised.
-    project_dir.to_path_buf()
+    Ok(project_dir.to_path_buf())
 }
 
-fn is_project_root(dir: &Path) -> bool {
-    dir.join(".git").exists()
-        || crate::registry::is_initialized(dir)
-        || dir.join(".codeflow/test-config.json").is_file()
-        || (dir.join(".claude").is_dir() && dir.join("CLAUDE.md").is_file())
+fn is_project_root(dir: &Path) -> std::io::Result<bool> {
+    if !crate::absence::proven_absent(&dir.join(".git"))? {
+        std::fs::metadata(dir.join(".git"))?;
+        return Ok(true);
+    }
+    if crate::registry::is_initialized(dir)? {
+        return Ok(true);
+    }
+    let is_kind = |path: &Path, directory: bool| -> std::io::Result<bool> {
+        if crate::absence::proven_absent(path)? {
+            return Ok(false);
+        }
+        let metadata = std::fs::metadata(path)?;
+        Ok(if directory {
+            metadata.is_dir()
+        } else {
+            metadata.is_file()
+        })
+    };
+    Ok(is_kind(&dir.join(".codeflow/test-config.json"), false)?
+        || (is_kind(&dir.join(".claude"), true)? && is_kind(&dir.join("CLAUDE.md"), false)?))
 }
 
 fn template_path(template_dir: &Path, name: &str) -> Result<std::path::PathBuf, SetupError> {
@@ -486,7 +500,7 @@ mod tests {
 
     #[test]
     fn config_path_is_correct() {
-        let path = config_path(Path::new("/repo"));
+        let path = config_path(Path::new("/repo")).unwrap();
         assert_eq!(
             path,
             std::path::PathBuf::from("/repo/.codeflow/test-config.json")
@@ -505,7 +519,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::write(root.join("CLAUDE.md"), "# Project instructions\n").unwrap();
 
-        let canonical = canonicalize_project_dir(&nested);
+        let canonical = canonicalize_project_dir(&nested).unwrap();
         assert_eq!(
             canonical,
             root.to_path_buf(),
@@ -513,7 +527,7 @@ mod tests {
         );
 
         // config_path built from the nested dir must write to root/.codeflow/
-        let cfg = config_path(&nested);
+        let cfg = config_path(&nested).unwrap();
         assert_eq!(
             cfg,
             root.join(".codeflow/test-config.json"),
@@ -532,7 +546,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".codeflow")).unwrap();
         std::fs::write(root.join(".codeflow/policy.json"), "{}\n").unwrap();
 
-        let canonical = canonicalize_project_dir(&nested);
+        let canonical = canonicalize_project_dir(&nested).unwrap();
         assert_eq!(canonical, root.to_path_buf());
     }
 
@@ -546,7 +560,7 @@ mod tests {
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::write(root.join("CLAUDE.md"), "# Project instructions\n").unwrap();
 
-        let canonical = canonicalize_project_dir(root);
+        let canonical = canonicalize_project_dir(root).unwrap();
         assert_eq!(canonical, root.to_path_buf());
     }
 
@@ -555,7 +569,7 @@ mod tests {
         // Fresh project during `codeflow init`: no project marker anywhere.
         // The caller's directory is used as-is so init can bootstrap.
         let dir = tempfile::tempdir().unwrap();
-        let canonical = canonicalize_project_dir(dir.path());
+        let canonical = canonicalize_project_dir(dir.path()).unwrap();
         assert_eq!(canonical, dir.path().to_path_buf());
     }
 
@@ -573,7 +587,7 @@ mod tests {
         let project = dir.path().join("AppData/Local/Temp/project");
         std::fs::create_dir_all(&project).unwrap();
 
-        assert_eq!(canonicalize_project_dir(&project), project);
+        assert_eq!(canonicalize_project_dir(&project).unwrap(), project);
     }
 
     #[test]
@@ -625,7 +639,7 @@ mod tests {
         .unwrap();
         let result = run_auto(dir.path()).unwrap();
         assert!(matches!(result, SetupResult::Written));
-        assert!(config_path(dir.path()).exists());
+        assert!(config_path(dir.path()).unwrap().exists());
     }
 
     /// Zero-detection honesty: an empty repo still gets a config written (the
@@ -639,7 +653,7 @@ mod tests {
             matches!(result, SetupResult::WrittenNoTargets),
             "empty repo must report zero-detection, got {result:?}"
         );
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert!(config.targets.is_empty());
     }
 
@@ -732,7 +746,7 @@ mod tests {
     fn write_minimal_config_creates_file() {
         let dir = tempfile::tempdir().unwrap();
         write_minimal_config(dir.path()).unwrap();
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.schema_version, "1.0");
         assert!(config.targets.is_empty());
     }
@@ -783,7 +797,7 @@ mod tests {
                 test_files: Vec::new(),
             }],
         };
-        let cfg_path = config_path(dir.path());
+        let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         config::write_test_config(&cfg_path, &populated).unwrap();
         let before = std::fs::read(&cfg_path).unwrap();
@@ -800,7 +814,7 @@ mod tests {
     #[test]
     fn write_minimal_config_preserves_malformed_existing_config() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg_path = config_path(dir.path());
+        let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         let malformed = b"{ populated but malformed\n";
         std::fs::write(&cfg_path, malformed).unwrap();
@@ -855,7 +869,7 @@ mod tests {
                 test_files: Vec::new(),
             }],
         };
-        let cfg_path = config_path(dir.path());
+        let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         config::write_test_config(&cfg_path, &populated).unwrap();
         let before = std::fs::read(&cfg_path).unwrap();
@@ -876,7 +890,7 @@ mod tests {
     #[test]
     fn run_auto_rejects_and_preserves_malformed_existing_config() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg_path = config_path(dir.path());
+        let cfg_path = config_path(dir.path()).unwrap();
         std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
         let malformed = b"{ populated but malformed\n";
         std::fs::write(&cfg_path, malformed).unwrap();
@@ -900,7 +914,7 @@ mod tests {
             run_auto(dir.path()).unwrap(),
             SetupResult::Written
         ));
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.targets.len(), 1);
         assert_eq!(config.targets[0].name, "rust-core");
     }
@@ -1018,7 +1032,7 @@ mod tests {
         let result =
             run_template(dir.path(), &assets_template_dir(), "minimal.json", false).unwrap();
         assert!(matches!(result, SetupResult::Written));
-        assert!(config_path(dir.path()).exists());
+        assert!(config_path(dir.path()).unwrap().exists());
     }
 
     #[test]
@@ -1032,11 +1046,14 @@ mod tests {
             .join(".codeflow/test-config.schema.json")
             .exists());
 
-        let before = std::fs::read(config_path(dir.path())).unwrap();
+        let before = std::fs::read(config_path(dir.path()).unwrap()).unwrap();
         let error = run_template_content(dir.path(), "minimal.json", &content, false)
             .expect_err("implicit replacement must be rejected");
         assert!(matches!(error, SetupError::ConfigExists(_)));
-        assert_eq!(std::fs::read(config_path(dir.path())).unwrap(), before);
+        assert_eq!(
+            std::fs::read(config_path(dir.path()).unwrap()).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -1049,7 +1066,7 @@ mod tests {
             false,
         );
         assert!(matches!(result, Err(SetupError::TemplateNotFound(_))));
-        assert!(!config_path(dir.path()).exists());
+        assert!(!config_path(dir.path()).unwrap().exists());
     }
 
     #[test]
@@ -1067,7 +1084,7 @@ mod tests {
         .unwrap();
         assert!(matches!(result, SetupResult::Written));
         // Verify config now has a target (overwritten from minimal)
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.targets.len(), 1);
     }
 
@@ -1085,7 +1102,7 @@ mod tests {
         ]);
         let result = run_add_target(dir.path(), &prompts).unwrap();
         assert!(matches!(result, SetupResult::Written));
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.targets.len(), 1);
         assert_eq!(config.targets[0].name, "my-target");
     }
@@ -1096,12 +1113,15 @@ mod tests {
         write_minimal_config(dir.path()).unwrap();
         let first = ScriptedPromptProvider::new(vec!["api", "custom", ".", "true", "true"]);
         run_add_target(dir.path(), &first).unwrap();
-        let before = std::fs::read(config_path(dir.path())).unwrap();
+        let before = std::fs::read(config_path(dir.path()).unwrap()).unwrap();
 
         let duplicate = ScriptedPromptProvider::new(vec!["api", "custom", ".", "true", "true"]);
         let error = run_add_target(dir.path(), &duplicate).unwrap_err();
         assert!(matches!(error, SetupError::DuplicateTarget(name) if name == "api"));
-        assert_eq!(std::fs::read(config_path(dir.path())).unwrap(), before);
+        assert_eq!(
+            std::fs::read(config_path(dir.path()).unwrap()).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -1137,7 +1157,7 @@ mod tests {
         let prompts = ScriptedPromptProvider::new(vec![]);
         let result = run_interactive(dir.path(), &prompts).unwrap();
         assert!(matches!(result, SetupResult::Written));
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert!(config.targets.is_empty());
     }
 
@@ -1154,7 +1174,7 @@ mod tests {
         let prompts = ScriptedPromptProvider::new(vec!["y", "", "", "", ""]);
         let result = run_interactive(dir.path(), &prompts).unwrap();
         assert!(matches!(result, SetupResult::Written));
-        let config = config::load_test_config(&config_path(dir.path())).unwrap();
+        let config = config::load_test_config(&config_path(dir.path()).unwrap()).unwrap();
         assert_eq!(config.targets.len(), 1);
     }
 
@@ -1166,5 +1186,18 @@ mod tests {
         let prompts = ScriptedPromptProvider::new(vec!["r"]);
         let result = run_interactive(dir.path(), &prompts).unwrap();
         assert!(matches!(result, SetupResult::Written));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_setup_refuses_unreadable_root_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(canonicalize_project_dir(dir.path()).unwrap(), dir.path());
+        std::os::unix::fs::symlink("missing", dir.path().join(".codeflow")).unwrap();
+        assert!(canonicalize_project_dir(dir.path()).is_err());
     }
 }

@@ -147,9 +147,14 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
                 continue;
             }
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            let Ok(text) = std::str::from_utf8(&bytes) else {
-                continue;
-            };
+            // Operative catalog inputs are text. Refuse an undecodable file
+            // rather than claiming its selectors were checked.
+            let text = std::str::from_utf8(&bytes).map_err(|error| {
+                format!(
+                    "cannot decode {} as UTF-8: {error}; repair the input",
+                    path.display()
+                )
+            })?;
             for (index, line) in text.lines().enumerate() {
                 for token in &tokens {
                     if contains_token(line, token) {
@@ -165,4 +170,24 @@ fn scan(root: &Path, catalog: &Catalog, retired: bool) -> Result<Vec<Finding>, S
     }
     findings.sort_by(|a, b| (&a.path, a.line, &a.token).cmp(&(&b.path, b.line, &b.token)));
     Ok(findings)
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_catalog_scan_refuses_non_utf8_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = crate::model_catalog::inputs::load_catalog(dir.path()).unwrap();
+        assert!(instruction_selectors(dir.path(), &catalog)
+            .unwrap()
+            .is_empty());
+        std::fs::write(dir.path().join("SKILL.md"), b"claude-opus-5-5\n\xff").unwrap();
+        let error = instruction_selectors(dir.path(), &catalog).unwrap_err();
+        assert!(
+            error.contains("SKILL.md") && error.contains("UTF-8"),
+            "{error}"
+        );
+    }
 }

@@ -640,7 +640,7 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
         assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
-        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)), &root).unwrap();
+        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)).unwrap(), &root).unwrap();
         let locked = gate(None);
         let err = String::from_utf8_lossy(&locked.stderr).to_string();
         assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");

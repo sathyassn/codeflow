@@ -88,24 +88,32 @@ pub fn qualified_bindings_path(home: &Path) -> PathBuf {
 
 /// Whether `repo_root` looks like an initialized codeflow repo: a
 /// `.codeflow/` directory containing `project.toml` or `policy.json`.
-#[must_use]
-pub fn is_initialized(repo_root: &Path) -> bool {
+/// # Errors
+/// Returns metadata errors instead of skipping a possible repository root.
+pub fn is_initialized(repo_root: &Path) -> std::io::Result<bool> {
     let dir = repo_root.join(".codeflow");
-    dir.join("project.toml").is_file() || dir.join("policy.json").is_file()
+    for name in ["project.toml", "policy.json"] {
+        let path = dir.join(name);
+        if !crate::absence::proven_absent(&path)? && std::fs::metadata(&path)?.is_file() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Walk upward from `start` to find the nearest directory containing a
 /// `.codeflow/` directory (an initialized repo root).
-#[must_use]
-pub fn find_repo_root(start: &Path) -> Option<PathBuf> {
+/// # Errors
+/// Returns an error when a candidate root cannot be inspected.
+pub fn find_repo_root(start: &Path) -> std::io::Result<Option<PathBuf>> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if is_initialized(dir) {
-            return Some(dir.to_path_buf());
+        if is_initialized(dir)? {
+            return Ok(Some(dir.to_path_buf()));
         }
         current = dir.parent();
     }
-    None
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +236,7 @@ pub fn read_project_info(repo_root: &Path) -> Result<ProjectInfo, String> {
 /// Returns `Err(String)` when the lock cannot be acquired or the registry
 /// file cannot be read, parsed, or written for another reason.
 pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
-    if !is_initialized(repo_root) {
+    if !is_initialized(repo_root).map_err(|error| error.to_string())? {
         return Ok(false);
     }
     let canonical = std::fs::canonicalize(repo_root)
@@ -443,9 +451,9 @@ mod tests {
     #[test]
     fn test_is_initialized_requires_codeflow_dir() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!is_initialized(dir.path()));
+        assert!(!is_initialized(dir.path()).unwrap());
         init_repo(dir.path(), None);
-        assert!(is_initialized(dir.path()));
+        assert!(is_initialized(dir.path()).unwrap());
     }
 
     #[test]
@@ -454,14 +462,14 @@ mod tests {
         init_repo(dir.path(), None);
         let nested = dir.path().join("src/deep/module");
         fs::create_dir_all(&nested).unwrap();
-        let found = find_repo_root(&nested).unwrap();
+        let found = find_repo_root(&nested).unwrap().unwrap();
         assert_eq!(found, dir.path());
     }
 
     #[test]
     fn test_find_repo_root_none_outside() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(find_repo_root(dir.path()), None);
+        assert_eq!(find_repo_root(dir.path()).unwrap(), None);
     }
 
     #[test]
@@ -476,7 +484,7 @@ mod tests {
         let nested = dir.path().join("AppData/Local/Temp/project");
         fs::create_dir_all(&nested).unwrap();
 
-        assert_eq!(find_repo_root(&nested), None);
+        assert_eq!(find_repo_root(&nested).unwrap(), None);
     }
 
     #[test]
@@ -802,5 +810,26 @@ mod r16_obtaining_regressions {
             std::fs::write(&path, text).unwrap();
             assert!(super::read_project_info(dir.path()).is_err());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_registry_stops_at_unreadable_root() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_initialized(dir.path()).unwrap());
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(dir.path().join(".codeflow/policy.json"), "{}").unwrap();
+        let nested = dir.path().join("child");
+        std::fs::create_dir(&nested).unwrap();
+        assert_eq!(
+            find_repo_root(&nested).unwrap(),
+            Some(dir.path().to_path_buf())
+        );
+        std::os::unix::fs::symlink("missing", nested.join(".codeflow")).unwrap();
+        assert!(find_repo_root(&nested).is_err());
     }
 }

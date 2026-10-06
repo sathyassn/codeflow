@@ -29,7 +29,11 @@ pub(crate) fn parse_lcov_str(
     let mut lines_found = 0u64;
     let mut lines_hit = 0u64;
 
-    for line in content.split_terminator('\n') {
+    for (index, line) in content.split_terminator('\n').enumerate() {
+        let invalid = || TestingError::CoverageParseError {
+            path: source_path.to_path_buf(),
+            message: format!("line {}: malformed LCOV record", index + 1),
+        };
         let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() {
             continue;
@@ -39,29 +43,22 @@ pub(crate) fn parse_lcov_str(
             current_file = Some(sf.to_string());
             lines_found = 0;
             lines_hit = 0;
-        } else if line.starts_with("DA:") {
-            // DA:line_number,execution_count
-            if let Some(parts) = line.strip_prefix("DA:") {
-                let parts: Vec<&str> = parts.splitn(2, ',').collect();
-                if parts.len() == 2 {
-                    lines_found += 1;
-                    if let Ok(count) = parts[1].parse::<u64>() {
-                        if count > 0 {
-                            lines_hit += 1;
-                        }
-                    }
-                }
+        } else if let Some(da) = line.strip_prefix("DA:") {
+            // LCOV permits an optional checksum after the execution count.
+            let parts: Vec<_> = da.split(',').collect();
+            if !(2..=3).contains(&parts.len()) || current_file.is_none() {
+                return Err(invalid());
+            }
+            parts[0].parse::<u64>().map_err(|_| invalid())?;
+            let count = parts[1].parse::<u64>().map_err(|_| invalid())?;
+            lines_found += 1;
+            if count > 0 {
+                lines_hit += 1;
             }
         } else if let Some(lf) = line.strip_prefix("LF:") {
-            // Override with explicit lines found if present
-            if let Ok(n) = lf.parse::<u64>() {
-                lines_found = n;
-            }
+            lines_found = lf.parse().map_err(|_| invalid())?;
         } else if let Some(lh) = line.strip_prefix("LH:") {
-            // Override with explicit lines hit if present
-            if let Ok(n) = lh.parse::<u64>() {
-                lines_hit = n;
-            }
+            lines_hit = lh.parse().map_err(|_| invalid())?;
         } else if line == "end_of_record" {
             if let Some(ref file_path) = current_file {
                 let percent = FileCoverage::compute_percent(lines_found, lines_hit);
@@ -191,5 +188,29 @@ mod r15_text_regressions {
         )
         .unwrap();
         assert_eq!(rows[0].path, "file.rs\u{a0}");
+    }
+}
+
+#[cfg(test)]
+mod r22_regressions {
+    use super::*;
+
+    #[test]
+    fn r22_lcov_malformed_records_name_file_and_line() {
+        let path = Path::new("cov.info");
+        assert!(parse_lcov_str("", path).unwrap().is_empty());
+        for record in ["DA:1", "DA:x,1", "DA:1,x", "LF:x", "LH:x"] {
+            let error = parse_lcov_str(&format!("SF:file.rs\n{record}\nend_of_record\n"), path)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("cov.info") && error.contains("line 2"),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            parse_lcov_str("SF:a\nDA:1,1,checksum\nend_of_record\n", path).unwrap()[0].lines_hit,
+            1
+        );
     }
 }

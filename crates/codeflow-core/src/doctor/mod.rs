@@ -542,8 +542,20 @@ fn hooks_wiring(root: &Path) -> Wiring {
     use crate::scaffold::state::{ProjectState, GIT_HOOKS_UNWIRED};
 
     let shims = root.join(CODEFLOW_HOOKS_PATH);
-    if !shims.join("pre-commit").exists() {
-        return Wiring::Read; // no scaffolded shims — nothing to wire
+    match crate::absence::proven_absent(&shims.join("pre-commit")) {
+        Ok(true) => return Wiring::Read,
+        Ok(false) => {
+            if let Err(error) = std::fs::metadata(shims.join("pre-commit")) {
+                return Wiring::Unreadable(format!(
+                    "cannot inspect hook shim: {error}; repair .codeflow/git-hooks/pre-commit"
+                ));
+            }
+        }
+        Err(error) => {
+            return Wiring::Unreadable(format!(
+                "cannot inspect hook shim: {error}; repair .codeflow/git-hooks/pre-commit"
+            ))
+        }
     }
     // Prefer the configured string: relative `.codeflow/git-hooks` is the
     // contract so each worktree uses its own shims. An absolute path (often
@@ -709,6 +721,28 @@ fn check_claude(opts: &Options) -> CheckResult {
     }
 }
 
+fn input_absent(path: &Path) -> std::io::Result<bool> {
+    if crate::absence::proven_absent(path)? {
+        return Ok(true);
+    }
+    std::fs::metadata(path)?;
+    Ok(false)
+}
+
+fn input_failure(
+    name: &str,
+    start: Instant,
+    path: &Path,
+    error: impl std::fmt::Display,
+) -> CheckResult {
+    CheckResult {
+        name: name.into(),
+        status: Status::Fail,
+        message: format!("cannot read {}: {error}; repair the file or its parent directories, then rerun `codeflow doctor --check {name}`", path.display()),
+        duration: start.elapsed(),
+    }
+}
+
 /// Codex harness wiring (ADR-0008). `.codex/hooks.json` binds the same
 /// `codeflow hook` guards to an interactive codex session that
 /// `.claude/settings.json` binds to Claude Code, but only after a one-time
@@ -728,7 +762,11 @@ fn check_codex(opts: &Options) -> CheckResult {
         .join(".codex")
         .join("hooks.json");
 
-    if !hooks_json.exists() {
+    let absent = match input_absent(&hooks_json) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("codex", start, &hooks_json, error),
+    };
+    if absent {
         return CheckResult {
             name: "codex".into(),
             status: Status::Pass,
@@ -1058,15 +1096,29 @@ fn check_grok(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = Path::new(&opts.project_dir);
     let hooks_dir = root.join(".grok").join("hooks");
-    let has_project_hooks = hooks_dir.is_dir()
-        && std::fs::read_dir(&hooks_dir).is_ok_and(|entries| {
-            entries.flatten().any(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
-            })
-        });
+    let has_project_hooks = (|| -> std::io::Result<bool> {
+        if input_absent(&hooks_dir)? {
+            return Ok(false);
+        }
+        let mut found = false;
+        for entry in std::fs::read_dir(&hooks_dir)? {
+            let entry = entry?;
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                // An existing hook entry must be obtainable even when another entry matched.
+                std::fs::metadata(entry.path())?;
+                found = true;
+            }
+        }
+        Ok(found)
+    })();
+    let has_project_hooks = match has_project_hooks {
+        Ok(found) => found,
+        Err(error) => return input_failure("grok", start, &hooks_dir, error),
+    };
 
     if !has_project_hooks {
         return CheckResult {
@@ -1589,7 +1641,11 @@ fn check_config(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let config_dir = Path::new(&opts.project_dir).join(".codeflow");
 
-    if !config_dir.is_dir() {
+    let absent = match input_absent(&config_dir) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("config", start, &config_dir, error),
+    };
+    if absent {
         return CheckResult {
             name: "config".into(),
             status: Status::Warn(remedy::DOCTOR_INIT.remedy()),
@@ -2055,7 +2111,7 @@ fn walk_json_files_inner(
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        if std::fs::metadata(&path)?.is_dir() {
             walk_json_files_inner(root, &path, invalid)?;
         } else if path.extension().is_some_and(|ext| ext == "json") {
             // Shown to a person (OS text rule, issue 79).
@@ -2836,7 +2892,17 @@ fn check_adopter_fit(opts: &Options) -> CheckResult {
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
-    let github = ci_workflow_dest(&root);
+    let github = match ci_workflow_dest(&root) {
+        Ok(dest) => dest,
+        Err(error) => {
+            return input_failure(
+                "ci-perimeter",
+                start,
+                &InstalledManifest::path(&root),
+                error,
+            )
+        }
+    };
     // The GitHub workflow `init` scaffolds, then the copy-in platform files
     // at the paths their platforms read.
     let mut found = None;
@@ -3002,16 +3068,22 @@ fn check_id_registry(opts: &Options) -> CheckResult {
 
 /// Where init placed the CI workflow: the installed-file record for the shipped
 /// CI asset (robust to a relocated workflow), else the canonical dest.
-fn ci_workflow_dest(root: &Path) -> String {
-    InstalledManifest::load_or_default(root, "0")
-        .ok()
-        .and_then(|m| {
-            m.files
-                .iter()
-                .find(|(_, f)| f.src == CI_ASSET_SRC)
-                .map(|(dest, _)| dest.clone())
-        })
-        .unwrap_or_else(|| CI_DEFAULT_DEST.to_string())
+fn read_installed_manifest(root: &Path) -> Result<InstalledManifest, String> {
+    let path = InstalledManifest::path(root);
+    if crate::absence::proven_absent(&path).map_err(|error| error.to_string())? {
+        return Ok(InstalledManifest::new("0"));
+    }
+    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+}
+
+fn ci_workflow_dest(root: &Path) -> Result<String, String> {
+    let installed = read_installed_manifest(root)?;
+    Ok(installed
+        .files
+        .iter()
+        .find(|(_, file)| file.src == CI_ASSET_SRC)
+        .map_or_else(|| CI_DEFAULT_DEST.to_string(), |(dest, _)| dest.clone()))
 }
 
 /// Managed-region drift (charter §4.3.2): WARN when a marker-delimited managed
@@ -3023,8 +3095,8 @@ fn ci_workflow_dest(root: &Path) -> String {
 /// the current block's hash and flags any that no longer match. Content OUTSIDE
 /// the markers is project-owned and never compared, and JSON settings merges
 /// (no text markers; the record holds the shipped preset's hash, not the
-/// on-disk block) are skipped. WARN only; stays quiet where it cannot read the
-/// record or a file — it flags, it never guesses.
+/// on-disk block) are skipped. Unreadable records and managed files fail with
+/// a repair remedy; a genuinely absent record keeps the check optional.
 fn check_managed_drift(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -3035,8 +3107,16 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         duration: start.elapsed(),
     };
 
-    let Ok(installed) = InstalledManifest::load_or_default(&root, "0") else {
-        return pass("no readable installed manifest; drift check skipped".into());
+    let installed = match read_installed_manifest(&root) {
+        Ok(installed) => installed,
+        Err(error) => {
+            return input_failure(
+                "managed-drift",
+                start,
+                &InstalledManifest::path(&root),
+                error,
+            )
+        }
     };
 
     let mut drifted: Vec<String> = Vec::new();
@@ -3044,8 +3124,15 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         if file.ownership != Ownership::ManagedRegion {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(root.join(dest)) else {
-            continue; // file absent: presence is another check's concern
+        let path = root.join(dest);
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => continue, // genuine absence belongs to the presence check
+            Ok(false) => {}
+            Err(error) => return input_failure("managed-drift", start, &path, error),
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => return input_failure("managed-drift", start, &path, error),
         };
         // Marker-delimited regions only (markdown/hash). A JSON settings merge
         // has no text markers, so extraction returns None and it is skipped —
@@ -3464,7 +3551,11 @@ fn check_test_config(opts: &Options) -> CheckResult {
     let root = PathBuf::from(&opts.project_dir);
     let config_path = root.join(".codeflow").join("test-config.json");
 
-    if !config_path.exists() {
+    let absent = match input_absent(&config_path) {
+        Ok(absent) => absent,
+        Err(error) => return input_failure("test-config", start, &config_path, error),
+    };
+    if absent {
         return CheckResult {
             name: "test-config".into(),
             status: Status::Pass,
@@ -3473,6 +3564,9 @@ fn check_test_config(opts: &Options) -> CheckResult {
         };
     }
 
+    if let Err(error) = crate::testing::config::load_test_config(&config_path) {
+        return input_failure("test-config", start, &config_path, error);
+    }
     let checks = crate::testing::doctor::run_all_checks(&root);
     let failures: Vec<String> = checks
         .iter()
@@ -6615,5 +6709,120 @@ mod r16_core_regressions {
         let actual = super::Options::default().env(name);
         std::env::remove_var(name);
         assert!(actual.is_some());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod r22_regressions {
+    use super::*;
+
+    fn opts(root: &Path) -> Options {
+        Options {
+            project_dir: root.to_str().unwrap().into(),
+            harness_home: Some(root.into()),
+            ..Options::default()
+        }
+    }
+    fn optional_input(relative: &str, check: fn(&Options) -> CheckResult) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let absent = check(&opts(dir.path()));
+        assert_ne!(
+            absent.status,
+            Status::Fail,
+            "absence: {relative}: {}",
+            absent.message
+        );
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        let result = check(&opts(dir.path()));
+        assert_eq!(
+            result.status,
+            Status::Fail,
+            "{relative}: {}",
+            result.message
+        );
+        assert!(result.message.contains("repair"), "{}", result.message);
+    }
+    #[test]
+    fn r22_codex_input() {
+        optional_input(".codex/hooks.json", check_codex);
+    }
+    #[test]
+    fn r22_grok_input() {
+        optional_input(".grok/hooks", check_grok);
+    }
+    #[test]
+    fn r22_config_input() {
+        optional_input(".codeflow", check_config);
+    }
+    #[test]
+    fn r22_test_config_input() {
+        optional_input(".codeflow/test-config.json", check_test_config);
+    }
+    #[test]
+    fn r22_drift_manifest_input() {
+        optional_input(".codeflow/manifest.json", check_managed_drift);
+    }
+    #[test]
+    fn r22_ci_manifest_input() {
+        optional_input(".codeflow/manifest.json", check_ci_perimeter);
+    }
+    #[test]
+    fn r22_hook_wiring_requires_readable_shim() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(hooks_wiring(dir.path()), Wiring::Read));
+        std::fs::create_dir_all(dir.path().join(".codeflow/git-hooks")).unwrap();
+        let path = dir.path().join(".codeflow/git-hooks/pre-commit");
+        std::os::unix::fs::symlink(dir.path().join("missing"), path).unwrap();
+        assert!(matches!(hooks_wiring(dir.path()), Wiring::Unreadable(_)));
+    }
+    #[test]
+    fn r22_grok_empty_listing_and_broken_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks = dir.path().join(".grok/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        assert_eq!(check_grok(&opts(dir.path())).status, Status::Pass);
+        std::os::unix::fs::symlink(dir.path().join("gone"), hooks.join("guard.json")).unwrap();
+        assert_eq!(check_grok(&opts(dir.path())).status, Status::Fail);
+    }
+    #[test]
+    fn r22_json_walk_refuses_unresolved_directory_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(walk_json_files(dir.path(), &mut Vec::new()).is_ok());
+        std::os::unix::fs::symlink("missing", dir.path().join("subdir")).unwrap();
+        assert!(walk_json_files(dir.path(), &mut Vec::new()).is_err());
+    }
+    #[test]
+    fn r22_corrupt_manifest_fails_ci_and_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(InstalledManifest::path(dir.path()), "{").unwrap();
+        for check in [check_managed_drift, check_ci_perimeter] {
+            assert_eq!(check(&opts(dir.path())).status, Status::Fail);
+        }
+    }
+    #[test]
+    fn r22_managed_file_read_failure_is_not_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = InstalledManifest::new("0");
+        manifest.files.insert(
+            "AGENTS.md".into(),
+            crate::scaffold::state::InstalledFile {
+                src: "AGENTS.md.tmpl".into(),
+                ownership: Ownership::ManagedRegion,
+                sha256: String::new(),
+                exec: false,
+            },
+        );
+        std::fs::create_dir(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            InstalledManifest::path(dir.path()),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(check_managed_drift(&opts(dir.path())).status, Status::Pass);
+        std::os::unix::fs::symlink("gone", dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(check_managed_drift(&opts(dir.path())).status, Status::Fail);
     }
 }
