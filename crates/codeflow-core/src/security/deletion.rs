@@ -4376,21 +4376,53 @@ impl Reader<'_> {
     /// `xargs CMD`: the command with each input value appended, or put in
     /// place of its `-I` token, and the command alone.
     fn judge_xargs(&mut self, args: &[String], st: &State, input: Option<&Fed>, ambiguous: bool) {
-        let (inner, replace, file_input, delimiter) = after_xargs_options(args);
-        if inner.is_empty() {
+        let options = after_xargs_options(args);
+        if self.input_options_unproven(&options, ambiguous) || options.command.is_empty() {
             return;
         }
+        let inner = options.command;
         self.exec(inner, st, None, false, ambiguous);
-        let inputs = if file_input { None } else { input };
-        for item in items(inputs, delimiter) {
-            let line: Vec<String> = match &replace {
+        for item in items(input, options.delimiter) {
+            let line: Vec<String> = match &options.replace {
                 Some(token) => inner
                     .iter()
-                    .map(|w| w.replace(token.as_str(), &item.value))
+                    .map(|word| {
+                        if word == token {
+                            item.value.clone()
+                        } else {
+                            word.clone()
+                        }
+                    })
                     .collect(),
                 None => inner.iter().cloned().chain([item.value.clone()]).collect(),
             };
             self.exec(&line, st, None, item.tree, ambiguous);
+        }
+    }
+
+    /// Refuse unknown input transformations before interpreting any operands.
+    fn input_options_unproven(&mut self, options: &InputOptions<'_>, ambiguous: bool) -> bool {
+        let reason = if !options.unmodelled.is_empty() {
+            Some(format!(
+                "input options the guard does not model: {}",
+                options.unmodelled.join(", ")
+            ))
+        } else if options.replace.as_ref().is_some_and(|token| {
+            token.is_empty()
+                || options
+                    .command
+                    .iter()
+                    .any(|word| word.contains(token) && word != token)
+        }) {
+            Some("replacement within an argument, which the guard cannot model exactly".into())
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.report(Judged::Unproven(Unproven { reason, cwd: false }), ambiguous);
+            true
+        } else {
+            false
         }
     }
 
@@ -4402,52 +4434,15 @@ impl Reader<'_> {
         input: Option<&Fed>,
         ambiguous: bool,
     ) {
-        const WITH_VALUE: &[&str] = &[
-            "-j",
-            "--jobs",
-            "-S",
-            "--sshlogin",
-            "--joblog",
-            "-a",
-            "--arg-file",
-            "--colsep",
-            "-d",
-            "--delimiter",
-            "--results",
-            "--tmpdir",
-            "--workdir",
-            "-I",
-            "--timeout",
-            "--delay",
-        ];
-        let mut delimiter = Delimiter::Char('\n');
-        let mut at = 0;
-        while let Some(arg) = args.get(at) {
-            if arg == "--" {
-                at += 1;
-                break;
-            }
-            if !arg.starts_with('-') || arg.starts_with(":::") {
-                break;
-            }
-            if let Some((selected, consumed)) = delimiter_option(&args[at..]) {
-                delimiter = selected;
-                at += consumed;
-                continue;
-            }
-            at += if WITH_VALUE.contains(&arg.as_str()) {
-                2
-            } else {
-                1
-            };
-        }
-        let rest = args.get(at..).unwrap_or_default();
+        let mut options = input_options(args, true);
+        let rest = options.command;
         let split = rest
             .iter()
             .position(|a| a.starts_with(":::"))
             .unwrap_or(rest.len());
         let (command, sources) = rest.split_at(split);
-        if command.is_empty() {
+        options.command = command;
+        if self.input_options_unproven(&options, ambiguous) || command.is_empty() {
             return;
         }
         let mut entries: Vec<Input> = sources
@@ -4459,14 +4454,21 @@ impl Reader<'_> {
             })
             .collect();
         if sources.is_empty() {
-            entries.extend(items(input, delimiter));
+            entries.extend(items(input, options.delimiter));
         }
         self.exec(command, st, None, false, ambiguous);
         for item in entries {
-            let line: Vec<String> = if command.iter().any(|w| w.contains("{}")) {
+            let token = options.replace.as_deref().unwrap_or("{}");
+            let line: Vec<String> = if command.iter().any(|word| word == token) {
                 command
                     .iter()
-                    .map(|w| w.replace("{}", &item.value))
+                    .map(|word| {
+                        if word == token {
+                            item.value.clone()
+                        } else {
+                            word.clone()
+                        }
+                    })
                     .collect()
             } else {
                 command
@@ -4785,7 +4787,11 @@ impl Reader<'_> {
                             }
                         }
                     }
-                    Err(_) if !Path::new(listed).is_dir() => {}
+                    Err(_)
+                        if crate::absence::proven_absent(Path::new(listed))
+                            .is_ok_and(|absent| absent)
+                            || std::fs::metadata(listed)
+                                .is_ok_and(|metadata| !metadata.is_dir()) => {}
                     Err(_) => return None,
                 }
                 next.extend(
@@ -6216,6 +6222,7 @@ fn heredoc_word(body: &str) -> Word {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Delimiter {
     Blanks,
+    ReplacementLines,
     Nul,
     Char(char),
 }
@@ -6230,6 +6237,23 @@ fn items(fed: Option<&Fed>, delimiter: Delimiter) -> Vec<Input> {
         .flat_map(|item| {
             let values = match delimiter {
                 Delimiter::Blanks => xargs_words(&item.value),
+                Delimiter::ReplacementLines => item
+                    .value
+                    .split('\n')
+                    .filter_map(|line| {
+                        let line = line.trim_start_matches([' ', '\t']);
+                        if line.is_empty() {
+                            return None;
+                        }
+                        // BSD and GNU replacement quoting/blank normalization can
+                        // differ. Only a shared, unchanged line is proven here.
+                        Some(if xargs_words(line).join(" ") == line {
+                            line.to_owned()
+                        } else {
+                            taint("xargs replacement quoting or blank normalization")
+                        })
+                    })
+                    .collect(),
                 Delimiter::Nul | Delimiter::Char(_) => {
                     let separator = match delimiter {
                         Delimiter::Char(ch) => ch,
@@ -6298,21 +6322,8 @@ fn xargs_words(text: &str) -> Vec<String> {
     words
 }
 
-/// Decode the explicitly supported xargs/parallel delimiter spellings.
-fn delimiter_option(args: &[String]) -> Option<(Delimiter, usize)> {
-    let arg = args.first()?;
-    if matches!(arg.as_str(), "-0" | "--null") {
-        return Some((Delimiter::Nul, 1));
-    }
-    let (value, consumed) = if matches!(arg.as_str(), "-d" | "--delimiter") {
-        (args.get(1)?.as_str(), 2)
-    } else {
-        (
-            arg.strip_prefix("--delimiter=")
-                .or_else(|| arg.strip_prefix("-d"))?,
-            1,
-        )
-    };
+/// Decode a delimiter value without changing its content.
+fn delimiter_value(value: &str) -> Option<Delimiter> {
     let mut chars = value.chars();
     let first = chars.next()?;
     let ch = if first == '\\' {
@@ -6332,7 +6343,7 @@ fn delimiter_option(args: &[String]) -> Option<(Delimiter, usize)> {
     } else {
         first
     };
-    Some((Delimiter::Char(ch), consumed))
+    Some(Delimiter::Char(ch))
 }
 
 /// A command after its launchers, with the environment and working
@@ -6639,26 +6650,32 @@ fn shell_script(args: &[String]) -> Option<(&str, &[String])> {
     Some((args[script].as_str(), &args[script + 1..]))
 }
 
-/// The command `xargs` runs, its replacement token and whether it reads
-/// its input from a file instead.
-fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool, Delimiter) {
-    const WITH_VALUE: &[&str] = &[
-        "-L",
-        "-n",
-        "-P",
-        "-s",
-        "-d",
-        "-E",
-        "--delimiter",
-        "--eof",
-        "--max-lines",
-        "--max-args",
-        "--max-procs",
-        "--max-chars",
-    ];
-    let mut delimiter = Delimiter::Blanks;
-    let mut replace = None;
-    let mut file_input = false;
+/// Parsed input-command options; unknown transformations cannot grant a clear verdict.
+struct InputOptions<'a> {
+    command: &'a [String],
+    replace: Option<String>,
+    delimiter: Delimiter,
+    unmodelled: Vec<String>,
+}
+
+fn after_xargs_options(args: &[String]) -> InputOptions<'_> {
+    input_options(args, false)
+}
+
+/// Short value options consume the remainder of their cluster, or the next word.
+#[allow(clippy::too_many_lines)]
+fn input_options(args: &[String], parallel: bool) -> InputOptions<'_> {
+    let mut options = InputOptions {
+        command: &[],
+        replace: parallel.then(|| "{}".into()),
+        delimiter: if parallel {
+            Delimiter::Char('\n')
+        } else {
+            Delimiter::Blanks
+        },
+        unmodelled: Vec::new(),
+    };
+    let mut explicit_delimiter = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "--" {
@@ -6668,41 +6685,95 @@ fn after_xargs_options(args: &[String]) -> (&[String], Option<String>, bool, Del
         if !arg.starts_with('-') || arg == "-" {
             break;
         }
-        if let Some((selected, consumed)) = delimiter_option(&args[at..]) {
-            delimiter = selected;
-            at += consumed;
-        } else if arg == "-I" {
-            replace = args.get(at + 1).cloned();
-            at += 2;
-        } else if let Some(token) = arg.strip_prefix("-I") {
-            replace = Some(token.to_string());
-            at += 1;
-        } else if let Some(token) = arg.strip_prefix("--replace") {
-            replace = Some(token.strip_prefix('=').unwrap_or("{}").to_string());
-            at += 1;
-        } else if arg == "-i" {
-            replace = Some("{}".to_string());
-            at += 1;
-        } else if matches!(arg.as_str(), "-a" | "--arg-file") {
-            file_input = true;
-            at += 2;
-        } else if arg.starts_with("--arg-file=") {
-            file_input = true;
-            at += 1;
-        } else {
-            at += if WITH_VALUE.contains(&arg.as_str()) {
-                2
-            } else {
-                1
-            };
+        at += 1;
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, attached) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "null" if attached.is_none() => {
+                    options.delimiter = Delimiter::Nul;
+                    explicit_delimiter = true;
+                }
+                "verbose" | "no-run-if-empty" if attached.is_none() => {}
+                "replace" => options.replace = Some(attached.unwrap_or("{}").into()),
+                "delimiter" | "max-procs" | "jobs" | "max-lines" | "max-args" | "max-chars"
+                | "eof" | "arg-file" | "sshlogin" | "joblog" | "colsep" | "results" | "tmpdir"
+                | "workdir" | "timeout" | "delay" => {
+                    let value = attached.or_else(|| {
+                        let next = args.get(at);
+                        at += 1;
+                        next.map(String::as_str)
+                    });
+                    match (name, value) {
+                        ("delimiter", Some(value)) => match delimiter_value(value) {
+                            Some(delimiter) => {
+                                options.delimiter = delimiter;
+                                explicit_delimiter = true;
+                            }
+                            None => options.unmodelled.push(arg.clone()),
+                        },
+                        ("max-procs", Some(_)) => {}
+                        ("jobs", Some(_)) if parallel => {}
+                        _ => options.unmodelled.push(arg.clone()),
+                    }
+                }
+                _ => options.unmodelled.push(arg.clone()),
+            }
+            continue;
+        }
+        let cluster = &arg[1..];
+        for (offset, flag) in cluster.char_indices() {
+            if flag == 'i' && !parallel {
+                let rest = &cluster[offset + 1..];
+                options.replace = Some(if rest.is_empty() { "{}" } else { rest }.into());
+                break;
+            }
+            if "dIJLnPsEaRS".contains(flag) || (parallel && flag == 'j') {
+                let rest = &cluster[offset + flag.len_utf8()..];
+                let value = if rest.is_empty() {
+                    let next = args.get(at);
+                    at += 1;
+                    next.map(String::as_str)
+                } else {
+                    Some(rest)
+                };
+                match (flag, value) {
+                    ('d', Some(value)) => match delimiter_value(value) {
+                        Some(delimiter) => {
+                            options.delimiter = delimiter;
+                            explicit_delimiter = true;
+                        }
+                        None => options.unmodelled.push("-d without a delimiter".into()),
+                    },
+                    ('I', Some(value)) => options.replace = Some(value.into()),
+                    // BSD -J splits/replaces differently from -I, including
+                    // first-only substitution. Keep that grammar unproven.
+                    ('J', Some(value)) => {
+                        options.replace = Some(value.into());
+                        options.unmodelled.push("-J replacement semantics".into());
+                    }
+                    ('P', Some(_)) => {}
+                    ('j', Some(_)) if parallel => {}
+                    _ => options.unmodelled.push(format!("-{flag}")),
+                }
+                break;
+            }
+            match flag {
+                '0' => {
+                    options.delimiter = Delimiter::Nul;
+                    explicit_delimiter = true;
+                }
+                't' | 'r' => {}
+                _ => options.unmodelled.push(format!("-{flag}")),
+            }
         }
     }
-    (
-        args.get(at..).unwrap_or_default(),
-        replace,
-        file_input,
-        delimiter,
-    )
+    if options.replace.is_some() && !explicit_delimiter && !parallel {
+        options.delimiter = Delimiter::ReplacementLines;
+    }
+    options.command = args.get(at..).unwrap_or_default();
+    options
 }
 
 /// The commands a `find` expression runs with `-exec`, `-execdir`, `-ok`
@@ -6743,7 +6814,7 @@ fn runs_remover(argv: &[String], depth: usize) -> bool {
     };
     match program_name(first).as_str() {
         "rm" | "rmdir" | "unlink" | "shred" | "srm" => true,
-        "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).0, depth + 1),
+        "xargs" => runs_remover(after_xargs_options(&run.argv[1..]).command, depth + 1),
         "bash" | "sh" | "zsh" | "dash" | "ksh" | "ash" | "fish" | "mksh" | "eval" => {
             let script = if program_name(first) == "eval" {
                 run.argv[1..].join(" ")
@@ -7628,6 +7699,182 @@ fn is_name(name: &str) -> bool {
 mod tests {
 
     #[test]
+    fn r19_option_clusters_consume_values_and_refuse_unknown_modes() {
+        for (args, command, delimiter, replacement, uncertain) in [
+            (
+                vec!["-0rt", "rm", "-rf"],
+                vec!["rm", "-rf"],
+                super::Delimiter::Nul,
+                None,
+                false,
+            ),
+            (
+                vec!["-tI{}", "rm", "-rf", "{}"],
+                vec!["rm", "-rf", "{}"],
+                super::Delimiter::ReplacementLines,
+                Some("{}"),
+                false,
+            ),
+            (
+                vec!["-td", r"\0", "rm"],
+                vec!["rm"],
+                super::Delimiter::Char('\0'),
+                None,
+                false,
+            ),
+            (
+                vec!["-tn0", "rm"],
+                vec!["rm"],
+                super::Delimiter::Blanks,
+                None,
+                true,
+            ),
+            (
+                vec!["-iTOKEN", "rm", "TOKEN"],
+                vec!["rm", "TOKEN"],
+                super::Delimiter::ReplacementLines,
+                Some("TOKEN"),
+                false,
+            ),
+            (
+                vec!["-J{}", "rm", "{}"],
+                vec!["rm", "{}"],
+                super::Delimiter::ReplacementLines,
+                Some("{}"),
+                true,
+            ),
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            let parsed = super::after_xargs_options(&args);
+            assert_eq!(parsed.command, command);
+            assert_eq!(parsed.delimiter, delimiter);
+            assert_eq!(parsed.replace.as_deref(), replacement);
+            assert_eq!(!parsed.unmodelled.is_empty(), uncertain);
+        }
+        for option in [
+            "-L1",
+            "-n1",
+            "-Eend",
+            "-afile",
+            "-s4096",
+            "-R2",
+            "-S512",
+            "-Z",
+            "--unknown",
+        ] {
+            for parallel in [false, true] {
+                let args = vec![option.into(), "rm".into(), "-rf".into()];
+                assert!(
+                    !super::input_options(&args, parallel).unmodelled.is_empty(),
+                    "{option}"
+                );
+            }
+        }
+        let args = vec!["-rt0".into(), "rm".into()];
+        assert_eq!(
+            super::input_options(&args, true).delimiter,
+            super::Delimiter::Nul
+        );
+    }
+
+    #[test]
+    fn r19_replacement_lines_remove_only_proven_leading_blanks() {
+        let fed = super::Fed {
+            complete: true,
+            items: vec![super::Input {
+                value: " \tordinary path\n".into(),
+                tree: false,
+            }],
+        };
+        assert_eq!(
+            super::items(Some(&fed), super::Delimiter::ReplacementLines)[0].value,
+            "ordinary path"
+        );
+        assert_eq!(
+            super::items(Some(&fed), super::Delimiter::Nul)[0].value,
+            " \tordinary path\n"
+        );
+        let quoted = super::Fed {
+            complete: true,
+            items: vec![super::Input {
+                value: "'ordinary  path'\n".into(),
+                tree: false,
+            }],
+        };
+        assert!(super::unproven(
+            &super::items(Some(&quoted), super::Delimiter::ReplacementLines)[0].value
+        )
+        .is_some());
+    }
+
+    #[cfg(unix)]
+    fn r19_xargs_case(index: usize) {
+        let dir = tempfile::tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/", dir.path().join("space name")).unwrap();
+        let (form, unproven) = super::super::guard_forms::XARGS_OPTION_FORMS[index];
+        let command = form.replace("{fixture}", dir.path().to_str().unwrap());
+        let found = super::composed_deletion_in(&command, Some(dir.path()))
+            .expect("must refuse the deletion");
+        assert_eq!(found.unproven.is_some(), unproven, "{command}: {found:?}");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_t0() {
+        r19_xargs_case(0);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_0t() {
+        r19_xargs_case(1);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_rt0() {
+        r19_xargs_case(2);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_separate_replacement() {
+        r19_xargs_case(3);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_attached_replacement() {
+        r19_xargs_case(4);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_nul_replacement() {
+        r19_xargs_case(5);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_partial_replacement() {
+        r19_xargs_case(6);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_xargs_batch_is_unproven() {
+        r19_xargs_case(7);
+    }
+
+    #[test]
+    fn r19_xargs_plain_replacement_stays_allowed() {
+        let dir = tempfile::tempdir_in(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"),
+        )
+        .unwrap();
+        assert!(super::composed_deletion_in(
+            "printf 'ordinary\\n' | xargs -I{} rm -rf {}",
+            Some(dir.path())
+        )
+        .is_none());
+    }
+
+    #[test]
     fn r18_delimiters_preserve_operand_bytes() {
         use super::{Delimiter, Fed, Input};
         for (text, delimiter, expected) in [
@@ -7691,9 +7938,9 @@ mod tests {
                 .chain(["rm", "-rf"].iter())
                 .map(|s| (*s).into())
                 .collect();
-            let (command, _, _, delimiter) = super::after_xargs_options(&args);
-            assert_eq!(delimiter, expected, "{options:?}");
-            assert_eq!(command, ["rm", "-rf"]);
+            let parsed = super::after_xargs_options(&args);
+            assert_eq!(parsed.delimiter, expected, "{options:?}");
+            assert_eq!(parsed.command, ["rm", "-rf"]);
         }
     }
     #[cfg(unix)]
@@ -7907,7 +8154,17 @@ mod tests {
         for (form, equivalent) in COMPOSED_PAIRS {
             let expected = refused(equivalent);
             assert!(expected.is_some(), "the equivalent {equivalent} is refused");
-            assert_eq!(refused(form), expected, "{form} as {equivalent}");
+            if matches!(
+                *form,
+                "ls ~ | xargs -n 1 rm -rf" | "ls /etc | xargs -I{} rm -rf /etc/{}"
+            ) {
+                // These still refuse, but batching and partial substitution now
+                // explicitly report unproven rather than claiming an exact target.
+                let actual = super::composed_deletion(form).expect("must still refuse");
+                assert!(actual.unproven.is_some(), "{form}: {actual:?}");
+            } else {
+                assert_eq!(refused(form), expected, "{form} as {equivalent}");
+            }
         }
     }
 

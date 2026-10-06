@@ -880,7 +880,7 @@ impl Sites {
 
     fn flagged(&self, name: &str, arguments: usize) -> bool {
         if self.absence {
-            return name == "try_exists";
+            return ABSENCE_METHODS.contains(&name);
         }
         if self.whitespace {
             return UNICODE_WHITESPACE.contains(&name);
@@ -908,9 +908,11 @@ impl Sites {
                     {
                         self.note(ident.span(), "ErrorKind::NotFound");
                     }
-                    if ident == "try_exists" && at > 0 && (punct(at - 1, '.') || punct(at - 1, ':'))
+                    if ABSENCE_METHODS.contains(&ident.to_string().as_str())
+                        && at > 0
+                        && (punct(at - 1, '.') || punct(at - 1, ':'))
                     {
-                        self.note(ident.span(), "try_exists");
+                        self.note(ident.span(), &ident.to_string());
                     }
                 }
             }
@@ -1144,8 +1146,10 @@ impl<'ast> Visit<'ast> for Sites {
     fn visit_path(&mut self, path: &'ast syn::Path) {
         if self.absence {
             if let Some(last) = path.segments.last() {
-                if last.ident == "try_exists" && path.segments.len() > 1 {
-                    self.note(last.ident.span(), "try_exists");
+                if ABSENCE_METHODS.contains(&last.ident.to_string().as_str())
+                    && path.segments.len() > 1
+                {
+                    self.note(last.ident.span(), &last.ident.to_string());
                 }
                 if last.ident == "NotFound"
                     && path.segments.len() > 1
@@ -5063,11 +5067,13 @@ fn obtaining_scan_covers_every_operation_consumer_and_discard_shape() {
 
 /// Closed hook/guard scope: filesystem absence must be proven centrally.
 fn absence_scope(file: &str) -> bool {
-    file.starts_with("crates/codeflow-core/src/hooks/")
+    file.starts_with("crates/codeflow-core/src/testing/config/")
+        || file.starts_with("crates/codeflow-core/src/hooks/")
         || file.starts_with("crates/codeflow-core/src/security/")
         || matches!(
             file,
-            "crates/codeflow-core/src/root_checkout.rs"
+            "crates/codeflow-core/src/testing/gate.rs"
+                | "crates/codeflow-core/src/root_checkout.rs"
                 | "crates/codeflow-core/src/remote.rs"
                 | "crates/codeflow-cli/src/cmd/git_hook.rs"
         )
@@ -5082,8 +5088,38 @@ fn absence_sites(source: &str) -> BTreeMap<(String, String), Vec<usize>> {
     sites.found
 }
 
-// (file, item, operation, count, proof). No raw absence decisions remain in scope.
-const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[];
+// (file, item, operation, count, proof). Obtained type checks and diagnostic probes.
+const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
+
+const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/hooks/adoption.rs", "detect_release_tools", "is_file", 1, "Optional advisory release-tool inventory for doctor, CI text and scaffold notes; it does not select release.backend or authorize a release or gate exemption."),
+    ("crates/codeflow-core/src/hooks/delegate_turn.rs", "validate_result_path", "is_dir", 1, "Parent metadata acquisition already returned an explicit error on failure; this checks the obtained type."),
+    ("crates/codeflow-core/src/hooks/delegate_turn.rs", "verify_exact_retry", "is_file", 1, "Symlink metadata was obtained fallibly; this rejects a non-regular result, not a missing input."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "enforcement_patterns", "is_file", 1, "Git marker absence is proven; metadata errors propagate before classifying an existing linked-worktree gitfile."),
+    ("crates/codeflow-core/src/hooks/edit_guard.rs", "find_candidates", "is_dir", 1, "Directory entry file_type errors propagate before testing the obtained type."),
+    ("crates/codeflow-core/src/hooks/git_discard.rs", "restore_paths", "is_dir", 1, "Missing paths are proven absent; existing symlink metadata errors propagate before directory classification."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "every_path_below", "is_dir", 1, "Obtained path metadata; failures produce GlobStop::Unreadable and refuse the glob judgment."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "expand_components", "is_dir", 1, "Obtained entry FileType; failures produce GlobStop::Unreadable rather than omitting recursion."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "glob_directory", "is_dir", 1, "After proven absence handling, metadata errors are unproven; a known non-directory has no glob children."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "read_sed_script", "is_file", 2, "Both path and opened-file metadata are fallibly obtained; errors already yield SedRead::Unreadable."),
+    ("crates/codeflow-core/src/hooks/git_hook.rs", "judging_identity", "is_dir", 1, "Only selects an additional source-drift diagnostic; it does not select policy or waive hook enforcement."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "gates_line", "exists", 3, "Selects presence marks in orientation output; the marks do not execute or waive a gate."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
+    ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "exists", 2, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
+    ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "is_dir", 2, "Selects a repair path description after a failed ledger write, never converts it to successful writing."),
+    ("crates/codeflow-core/src/hooks/source_identity.rs", "input_files::visit", "is_dir", 1, "Symlink metadata and entry errors propagate before source input type classification."),
+    ("crates/codeflow-core/src/hooks/source_identity.rs", "input_files::visit", "is_file", 1, "Symlink metadata errors propagate before regular source input classification."),
+    ("crates/codeflow-core/src/hooks/source_identity.rs", "revision", "exists", 1, "Build provenance fallback records dirty=unavailable and supplied or unavailable revision; it grants no enforcement exemption."),
+    ("crates/codeflow-core/src/root_checkout.rs", "git_marker", "is_dir", 1, "After proven absence, metadata errors propagate before repository marker type classification."),
+    ("crates/codeflow-core/src/root_checkout.rs", "git_marker", "is_file", 2, "After proven absence, metadata errors propagate; these classify or reject the obtained marker."),
+    ("crates/codeflow-core/src/root_checkout.rs", "nested_repositories", "is_dir", 2, "First receiver is fallibly obtained FileType; the .codeflow path predicate only selects a displayed kind, with both kinds retained in the same nested-repository/ignore inventory."),
+    ("crates/codeflow-core/src/security/deletion.rs", "Reader::change_dir", "is_dir", 1, "Metadata classification failure sets may_fail and preserves both shell outcomes, never removes the target candidate."),
+    ("crates/codeflow-core/src/security/deletion.rs", "Reader::glob_paths", "is_dir", 1, "A failed directory listing is ignored only for proven absence or successfully obtained non-directory metadata; other failures keep expansion unproven."),
+    ("crates/codeflow-core/src/security/prose.rs", "plain_target", "is_file", 1, "FileType is obtained from successful metadata after proven absence handling; unreadable targets do not certify prose."),
+    ("crates/codeflow-core/src/testing/gate.rs", "copy_evidence", "is_dir", 1, "The entry file_type acquisition propagates errors before choosing recursive versus file copy."),
+];
 
 #[test]
 fn hook_and_guard_absence_is_proven() {
@@ -5104,7 +5140,7 @@ fn hook_and_guard_absence_is_proven() {
     let mut allowed = BTreeMap::new();
     for (file, item, call, count, reason) in ABSENCE_EXCEPTIONS {
         assert!(absence_scope(file));
-        assert!(matches!(*call, "ErrorKind::NotFound" | "try_exists"));
+        assert!(*call == "ErrorKind::NotFound" || ABSENCE_METHODS.contains(call));
         assert!(*count > 0 && !reason.trim().is_empty());
         assert!(allowed
             .insert(
@@ -5174,4 +5210,52 @@ fn absence_scan_is_scoped_and_counts_paths_methods_and_macros() {
         absence_sites("fn f() { a.try_exists(); b.try_exists(); }"),
         "stale counts fail"
     );
+}
+
+#[test]
+fn absence_scan_covers_boolean_path_probes_and_the_config_chain() {
+    for method in ABSENCE_METHODS {
+        for expression in [
+            format!("p.{method}()"),
+            format!("Path::{method}(p)"),
+            format!("iter.map(std::path::Path::{method})"),
+            format!("opaque!(nested!(p.{method}()); ErrorKind::NotFound)"),
+        ] {
+            let source = format!("fn f() {{ {expression}; }}");
+            assert_eq!(
+                absence_sites(&source).values().map(Vec::len).sum::<usize>(),
+                if expression.starts_with("opaque") {
+                    2
+                } else {
+                    1
+                },
+                "{expression}"
+            );
+        }
+    }
+    assert_eq!(
+        absence_sites("fn f() { metadata.is_dir(); kind.is_file(); }").len(),
+        2,
+        "obtained metadata needs counted reasons too"
+    );
+    assert!(absence_sites(
+        r#"fn f() { let exists=1; let is_file=2; let is_dir=3; let s="p.exists()"; }"#
+    )
+    .is_empty());
+    assert!(absence_sites("#[cfg(test)] mod tests { fn t() { p.exists(); } }").is_empty());
+    for path in [
+        "testing/gate.rs",
+        "testing/config/mod.rs",
+        "testing/config/extra.rs",
+        "hooks/git_hook.rs",
+    ] {
+        assert!(absence_scope(&format!("crates/codeflow-core/src/{path}")));
+    }
+    for path in [
+        "testing/runner.rs",
+        "testing/gate_extra.rs",
+        "testing/configuration.rs",
+    ] {
+        assert!(!absence_scope(&format!("crates/codeflow-core/src/{path}")));
+    }
 }

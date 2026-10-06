@@ -310,7 +310,13 @@ fn enforcement_patterns(ctx: &EditContext<'_>) -> Result<Vec<String>, EditError>
                 && base == ctx.root
                 && relative.starts_with(".git/")
                 && ctx.git_common_dir.is_some()
-                && ctx.root.join(".git").is_file()
+                && {
+                    let marker = ctx.root.join(".git");
+                    let unreadable =
+                        |error| EditError(format!("cannot inspect Git marker: {error}"));
+                    !crate::absence::proven_absent(&marker).map_err(unreadable)?
+                        && std::fs::metadata(&marker).map_err(unreadable)?.is_file()
+                }
             {
                 continue;
             }

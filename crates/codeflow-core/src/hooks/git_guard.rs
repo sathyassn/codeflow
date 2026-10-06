@@ -202,7 +202,7 @@ pub fn read_target(
     } else {
         cwd.join(p)
     };
-    if !abs.exists() {
+    if crate::absence::proven_absent(&abs).ok()? {
         return None;
     }
     let repo = if spec.git_dir {
@@ -1748,6 +1748,8 @@ const GLOB_ENTRY_LIMIT: usize = 4096;
 enum GlobStop {
     /// It would read more than [`GLOB_ENTRY_LIMIT`] entries.
     TooManyEntries,
+    /// An existing path could not be classified or enumerated.
+    Unreadable,
 }
 
 /// One file-name component of a shell pattern, read so that it matches at
@@ -1945,6 +1947,21 @@ impl WordGlob {
     }
 }
 
+/// Missing paths and known non-directories have no children; unreadable paths
+/// cannot certify an empty glob expansion.
+fn glob_directory(dir: &Path) -> Result<Option<std::fs::ReadDir>, GlobStop> {
+    if crate::absence::proven_absent(dir).map_err(|_| GlobStop::Unreadable)? {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(dir).map_err(|_| GlobStop::Unreadable)?;
+    if !metadata.is_dir() {
+        return Ok(None);
+    }
+    std::fs::read_dir(dir)
+        .map(Some)
+        .map_err(|_| GlobStop::Unreadable)
+}
+
 /// Every path at or below `dir`, at every depth: names that start with `.`
 /// are included and linked directories are entered, each real directory
 /// once.
@@ -1958,16 +1975,20 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
                 continue;
             }
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Some(entries) = glob_directory(&dir)? else {
             continue;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|_| GlobStop::Unreadable)?;
             *read += 1;
             if *read > GLOB_ENTRY_LIMIT {
                 return Err(GlobStop::TooManyEntries);
             }
             let path = dir.join(entry.file_name());
-            if path.is_dir() {
+            if std::fs::metadata(&path)
+                .map_err(|_| GlobStop::Unreadable)?
+                .is_dir()
+            {
                 pending.push(path.clone());
             }
             found.push(path);
@@ -2009,10 +2030,11 @@ fn expand_components(
             let mut next = current.clone();
             let mut pending = current.clone();
             while let Some(dir) = pending.pop() {
-                let Ok(entries) = std::fs::read_dir(&dir) else {
+                let Some(entries) = glob_directory(&dir)? else {
                     continue;
                 };
-                for entry in entries.flatten() {
+                for entry in entries {
+                    let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                     *read += 1;
                     if *read > GLOB_ENTRY_LIMIT {
                         return Err(GlobStop::TooManyEntries);
@@ -2022,7 +2044,11 @@ fn expand_components(
                         continue;
                     }
                     let path = dir.join(&name);
-                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    if entry
+                        .file_type()
+                        .map_err(|_| GlobStop::Unreadable)?
+                        .is_dir()
+                    {
                         pending.push(path.clone());
                     }
                     next.push(path);
@@ -2035,10 +2061,11 @@ fn expand_components(
         let dotted = every_name || text.starts_with('.');
         let mut next = Vec::new();
         for dir in &current {
-            let Ok(entries) = std::fs::read_dir(dir) else {
+            let Some(entries) = glob_directory(dir)? else {
                 continue;
             };
-            for entry in entries.flatten() {
+            for entry in entries {
+                let entry = entry.map_err(|_| GlobStop::Unreadable)?;
                 *read += 1;
                 if *read > GLOB_ENTRY_LIMIT {
                     return Err(GlobStop::TooManyEntries);
@@ -2083,6 +2110,7 @@ fn glob_reach(word: &str, cwd: &Path, payload_cwd: &Path) -> Option<String> {
             .iter()
             .find_map(|path| reached(path))
             .map(|p| format!("{p} (through `{word}`)")),
+        Err(GlobStop::Unreadable) => Some(format!("cannot read paths reached through `{word}`")),
         Err(GlobStop::TooManyEntries) => {
             let prefix = glob.prefix();
             let holds =
@@ -2335,6 +2363,10 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
         if target.contains(['*', '?', '[']) {
             match WordGlob::new(target, dir).expand() {
                 Ok(found) => reached.extend(found),
+                Err(GlobStop::Unreadable) => {
+                    run.unknown
+                        .get_or_insert_with(|| format!("cannot read directory glob `{target}`"));
+                }
                 Err(GlobStop::TooManyEntries) => {
                     run.unknown.get_or_insert_with(|| {
                         format!("`{target}`, a directory glob over too many entries")
@@ -8730,6 +8762,23 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_glob_dangling_descendant_is_unproven() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tree")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("tree/broken"))
+            .unwrap();
+        assert_eq!(
+            super::every_path_below(&dir.path().join("tree"), &mut 0),
+            Err(super::GlobStop::Unreadable)
+        );
+        assert!(super::glob_reach("tree/*(D)", dir.path(), dir.path()).is_some());
+        assert!(super::glob_directory(&dir.path().join("missing"))
+            .unwrap()
+            .is_none());
+    }
 
     #[cfg(unix)]
     #[test]

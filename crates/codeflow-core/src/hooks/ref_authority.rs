@@ -104,7 +104,8 @@ pub(super) fn check(root: &Path, args: &[String]) -> Option<String> {
                     || destination.starts_with("../")
                     || destination.starts_with("file:")
                     || (destination.contains('/') && !destination.contains(':'))
-                    || root.join(destination).exists())
+                    || !crate::absence::proven_absent(&root.join(destination))
+                        .is_ok_and(|absent| absent))
             {
                 Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
             } else {
@@ -420,6 +421,17 @@ pub fn recovery_fetch(command: &str, root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_dangling_local_push_destination_refuses() {
+        let dir = repository_with_config(b"");
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("destination"))
+            .unwrap();
+        let args = ["push", "destination"].map(str::to_string);
+        assert!(check(dir.path(), &args).is_some());
+    }
+
     #[test]
     fn r15_owned_config_keys_are_not_dropped_on_decode_failure() {
         let entries = config_entries(b"remote.caf\xff.url\nurl\0remote.ok.url\nurl2\0");

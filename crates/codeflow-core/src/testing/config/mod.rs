@@ -612,7 +612,7 @@ pub fn validate_prerequisites(path: &Path, targets: &[TargetConfig]) -> Result<(
 /// Returns `TestingError::UnsupportedSchemaVersion` for unknown versions.
 /// Returns `TestingError::ConfigInvalid` for schema violations.
 pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
-    if !path.exists() {
+    if crate::absence::proven_absent(path)? {
         return Err(TestingError::ConfigNotFound(path.to_path_buf()));
     }
 
@@ -669,6 +669,27 @@ pub fn write_test_config(path: &Path, config: &TestConfig) -> Result<(), Testing
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_leaf_refuses_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+        std::fs::create_dir(&config).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        assert!(matches!(load_test_config(&path), Err(TestingError::Io(_))));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_ancestor_refuses_loader() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+
+        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
+        assert!(matches!(load_test_config(&path), Err(TestingError::Io(_))));
+    }
+
     use super::*;
 
     #[test]

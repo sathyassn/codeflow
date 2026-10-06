@@ -845,7 +845,11 @@ fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -
         return false;
     };
     let common = repo.commondir();
-    if is_zero_sha(old_oid) || current != Some(old) || common.join("packed-refs.lock").exists() {
+    if is_zero_sha(old_oid)
+        || current != Some(old)
+        || !crate::absence::proven_absent(&common.join("packed-refs.lock"))
+            .is_ok_and(|absent| absent)
+    {
         return false;
     }
     let loose = std::fs::read_to_string(common.join(refname)).ok();
@@ -1167,14 +1171,18 @@ pub fn run_push_targets(
     report: &mut StageReport,
 ) -> Vec<PushStep> {
     let cfg_path = root.join(".codeflow").join("test-config.json");
-    if !cfg_path.exists() {
-        report.notes.push(crate::remedy::Finding::new(
-            "quick targets skipped: no .codeflow/test-config.json",
-            crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
-        ));
-        return Vec::new();
-    }
-    match run_gate_exact(root, "quick") {
+    let outcome = match crate::absence::proven_absent(&cfg_path) {
+        Ok(true) => {
+            report.notes.push(crate::remedy::Finding::new(
+                "quick targets skipped: no .codeflow/test-config.json",
+                crate::remedy::PUSH_TARGETS_UNCONFIGURED.remedy(),
+            ));
+            return Vec::new();
+        }
+        Ok(false) => run_gate_exact(root, "quick"),
+        Err(error) => Err(crate::testing::error::TestingError::Io(error)),
+    };
+    match outcome {
         Ok(GateOutcome::NoTargets { reason }) => {
             report.notes.push(crate::remedy::Finding::new(
                 format!(
@@ -1269,6 +1277,85 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r19_missing_test_config_keeps_all_absence_results() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            crate::testing::config::load_test_config(
+                &dir.path().join(".codeflow/test-config.json")
+            ),
+            Err(crate::testing::error::TestingError::ConfigNotFound(_))
+        ));
+        assert!(matches!(
+            run_gate_exact(dir.path(), "quick"),
+            Ok(GateOutcome::NoTargets { .. })
+        ));
+        let (report, steps) = run_targets(dir.path(), &GitPolicy::default());
+        assert!(steps.is_empty() && report.violations.is_empty());
+        assert!(report
+            .notes
+            .iter()
+            .any(|n| n.text.contains("no .codeflow/test-config.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_dangling_packed_ref_lock_withholds_prune_exemption() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        let repo = Repository::open(dir.path()).unwrap();
+        let oid = repo.head().unwrap().target().unwrap();
+        let name = "refs/heads/feat/x";
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\n")).unwrap();
+        assert!(keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+        std::os::unix::fs::symlink(
+            dir.path().join("missing"),
+            repo.path().join("packed-refs.lock"),
+        )
+        .unwrap();
+        assert!(!keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_leaf_refuses_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+        std::fs::create_dir(&config).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        let mut report = StageReport::default();
+        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
+        assert!(steps.is_empty());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
+            "{:?}",
+            report.violations
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_ancestor_refuses_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
+        let mut report = StageReport::default();
+        let steps = run_push_targets(dir.path(), &GitPolicy::default(), &mut report);
+        assert!(steps.is_empty());
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.test_gate_on_push" && v.level == PolicyLevel::Block),
+            "{:?}",
+            report.violations
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn r18_merge_marker_absence_requires_resolved_ancestors() {

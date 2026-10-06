@@ -1193,8 +1193,25 @@ pub fn worktree_findings(
     };
     for worktree in worktrees {
         let path = canonical(&worktree.path);
-        if !path.exists() {
-            continue;
+        let readable = crate::absence::proven_absent(&path).and_then(|absent| {
+            if absent {
+                Ok(None)
+            } else {
+                std::fs::metadata(&path).map(Some)
+            }
+        });
+        match readable {
+            Ok(None) => continue,
+            Ok(Some(_)) => {}
+            Err(error) => {
+                out.push(Finding {
+                    severity: Severity::Warn,
+                    rule: LOCATIONS_KEY,
+                    message: format!("cannot inspect linked worktree {}: {error}", path.display()),
+                    next_step: "repair the registered worktree path, then rerun doctor".into(),
+                });
+                continue;
+            }
         }
         if !locations.iter().any(|loc| path.starts_with(loc)) {
             out.push(Finding {

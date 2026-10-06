@@ -329,8 +329,8 @@ mod tests {
     }
 
     /// Each composed deletion is refused under `security.dangerous_commands`
-    /// with the message its `rm -rf` equivalent gets, alone and nested; a
-    /// project deletion raises nothing (TSK-141 AC-1, AC-2).
+    /// with its equivalent's message when the target is proven, alone and
+    /// nested; a project deletion raises nothing (TSK-141 AC-1, AC-2).
     #[test]
     fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
         use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
@@ -349,6 +349,18 @@ mod tests {
                 assert_eq!(refused.len(), 1, "{nested}");
                 assert!(any_blocking(&v), "{nested}");
                 if *nesting == "{}" {
+                    if matches!(
+                        *form,
+                        "ls ~ | xargs -n 1 rm -rf" | "ls /etc | xargs -I{} rm -rf /etc/{}"
+                    ) {
+                        // These modes now refuse as unproven, preserving the
+                        // blocking verdict without claiming an exact target.
+                        assert!(
+                            refused[0].message.contains("target cannot be proven"),
+                            "{form}"
+                        );
+                        continue;
+                    }
                     // A target reached on only some paths says so; the
                     // pattern it names is the equivalent's either way.
                     let pattern = |m: &str| m.rfind("(pattern").map(|at| m[at..].to_string());

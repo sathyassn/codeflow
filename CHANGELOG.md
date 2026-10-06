@@ -281,7 +281,9 @@ erratum below, never an edit of the section.
   delimiter.** A protected path containing a blank, passed through
   `xargs -0`, `xargs -d`, quoted xargs input or `parallel`, was split on the
   blank and not judged as one path, so the deletion was allowed. The guard
-  now splits by the delimiter the command selects and refuses it.
+  now splits by the delimiter the command selects and refuses it, including
+  clustered options such as `-t0` and whole-line `-I` replacement mode.
+  Input options or replacement forms it cannot model refuse as unproven.
 
 <!-- codeflow:release-impact patch -->
 - **Text from the operating system or git that is not valid UTF-8 no

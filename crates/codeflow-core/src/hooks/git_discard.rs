@@ -114,8 +114,14 @@ fn restore_paths(
     for path in paths {
         let rel = local_path(prefix, path)?;
         let text = portable(&rel)?;
+        let absolute = root.join(&rel);
+        let absent = crate::absence::proven_absent(&absolute).map_err(|e| e.to_string())?;
         let directory = rel.as_os_str().is_empty()
-            || root.join(&rel).symlink_metadata().is_ok_and(|m| m.is_dir())
+            || (!absent
+                && absolute
+                    .symlink_metadata()
+                    .map_err(|e| e.to_string())?
+                    .is_dir())
             || index.iter().any(|e| {
                 let p = lossy(&e.path);
                 under(&p, &text) && p != text

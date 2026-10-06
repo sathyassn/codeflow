@@ -2169,3 +2169,29 @@ fn r18_dangling_git_marker_is_not_absent() {
     std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join(".git")).unwrap();
     assert!(super::git_marker(dir.path()).is_err());
 }
+
+#[cfg(unix)]
+#[test]
+fn r19_dangling_registered_worktree_stays_visible() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("root"));
+    let checkout = dir.path().join("checkout");
+    git(
+        &root,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            checkout.to_str().unwrap(),
+            "-b",
+            "feat/x",
+        ],
+    );
+    std::fs::rename(&checkout, dir.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(dir.path().join("missing"), &checkout).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    let env = env_of(&[]);
+    assert!(worktree_findings(&repo, &GitPolicy::default(), &env)
+        .iter()
+        .any(|f| f.message.contains("cannot inspect linked worktree")));
+}

@@ -181,7 +181,8 @@ fn run_gate_resolved(
     };
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
-    let (mut targets, execution, effective_mode) = if config_path.exists() {
+    let has_config = !crate::absence::proven_absent(&config_path)?;
+    let (mut targets, execution, effective_mode) = if has_config {
         let config = load_test_config(&config_path)?;
         if config.targets.is_empty() {
             return Ok(GateOutcome::NoTargets {
@@ -202,7 +203,7 @@ fn run_gate_resolved(
         (targets, ExecutionConfig::default(), effective)
     };
 
-    let config_digest = if config_path.exists() {
+    let config_digest = if has_config {
         // Bind evidence to the complete configured input, including defaults.
         delivery::digest(&std::fs::read(&config_path)?)
     } else {
@@ -529,16 +530,19 @@ fn copy_evidence(from: &Path, to: &Path) -> Result<(), TestingError> {
 #[must_use]
 pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
     let config_path = project_dir.join(TEST_CONFIG_PATH);
-    let targets: Vec<TargetConfig> = if config_path.exists() {
-        match load_test_config(&config_path) {
-            Ok(config) => config.targets,
-            Err(_) => return false,
-        }
-    } else {
+    let Ok(absent) = crate::absence::proven_absent(&config_path) else {
+        return false; // The actual gate reports this obtaining error.
+    };
+    let targets: Vec<TargetConfig> = if absent {
         let Ok(detected) = detect_stacks(project_dir) else {
             return false;
         };
         detected.into_iter().map(|d| d.config).collect()
+    } else {
+        match load_test_config(&config_path) {
+            Ok(config) => config.targets,
+            Err(_) => return false,
+        }
     };
     let effective = resolve_mode(mode, &targets);
     targets
@@ -726,6 +730,25 @@ fn resolve_mode(requested: &str, targets: &[TargetConfig]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_leaf_refuses_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        let path = config.join("test-config.json");
+        std::fs::create_dir(&config).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        assert!(run_gate_exact(dir.path(), "quick").is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn r19_test_config_ancestor_refuses_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".codeflow");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &config).unwrap();
+        assert!(run_gate_exact(dir.path(), "quick").is_err());
+    }
+
     fn cov(failed: usize) -> CoverageReport {
         CoverageReport {
             target: "t".into(),
