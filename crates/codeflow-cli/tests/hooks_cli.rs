@@ -4349,6 +4349,9 @@ permission_preset = "strict"
     std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
     git(dir.path(), &["add", "implementation.rs"]);
 
+    // Wired hooks resolve the current binary from PATH. Establish the CI
+    // commit while policy is readable, before testing the refusal paths.
+    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
     let denied_state = RestorePermissions::deny(&state_path);
     match std::fs::read(&state_path) {
         Ok(_) => {
@@ -4370,13 +4373,12 @@ permission_preset = "strict"
         String::from_utf8_lossy(&hook.stderr)
     );
 
-    git(dir.path(), &["commit", "-m", "feat: add implementation"]);
     let ci = task_branch_ci(dir.path(), "task/TSK-001-unreadable-state", false);
     assert_eq!(ci.status.code(), Some(2));
     let ci_error = String::from_utf8_lossy(&ci.stderr);
     assert!(ci_error.contains("cannot read policy"), "{ci_error}");
     assert!(
-        ci_error.contains("cannot read project settings"),
+        ci_error.contains("project.toml") && ci_error.contains("Permission denied"),
         "{ci_error}"
     );
     drop(denied_state);

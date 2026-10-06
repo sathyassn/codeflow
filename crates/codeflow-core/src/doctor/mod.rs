@@ -636,8 +636,14 @@ fn shims_not_called(active: &Path, shims: &Path) -> Result<Vec<String>, String> 
     let mut uncalled = Vec::new();
     for name in names {
         let hook = active.join(&name);
-        let text = std::fs::read_to_string(&hook)
-            .map_err(|error| format!("{}: {error}", hook.display()))?;
+        let text = match std::fs::read_to_string(&hook) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                uncalled.push(format!("{name} (no hook)"));
+                continue;
+            }
+            Err(error) => return Err(format!("{}: {error}", hook.display())),
+        };
         let call = format!("{CODEFLOW_HOOKS_PATH}/{name}");
         let why = if !crate::scaffold::detect::is_executable(&hook) {
             "not executable"
@@ -3092,6 +3098,9 @@ fn check_customization(opts: &Options) -> CheckResult {
                 incomplete.push(path.to_string());
             }
             Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                incomplete.push(format!("{path} (missing)"));
+            }
             Err(error) => return refused(format!("{path}: {error}")),
         }
     }
@@ -5157,7 +5166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_hooks_refuses_unreadable_active_hook() {
+    fn r17_check_hooks_warns_on_absent_active_hook() {
         // The fresh-clone signature: shims committed in the tree, but the
         // local core.hooksPath wiring is gone — subcommands respond, git
         // calls nothing.
@@ -5165,12 +5174,31 @@ mod tests {
         git(dir.path(), &["init", "-b", "main"]);
         write_shims(dir.path());
         let r = check_hooks(&hooks_opts(dir.path()));
-        assert_eq!(r.status, Status::Fail, "{}", r.message);
-        assert!(
-            r.message.contains("cannot read hook wiring"),
-            "{}",
-            r.message
-        );
+        assert!(matches!(r.status, Status::Warn(_)), "{}", r.message);
+        assert!(r.message.contains("pre-commit (no hook)"), "{}", r.message);
+    }
+
+    #[test]
+    fn r17_check_hooks_refuses_unreadable_existing_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        write_shims(dir.path());
+        std::fs::write(dir.path().join(".git/hooks/pre-commit"), b"\xff").unwrap();
+        let result = check_hooks(&hooks_opts(dir.path()));
+        assert_eq!(result.status, Status::Fail);
+        assert!(result.message.contains("cannot read hook wiring"));
+    }
+
+    #[test]
+    fn r17_customization_missing_document_warns_but_unreadable_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/product.md"), "Product context\n").unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_str().unwrap().to_owned();
+        assert!(matches!(check_customization(&opts).status, Status::Warn(_)));
+        std::fs::write(dir.path().join("docs/architecture.md"), b"\xff").unwrap();
+        assert_eq!(check_customization(&opts).status, Status::Fail);
     }
 
     #[test]

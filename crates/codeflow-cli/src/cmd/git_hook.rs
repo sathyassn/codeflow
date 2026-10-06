@@ -56,10 +56,19 @@ pub fn run(args: &GitHookArgs) -> i32 {
         println!("{HOOK_CAPABILITY}");
         return 0;
     }
+    if matches!(args.stage, StageName::ReferenceTransaction)
+        && args.args.first().map(String::as_str) != Some("prepared")
+    {
+        // Notifications cannot cancel a transaction and need no repository.
+        return 0;
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = match super::project_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
+            if matches!(args.stage, StageName::ReferenceTransaction) {
+                return refuse_reference_transaction(&error);
+            }
             eprintln!("codeflow: cannot read project root: {error}");
             return 2;
         }
@@ -272,13 +281,15 @@ fn run_reference_transaction_with_reader(
     let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
         Ok(report) => super::render_stage("reference-transaction", root, &report, 1),
-        Err(e) => {
-            eprintln!(
-                "codeflow reference-transaction: could not evaluate protected-ref transaction ({e}) — operation blocked"
-            );
-            1
-        }
+        Err(e) => refuse_reference_transaction(&e),
     }
+}
+
+fn refuse_reference_transaction(error: impl std::fmt::Display) -> i32 {
+    eprintln!(
+        "codeflow reference-transaction: could not evaluate protected-ref transaction ({error}) - operation blocked"
+    );
+    1
 }
 
 // OS text rule (issue 79, `docs/architecture.md`): kept strict, by a recorded

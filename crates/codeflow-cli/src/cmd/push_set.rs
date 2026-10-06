@@ -1579,7 +1579,7 @@ fn incomplete_checkout(root: &Path) -> Result<Option<String>, String> {
 /// OS text rule (issue 79): the answer is read as text (shas, config values,
 /// URLs, ref and submodule names the callers compare), so an answer that is
 /// not valid UTF-8 returns an error through `run_checked` to `run`, which refuses.
-/// Only Git exit 1 for lookup/predicate commands means a genuinely absent answer.
+/// Lookup/predicate exit 1, and `remote get-url` exit 2, mean an absent answer.
 fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
@@ -1607,6 +1607,9 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, 
 
 fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>, String> {
     if !out.status.success() {
+        if out.status.code() == Some(2) && args.starts_with(&["remote", "get-url"]) {
+            return Ok(None);
+        }
         if out.status.code() == Some(1)
             && matches!(args.first(), Some(&"merge-base" | &"rev-parse" | &"config"))
         {

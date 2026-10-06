@@ -250,10 +250,9 @@ pub(crate) struct AnchoredTask {
 ///
 /// Returns an error if an existing conventional target or its repository cannot be read.
 pub fn default_work_target(repo_root: &Path) -> Result<Option<String>, WorkStartError> {
-    let repo = match Repository::discover(repo_root) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    let Some(repo) = crate::hooks::repo::open(repo_root).map_err(WorkStartError::Repository)?
+    else {
+        return Ok(None);
     };
     for target in ["origin/main", "origin/master", "main", "master"] {
         let reference = if target.starts_with("origin/") {

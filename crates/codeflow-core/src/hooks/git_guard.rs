@@ -2483,8 +2483,10 @@ fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
     if !bytes.starts_with(b".") || !bytes.iter().any(|b| b"*?[{".contains(b)) {
         return None;
     }
-    let Ok(parent) = path.parent()?.canonicalize() else {
-        return Some("repository root pattern (cannot read directory)");
+    let parent = match path.parent()?.canonicalize() {
+        Ok(parent) => parent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(_) => return Some("repository root pattern (cannot read directory)"),
     };
     let info = match super::RepoInfo::discover(&parent) {
         Ok(info) => info?,
@@ -8724,6 +8726,38 @@ pub(crate) fn shell_blank(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r17_root_pattern_under_absent_directory_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        assert!(root_dot_pattern_target(&dir.path().join("absent/.*")).is_none());
+        assert!(root_dot_pattern_target(&dir.path().join(".*")).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r17_root_pattern_under_unreadable_directory_refuses() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("closed");
+        std::fs::create_dir_all(parent.join("child")).unwrap();
+        let original = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o0)).unwrap();
+        let probe = parent.join("child").canonicalize();
+        let target = root_dot_pattern_target(&parent.join("child/.*"));
+        std::fs::set_permissions(&parent, original).unwrap();
+        match probe {
+            Ok(_) => eprintln!("EACCES directory probe unavailable under this test identity"),
+            Err(error) => {
+                assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(
+                    target,
+                    Some("repository root pattern (cannot read directory)")
+                );
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn r15_extra_unreadable_root_pattern_is_unproven() {

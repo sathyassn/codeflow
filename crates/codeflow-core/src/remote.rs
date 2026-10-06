@@ -167,16 +167,18 @@ impl ProtectionPlan {
     /// `git.protected_branches` (falling back to a top-level
     /// `protected_branches`, then to `main`/`master`) and derives rule
     /// strictness from the corresponding `git.*` block/warn/allow values
-    /// (missing values default to the charter's strict baseline).
+    /// (a missing file or value defaults to the charter's strict baseline).
     ///
     /// # Errors
     ///
     /// Returns an error when the policy cannot be read or its protection fields are invalid.
     pub fn from_policy_file(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path)
-            .map_err(|error| format!("cannot read policy {}: {error}", path.display()))?;
-        let policy: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?;
+        let policy: serde_json::Value = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(error) => return Err(format!("cannot read policy {}: {error}", path.display())),
+        };
         if !policy.is_object() {
             return Err("policy must be an object".into());
         }
@@ -685,9 +687,24 @@ mod tests {
     }
 
     #[test]
-    fn test_plan_missing_policy_is_unproven() {
+    fn r17_plan_missing_policy_uses_strict_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(ProtectionPlan::from_policy_file(&dir.path().join("nope.json")).is_err());
+        let plan = ProtectionPlan::from_policy_file(&dir.path().join("nope.json")).unwrap();
+        assert_eq!(
+            plan.rules
+                .iter()
+                .map(|rule| rule.pattern.as_str())
+                .collect::<Vec<_>>(),
+            ["main", "master"]
+        );
+        for rule in plan.rules {
+            assert!(
+                rule.require_pr
+                    && rule.require_status_checks
+                    && rule.block_force_push
+                    && rule.block_deletion
+            );
+        }
     }
 
     #[test]

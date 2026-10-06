@@ -2097,7 +2097,14 @@ pub fn changed_paths(
 ///
 /// Returns an error if changed paths, target history or contextual records cannot be read.
 pub fn working_context(repo_root: &Path) -> Result<(Option<Graph>, Option<Vec<String>>), String> {
-    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let Some(repo) = crate::hooks::repo::open(repo_root)? else {
+        return Ok((None, None));
+    };
+    match repo.head() {
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok((None, None)),
+        Err(error) => return Err(format!("cannot read working context HEAD: {error}")),
+        Ok(_) => {}
+    }
     let paths = changed_paths(&repo, "HEAD", None)?;
     let base = match super::work_start::default_work_target(repo_root)
         .map_err(|error| error.to_string())?

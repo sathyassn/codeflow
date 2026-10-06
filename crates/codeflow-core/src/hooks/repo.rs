@@ -105,9 +105,26 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
         Ok(repo) => Ok(Some(repo)),
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             // libgit2 also reports NotFound for an existing .git with an invalid
-            // HEAD. Such a repository must never look like ordinary non-repo input.
+            // HEAD. Only an empty directory is proven to contain no repository;
+            // gitfiles, partial metadata and unreadable directories must refuse.
             for ancestor in start.ancestors() {
                 match std::fs::symlink_metadata(ancestor.join(".git")) {
+                    Ok(meta) if meta.is_dir() => {
+                        let mut entries =
+                            std::fs::read_dir(ancestor.join(".git")).map_err(|failure| {
+                                format!("cannot inspect repository directory: {failure}")
+                            })?;
+                        if entries
+                            .next()
+                            .transpose()
+                            .map_err(|failure| {
+                                format!("cannot inspect repository entry: {failure}")
+                            })?
+                            .is_some()
+                        {
+                            return Err(format!("cannot discover existing repository: {error}"));
+                        }
+                    }
                     Ok(_) => return Err(format!("cannot discover existing repository: {error}")),
                     Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
                     Err(failure) => {
@@ -115,12 +132,17 @@ pub fn open(start: &Path) -> Result<Option<Repository>, String> {
                     }
                 }
                 if ancestor
-                    .join("HEAD")
+                    .join("objects")
                     .try_exists()
                     .map_err(|failure| failure.to_string())?
-                    && ancestor
-                        .join("objects")
-                        .try_exists()
+                    && ["HEAD", "config", "refs"]
+                        .iter()
+                        .try_fold(false, |found, name| {
+                            ancestor
+                                .join(name)
+                                .try_exists()
+                                .map(|exists| found || exists)
+                        })
                         .map_err(|failure| failure.to_string())?
                 {
                     return Err(format!("cannot discover existing bare repository: {error}"));
@@ -278,6 +300,22 @@ mod tests {
 
 #[cfg(test)]
 mod r16_obtaining_regressions {
+    #[test]
+    fn r17_empty_git_directory_is_not_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        assert!(super::open(dir.path()).unwrap().is_none());
+        assert!(super::RepoInfo::discover(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn r17_bare_repository_without_head_is_not_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init_bare(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join("HEAD")).unwrap();
+        assert!(super::open(dir.path()).is_err());
+    }
+
     #[test]
     fn r16_invalid_existing_head_is_not_detached_or_nonrepo() {
         let dir = tempfile::tempdir().unwrap();

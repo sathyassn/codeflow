@@ -462,3 +462,21 @@ fn r15_tracking_namespace_preserves_config_bytes() {
         None
     );
 }
+#[cfg(unix)]
+#[test]
+fn r17_remote_query_exit_codes_keep_absence_distinct() {
+    use std::os::unix::process::ExitStatusExt;
+    let output = |code| std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    assert_eq!(
+        git_answer(&["remote", "get-url", "missing"], output(2)),
+        Ok(None)
+    );
+    for code in [1, 3, 128] {
+        assert!(git_answer(&["remote", "get-url", "missing"], output(code)).is_err());
+    }
+    assert!(git_answer(&["remote", "update"], output(2)).is_err());
+}

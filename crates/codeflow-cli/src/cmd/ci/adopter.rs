@@ -56,8 +56,9 @@ pub(super) fn trusted_actor(
     if event != "pull_request_target" && event != "pull_request" {
         return untrusted(format!("the '{event}' event is not a pull request event"));
     }
-    let path =
-        env("GITHUB_EVENT_PATH").ok_or("cannot read GitHub event: GITHUB_EVENT_PATH is absent")?;
+    let Some(path) = env("GITHUB_EVENT_PATH") else {
+        return untrusted("GITHUB_EVENT_PATH is absent, so there is no event identity".into());
+    };
     let bytes =
         std::fs::read(&path).map_err(|error| format!("cannot read GitHub event: {error}"))?;
     let payload: serde_json::Value = serde_json::from_slice(&bytes)
@@ -351,6 +352,19 @@ fn print_levels(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn r17_absent_event_path_keeps_actor_untrusted() {
+        let env = |key: &str| match key {
+            "GITHUB_ACTIONS" => Some("true".into()),
+            "GITHUB_EVENT_NAME" => Some("pull_request".into()),
+            "GITHUB_ACTOR" => Some("automation".into()),
+            _ => None,
+        };
+        let (actor, why) = super::trusted_actor("automation", &env).unwrap();
+        assert_eq!(actor, super::UNKNOWN_ACTOR);
+        assert!(why.unwrap().contains("GITHUB_EVENT_PATH is absent"));
+    }
 
     #[test]
     fn r16_unreadable_actor_event_refuses() {

@@ -519,19 +519,15 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
     {
         return Ok(None);
     }
-    let repo = git2::Repository::discover(root).map_err(|error| {
+    let Some(repo) = crate::hooks::repo::open(root).map_err(|error| {
         ScaffoldError::Git(format!("cannot read migration repository: {error}"))
-    })?;
+    })?
+    else {
+        return Ok(None);
+    };
     let head = match repo.head() {
         Ok(head) => head,
-        Err(error)
-            if matches!(
-                error.code(),
-                git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound
-            ) =>
-        {
-            return Ok(None)
-        }
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => return Ok(None),
         Err(error) => {
             return Err(ScaffoldError::Git(format!(
                 "cannot read migration HEAD: {error}"
@@ -1394,6 +1390,27 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r17_migration_without_repository_has_no_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = dir.path().join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(
+            tasks.join("TSK-001.md"),
+            "---\nid: TSK-001\ntitle: Fixture\nstatus: planned\n---\n",
+        )
+        .unwrap();
+        assert!(super::record_work_records_baseline(dir.path())
+            .unwrap()
+            .is_none());
+        git2::Repository::init(dir.path()).unwrap();
+        assert!(super::record_work_records_baseline(dir.path())
+            .unwrap()
+            .is_none());
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        assert!(super::record_work_records_baseline(dir.path()).is_err());
+    }
+
     /// The shipped workflow and this repository's own run only the checkout
     /// before the gitleaks step; a step added there is named, a renamed scan
     /// step is reported as unrecognised, and a conflict proposal that does

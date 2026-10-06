@@ -1999,16 +1999,18 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let Ok(out) = codeflow_core::git::command()
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["remote", "get-url", "origin"])
         .output()
-    else {
-        return Ok(None);
-    };
+        .map_err(|error| format!("cannot query origin URL: {error}"))?;
     if !out.status.success() {
-        return Ok(None);
+        return if out.status.code() == Some(2) {
+            Ok(None)
+        } else {
+            Err(format!("cannot query origin URL: {}", out.status))
+        };
     }
     let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
     let url = std::str::from_utf8(bytes)
@@ -2685,6 +2687,22 @@ mod tests {
             .unwrap();
         let error = origin_url(dir.path()).unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
+    }
+
+    #[test]
+    fn r17_origin_url_query_failure_is_not_an_absent_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(origin_url(dir.path()).is_err());
+        assert!(origin_url(&dir.path().join("absent")).is_err());
+        assert!(codeflow_core::git::command()
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        assert_eq!(origin_url(dir.path()), Ok(None));
+        std::fs::write(dir.path().join(".git/config"), "[malformed\n").unwrap();
+        assert!(origin_url(dir.path()).is_err());
     }
 
     /// Round eleven on issue 79: a URL that is a path ending in a carriage

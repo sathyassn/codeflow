@@ -428,7 +428,8 @@ mod tests {
             Ok(()) => {}
             Err(error)
                 if cfg!(target_os = "macos")
-                    && error.kind() == std::io::ErrorKind::PermissionDenied =>
+                    && (error.raw_os_error() == Some(92)
+                        || error.kind() == std::io::ErrorKind::PermissionDenied) =>
             {
                 // This macOS filesystem rejects the invalid-byte name before
                 // inventory can run. Linux exercises the byte-path fixture.

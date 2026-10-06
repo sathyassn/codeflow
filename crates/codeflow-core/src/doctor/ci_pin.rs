@@ -260,7 +260,9 @@ type TargetText = Result<Option<String>, String>;
 type TargetFiles<R> = Result<Option<(String, R)>, String>;
 
 fn target_files(root: &Path) -> TargetFiles<impl Fn(&str) -> TargetText> {
-    let repo = git2::Repository::discover(root).map_err(|error| error.to_string())?;
+    let Some(repo) = crate::hooks::repo::open(root)? else {
+        return Ok(None);
+    };
     let mut target = None;
     for name in TARGETS {
         let reference = match repo.find_reference(name) {
@@ -378,6 +380,15 @@ fn policy_keys(text: &str) -> Result<BTreeSet<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r17_target_files_without_repository_are_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(target_files(dir.path()).unwrap().is_none());
+        git2::Repository::init(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+        assert!(target_files(dir.path()).is_err());
+    }
 
     fn git(dir: &Path, args: &[&str]) {
         let out = crate::git::command()

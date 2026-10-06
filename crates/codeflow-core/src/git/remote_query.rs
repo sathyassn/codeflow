@@ -28,13 +28,16 @@ pub const MAX_ANSWER_BYTES: usize = 16 << 20;
 pub fn ls_remote(root: &Path, args: &[&str]) -> Result<String, String> {
     let mut all = vec!["ls-remote"];
     all.extend_from_slice(args);
-    run(root, &all, LS_REMOTE_DEADLINE).map_err(|why| match why {
-        Failure::Exit => {
-            "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
-                .to_string()
-        }
-        Failure::Other(why) => why,
-    })
+    match run(root, &all, LS_REMOTE_DEADLINE) {
+        Ok(answer) => Ok(answer),
+        // With --exit-code, Git distinguishes an empty advertisement from a
+        // transport failure. No matching refs is still a complete answer.
+        Err(Failure::Exit(Some(2))) if args.contains(&"--exit-code") => Ok(String::new()),
+        Err(Failure::Exit(_)) => Err(
+            "`git ls-remote` failed (unreachable, no credentials, or no such repository)".into(),
+        ),
+        Err(Failure::Other(why)) => Err(why),
+    }
 }
 
 /// Fetch `refs` from `url` into the object store only: no tracking ref,
@@ -57,14 +60,14 @@ pub fn fetch_objects(root: &Path, url: &str, refs: &[&str]) -> Result<(), String
     run(root, &all, FETCH_DEADLINE)
         .map(|_| ())
         .map_err(|why| match why {
-            Failure::Exit => format!("`git fetch {url}` failed"),
+            Failure::Exit(_) => format!("`git fetch {url}` failed"),
             Failure::Other(why) => why,
         })
 }
 
 enum Failure {
     /// Git ran and exited unsuccessfully.
-    Exit,
+    Exit(Option<i32>),
     Other(String),
 }
 
@@ -138,7 +141,7 @@ fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<String, Failure
         }
     };
     if !status.success() {
-        return Err(Failure::Exit);
+        return Err(Failure::Exit(status.code()));
     }
     text_answer(&bytes)
 }
@@ -231,6 +234,19 @@ fn kill_group(child: &mut std::process::Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r17_remote_no_matching_ref_is_an_empty_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init_bare(dir.path()).unwrap();
+        let url = dir.path().to_str().unwrap();
+        assert_eq!(
+            ls_remote(dir.path(), &["--exit-code", url, "refs/heads/absent"]),
+            Ok(String::new())
+        );
+        assert!(ls_remote(dir.path(), &["--exit-code", "./absent-repository"]).is_err());
+        assert!(fetch_objects(dir.path(), url, &["refs/heads/absent"]).is_err());
+    }
 
     /// Review finding on issue 79: advertised ref names were decoded lossily,
     /// so a valid `caf` plus U+FFFD resolved to the tip of the distinct branch

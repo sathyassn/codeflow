@@ -700,10 +700,8 @@ impl Drop for RepoFactsScope {
 /// outside a repository.
 fn protected_at(root: &Path) -> Result<Option<Protected>, String> {
     let read = || {
-        let repo = match git2::Repository::discover(root) {
-            Ok(repo) => repo,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-            Err(error) => return Err(format!("cannot read repository enforcement paths: {error}")),
+        let Some(repo) = super::repo::open(root)? else {
+            return Ok(None);
         };
         let both = |path: &Path| {
             [false, true]
@@ -775,10 +773,8 @@ const CANDIDATE_WALK_LIMIT: usize = 4096;
 /// directory. A protected directory too large to walk is represented by
 /// `<dir>/*`, which every check reads as inside it.
 pub(crate) fn find_candidates(start: &Path, root: &Path) -> Result<Vec<PathBuf>, String> {
-    let repo = match git2::Repository::discover(root) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("cannot read find repository: {error}")),
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(Vec::new());
     };
     let start = normalized(start, true).map_err(|error| error.to_string())?;
     let mut out: Vec<PathBuf> = Vec::new();
@@ -856,10 +852,8 @@ pub(crate) fn registered_checkout_under(
     root: &Path,
     except: Option<&Path>,
 ) -> Result<Option<PathBuf>, String> {
-    let repo = match git2::Repository::discover(root) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot read checkout repository: {error}")),
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(None);
     };
     let checkouts = checkout_roots(&repo)?;
     let except: Vec<PathBuf> = except
@@ -885,10 +879,8 @@ pub(crate) fn registered_checkout_under(
 /// it lies in, so a linked checkout's root holds its own files (TSK-216
 /// round 3).
 pub(crate) fn holds_enforcement_files(target: &Path, root: &Path) -> Result<bool, String> {
-    let repo = match git2::Repository::discover(root) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
-        Err(error) => return Err(format!("cannot read enforcement repository: {error}")),
+    let Some(repo) = super::repo::open(root)? else {
+        return Ok(false);
     };
     let protected = protected_paths(&repo)?;
     for resolve in [false, true] {
@@ -917,10 +909,8 @@ pub(crate) fn checkout_root_of(dir: &Path) -> Option<PathBuf> {
 /// inside its working tree, as a main checkout with `.worktrees/<name>`
 /// does. A command whose target cannot be resolved there may delete one.
 pub(crate) fn holds_registered_worktrees(dir: &Path) -> Result<bool, String> {
-    let repo = match git2::Repository::discover(dir) {
-        Ok(repo) => repo,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
-        Err(error) => return Err(format!("cannot read registered worktrees: {error}")),
+    let Some(repo) = super::repo::open(dir)? else {
+        return Ok(false);
     };
     let Some(workdir) = repo.workdir() else {
         return Ok(false);
@@ -930,6 +920,26 @@ pub(crate) fn holds_registered_worktrees(dir: &Path) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn r17_repository_readers_distinguish_absence_from_broken_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(protected_at(root).unwrap().is_none());
+        assert!(find_candidates(root, root).unwrap().is_empty());
+        assert!(registered_checkout_under(root, root, None)
+            .unwrap()
+            .is_none());
+        assert!(!holds_enforcement_files(root, root).unwrap());
+        assert!(!holds_registered_worktrees(root).unwrap());
+        git2::Repository::init(root).unwrap();
+        std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+        assert!(protected_at(root).is_err());
+        assert!(find_candidates(root, root).is_err());
+        assert!(registered_checkout_under(root, root, None).is_err());
+        assert!(holds_enforcement_files(root, root).is_err());
+        assert!(holds_registered_worktrees(root).is_err());
+    }
+
     #[test]
     fn r16_linked_git_pointer_preserves_ordinary_and_protected_targets() {
         let dir = tempfile::tempdir().unwrap();
@@ -1238,7 +1248,9 @@ mod tests {
         let request = parse_payload(&json!({"toolName":"write","toolInput":{"path":"../.codeflow/policy.json"},"cwd":subdir}).to_string()).unwrap().unwrap();
         assert_eq!(evaluate(&request, &f.ctx()).unwrap().len(), 1);
         let common = f.temp.path().join("main/.git");
-        std::fs::create_dir_all(&common).unwrap();
+        // A gitfile must name real repository metadata; a dangling/empty
+        // administration directory is deliberately refused by discovery.
+        git2::Repository::init(f.temp.path().join("main")).unwrap();
         std::fs::write(
             f.root.join(".git"),
             format!("gitdir: {}\n", common.display()),

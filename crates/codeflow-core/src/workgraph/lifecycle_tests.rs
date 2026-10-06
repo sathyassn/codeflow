@@ -3270,3 +3270,19 @@ fn r16_unreadable_revision_record_refuses_graph_and_history() {
     assert!(Graph::from_revision(&repo, &oid.to_string()).is_err());
     assert!(super::shipped_in_history(&repo, oid, "SPC-001").is_err());
 }
+#[test]
+fn r17_working_context_distinguishes_no_repository_from_broken_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    git2::Repository::init(dir.path()).unwrap();
+    let (base, paths) = super::working_context(dir.path()).unwrap();
+    assert!(base.is_none() && paths.is_none());
+    assert_eq!(
+        super::super::work_start::default_work_target(dir.path()).unwrap(),
+        None
+    );
+    std::fs::remove_file(dir.path().join(".git/HEAD")).unwrap();
+    assert!(super::working_context(dir.path()).is_err());
+    assert!(super::super::work_start::default_work_target(dir.path()).is_err());
+}
