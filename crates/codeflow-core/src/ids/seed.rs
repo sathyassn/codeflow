@@ -594,12 +594,17 @@ fn retarget_files(
         // Removal can fail after unlinking, and replacement after renaming.
         // Restore the old record as well as every rewritten link in either case.
         let mut failed = restore_links(&tree, &planned);
-        if let Err(error) = tree.write(&old, original.as_bytes()) {
+        let restored = tree.write(&old, original.as_bytes());
+        if let Err(error) = &restored {
             failed.push(format!("restoring {old} failed: {error}"));
+            if moving {
+                failed.push(format!("recovery record retained at {new}"));
+            }
         }
+        // The new record may be the only surviving copy if restoration failed.
         return Err(retarget_rollback_error(
             &tree,
-            moving.then_some(new.as_str()),
+            (moving && restored.is_ok()).then_some(new.as_str()),
             IdsError::Invalid(format!("{old}: {error}")),
             failed,
         ));
@@ -797,6 +802,68 @@ mod tests {
                 assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
             }
             assert!(!root.join(NEW).exists(), "the new record is removed");
+        }
+    }
+
+    #[test]
+    fn retarget_keeps_recovery_record_when_restoring_old_fails() {
+        for point in [Point::BeforeRename, Point::AfterRename] {
+            let dir = retarget_fixture();
+            let root = dir.path();
+            let original = std::fs::read_to_string(root.join(OLD)).unwrap();
+            let expected = format!(
+                "---\nid: TSK-006\nuid: {}\nformer_ids: [TSK-005]\ntitle: Move\n---\n",
+                frontmatter_value(&original, "uid").unwrap()
+            );
+            fault::arm_sequence(&[(Point::AfterRemove, OLD), (point, OLD)]);
+            let error = retarget(root, &RegId::parse("TSK-005").unwrap())
+                .unwrap_err()
+                .to_string();
+            if point == Point::BeforeRename {
+                assert!(!root.join(OLD).exists(), "restoration was not published");
+            } else {
+                assert_eq!(std::fs::read_to_string(root.join(OLD)).unwrap(), original);
+            }
+            assert!(
+                root.join(NEW).is_file(),
+                "the recovery record must survive: {error}"
+            );
+            assert_eq!(std::fs::read_to_string(root.join(NEW)).unwrap(), expected);
+            for expected_error in [OLD, "AfterRemove", &format!("{point:?}"), NEW, "recovery"] {
+                assert!(
+                    error.contains(expected_error),
+                    "missing {expected_error}: {error}"
+                );
+            }
+            for link in LINKS {
+                assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
+            }
+        }
+    }
+
+    #[test]
+    fn retarget_link_restore_failure_preserves_record_and_link_contents() {
+        for failure in [(Point::AfterRemove, OLD), (Point::AfterRename, LINKS[1])] {
+            let dir = retarget_fixture();
+            let root = dir.path();
+            let original = std::fs::read(root.join(OLD)).unwrap();
+            fault::arm_sequence(&[failure, (Point::BeforeRename, LINKS[0])]);
+            let error = retarget(root, &RegId::parse("TSK-005").unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("restoring docs/a.md failed"), "{error}");
+            assert!(error.contains("BeforeRename"), "{error}");
+            // A failed atomic restoration keeps the complete rewritten file.
+            assert_eq!(
+                std::fs::read(root.join(LINKS[0])).unwrap(),
+                b"see TSK-006\n"
+            );
+            assert_eq!(
+                std::fs::read(root.join(LINKS[1])).unwrap(),
+                b"see TSK-005\n"
+            );
+            assert_eq!(std::fs::read(root.join(OLD)).unwrap(), original);
+            assert!(!root.join(NEW).exists(), "the old record is safely present");
         }
     }
 

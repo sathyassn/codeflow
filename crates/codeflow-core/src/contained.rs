@@ -240,6 +240,8 @@ impl Tree {
             file.sync_all()?;
             drop(file);
             hook()?;
+            #[cfg(test)]
+            fault::check(fault::Point::BeforeRename, relative)?;
             platform::rename(&parent, &temporary, &parent, &name)?;
             #[cfg(test)]
             fault::check(fault::Point::AfterRename, relative)?;
@@ -410,7 +412,7 @@ impl Tree {
 }
 
 /// Test-only failure injection at the points a disk error is otherwise hard
-/// to provoke: after a replacement's rename, after a new file's write, and
+/// to provoke: before and after a replacement's rename, after a new file's write, and
 /// before and after a removal.
 #[cfg(test)]
 pub(crate) mod fault {
@@ -420,6 +422,7 @@ pub(crate) mod fault {
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub(crate) enum Point {
+        BeforeRename,
         AfterRename,
         AfterCreate,
         BeforeRemove,
