@@ -114,12 +114,13 @@ cf-method, "Managing a body of work" (standard and full tiers).
 
 **PR bodies:** follow the template and the sections `codeflow ci` requires
 for the PR's class (`cf-ship` owns the format where installed). Every PR
-names its work on one `Task:` line. Where durable tracking is active (the
-project keeps its work records in `project-management/`), the line names the
-task, `Task: TSK-NNN`, or the epic, `Task: EPC-NNN`, for the breakdown PR
-and the PR to `main`; where it is not, it names the harness's tracked unit,
-any non-empty name. A missing, empty, malformed, repeated or mismatched
-`Task:` line is refused, and there is no unrecorded form.
+names its work on one `Task:` line. Under durable tracking (work records in
+`project-management/`), it names the task, `Task: TSK-NNN`, or, for the
+breakdown PR and the PR to `main`, the epic, `Task: EPC-NNN`; a planning
+amendment names every epic it changes, `Task: EPC-001, EPC-002`. Elsewhere
+it names the harness's tracked unit, any non-empty name. A missing, empty,
+malformed, repeated or mismatched `Task:` line is refused; there is no
+unrecorded form.
 
 The Summary anchors a reader with no context in a few lines: the result, why
 it matters and where it stands; a key file name or number belongs there when
