@@ -46,9 +46,47 @@ pub fn evaluate_floor(command: &str) -> Vec<Violation> {
 }
 
 /// Evaluate commands and interpreter literals at the shell's actual directory.
+/// The shell is unknown, so no line is certified as prose.
 #[must_use]
 pub fn evaluate_at(
     command: &str,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+) -> Vec<Violation> {
+    evaluate_in(command, false, levels, integrity, cwd, root)
+}
+
+/// Whether a call's command will run in a POSIX shell the prose grammar was
+/// proved against (TSK-233). The `Bash` tool is a bash by name. A
+/// `run_terminal_command` call runs in the user's own shell, so it counts only
+/// on a Unix host whose `SHELL` names bash or zsh; on any other host, or when
+/// the shell is unset or anything else, it is not shown to be POSIX and the
+/// line keeps the raw 3.0.0 rules. Every other tool, `PowerShell` included, is
+/// never POSIX here.
+#[must_use]
+pub fn shell_is_posix(tool_name: &str, shell: Option<&str>, unix_host: bool) -> bool {
+    match tool_name {
+        "Bash" => true,
+        "run_terminal_command" => {
+            unix_host
+                && shell
+                    .and_then(|path| path.rsplit('/').next())
+                    .is_some_and(|name| matches!(name, "bash" | "zsh"))
+        }
+        _ => false,
+    }
+}
+
+/// [`evaluate_at`] for a call whose shell is known. `posix` is true for the
+/// Bash and `run_terminal_command` tools; only those lines can be certified
+/// as prose (TSK-233), because the grammar is POSIX shell grammar and
+/// Windows `PowerShell` reads `1,2`, `@name` and aliases differently.
+#[must_use]
+pub fn evaluate_in(
+    command: &str,
+    posix: bool,
     levels: &SecuritySection,
     integrity: PolicyLevel,
     cwd: &std::path::Path,
@@ -68,13 +106,28 @@ pub fn evaluate_at(
     // A consuming repository cannot turn the catastrophic floor off or
     // downgrade it to advice. The serialized key stays explicit for policy
     // compatibility, but a stale or hand-edited weaker value is not authority.
-    let mut violations = evaluate_floor(command);
-    if levels.privilege_escalation.is_active() {
+    //
+    // A line that the strict prose tokenizer certifies (TSK-233) is judged by
+    // none of the three raw-text checks below (the composed deletion check in
+    // the dangerous module included): it runs only `echo`, `printf`, `grep` and
+    // `cat` with their quoted words as data, and none of them deletes. Its
+    // redirect targets must be plain files on disk. Every other check still
+    // runs on it, and every other line keeps the raw rules.
+    let prose = posix
+        && crate::security::prose::certify_with_writes(command).is_some_and(|certified| {
+            crate::security::prose::writes_are_plain_files(&certified.writes, cwd)
+        });
+    let mut violations = if prose {
+        Vec::new()
+    } else {
+        evaluate_floor(command)
+    };
+    if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
         }
     }
-    if levels.headless_peer_runs.is_active() {
+    if !prose && levels.headless_peer_runs.is_active() {
         if let Some(run) = headless_peer_run(command) {
             violations.push(headless_violation(levels.headless_peer_runs, &run));
         }
@@ -167,6 +220,33 @@ fn privilege_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_shell_is_posix_by_tool_and_shell() {
+        use super::shell_is_posix;
+        assert!(shell_is_posix("Bash", None, true));
+        assert!(shell_is_posix("Bash", Some("/usr/bin/fish"), false));
+        for shell in ["/bin/zsh", "/opt/homebrew/bin/bash", "zsh"] {
+            assert!(shell_is_posix("run_terminal_command", Some(shell), true));
+            assert!(!shell_is_posix("run_terminal_command", Some(shell), false));
+        }
+        for shell in [
+            None,
+            Some(""),
+            Some("/usr/bin/fish"),
+            Some("/bin/dash"),
+            Some("pwsh"),
+            Some("C:\\x\\cmd.exe"),
+        ] {
+            assert!(
+                !shell_is_posix("run_terminal_command", shell, true),
+                "{shell:?}"
+            );
+        }
+        for tool in ["PowerShell", "Read", "", "bash"] {
+            assert!(!shell_is_posix(tool, Some("/bin/bash"), true), "{tool}");
+        }
+    }
+
     use super::*;
     use crate::hooks::any_blocking;
 

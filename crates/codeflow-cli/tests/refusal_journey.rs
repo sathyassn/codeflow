@@ -228,6 +228,7 @@ fn shell_refusal_pairs(project: &Project) {
     for harness in ["claude", "codex", "grok"] {
         for (command, rule) in [
             ("timeout 1 sudo true", "security.privilege_escalation"),
+            ("true; su -", "security.privilege_escalation"),
             ("nohup cargo +stable publish", "security.outward_actions"),
             ("xargs gh gist create notes.txt", "security.outward_actions"),
             ("gh -R o/r release create v1", "security.outward_actions"),
@@ -289,6 +290,7 @@ fn shell_refusal_pairs(project: &Project) {
             "gh release view v1",
             "cargo package",
             "grep -rn sudo docs/",
+            "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
             "cat README.md",
             "cat .env.example",
             "rg 'claude -p' assets/",
