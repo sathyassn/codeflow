@@ -6725,3 +6725,48 @@ fn git_hook_help_matches_the_install_path_constant() {
         "git-hook help names .git/hooks, which the install code does not use"
     );
 }
+
+#[test]
+fn unicode_branch_and_unreadable_aliases_reach_the_hook_refusals() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"protected_branches":["release\u00a0"]}}"#,
+    );
+    let payload = guard_payload("git push origin HEAD:release\u{a0}", dir.path());
+    let out = run_with_stdin(
+        codeflow()
+            .args(["hook", "git-guard"])
+            .current_dir(dir.path()),
+        &payload,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("git.push_to_protected"));
+
+    let mut config = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.path().join(".git/config"))
+        .unwrap();
+    config
+        .write_all(b"[alias]\n bad = push origin caf\xff\n nested = bad\n shell = !sh -c 'git push origin caf\xff'\n")
+        .unwrap();
+    for command in [
+        "git bad",
+        "git nested",
+        "git shell",
+        "git -c alias.outer=bad outer",
+    ] {
+        let out = run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        );
+        assert_eq!(out.status.code(), Some(2), "{command}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.outward_actions"),
+            "{command}"
+        );
+    }
+}

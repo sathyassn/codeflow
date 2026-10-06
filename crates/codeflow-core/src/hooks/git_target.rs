@@ -157,8 +157,8 @@ pub(super) fn flat_top_level(command: &str) -> Option<Vec<(String, Join)>> {
                 cur.push(c);
                 i += 1;
             }
-            '{' if next.is_none_or(char::is_whitespace) => return None,
-            '}' if i == 0 || chars[i - 1].is_whitespace() => return None,
+            '{' if next.is_none_or(super::git_guard::shell_blank) => return None,
+            '}' if i == 0 || super::git_guard::shell_blank(chars[i - 1]) => return None,
             '<' if matches!(next, Some('<' | '(')) => return None,
             '>' if next == Some('(') => return None,
             // Background jobs, pipes, `||`, subshells, groups.
@@ -188,8 +188,10 @@ fn close_segment(
     next: Join,
 ) -> Option<()> {
     let text = std::mem::take(cur);
-    let text = text.trim();
-    let mut words = text.split_whitespace();
+    let text = text.trim_matches(super::git_guard::shell_blank);
+    let mut words = text
+        .split(super::git_guard::shell_blank)
+        .filter(|word| !word.is_empty());
     let Some(first) = words.next() else {
         if *pending == Join::Seq || (*pending == Join::And && next == Join::And) {
             *pending = Join::Seq;
@@ -278,7 +280,9 @@ pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<Str
         }
         match vars.get(&name) {
             Some(Val::Known(v))
-                if !v.contains(|ch: char| ch.is_whitespace() || matches!(ch, '*' | '?' | '[')) =>
+                if !v.contains(|ch: char| {
+                    super::git_guard::shell_blank(ch) || matches!(ch, '*' | '?' | '[')
+                }) =>
             {
                 out.push_str(v);
             }
@@ -568,6 +572,21 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unicode_blanks_stay_in_target_commands() {
+        for command in [
+            "cd repo\u{a0}",
+            "if\u{a0} echo",
+            "{\u{a0} echo",
+            "echo x\u{a0}}",
+        ] {
+            let commands = flat_top_level(command).unwrap();
+            assert_eq!(commands[0].0, command);
+        }
+        let vars = HashMap::from([("DIR".into(), Val::Known("repo\u{a0}".into()))]);
+        assert_eq!(expand_word("$DIR", &vars).unwrap(), "repo\u{a0}");
+    }
     use super::*;
 
     fn joins(cmd: &str) -> Option<Vec<Join>> {

@@ -837,11 +837,11 @@ fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -
     }
     let loose = std::fs::read_to_string(common.join(refname)).ok();
     let packed = std::fs::read_to_string(common.join("packed-refs")).ok();
-    loose.is_some_and(|loose| loose.trim() == old_oid)
+    loose.is_some_and(|loose| loose.trim_end_matches('\n') == old_oid)
         && packed.is_some_and(|packed| {
             packed.lines().any(|line| {
                 line.split_once(' ')
-                    .is_some_and(|(sha, name)| sha == old_oid && name.trim() == refname)
+                    .is_some_and(|(sha, name)| sha == old_oid && name == refname)
             })
         })
 }
@@ -1255,6 +1255,31 @@ pub fn over_budget_note(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn packed_refs_keep_unicode_whitespace_in_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let oid = repo
+            .commit(None, &sig, &sig, "fixture", &tree, &[])
+            .unwrap();
+        let name = "refs/heads/release\u{a0}";
+        repo.reference(name, oid, false, "fixture").unwrap();
+        std::fs::write(repo.path().join("packed-refs"), format!("{oid} {name}\n")).unwrap();
+        assert!(keeps_value(&repo, name, &oid.to_string(), &"0".repeat(40)));
+        // A lookalike packed name must not authorize pruning a different ref.
+        repo.reference("refs/heads/release", oid, false, "fixture")
+            .unwrap();
+        assert!(!keeps_value(
+            &repo,
+            "refs/heads/release",
+            &oid.to_string(),
+            &"0".repeat(40)
+        ));
+    }
     use std::path::Path;
 
     use super::super::policy::PolicyLevel;

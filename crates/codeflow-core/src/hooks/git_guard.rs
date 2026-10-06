@@ -169,7 +169,9 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
         // so one that is not valid UTF-8 is unreadable, which the guard
         // treats as uncertainty and stops, never as a lossy spelling.
         Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
-            Ok(text) => AliasAnswer::Expansion(text.trim_end_matches(['\n', '\r']).to_string()),
+            Ok(text) => {
+                AliasAnswer::Expansion(text.strip_suffix('\n').unwrap_or(&text).to_string())
+            }
             Err(_) => AliasAnswer::Unreadable("the alias is not valid UTF-8".to_string()),
         },
         Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
@@ -2719,7 +2721,7 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
             }
             c if !single
                 && !double
-                && (c.is_whitespace() || matches!(c, '<' | '>' | '|' | ';' | '&' | '(' | ')')) =>
+                && (shell_blank(c) || matches!(c, '<' | '>' | '|' | ';' | '&' | '(' | ')')) =>
             {
                 break;
             }
@@ -3048,7 +3050,7 @@ fn assignment_name(name: &str) -> bool {
 /// their quotes removed.
 fn line_words(line: &str) -> impl Iterator<Item = &str> {
     line.split(|c: char| {
-        c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
+        shell_blank(c) || matches!(c, '|' | ';' | '&' | '(' | ')' | '<' | '>' | '\0')
     })
     .map(|w| w.trim_matches(['\'', '"']))
     .filter(|w| !w.is_empty())
@@ -4405,7 +4407,8 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             // A group or process substitution in command position belongs to
             // the pipeline it sits in (`cat <<EOF | { bash; }`, `>(sh)`).
             '(' => {
-                let in_pipeline = cur.trim().is_empty() || cur.ends_with(['<', '>']);
+                let in_pipeline =
+                    cur.trim_matches(shell_blank).is_empty() || cur.ends_with(['<', '>']);
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
@@ -4440,8 +4443,8 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                     i += 2;
                 }
             }
-            '{' if i + 1 >= chars.len() || chars[i + 1].is_whitespace() => {
-                let in_pipeline = cur.trim().is_empty();
+            '{' if i + 1 >= chars.len() || shell_blank(chars[i + 1]) => {
+                let in_pipeline = cur.trim_matches(shell_blank).is_empty();
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
@@ -4449,7 +4452,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 groups += 1;
                 i += 1;
             }
-            '}' if i == 0 || chars[i - 1].is_whitespace() => {
+            '}' if i == 0 || shell_blank(chars[i - 1]) => {
                 line.end_segment(out, &mut cur, false);
                 groups = groups.saturating_sub(1);
                 i += 1;
@@ -4555,7 +4558,9 @@ impl Line {
     /// new one.
     fn end_segment(&mut self, out: &mut Vec<String>, cur: &mut String, pipe: bool) {
         let text = std::mem::take(cur);
-        let text = text.trim();
+        // Only the shell's blanks are trimmed: a command ends in a no-break
+        // space when its last word does (OS text rule, issue 79).
+        let text = text.trim_matches([' ', '\t', '\n']);
         if !text.is_empty() {
             out.push(text.to_string());
             self.segments.push((self.pipeline, text.to_string()));
@@ -4663,15 +4668,15 @@ const COMMAND_POSITION_WORDS: &[&str] = &[
 /// caller also judges the text inside a word's parentheses as commands
 /// (TSK-216 rounds 17 and 18).
 fn paren_in_word(cur: &str) -> bool {
-    let attached = cur.chars().last().is_some_and(|c| !c.is_whitespace());
-    let trimmed = cur.trim_end();
+    let attached = cur.chars().last().is_some_and(|c| !shell_blank(c));
+    let trimmed = cur.trim_end_matches(shell_blank);
     let Some(last) = trimmed.chars().last() else {
         return false;
     };
     if matches!(last, '<' | '>' | '|' | '&') {
         return !attached;
     }
-    let mut words = trimmed.split_whitespace();
+    let mut words = trimmed.split(shell_blank).filter(|word| !word.is_empty());
     let first = words.next().unwrap_or_default();
     first != "case"
         && !std::iter::once(first)
@@ -4727,7 +4732,7 @@ fn qualifier_code(group: &str) -> Vec<String> {
             let Some(&open) = chars.get(at + 1) else {
                 continue;
             };
-            if open.is_alphanumeric() || open.is_whitespace() {
+            if open.is_alphanumeric() || shell_blank(open) {
                 continue;
             }
             let close = match open {
@@ -4745,7 +4750,7 @@ fn qualifier_code(group: &str) -> Vec<String> {
                 .iter()
                 .take_while(|&&d| !matches!(d, ',' | ')' | ':'))
                 .collect();
-            if !rest.trim().is_empty() {
+            if !rest.trim_matches(shell_blank).is_empty() {
                 code.push(rest);
             }
         }
@@ -4808,7 +4813,7 @@ fn parse_heredoc_operator(chars: &[char], start: usize) -> Option<(Heredoc, usiz
                     }
                 }
                 '$' | '`' => return None,
-                c if c.is_whitespace() || ";&|<>()".contains(c) => break,
+                c if shell_blank(c) || ";&|<>()".contains(c) => break,
                 c => delimiter.push(c),
             },
         }
@@ -5955,7 +5960,7 @@ fn expand_alias(
             AliasAnswer::Unreadable(why) => return Err(why),
             AliasAnswer::Expansion(value) => value,
         };
-        if value.trim_start().starts_with('!') {
+        if value.starts_with('!') {
             return Err("a `!` shell alias".to_string());
         }
         let words =
@@ -5981,7 +5986,7 @@ fn expand_alias(
 /// whitespace, with single and double quotes grouping and a backslash
 /// escaping the next character outside single quotes. `None` for an
 /// unterminated quote or a trailing backslash.
-fn split_alias(value: &str) -> Option<Vec<String>> {
+pub(crate) fn split_alias(value: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
@@ -6000,7 +6005,8 @@ fn split_alias(value: &str) -> Option<Vec<String>> {
                 quote = Some(c);
                 in_word = true;
             }
-            (None, c) if c.is_whitespace() => {
+            // Git's sane_ctype blanks exclude vertical tab and form feed.
+            (None, ' ' | '\t' | '\n' | '\r') => {
                 if in_word {
                     words.push(std::mem::take(&mut word));
                     in_word = false;
@@ -7649,7 +7655,7 @@ fn sed_script_writes(args: &[String], cwd: &Path) -> Vec<String> {
     }
     let mut out: Vec<String> = Vec::new();
     let mut add = |candidate: &str| {
-        let candidate = candidate.trim();
+        let candidate = candidate.trim_start_matches([' ', '\t']);
         if !candidate.is_empty() && !out.iter().any(|c| c == candidate) {
             out.push(candidate.to_string());
         }
@@ -7953,7 +7959,11 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     }
                 }
             }
-            c if c.is_whitespace() && !in_single && !in_double => {
+            // The shell splits words at its blanks (space, tab, newline); any
+            // other whitespace, a no-break space included, is part of the word
+            // (OS text rule, issue 79), so a protected name that holds one is
+            // still compared whole.
+            ' ' | '\t' | '\n' if !in_single && !in_double => {
                 if started {
                     words.push(ShellWord {
                         text: std::mem::take(&mut cur),
@@ -8557,8 +8567,77 @@ mod registry_guard_tests {
     }
 }
 
+/// Unquoted shell separators. Other whitespace belongs to the word.
+pub(crate) fn shell_blank(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n')
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn alias_reader_removes_only_its_output_terminator() {
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let value = "!printf value\r\n";
+        let config = vec![format!("alias.x={value}")];
+        assert_eq!(
+            read_alias(
+                temp.path(),
+                &AliasQuery {
+                    target: None,
+                    config: &config,
+                    name: "x"
+                }
+            ),
+            AliasAnswer::Expansion(value.into())
+        );
+    }
+
+    #[test]
+    fn unicode_blanks_stay_in_shell_operands() {
+        for blank in ['\u{a0}', '\u{2003}', '\u{202f}', '\r', '\u{b}', '\u{c}'] {
+            let name = format!("release{blank}");
+            assert_eq!(command_argv(&format!("git push origin {name}"))[3], name);
+            let chars: Vec<_> = format!("{name} next").chars().collect();
+            assert_eq!(redirect_word(&chars, 0).0, name);
+            assert_eq!(
+                line_words(&format!("echo {name}")).last(),
+                Some(name.as_str())
+            );
+            let chars: Vec<_> = format!("<<{name}\n").chars().collect();
+            assert_eq!(parse_heredoc_operator(&chars, 0).unwrap().0.delimiter, name);
+            assert_eq!(
+                expand_commands(&format!("echo {name}"))[0],
+                format!("echo {name}")
+            );
+            assert!(paren_in_word(&format!("case{blank}")));
+        }
+        assert_eq!(
+            qualifier_code("e\u{a0}git push origin main\u{a0}"),
+            vec!["git push origin main"]
+        );
+        assert_eq!(qualifier_code("+\u{a0}"), vec!["\u{a0}"]);
+        assert!(expand_commands("{\u{a0}echo ok")
+            .iter()
+            .any(|s| s.starts_with("{\u{a0}")));
+        assert!(expand_commands("echo x\u{a0}} tail")
+            .iter()
+            .any(|s| s.contains("x\u{a0}}")));
+        assert_eq!(
+            sed_script_writes(&["w file\u{a0}".into()], Path::new(".")),
+            vec!["file\u{a0}"]
+        );
+        assert_eq!(
+            split_alias("push origin release\u{a0}").unwrap()[2],
+            "release\u{a0}"
+        );
+        assert_eq!(
+            split_alias("push\torigin\nrelease").unwrap(),
+            ["push", "origin", "release"]
+        );
+        assert_eq!(split_alias("version\u{c}").unwrap(), ["version\u{c}"]);
+    }
     use super::super::policy::PolicyLevel;
     use super::*;
 
@@ -8947,6 +9026,31 @@ mod tests {
     }
 
     // -- push / force-push / delete --
+
+    /// Round sixteen on issue 79: a protected branch whose name ends in a
+    /// no-break space is compared whole, so an unquoted push to it is blocked
+    /// as the quoted one is, and an alias that runs it is judged the same.
+    #[test]
+    fn a_push_to_a_protected_name_with_a_no_break_space_is_blocked() {
+        let p = GitPolicy {
+            protected_branches: vec!["release\u{a0}".into()],
+            ..GitPolicy::default()
+        };
+        for command in [
+            "git push origin HEAD:release\u{a0}",
+            "git push origin 'HEAD:release\u{a0}'",
+        ] {
+            let v = evaluate(command, &ctx(&p, "feat/x"));
+            assert_eq!(
+                v.first().map(|v| v.rule.as_str()),
+                Some("git.push_to_protected"),
+                "{command}"
+            );
+        }
+        assert!(evaluate("git push origin release", &ctx(&p, "feat/x")).is_empty());
+        let words = split_alias("push origin HEAD:release\u{a0}").unwrap();
+        assert_eq!(words.last().map(String::as_str), Some("HEAD:release\u{a0}"));
+    }
 
     #[test]
     fn test_push_to_protected_explicit_refspec_blocked() {

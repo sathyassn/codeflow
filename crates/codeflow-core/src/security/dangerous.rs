@@ -61,6 +61,8 @@ fn command_tokens(command: &str) -> Vec<String> {
         match (quote, ch) {
             (Some(active), c) if c == active => quote = None,
             (None, '\'' | '"') => quote = Some(ch),
+            // This fallback also reads raw PowerShell, whose lexical grammar
+            // includes Unicode separators. POSIX deletion has its own reader.
             (None, c) if c.is_whitespace() => {
                 if !current.is_empty() {
                     tokens.push(std::mem::take(&mut current));
@@ -338,7 +340,7 @@ fn is_home_root_operand(op: &str) -> bool {
 /// false-positive on ordinary `echo` and commit-message strings.
 pub(super) fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
     let op = unquote_unescape(raw);
-    let op = op.trim();
+    let op = op.as_str();
     if is_home_root_operand(op) {
         return Some("home directory");
     }
@@ -1050,6 +1052,18 @@ fn check_fork_bomb(cmd: &str) -> Option<Verdict> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unicode_blanks_stay_in_dangerous_operands() {
+        assert_eq!(
+            command_tokens("Remove-Item\u{a0}-Recurse C:\\Windows"),
+            ["Remove-Item", "-Recurse", "C:\\Windows"]
+        );
+        assert_eq!(dangerous_rm_target("'/etc\u{a0}'"), None);
+        assert_eq!(dangerous_rm_target("'/etc '"), None);
+        assert!(dangerous_rm_target("/etc").is_some());
+        assert!(check_windows_recursive_delete("Remove-Item\u{a0}-Recurse C:\\Windows").is_some());
+    }
     use super::*;
     use std::sync::OnceLock;
 

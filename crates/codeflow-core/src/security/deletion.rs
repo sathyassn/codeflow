@@ -678,7 +678,9 @@ impl Lexer {
         }
         let mut word = Word::default();
         while let Some(ch) = self.peek(0) {
-            if ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')' | '<' | '>') {
+            if crate::hooks::git_guard::shell_blank(ch)
+                || matches!(ch, ';' | '&' | '|' | '(' | ')' | '<' | '>')
+            {
                 break;
             }
             self.word_char(&mut word, true);
@@ -4062,7 +4064,10 @@ impl Reader<'_> {
                 }
                 let name: String = chars[start..i].iter().collect();
                 let mut j = i;
-                while chars.get(j).is_some_and(|c| c.is_whitespace()) {
+                while chars
+                    .get(j)
+                    .is_some_and(|c| crate::hooks::git_guard::shell_blank(*c))
+                {
                     j += 1;
                 }
                 if chars.get(j) == Some(&'[') {
@@ -4076,14 +4081,17 @@ impl Reader<'_> {
                         self.arith_scan(&subscript, st, depth);
                     }
                     j = next;
-                    while chars.get(j).is_some_and(|c| c.is_whitespace()) {
+                    while chars
+                        .get(j)
+                        .is_some_and(|c| crate::hooks::git_guard::shell_blank(*c))
+                    {
                         j += 1;
                     }
                 }
                 let before: String = chars[..start]
                     .iter()
                     .rev()
-                    .filter(|c| !c.is_whitespace())
+                    .filter(|c| !crate::hooks::git_guard::shell_blank(**c))
                     .take(2)
                     .collect();
                 let after = |k: usize| chars.get(j + k).copied();
@@ -4115,7 +4123,7 @@ impl Reader<'_> {
     /// expression is evaluated too.
     fn arith_reference(&mut self, name: &str, st: &mut State, depth: usize) {
         for value in st.var(name) {
-            let text = value.trim();
+            let text = value.trim_matches(crate::hooks::git_guard::shell_blank);
             if text.is_empty() || spelled(text) || is_number(text) {
                 continue;
             }
@@ -5990,7 +5998,7 @@ fn declaration_flags(words: &[Word]) -> (usize, String) {
 /// A value an integer variable takes without evaluating anything: a
 /// number, or nothing (which reads as zero).
 fn integer_literal(text: &str) -> bool {
-    let text = text.trim();
+    let text = text.trim_matches(crate::hooks::git_guard::shell_blank);
     text.is_empty() || is_number(text)
 }
 
@@ -6069,7 +6077,7 @@ fn builtin_prefix(argv: &[String]) -> Option<(usize, bool)> {
 /// the last the rest of the line (with and without one trailing
 /// delimiter, which bash drops).
 fn read_fields(line: &str, ifs: &str, count: usize) -> Vec<Values> {
-    let space = |c: char| ifs.contains(c) && c.is_whitespace();
+    let space = |c: char| ifs.contains(c) && crate::hooks::git_guard::shell_blank(c);
     let delim = |c: char| ifs.contains(c);
     let mut rest = line.trim_matches(space);
     let mut out: Vec<Values> = Vec::new();
@@ -6083,7 +6091,11 @@ fn read_fields(line: &str, ifs: &str, count: usize) -> Vec<Values> {
                 out.push([rest[..end].to_string()].into());
                 let after = rest[end..].trim_start_matches(space);
                 let after = match after.chars().next() {
-                    Some(c) if delim(c) && !c.is_whitespace() && rest[end..].starts_with(c) => {
+                    Some(c)
+                        if delim(c)
+                            && !crate::hooks::git_guard::shell_blank(c)
+                            && rest[end..].starts_with(c) =>
+                    {
                         &after[c.len_utf8()..]
                     }
                     _ => after,
@@ -6152,7 +6164,7 @@ fn items(fed: Option<&Fed>) -> Vec<Input> {
         .iter()
         .flat_map(|item| {
             item.value
-                .split(|c: char| c.is_whitespace() || c == '\0')
+                .split([' ', '\t', '\n', '\r', '\u{b}', '\u{c}', '\0'])
                 .filter(|v| !v.is_empty())
                 .map(|value| Input {
                     value: value.to_string(),
@@ -6346,7 +6358,7 @@ fn split_string(text: &str) -> Vec<String> {
                 quote = Some(c);
                 current.get_or_insert_with(String::new);
             }
-            (None, c) if c.is_whitespace() => {
+            (None, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}') => {
                 if let Some(word) = current.take() {
                     words.push(word);
                 }
@@ -7435,6 +7447,53 @@ fn is_name(name: &str) -> bool {
 #[cfg(test)]
 #[cfg_attr(not(unix), allow(dead_code, unused_imports))]
 mod tests {
+
+    #[test]
+    fn arithmetic_does_not_erase_unicode_between_name_and_assignment() {
+        let mut reader = super::Reader {
+            base: None,
+            rooted_unplaced: false,
+            found: None,
+            depth: 0,
+            pipe_input: None,
+            jumps: Vec::new(),
+            expanding: Vec::new(),
+            traps: Vec::new(),
+            in_trap: false,
+            status: None,
+        };
+        for expression in ["x\u{a0}=1", "x[0]\u{a0}=1", "+\u{a0}+x"] {
+            let mut state = super::State::start();
+            state.set("x", ["0".into()].into());
+            reader.arith_scan(expression, &mut state, 0);
+            assert_eq!(state.var("x"), ["0".into()].into(), "{expression}");
+        }
+    }
+
+    #[test]
+    fn unicode_blanks_stay_in_deletion_inputs() {
+        let mut lexer = super::Lexer::new("file\u{a0}tail");
+        assert_eq!(
+            lexer.redirect_target().unwrap().plain(),
+            Some("file\u{a0}tail")
+        );
+        assert!(!super::integer_literal("\u{a0}1"));
+        assert_eq!(
+            super::split_string("rm file\u{a0}tail"),
+            ["rm", "file\u{a0}tail"]
+        );
+        let fed = super::Fed {
+            items: vec![super::Input {
+                value: "file\u{a0}tail".into(),
+                tree: false,
+            }],
+            complete: true,
+        };
+        assert_eq!(super::items(Some(&fed))[0].value, "file\u{a0}tail");
+        let fields = super::read_fields("\u{a0}x\u{a0}y", "\u{a0}", 3);
+        assert!(fields[0].contains(""));
+        assert!(fields[1].contains("x"));
+    }
     use super::super::dangerous::DangerousModule;
     use super::super::guard_forms::{
         Expect, COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS, REVIEW_PROBES,

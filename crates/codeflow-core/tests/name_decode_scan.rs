@@ -24,6 +24,11 @@
 //! the test. Items marked `#[cfg(test)]` are skipped one by one. The layer
 //! itself (`git/name.rs`) is not scanned.
 //!
+//! Guard modules also reject Unicode whitespace splitting/trimming unless
+//! a counted exception explains the applicable grammar or non-command use.
+//! Shell, Git and utility
+//! separators are explicit so non-separator characters keep their identity.
+//!
 //! Limits, stated rather than hidden: a text conversion that is not one of
 //! these calls (`Path::display().to_string()`, `to_str().unwrap_or("")`,
 //! `format!("{path:?}")`) is not seen; the tests of each site (a
@@ -41,6 +46,13 @@ const LAYER: &str = "crates/codeflow-core/src/git/name.rs";
 
 /// Calls found by name.
 const LOSSY: &[&str] = &["from_utf8_lossy", "to_string_lossy"];
+const UNICODE_WHITESPACE: &[&str] = &[
+    "is_whitespace",
+    "split_whitespace",
+    "trim",
+    "trim_start",
+    "trim_end",
+];
 const GIT2_TEXT: &[&str] = &["shorthand", "symbolic_target"];
 
 /// Production sites that decode lossily or read git2 text, where the value
@@ -85,15 +97,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("codeflow-core/src/hooks/git_discard.rs", "lossy", "from_utf8_lossy", 1, "decided in the file: a dirty name read lossily can only add a refusal, never remove one, and a lookalike is judged as the work it is"),
     ("codeflow-core/src/hooks/git_guard.rs", "WordGlob::prefix", "to_string_lossy", 1, "a component of a command word, which is valid UTF-8 text; tests only for glob syntax"),
     ("codeflow-core/src/hooks/git_guard.rs", "expand_components", "to_string_lossy", 1, "a component of a command word, which is valid UTF-8 text; tests only for glob syntax"),
-    ("codeflow-core/src/hooks/git_guard.rs", "find_action_violation", "from_utf8_lossy", 1, "a script file's content, and a name read from a directory that is judged only as an operand of a command and never equals an ASCII enforcement name"),
+    ("codeflow-core/src/hooks/git_guard.rs", "find_action_violation", "from_utf8_lossy", 1, "a NUL list scanned for fixed ASCII enforcement/worktree substrings; replacement characters cannot erase those bytes and any added word boundary only adds a refusal"),
     ("codeflow-core/src/hooks/git_guard.rs", "find_name_matches", "to_string_lossy", 2, "a find -name pattern matched against a candidate name: a candidate that is not UTF-8 stays when the pattern has a single-character wildcard, so the lossy spelling decides only literal and `*` patterns, which it answers as the bytes would, except that a literal U+FFFD in the pattern also matches such a name, which only adds a candidate or a refusal"),
     ("codeflow-core/src/hooks/git_guard.rs", "in_enforcement_dir", "to_string_lossy", 1, "compared with ASCII enforcement folder names, which U+FFFD never equals, so an invalid name is none of them"),
     ("codeflow-core/src/hooks/git_guard.rs", "read_alias", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/hooks/git_guard.rs", "read_branch_name", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
-    ("codeflow-core/src/hooks/git_guard.rs", "sed_text_violation", "from_utf8_lossy", 1, "file or blob content, a format contract and not a name"),
+    ("codeflow-core/src/hooks/git_guard.rs", "sed_text_violation", "from_utf8_lossy", 1, "script content scanned for fixed ASCII enforcement substrings; replacement characters are non-name boundaries, so the decode can only add matches, never remove an ASCII needle"),
     ("codeflow-core/src/hooks/git_hook.rs", "scan_staged", "from_utf8_lossy", 1, "file or blob content, a format contract and not a name (an added line scanned for secrets)"),
     ("codeflow-core/src/hooks/orient.rs", "generate", "from_utf8_lossy", 1, "an object id or fixed ASCII word git prints, compared with ASCII only (`hooks 3`)"),
-    ("codeflow-core/src/hooks/source_identity.rs", "git", "from_utf8_lossy", 1, "an object id or fixed ASCII word git prints, compared with ASCII only"),
     ("codeflow-core/src/ids/check.rs", "Texts::uid_at", "from_utf8_lossy", 1, "file or blob content, a format contract and not a name"),
     ("codeflow-core/src/ids/git.rs", "Git::blobs", "from_utf8_lossy", 1, "the `git cat-file --batch` header line: an object id, a type and a size"),
     ("codeflow-core/src/ids/git.rs", "Git::rev", "from_utf8_lossy", 1, "an object id or fixed ASCII word git prints, compared with ASCII only"),
@@ -122,7 +133,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("codeflow-core/src/scaffold/gitutil.rs", "add_and_commit", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/scaffold/gitutil.rs", "git_ok", "from_utf8_lossy", 1, "a git or tool error message shown to a person, never compared"),
     ("codeflow-core/src/scaffold/gitutil.rs", "is_repo", "from_utf8_lossy", 1, "an object id or fixed ASCII word git prints, compared with ASCII only (`true`)"),
-    ("codeflow-core/src/security/outward.rs", "git_alias", "from_utf8_lossy", 1, "an alias value read only to find the ASCII command words it runs (push, tag); bytes that are not UTF-8 become U+FFFD in text that no decision compares, and the alternative would read the alias as absent"),
     ("codeflow-core/src/security/deletion.rs", "Reader::glob_paths", "to_string_lossy", 1, "a name that is not UTF-8 makes the deletion unproven when the glob has a single-character wildcard or a bracket; the lossy spelling decides only literal and `*` patterns, which it answers as the bytes would, except that a literal U+FFFD in the pattern also matches such a name, which only adds a candidate or a refusal"),
     ("codeflow-core/src/testing/coverage/cobertura.rs", "parse_cobertura_str", "from_utf8_lossy", 2, "attributes of a coverage XML report, a format contract"),
     ("codeflow-core/src/testing/delivery.rs", "observation", "from_utf8_lossy", 2, "output of a sandbox probe, shown in a report"),
@@ -248,6 +258,7 @@ fn trait_item_attributes(item: &syn::TraitItem) -> &[syn::Attribute] {
 /// One site: the enclosing item, the call, and the first line seen.
 #[derive(Default)]
 struct Sites {
+    whitespace: bool,
     /// The file uses git2, so a zero-argument `name()` may be its text.
     uses_git2: bool,
     context: Vec<String>,
@@ -269,6 +280,9 @@ impl Sites {
     }
 
     fn flagged(&self, name: &str, arguments: usize) -> bool {
+        if self.whitespace {
+            return UNICODE_WHITESPACE.contains(&name);
+        }
         LOSSY.contains(&name)
             || (GIT2_TEXT.contains(&name) && arguments == 0)
             || (name == "name" && arguments == 0 && self.uses_git2)
@@ -298,7 +312,7 @@ impl Sites {
                     let arguments = usize::from(!empty_call);
                     // Zero-argument names count only as a method (`x.name()`).
                     if self.flagged(&name, arguments)
-                        && (after_dot || LOSSY.contains(&name.as_str()))
+                        && (after_dot || LOSSY.contains(&name.as_str()) || self.whitespace)
                     {
                         self.note(ident.span(), &name);
                     }
@@ -396,7 +410,9 @@ impl<'ast> Visit<'ast> for Sites {
         // `String::from_utf8_lossy(x)` and `map(String::from_utf8_lossy)`.
         if let Some(last) = path.segments.last() {
             let name = last.ident.unraw().to_string();
-            if LOSSY.contains(&name.as_str()) {
+            if (self.whitespace && UNICODE_WHITESPACE.contains(&name.as_str()))
+                || (!self.whitespace && LOSSY.contains(&name.as_str()))
+            {
                 self.note(last.ident.span(), &name);
             }
         }
@@ -412,8 +428,13 @@ impl<'ast> Visit<'ast> for Sites {
 /// Every site in `source`, as ((item, call), lines). `file` only decides
 /// whether git2 is in use.
 fn sites_in(source: &str) -> BTreeMap<(String, String), Vec<usize>> {
+    sites_in_mode(source, false)
+}
+
+fn sites_in_mode(source: &str, whitespace: bool) -> BTreeMap<(String, String), Vec<usize>> {
     let file = syn::parse_file(source).expect("the source parses");
     let mut sites = Sites {
+        whitespace,
         uses_git2: source.contains("git2"),
         ..Sites::default()
     };
@@ -640,4 +661,100 @@ fn the_scan_does_not_flag_the_strict_decodes() {
         "fn f() { String::from_utf8(b); std::str::from_utf8(b); p.to_str(); p.display(); }"
     )
     .is_empty());
+}
+
+// Exceptions concern prose, diagnostics, schema validation, or a language
+// whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
+const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/security/dangerous.rs", "command_tokens", "is_whitespace", 1, "Multi-language catastrophe fallback also reads raw PowerShell, whose grammar includes Unicode separators. POSIX deletion has its own exact reader; this fallback does not compare protected ref names."),
+    ("crates/codeflow-core/src/hooks/conflict_markers.rs", "marker_sizes", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
+    ("crates/codeflow-core/src/hooks/delegate_turn.rs", "signal_tmux", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "read_alias", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
+    ("crates/codeflow-core/src/hooks/git_guard.rs", "read_branch_name", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
+    ("crates/codeflow-core/src/hooks/git_hook.rs", "commit_msg_from", "trim", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/git_hook.rs", "commit_msg_with_files", "trim", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/git_hook.rs", "policy_character_violation", "trim", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "generate", "trim", 1, "Compares the fixed ASCII hooks-version marker for orientation; replacement or whitespace cannot conceal a command."),
+    ("crates/codeflow-core/src/hooks/orient.rs", "product_one_liner", "trim", 6, "Human-readable product description for orientation only."),
+    ("crates/codeflow-core/src/hooks/policy_schema.rs", "validate_profiles", "trim", 6, "Rejects empty schema fields and wildcard-only branch patterns; Unicode trimming only adds a rejection and does not rewrite the stored value."),
+    ("crates/codeflow-core/src/hooks/policy_schema.rs", "validate_retry_entries", "trim", 1, "Rejects empty retry-provider labels; Unicode trimming only adds a rejection and does not rewrite the stored value."),
+    ("crates/codeflow-core/src/hooks/scan.rs", "scan_diff", "trim", 1, "The path labels secret findings for display; secret detection inspects the unchanged added content."),
+    ("crates/codeflow-core/src/hooks/session_summary.rs", "record", "trim", 1, "Session-summary JSON framing, not execution or policy input."),
+    ("crates/codeflow-core/src/hooks/source_identity.rs", "revision", "trim", 1, "Rejects an empty archive revision label for build metadata; retains the original nonempty value."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_breaking_footer", "trim_start", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_commit_body", "trim", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_commit_body", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_commit_format", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_commit_ticket", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_required_footers", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_subject_separator", "trim", 2, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "check_subject_separator", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "is_breaking_footer_start", "trim_start", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+    ("crates/codeflow-core/src/hooks/standards.rs", "trailer_kv", "trim_end", 1, "Commit-message prose validation, whose whitespace rules are independent of shell token and ref identity."),
+];
+
+#[test]
+fn guard_whitespace_uses_explicit_separator_rules() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for dir in [
+        "crates/codeflow-core/src/hooks",
+        "crates/codeflow-core/src/security",
+        "crates/codeflow-cli/src/cmd",
+    ] {
+        rust_files(&root.join(dir), &mut files);
+    }
+    let mut actual = BTreeMap::new();
+    for file in files {
+        let name = relative(&root, &file);
+        if name.contains("codeflow-cli")
+            && !file
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("hook")
+        {
+            continue;
+        }
+        for ((item, call), lines) in sites_in_mode(&std::fs::read_to_string(&file).unwrap(), true) {
+            println!("{name} {item} {call} {} {lines:?}", lines.len());
+            actual.insert((name.clone(), item, call), lines.len());
+        }
+    }
+    let mut allowed = BTreeMap::new();
+    for (file, item, call, count, reason) in WHITESPACE_EXCEPTIONS {
+        assert!(!reason.is_empty());
+        assert!(allowed
+            .insert(
+                (file.to_string(), item.to_string(), call.to_string()),
+                *count
+            )
+            .is_none());
+    }
+    assert_eq!(actual, allowed, "Unicode whitespace in a guard needs a reviewed reason; shell and git names keep non-separator characters");
+}
+
+#[test]
+fn whitespace_scan_covers_methods_function_values_and_macros() {
+    for expression in [
+        "text.trim()",
+        "text.split_whitespace()",
+        "text.trim_start()",
+        "text.trim_end()",
+        "c.is_whitespace()",
+        "iter.any(char::is_whitespace)",
+        "format!(\"{}\", text.trim())",
+    ] {
+        let source = format!("fn f() {{ {expression}; }}");
+        assert_eq!(
+            sites_in_mode(&source, true)
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            1,
+            "{expression}"
+        );
+    }
+    assert!(sites_in_mode("#[cfg(test)] mod tests { fn f() { text.trim(); } }", true).is_empty());
 }

@@ -5,7 +5,8 @@ use super::headless::{
     skip_options,
 };
 use crate::hooks::git_guard::{
-    command_argv, expand_commands, strip_launchers, strip_reserved_words,
+    command_argv, expand_commands, read_alias, split_alias, strip_launchers, strip_reserved_words,
+    AliasAnswer, AliasQuery, Retarget,
 };
 use crate::hooks::policy::SecuritySection;
 use crate::hooks::Violation;
@@ -665,36 +666,85 @@ fn git_alias(rest: &[String], cwd: Option<&Path>, depth: usize, out: &mut Parsed
     if crate::hooks::git_guard::GIT_BUILTINS.contains(&name.as_str()) {
         return;
     }
-    let Some(dir) = git_directory(cwd, rest) else {
+    let Some(mut dir) = cwd.map(Path::to_path_buf) else {
         return;
     };
     let end = rest.len() - sub.len();
-    let inline = rest[..end]
-        .windows(2)
-        .filter(|p| p[0] == "-c")
-        .filter_map(|p| p[1].split_once('='))
-        .rfind(|(key, _)| *key == format!("alias.{name}"))
-        .map(|(_, value)| value.to_string());
-    let value = inline.or_else(|| {
-        let config = git2::Repository::open(&dir)
-            .ok()?
-            .config()
-            .ok()?
-            .snapshot()
-            .ok()?;
-        // OS text rule (issue 79): the alias is read to find the command words
-        // it runs (`push`, `tag`), which are ASCII. A value with bytes that
-        // are not UTF-8 is still analysed, with those bytes as U+FFFD, rather
-        // than read as no alias; no decision compares the replaced text.
-        let bytes = config.get_bytes(&format!("alias.{name}")).ok()?;
-        Some(String::from_utf8_lossy(bytes).into_owned())
-    });
-    if let Some(value) = value.filter(|v| !v.starts_with('!')) {
+    // Preserve the command's directory and configuration order, including
+    // relative includes and worktree-specific conditional includes.
+    let mut config = Vec::new();
+    let mut git_dir = None;
+    let mut config_unknown = false;
+    let mut at = 0;
+    while at < end {
+        match rest[at].as_str() {
+            "-c" => {
+                config.extend(rest.get(at + 1).cloned());
+                at += 1;
+            }
+            "-C" => {
+                if let Some(path) = rest.get(at + 1) {
+                    dir = dir.join(path);
+                }
+                at += 1;
+            }
+            "--git-dir" => {
+                git_dir = rest.get(at + 1).map(String::as_str);
+                at += 1;
+            }
+            "--work-tree" | "--namespace" => at += 1,
+            "--config-env" => {
+                config_unknown = true;
+                at += 1;
+            }
+            value => {
+                if let Some(path) = value.strip_prefix("--git-dir=") {
+                    git_dir = Some(path);
+                } else if value.starts_with("--config-env=") {
+                    config_unknown = true;
+                } else if let Some(setting) = value.strip_prefix("-c") {
+                    config.push(setting.to_string());
+                }
+            }
+        }
+        at += 1;
+    }
+    let answer = if config_unknown || depth >= 32 {
+        AliasAnswer::Unreadable("alias configuration or expansion is unresolved".into())
+    } else {
+        read_alias(
+            &dir,
+            &AliasQuery {
+                target: git_dir.map(|path| Retarget {
+                    path,
+                    git_dir: true,
+                }),
+                config: &config,
+                name,
+            },
+        )
+    };
+    let value = match answer {
+        AliasAnswer::NotAlias => return,
+        AliasAnswer::Expansion(value) if !value.starts_with('!') => split_alias(&value),
+        // Neither an unreadable byte string nor shell code can prove its ref
+        // operands safe. Do not inspect replacement characters or guess from
+        // top-level words: a shell alias can hide another git invocation.
+        AliasAnswer::Expansion(_) | AliasAnswer::Unreadable(_) => None,
+    };
+    if let Some(words) = value {
         let mut args = vec!["git".to_string()];
         args.extend_from_slice(&rest[..end]);
-        args.extend(command_argv(&value));
+        args.extend(words);
         args.extend_from_slice(&sub[1..]);
         argv(&args, cwd, depth + 1, out);
+    } else {
+        let source = rest
+            .iter()
+            .any(|s| s == "-C" || s == "--git-dir" || s.starts_with("--git-dir="))
+            .then(|| git_policy_root(cwd, rest))
+            .flatten();
+        out.families.push(("release", source));
     }
 }
 
@@ -762,6 +812,60 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn unreadable_and_shell_aliases_fail_closed_through_all_config_sources() {
+        use std::io::Write as _;
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let included = temp.path().join("aliases");
+        std::fs::write(&included, b"[alias]\n included = push origin caf\xff\n").unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(temp.path().join(".git/config"))
+            .unwrap();
+        config.write_all(b"[alias]\n bad = push origin caf\xff\n nested = bad\n shell = !sh -c 'git push origin caf\xff'\n text = !sh -c 'git bad'\n safe = log --oneline\n").unwrap();
+        let cli_included = temp.path().join("cli-aliases");
+        std::fs::write(&cli_included, b"[alias]\n cli = push origin caf\xff\n").unwrap();
+        let conditional = temp.path().join("conditional-aliases");
+        std::fs::write(
+            &conditional,
+            b"[alias]\n conditional = push origin caf\xff\n",
+        )
+        .unwrap();
+        writeln!(config, "[include]\n path = {}", included.display()).unwrap();
+        writeln!(
+            config,
+            "[includeIf \"gitdir:{}\"]\n path = {}",
+            temp.path().join(".git").canonicalize().unwrap().display(),
+            conditional.display()
+        )
+        .unwrap();
+        for command in [
+            "git bad".to_string(),
+            "git nested".into(),
+            "git shell".into(),
+            "git text".into(),
+            "git included".into(),
+            "git -c alias.outer=bad outer".into(),
+            "git -c 'alias.outer=!sh -c git\\ bad' outer".into(),
+            format!("git -c include.path={} cli", cli_included.display()),
+            "git -c include.path=cli-aliases cli".into(),
+            "git conditional".into(),
+        ] {
+            assert!(
+                !evaluate_at(&command, &SecuritySection::default(), Some(temp.path())).is_empty(),
+                "{command}"
+            );
+        }
+        assert!(evaluate_at("git safe", &SecuritySection::default(), Some(temp.path())).is_empty());
+        assert!(evaluate_at(
+            "git -c 'alias.bad=log --oneline' bad",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+    }
     use super::*;
     use crate::security::actions::{table, PatternToken};
 
@@ -901,6 +1005,30 @@ mod tests {
             Some(temp.path())
         )
         .is_empty());
+    }
+
+    /// Round sixteen on issue 79: an alias that is not UTF-8 and pushes names
+    /// a ref this text cannot give exactly, so it is judged as a release
+    /// action; even a seemingly read-only value needs exact command text.
+    #[test]
+    fn an_alias_that_is_not_utf8_and_pushes_is_judged_as_a_release() {
+        use std::io::Write as _;
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let mut config = std::fs::OpenOptions::new()
+            .append(true)
+            .open(temp.path().join(".git").join("config"))
+            .unwrap();
+        config
+            .write_all(b"[alias]\n\tpublish = push origin caf\xff\n\tlgx = log --format=caf\xe9\n")
+            .unwrap();
+        assert!(!evaluate_at(
+            "git publish",
+            &SecuritySection::default(),
+            Some(temp.path())
+        )
+        .is_empty());
+        assert!(!evaluate_at("git lgx", &SecuritySection::default(), Some(temp.path())).is_empty());
     }
 
     #[test]

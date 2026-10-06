@@ -87,7 +87,7 @@ pub fn hex_digest(bytes: &[u8]) -> String {
 /// script that shares this file, a plain process (it runs no hook).
 pub type Git<'a> = &'a dyn Fn() -> std::process::Command;
 
-fn git(root: &Path, args: &[&str], make: Git<'_>) -> Option<String> {
+fn git(root: &Path, args: &[impl AsRef<std::ffi::OsStr>], make: Git<'_>) -> Option<Vec<u8>> {
     let out = make()
         .args(args)
         .current_dir(root)
@@ -96,9 +96,12 @@ fn git(root: &Path, args: &[&str], make: Git<'_>) -> Option<String> {
         .env_remove("GIT_INDEX_FILE")
         .output()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    out.status.success().then(|| {
+        out.stdout
+            .strip_suffix(b"\n")
+            .unwrap_or(&out.stdout)
+            .to_vec()
+    })
 }
 
 /// Source revision, dirty state and Git metadata paths to watch. Archive
@@ -119,7 +122,9 @@ pub fn revision(
             Vec::new(),
         );
     }
-    let revision = git(root, &["rev-parse", "HEAD"], make).unwrap_or_else(|| "unavailable".into());
+    let revision = git(root, &["rev-parse", "HEAD"], make)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .unwrap_or_else(|| "unavailable".into());
     let dirty = git(
         root,
         &["status", "--porcelain", "--untracked-files=normal"],
@@ -131,27 +136,77 @@ pub fn revision(
     );
     let mut paths = Vec::new();
     for name in [
-        Some("HEAD".to_string()),
+        Some(b"HEAD".to_vec()),
         git(root, &["symbolic-ref", "-q", "HEAD"], make),
-        Some("packed-refs".to_string()),
-        Some("index".to_string()),
+        Some(b"packed-refs".to_vec()),
+        Some(b"index".to_vec()),
     ]
     .into_iter()
     .flatten()
     {
+        let Some(name) = metadata_path(name) else {
+            continue;
+        };
         if let Some(path) = git(
             root,
-            &["rev-parse", "--path-format=absolute", "--git-path", &name],
+            &[
+                std::ffi::OsStr::new("rev-parse"),
+                std::ffi::OsStr::new("--path-format=absolute"),
+                std::ffi::OsStr::new("--git-path"),
+                name.as_os_str(),
+            ],
             make,
-        ) {
-            paths.push(PathBuf::from(path));
+        )
+        .and_then(metadata_path)
+        {
+            paths.push(path);
         }
     }
     (revision, dirty, paths)
 }
 
+// This module is also compiled into the build script, without the core crate.
+// Keep Git's path bytes intact on Unix; never manufacture a lossy path.
+#[allow(clippy::unnecessary_wraps)] // Non-Unix paths can reject invalid UTF-8.
+fn metadata_path(bytes: Vec<u8>) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Some(std::ffi::OsString::from_vec(bytes).into())
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8(bytes).ok().map(PathBuf::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn metadata_paths_keep_unicode_whitespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.set_head("refs/heads/topic\u{a0}").unwrap();
+        let (_, _, paths) = revision(temp.path(), None, &crate::git::command);
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("refs/heads/topic\u{a0}")));
+        assert!(!paths.iter().any(|path| path.ends_with("refs/heads/topic")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_paths_keep_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        std::fs::write(repo.path().join("HEAD"), b"ref: refs/heads/caf\xff\n").unwrap();
+        let (_, _, paths) = revision(temp.path(), None, &crate::git::command);
+        assert!(paths
+            .iter()
+            .any(|path| path.as_os_str().as_bytes().ends_with(b"refs/heads/caf\xff")));
+    }
     use super::*;
     fn sources(root: &Path) {
         for path in INPUT_ROOTS {
