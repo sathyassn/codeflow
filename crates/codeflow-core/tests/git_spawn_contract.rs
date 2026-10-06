@@ -27,6 +27,12 @@
 //! test target the runner starts through `sh -c`, is the user's command,
 //! not one codeflow builds.
 
+//! The fixture environment scan below checks raw source tokens, including
+//! comments and strings, across Rust, JavaScript, Python and shell fixtures.
+//! It cannot see dynamic keys constructed from fragments or environment
+//! changes made by an external program. Clone checks cover literal arrays
+//! passed to Command args and the Git helper names listed in the scanner.
+
 use std::path::{Path, PathBuf};
 
 /// Spawns whose program is not a literal: (file under `crates/`, the
@@ -532,31 +538,6 @@ fn every_git_process_is_built_by_the_one_constructor() {
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
 }
 
-/// Non-command vocabularies containing `clone`, outside a call's arguments.
-/// This exemption never admits a `let` binding or a command argument array.
-const CLONE_WORD_LISTS: &[(&str, usize, &str)] = &[
-    (
-        "codeflow-core/tests/manifest_consistency.rs",
-        1,
-        "documentation verbs",
-    ),
-    (
-        "codeflow-core/src/security/deletion.rs",
-        2,
-        "shell builtin vocabularies",
-    ),
-    (
-        "codeflow-core/src/security/headless.rs",
-        1,
-        "interactive Grok subcommands",
-    ),
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
-        1,
-        "Git builtin vocabulary",
-    ),
-];
-
 /// The closing delimiter of a Rust token group.
 fn group_end(toks: &[Token], start: usize) -> usize {
     let mut depth = 0_usize;
@@ -600,13 +581,51 @@ fn literal(toks: &[Token]) -> Option<&str> {
     }
 }
 
-/// Literal clone arrays are the supported subset, with an optional `-C` pair.
-/// Split `.arg("clone")` chains and bound arrays are refused, even with the
-/// right flag: this scanner cannot follow their later arguments or mutations.
-fn unsafe_fixture_clones(file: &str, source: &str) -> Vec<String> {
+/// The callee enclosing an array, ignoring completed nested expressions.
+fn array_callee(toks: &[Token], start: usize) -> Option<&Token> {
+    let mut stack = Vec::new();
+    for (index, token) in toks[..start].iter().enumerate() {
+        if token.punct('(') || token.punct('[') || token.punct('{') {
+            stack.push(index);
+        } else if token.punct(')') || token.punct(']') || token.punct('}') {
+            stack.pop();
+        }
+    }
+    let open = *stack.last()?;
+    (toks[open].punct('(') && open > 0).then(|| &toks[open - 1])
+}
+
+fn clone_option_takes_value(option: &str) -> bool {
+    matches!(
+        option,
+        "--template"
+            | "--reference"
+            | "--reference-if-able"
+            | "--separate-git-dir"
+            | "-c"
+            | "--config"
+            | "-o"
+            | "-b"
+            | "--branch"
+            | "--depth"
+            | "--filter"
+            | "--origin"
+            | "-u"
+            | "--upload-pack"
+            | "-j"
+            | "--jobs"
+            | "--shallow-since"
+            | "--shallow-exclude"
+            | "--server-option"
+            | "--bundle-uri"
+    )
+}
+
+/// Literal arrays passed to Command args or this suite's Git helpers form the
+/// supported subset. Split clone chains and bound clone arrays are refused.
+fn unsafe_fixture_clones(_file: &str, source: &str) -> Vec<String> {
     let toks = tokens(source);
     let mut offenders = Vec::new();
-    let mut word_lists = 0;
     for (start, token) in toks.iter().enumerate() {
         if token.is("arg")
             && toks.get(start + 1).is_some_and(|t| t.punct('('))
@@ -623,58 +642,55 @@ fn unsafe_fixture_clones(file: &str, source: &str) -> Vec<String> {
         if !args.iter().any(|arg| literal(arg) == Some("clone")) {
             continue;
         }
+        let text: String = toks[start..=end].iter().map(Token::text).collect();
         let before = &toks[..start];
-        let call = matches!(before.last(), Some(t) if t.punct('('))
+        let direct = matches!(before.last(), Some(t) if t.punct('('))
             || matches!(before, [.., separator, amp] if amp.punct('&')
                 && (separator.punct('(') || separator.punct(',')));
-        let text: String = toks[start..=end].iter().map(Token::text).collect();
-        if !call {
+        if !direct {
             let bound = before
                 .iter()
                 .rev()
                 .take_while(|t| !t.punct(';') && !t.punct('{'))
                 .any(|t| t.is("let"));
-            if !bound && CLONE_WORD_LISTS.iter().any(|(name, _, _)| *name == file) {
-                word_lists += 1;
-            } else {
-                offenders.push(format!(
-                    "{text}: clone array outside call position hides its use"
-                ));
+            if bound {
+                offenders.push(format!("{text}: bound clone array hides its use"));
             }
             continue;
         }
-        let command = if literal(args[0]) == Some("clone") {
-            0
-        } else if args.len() > 2
-            && literal(args[0]) == Some("-C")
-            && literal(args[2]) == Some("clone")
-        {
-            2
-        } else {
-            offenders.push(format!(
-                "{text}: clone is outside the supported command position"
-            ));
+        if !array_callee(&toks, start).is_some_and(|callee| {
+            ["args", "git", "run_git", "git_ok", "run", "command"]
+                .iter()
+                .any(|name| callee.is(name))
+        }) {
             continue;
-        };
+        }
+        let mut command = 0;
+        while command + 1 < args.len() && matches!(literal(args[command]), Some("-C" | "-c")) {
+            command += 2;
+        }
+        if args.get(command).and_then(|arg| literal(arg)) != Some("clone") {
+            // A path or message named clone is not a clone invocation.
+            // Only the supported command slot identifies the operation.
+            // Unrelated argument arrays need no vocabulary allowance.
+            continue;
+        }
         let mut transport = false;
-        for arg in &args[command + 1..] {
-            match literal(arg) {
+        let mut index = command + 1;
+        while index < args.len() {
+            match literal(args[index]) {
                 Some("--") => break,
                 Some("--no-local") => transport = true,
                 Some("--local" | "-l") => transport = false,
+                Some(option) if clone_option_takes_value(option) => {
+                    index += 1;
+                }
                 _ => {}
             }
+            index += 1;
         }
         if !transport {
             offenders.push(format!("{text}: fixture clone needs effective --no-local before --; local copies can race with repacking"));
-        }
-    }
-    if let Some((_, expected, reason)) = CLONE_WORD_LISTS.iter().find(|(name, _, _)| *name == file)
-    {
-        if word_lists != *expected {
-            offenders.push(format!(
-                "word-list allowance for {reason}: found {word_lists}, expected {expected}"
-            ));
         }
     }
     offenders
@@ -736,8 +752,7 @@ fn clone_scan_checks_the_flags_on_each_argument_list() {
         r#"cmd.args(["clone", "--", "--no-local", source]);"#,
         r#"cmd.args(["clone", "--no-local", "--local", source]);"#,
         r#"cmd.args(["clone", "--no-local", "-l", source]);"#,
-        r#"cmd.args(["-q", "clone", "--no-local", source]);"#,
-        r#"["clone", "help"].iter();"#,
+        r#"cmd.args(["-c", "key=value", "clone", source]);"#,
     ] {
         assert!(
             !unsafe_fixture_clones("probe.rs", source).is_empty(),
@@ -745,6 +760,11 @@ fn clone_scan_checks_the_flags_on_each_argument_list() {
         );
     }
     for source in [
+        r#"display_words(&["clone", "help"]); git(root, &["add", "clone"]);"#,
+        r#"["clone", "help"].iter();"#,
+        r#"Commands { subcommands: &["clone", "help"] }"#,
+        r#"cmd.args(["-c", "a=b", "-C", root, "clone", "--no-local", source]);"#,
+        r#"cmd.args(["clone", "--template=--local", "--no-local", source]);"#,
         r#"git(root, &["clone", "--no-local", source, dest]);"#,
         r#"git(root, &["clone", "--no-hardlinks", "--no-local", source, dest]);"#,
         r#"command.args(["clone", "--no-local", "--depth", "1", url]);"#,
@@ -760,20 +780,6 @@ fn clone_scan_checks_the_flags_on_each_argument_list() {
             "{source}"
         );
     }
-    for (file, source) in [
-        (
-            "codeflow-core/tests/manifest_consistency.rs",
-            r#"["clone", "re-render", "reproduce"].iter();"#,
-        ),
-        (
-            "codeflow-core/src/security/headless.rs",
-            r#"Commands { subcommands: &["clone", "help"] }"#,
-        ),
-    ] {
-        assert!(unsafe_fixture_clones(file, source).is_empty(), "{source}");
-        assert!(!unsafe_fixture_clones(file, r#"let args = ["clone", source];"#).is_empty());
-        assert!(!unsafe_fixture_clones(file, r#"git(root, &["clone", source]);"#).is_empty());
-    }
     assert_eq!(
         unsafe_fixture_clones(
             "probe.rs",
@@ -785,896 +791,167 @@ fn clone_scan_checks_the_flags_on_each_argument_list() {
     );
 }
 
-/// Audited environment changes: file, operation/key, occurrence count, reason.
-/// Counts also fail closed when an allowance becomes stale or gains a new site.
-const ENV_CHANGES: &[(&str, &str, usize, &str)] = &[
-    (
-        "codeflow-cli/src/cmd/ci/conflict_markers.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/src/cmd/ci/conflict_markers.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/src/cmd/ci.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/src/cmd/ci.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/src/cmd/present.rs",
-        "env_clear",
-        1,
-        "Presentation service and environment canaries; no Git operations.",
-    ),
-    (
-        "codeflow-cli/src/cmd/push_set/tests.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/src/cmd/push_set/tests.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/acceptance_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/acceptance_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/acceptance_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/acceptance_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/adopter_fit.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/adopter_fit.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        4,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        4,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_COUNT)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        4,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_KEY_0)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_KEY_1)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_PARAMETERS)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        4,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_VALUE_0)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env(GIT_CONFIG_VALUE_1)",
-        1,
-        "Restores the forced Cargo value after env_clear, without a private copy.",
-    ),
-    (
-        "codeflow-cli/tests/ci_pin_platforms.rs",
-        "env_clear",
-        1,
-        "Restores the Cargo maintenance settings immediately after clearing CI state.",
-    ),
-    (
-        "codeflow-cli/tests/classification_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/classification_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/codex_hooks.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/codex_hooks.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/estimate_adoption_e2e.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/estimate_adoption_e2e.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/git_maintenance_contract.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/git_maintenance_contract.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/hooks_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        19,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/hooks_cli.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/hooks_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        19,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/id_registry_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/id_registry_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/id_registry_journey.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/init_e2e.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        5,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/init_e2e.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        5,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/installed_cli_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/installed_cli_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/light_paths_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/light_paths_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/live_eval_pack.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/live_eval_pack.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/planning_amendment.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/planning_amendment.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/policy_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/policy_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/portal_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/portal_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/present_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/present_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/prose_oracle.rs",
-        "env_clear",
-        1,
-        "Shell oracle uses logging stubs, including git; it never operates on a Git repository.",
-    ),
-    (
-        "codeflow-cli/tests/read_benchmark.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/read_benchmark.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/read_commands_offline.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/read_commands_offline.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/readiness_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/readiness_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/record_lifecycle_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/record_lifecycle_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/refusal_journey/landed.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        3,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/refusal_journey/landed.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/refusal_journey/landed.rs",
-        "env_remove(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/refusal_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/refusal_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_contract.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_contract.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_journey.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_journey.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_line_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/release_line_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/remedy_clearing/main.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/remedy_clearing/main.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/remedy_clearing/push.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/report_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/report_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/settings_presets.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/settings_presets.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/tier_floor_e2e.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/tier_floor_e2e.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/work_cli.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/work_cli.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/workspace_mode.rs",
-        "env(GIT_CONFIG_COUNT)",
-        2,
-        "Appends core.ignoreCase at slot 2, preserving maintenance slots 0 and 1.",
-    ),
-    (
-        "codeflow-cli/tests/workspace_mode.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        8,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/workspace_mode.rs",
-        "env(GIT_CONFIG_KEY_2)",
-        2,
-        "Appends core.ignoreCase at slot 2, preserving maintenance slots 0 and 1.",
-    ),
-    (
-        "codeflow-cli/tests/workspace_mode.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        8,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-cli/tests/workspace_mode.rs",
-        "env(GIT_CONFIG_VALUE_2)",
-        2,
-        "Appends core.ignoreCase at slot 2, preserving maintenance slots 0 and 1.",
-    ),
-    (
-        "codeflow-core/src/doctor/ci_pin.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/doctor/ci_pin.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/doctor/mod.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/doctor/mod.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/conflict_markers.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/conflict_markers.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/git_guard.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/git_hook.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/git_hook.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/orient.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/orient.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/policy.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/policy.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/repo.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/repo.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/session_summary.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/hooks/session_summary.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/ids/inventory.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/ids/inventory.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/root_checkout_tests.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/root_checkout_tests.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/scaffold/detect.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/scaffold/detect.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/validate/portal.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/validate/portal.rs",
-        "env(GIT_CONFIG_NOSYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/validate/portal.rs",
-        "env_clear",
-        1,
-        "Hardened Git readers only; no commit, fetch, or automatic maintenance.",
-    ),
-    (
-        "codeflow-core/src/workgraph/acceptance.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/workgraph/acceptance.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/workgraph/release_line_tests.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/src/workgraph/release_line_tests.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        2,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/doctor_trust_probes.rs",
-        "env(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/doctor_trust_probes.rs",
-        "env(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/id_registry.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/id_registry.rs",
-        "set_var(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/permission_presets_update.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/permission_presets_update.rs",
-        "set_var(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/rule_map_contract.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/rule_map_contract.rs",
-        "set_var(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/rule_reinjection_update.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/rule_reinjection_update.rs",
-        "set_var(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/scaffold_test.rs",
-        "set_var(GIT_CONFIG_GLOBAL)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-core/tests/scaffold_test.rs",
-        "set_var(GIT_CONFIG_SYSTEM)",
-        1,
-        "Selects fixture config files; command-line maintenance settings remain inherited.",
-    ),
-    (
-        "codeflow-present/src/platform.rs",
-        "env_clear",
-        1,
-        "Restricted browser/system tools and canary children; no Git operations.",
-    ),
-];
-
-fn environment_edits(source: &str) -> Vec<String> {
-    let toks = tokens(source);
-    let mut edits = Vec::new();
-    for (index, token) in toks.iter().enumerate() {
-        let method = index > 0 && toks[index - 1].punct('.');
-        if !toks.get(index + 1).is_some_and(|t| t.punct('(')) {
-            continue;
-        }
-        if method && token.is("env_clear") {
-            edits.push("env_clear".into());
-            continue;
-        }
-        let setter = method && (token.is("env") || token.is("env_remove"));
-        if !setter && !token.is("set_var") && !token.is("remove_var") {
-            continue;
-        }
-        let end = group_end(&toks, index + 1);
-        let args = arguments(&toks[index + 2..end]);
-        if let Some(key) = args.first().and_then(|arg| literal(arg)) {
-            if key == "GIT_CONFIG" || key.starts_with("GIT_CONFIG_") {
-                edits.push(format!("{}({key})", token.text()));
-            }
-        }
-    }
-    edits
+/// Environment tokens are deliberately checked in comments and strings too.
+/// Dynamic key construction from fragments and mutations by external programs
+/// remain outside this source scan. Exact line bindings require review on moves.
+#[derive(Debug)]
+struct EnvironmentAllowance<'a> {
+    file: &'a str,
+    line: usize,
+    text: &'a str,
+    reason: &'a str,
 }
 
-fn environment_violations(file: &str, source: &str) -> Vec<String> {
-    let mut counts = std::collections::BTreeMap::new();
-    for edit in environment_edits(source) {
-        *counts.entry(edit).or_insert(0_usize) += 1;
+fn environment_allowances() -> Vec<EnvironmentAllowance<'static>> {
+    include_str!("fixtures/git_environment_allowlist.tsv")
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<_> = line.splitn(4, '\t').collect();
+            assert_eq!(fields.len(), 4, "{line}");
+            EnvironmentAllowance {
+                file: fields[0],
+                line: fields[1].parse().unwrap(),
+                text: fields[2],
+                reason: fields[3],
+            }
+        })
+        .collect()
+}
+
+fn environment_sites(source: &str) -> Vec<(usize, &str)> {
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut offsets = Vec::new();
+    for token in [
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_KEY_",
+        "GIT_CONFIG_VALUE_",
+        "env_clear",
+        "envs",
+        "os.environ.clear",
+    ] {
+        offsets.extend(compact.match_indices(token).filter_map(|(offset, _)| {
+            let prefix = &compact[..offset];
+            let inside_identifier = prefix.ends_with(|c: char| c.is_alphanumeric() || c == '_');
+            let suffix = &compact[offset + token.len()..];
+            let followed_by_identifier =
+                suffix.starts_with(|c: char| c.is_alphanumeric() || c == '_');
+            (token != "envs" || (!inside_identifier && !followed_by_identifier)).then_some(offset)
+        }));
     }
-    for (_, edit, _, _) in ENV_CHANGES.iter().filter(|(name, ..)| *name == file) {
-        counts.entry((*edit).to_string()).or_insert(0);
+    for (offset, _) in source.match_indices("env") {
+        let tail = &source[offset + 3..];
+        if tail.starts_with(char::is_whitespace) && tail.trim_start().starts_with("-i") {
+            offsets.push(
+                source[..offset]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum(),
+            );
+        }
     }
+    for (offset, _) in compact.match_indices("env:{") {
+        let object = &compact[offset + 5..];
+        let end = object.find('}').unwrap_or(object.len());
+        if !object[..end].contains("...process.env") {
+            offsets.push(offset);
+        }
+    }
+    let mut start = 0;
+    source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let end = start
+                + line
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+            let marked = offsets
+                .iter()
+                .any(|offset| *offset >= start && *offset < end);
+            start = end;
+            marked.then_some((index + 1, line.trim()))
+        })
+        .collect()
+}
+
+fn environment_violations(
+    file: &str,
+    source: &str,
+    allowed: &[EnvironmentAllowance<'_>],
+) -> Vec<String> {
+    let sites = environment_sites(source);
     let mut offenders = Vec::new();
-    for (edit, count) in counts {
-        let allowance = ENV_CHANGES
-            .iter()
-            .find(|(name, site, ..)| *name == file && *site == edit);
-        if !allowance
-            .is_some_and(|(_, _, expected, reason)| *expected == count && !reason.is_empty())
-        {
-            offenders.push(format!("{file}: {edit}: found {count}, expected {}; environment change needs review to preserve maintenance-off",
-                allowance.map_or(0, |(_, _, count, _)| *count)));
+    for (line, text) in &sites {
+        if !allowed.iter().any(|entry| {
+            entry.file == file
+                && entry.line == *line
+                && entry.text == *text
+                && !entry.reason.is_empty()
+        }) {
+            offenders.push(format!(
+                "{file}:{line}: {text}: unreviewed environment token"
+            ));
+        }
+    }
+    for entry in allowed.iter().filter(|entry| entry.file == file) {
+        if !sites.contains(&(entry.line, entry.text)) {
+            offenders.push(format!(
+                "{file}:{}: {}: allowance moved, changed or disappeared",
+                entry.line, entry.text
+            ));
         }
     }
     offenders
 }
 
+fn script_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if !dir.is_dir() {
+        return;
+    }
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            script_files(&path, files);
+        } else if path.extension().is_some_and(|ext| {
+            ["mjs", "js", "py", "sh", "bash"]
+                .iter()
+                .any(|name| ext == *name)
+        }) {
+            files.push(path);
+        }
+    }
+}
+
 #[test]
 fn fixture_processes_preserve_the_maintenance_environment() {
-    let (crates, files) = fixture_sources();
+    let (crates, mut files) = fixture_sources();
+    let root = crates.parent().unwrap();
+    for area in ["docs-portal/tests", "scripts", "tests"] {
+        script_files(&root.join(area), &mut files);
+    }
+    let allowed = environment_allowances();
     let mut offenders = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for file in files {
         let name = file
-            .strip_prefix(&crates)
+            .strip_prefix(root)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
         let source = std::fs::read_to_string(&file).unwrap();
-        offenders.extend(environment_violations(&name, &source));
+        offenders.extend(environment_violations(&name, &source, &allowed));
         seen.insert(name);
     }
-    for (file, ..) in ENV_CHANGES {
+    for entry in &allowed {
         assert!(
-            seen.contains(*file),
-            "environment allowance names missing file {file}"
+            seen.contains(entry.file),
+            "allowance names missing file {}",
+            entry.file
         );
     }
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
@@ -1684,30 +961,104 @@ fn fixture_processes_preserve_the_maintenance_environment() {
 fn environment_scan_refuses_unreviewed_changes() {
     for source in [
         "cmd.env_clear();",
-        r#"cmd.env("GIT_CONFIG_COUNT", "0");"#,
-        r#"cmd.env("GIT_CONFIG_PARAMETERS", "gc.auto=1");"#,
-        r#"cmd.env("GIT_CONFIG_KEY_0", "maintenance.auto");"#,
-        r#"cmd.env("GIT_CONFIG_VALUE_0", "true");"#,
-        r#"cmd.env(r"GIT_CONFIG_GLOBAL", config);"#,
-        r#"std::env::set_var("GIT_CONFIG_COUNT", "0");"#,
-        r#"std::env::set_var("GIT_CONFIG_SYSTEM", config);"#,
-        r#"cmd.env_remove("GIT_CONFIG_COUNT");"#,
-        r#"std::env::remove_var("GIT_CONFIG_COUNT");"#,
+        "Command::env_clear(&mut cmd);",
+        r#"cmd.envs([("GIT_CONFIG_COUNT", "0")]);"#,
+        r#"let key = "GIT_CONFIG_COUNT"; cmd.env_remove(key);"#,
+        r#"spawnSync("git", args, { env: { GIT_CONFIG_COUNT: "0" } });"#,
+        r#"os.environ["GIT_CONFIG_COUNT"] = "0""#,
+        "os.environ.clear()",
+        "env -i git commit",
+        "cmd.envs(map);",
+        "cmd.envs /* comment */ (map);",
+        "Command::envs(&mut cmd, map);",
+        "cmd.envs\n(map);",
+        "spawn('git', [], { env:\n {} });",
+        "// cmd.env_clear();",
     ] {
-        assert_eq!(environment_edits(source).len(), 1, "{source}");
         assert!(
-            !environment_violations("probe.rs", source).is_empty(),
+            !environment_violations("probe", source, &[]).is_empty(),
+            "{source}"
+        );
+    }
+    let original = r#"cmd.env("GIT_CONFIG_COUNT", inherited);"#;
+    let allowance = [EnvironmentAllowance {
+        file: "probe",
+        line: 1,
+        text: original,
+        reason: "restores Cargo settings",
+    }];
+    assert!(environment_violations("probe", original, &allowance).is_empty());
+    for source in [
+        original.replace("inherited", "\"0\""),
+        format!("\n{original}"),
+        format!("{original}\n{original}"),
+    ] {
+        assert!(
+            !environment_violations("probe", &source, &allowance).is_empty(),
             "{source}"
         );
     }
     for source in [
-        r#"cmd.env("PATH", bin);"#,
-        r#"std::env::set_var("CODEFLOW_HOME", home);"#,
-        r"// cmd.env_clear();",
-        r#"let text = "cmd.env_clear()";"#,
-        r#"cmd.env("GIT_TRACE2_EVENT", trace);"#,
+        r#"cmd.env("GIT_CONFIG_GLOBAL", config);"#,
+        "cmd.env(\"PATH\", bin);",
+        "spawn('git', [], { env: { ...process.env, PATH: bin } });",
     ] {
-        assert!(environment_edits(source).is_empty(), "{source}");
+        assert!(environment_sites(source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn environment_allowances_bind_the_actual_restoration_value() {
+    let file = "crates/codeflow-cli/tests/ci_pin_platforms.rs";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let source = std::fs::read_to_string(root.join(file)).unwrap();
+    let allowed = environment_allowances();
+    assert!(environment_violations(file, &source, &allowed).is_empty());
+    let changed = source.replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()", "\"0\"");
+    assert_ne!(changed, source);
+    let findings = environment_violations(file, &changed, &allowed);
+    assert!(!findings.is_empty(), "restoring zero must be refused");
+    assert!(findings.iter().all(|finding| finding.starts_with(file)));
+}
+
+#[test]
+fn clone_options_consume_their_values() {
+    for option in [
+        "--template",
+        "--reference",
+        "--separate-git-dir",
+        "-c",
+        "--config",
+        "-o",
+        "-b",
+        "--branch",
+        "--depth",
+        "--filter",
+        "--origin",
+        "-u",
+        "--upload-pack",
+        "-j",
+        "--jobs",
+        "--shallow-since",
+        "--shallow-exclude",
+        "--server-option",
+        "--bundle-uri",
+    ] {
+        let source = format!(r#"cmd.args(["clone", "{option}", "--no-local", source]);"#);
+        assert!(
+            !unsafe_fixture_clones("probe", &source).is_empty(),
+            "{source}"
+        );
+        let source =
+            format!(r#"cmd.args(["clone", "{option}", "--local", "--no-local", source]);"#);
+        assert!(
+            unsafe_fixture_clones("probe", &source).is_empty(),
+            "{source}"
+        );
     }
 }
 

@@ -46,6 +46,7 @@ absolute() { case $1 in /*) printf '%s' "$1" ;; */*) printf '%s/%s' "$(pwd)" "$1
 GITLEAKS=$(absolute "$GITLEAKS")
 [ -z "$CODEFLOW" ] || CODEFLOW=$(absolute "$CODEFLOW")
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT/scripts/fixture-git-env.sh"
 TEMPLATE=${CODEFLOW_CI_TEMPLATE:-$ROOT/assets/base/ci/codeflow-ci.yml}
 OWN=${CODEFLOW_CI_OWN:-$ROOT/.github/workflows/codeflow-ci.yml}
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-gitleaks.XXXXXX")
@@ -297,7 +298,7 @@ expect near-misses 1 .claude/workflows/pipeline.workflow.js:2 \
 
 # A git that cannot list the paths the scan will read fails the step before
 # gitleaks runs.
-STEP_ENV="GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.algorithm GIT_CONFIG_VALUE_0=invalid"
+STEP_ENV="GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_2=diff.algorithm GIT_CONFIG_VALUE_2=invalid"
 MESSAGE="cannot check the history the pull request brings; refusing to scan"
 NO_SCAN=1
 expect listing-failure 1
@@ -779,7 +780,7 @@ mkdir "$REPO/dir"
 printf '%s\n' "$PLANTED" >"$REPO/dir/leak.txt"
 commit "a leak one directory down"
 inherit() { # STEP_ENV that sets each key=value as the runner's git configuration
-  count=0
+  count=2
   STEP_ENV=
   for pair in "$@"; do
     STEP_ENV="$STEP_ENV GIT_CONFIG_KEY_$count=${pair%%=*} GIT_CONFIG_VALUE_$count=${pair#*=}"

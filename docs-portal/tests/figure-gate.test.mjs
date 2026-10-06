@@ -19,7 +19,7 @@ import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from 
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { serveBuiltSite } from "../scripts/site-server.mjs";
 import { COMPOSED_PAGE, FIGURE_FACTS_PATH, SHELL_PAGE, panelBindings, specimen, writeFigureInputs } from "./page-shapes.mjs";
-import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
+import { buildFixture, commitFixture, configureFixture, git, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
 const GUIDE = [
   "# Install guide", "",
@@ -506,8 +506,7 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
       files: { "portal.config.json": { ownership: "user-owned", pristine_sha256: sha256(configText) } },
     }, null, 2)}\n`);
     for (const args of [["init", "-q"], ["config", "user.email", "portal-tests@codeflow.invalid"], ["config", "user.name", "CodeFlow portal tests"], ["add", "-A"], ["commit", "-q", "-m", "nested portal fixture"]]) {
-      const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-      assert.equal(result.status, 0, result.stderr);
+      git(root, args);
     }
     // The build steps the workflow runs, with the dependencies of this
     // checkout: adapt, build the site, record the built artifacts.

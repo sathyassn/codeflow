@@ -233,9 +233,9 @@ impl Fixture {
         command
     }
 
-    /// `platform`'s shipped script, run from the fixture repository with a
-    /// clean environment and the local release.
-    fn script_command(&self, platform: Platform) -> Command {
+    /// Shell command in the fixture repository with a scrubbed CI environment
+    /// and the local release, ready for a script or an environment probe.
+    fn script_environment(&self) -> Command {
         // Scratch space inside the fixture, so the scripts' temporary
         // directories go away with it.
         let scratch = self.dir.path().join("tmp");
@@ -280,6 +280,11 @@ impl Fixture {
                 "CODEFLOW_RELEASE_URL",
                 format!("file://{}", self.releases().display()),
             );
+        command
+    }
+
+    fn script_command(&self, platform: Platform) -> Command {
+        let mut command = self.script_environment();
         command.arg("-c").arg(script(platform));
         if let Platform::Generic = platform {
             command.arg("ci-generic.sh");
@@ -1054,6 +1059,40 @@ fn a_criss_cross_head_cannot_keep_a_lowered_pin() {
             );
             let calls = fx.calls();
             assert!(calls.iter().all(|c| c.starts_with("1.2.4 ")), "{calls:?}");
+        }
+    }
+}
+
+#[test]
+fn the_scrubbed_script_environment_prevents_automatic_maintenance() {
+    let fx = Fixture::new();
+    fx.project(env!("CARGO_PKG_VERSION"));
+    let trace = fx.dir.path().join("maintenance-trace.jsonl");
+    let out = fx.script_environment()
+        .args(["-c", "git -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -m fixture"])
+        .env("GIT_TRACE2_EVENT", &trace)
+        .output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(trace)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| event["event"] == "start"));
+    for event in events {
+        if event["event"] == "child_start" {
+            assert!(
+                !event["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == "maintenance" || arg == "gc"),
+                "{event}"
+            );
         }
     }
 }

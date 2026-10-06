@@ -535,17 +535,13 @@ fn codeflow_with_override(dir: &Path, args: &[&str], key: &str, value: &str) -> 
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .expect("joinable PATH");
-    Command::new(&exe)
+    with_runtime_override(&mut Command::new(&exe), key, value)
         .args(args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
         .env("PATH", path)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        // Keep Cargo's maintenance-off slots 0 and 1; append the fixture override.
-        .env("GIT_CONFIG_COUNT", "3")
-        .env("GIT_CONFIG_KEY_2", key)
-        .env("GIT_CONFIG_VALUE_2", value)
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
@@ -561,15 +557,11 @@ fn codeflow_with_override(dir: &Path, args: &[&str], key: &str, value: &str) -> 
 
 /// Whether git ignores `path` in `root` under the runtime override.
 fn git_ignores_with_override(root: &Path, path: &str, key: &str, value: &str) -> bool {
-    Command::new("git")
+    with_runtime_override(&mut Command::new("git"), key, value)
         .args(["check-ignore", "-q", path])
         .current_dir(root)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        // Keep Cargo's maintenance-off slots 0 and 1; append the fixture override.
-        .env("GIT_CONFIG_COUNT", "3")
-        .env("GIT_CONFIG_KEY_2", key)
-        .env("GIT_CONFIG_VALUE_2", value)
         .status()
         .expect("git runs")
         .success()
@@ -837,4 +829,38 @@ fn journey_ci_accepts_the_root_branch_at_the_minimal_tier() {
     let said = both(&bodyless);
     assert!(bodyless.status.success(), "{said}");
     assert!(!said.contains(UNVERIFIED_LINE), "{said}");
+}
+
+fn with_runtime_override<'a>(command: &'a mut Command, key: &str, value: &str) -> &'a mut Command {
+    // Preserve Cargo's two maintenance settings and append the fixture override.
+    command
+        .env("GIT_CONFIG_COUNT", "3")
+        .env("GIT_CONFIG_KEY_2", key)
+        .env("GIT_CONFIG_VALUE_2", value)
+}
+
+#[test]
+fn a_runtime_override_preserves_both_maintenance_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("workspace"));
+    for (key, expected) in [
+        ("maintenance.auto", "false"),
+        ("gc.auto", "0"),
+        ("core.ignoreCase", "false"),
+    ] {
+        let out = with_runtime_override(&mut Command::new("git"), "core.ignoreCase", "false")
+            .current_dir(&root)
+            .args(["config", "--show-origin", "--get", key])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "missing {key}");
+        assert_eq!(
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .trim_end()
+                .split_once('\t'),
+            Some(("command line:", expected)),
+            "{key}"
+        );
+    }
 }

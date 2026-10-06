@@ -15,7 +15,7 @@ import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
 import { lockDigestFailure, REGENERATE } from "../scripts/runtime-scripts.mjs";
-import { adapterPath, buildFixture, commitFixture, configureFixture, git, initializedFixture, portalFixture, runAdapter, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
+import { adapterPath, buildFixture, fixtureEnvironment, commitFixture, configureFixture, git, initializedFixture, portalFixture, runAdapter, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 // Windows can hold a fixture briefly after a child exits; retry busy removals.
@@ -1670,7 +1670,7 @@ test("Git snapshot reads scale by corpus phase and disable configured fsmonitor 
 test("Git snapshot accepts native SHA-256 object identities", async (context) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-sha256-"));
   try {
-    const initialized = spawnSync("git", ["-C", root, "init", "-q", "--object-format=sha256"], { encoding: "utf8" });
+    const initialized = spawnSync("git", ["-C", root, "init", "-q", "--object-format=sha256"], { encoding: "utf8", env: fixtureEnvironment() });
     if (initialized.status !== 0) return context.skip("installed Git does not support SHA-256 repositories");
     git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
     git(root, ["config", "user.name", "CodeFlow portal tests"]);
