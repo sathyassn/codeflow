@@ -2017,3 +2017,20 @@ fn a_gitfile_folder_with_a_newline_is_not_an_owned_worktree() {
     std::fs::write(&marker, format!("gitdir: {}\nother\n", inside.display())).unwrap();
     assert!(!is_own_worktree(&marker, &common));
 }
+
+#[test]
+fn configured_root_branch_keeps_unicode_whitespace() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = git2::Repository::init(temp.path()).unwrap();
+    for name in ["release\u{a0}", "\u{a0}"] {
+        let policy = GitPolicy {
+            root_branch: name.into(),
+            ..GitPolicy::default()
+        };
+        assert_eq!(root_branch(&repo, &policy).name.bytes(), name.as_bytes());
+        assert_eq!(workspace_branch_name(&policy), name);
+        let checkout = RootCheckout::read(&repo, &policy).unwrap();
+        assert!(checkout.commit_on(name).is_none());
+        assert!(checkout.commit_on("release").is_some());
+    }
+}

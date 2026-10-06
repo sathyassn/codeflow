@@ -666,6 +666,12 @@ fn the_scan_does_not_flag_the_strict_decodes() {
 // Exceptions concern prose, diagnostics, schema validation, or a language
 // whose lexical grammar explicitly includes Unicode separators. Counts reject both new calls and stale exceptions.
 const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
+    ("crates/codeflow-core/src/security/prose.rs", "char_allowed", "is_whitespace", 1, "Rejects non-ASCII whitespace from certified prose without rewriting text; rejection keeps the full guard checks."),
+    ("crates/codeflow-core/src/root_checkout.rs", "actor", "trim", 1, "Harness-marker presence check: a whitespace-only marker is absent by this contract; the value is never used as a ref, path or command word."),
+    ("crates/codeflow-core/src/root_checkout.rs", "is_valid_location", "trim", 1, "Rejects whitespace-only policy locations without rewriting any accepted path; this can only add a schema refusal."),
+    ("crates/codeflow-core/src/root_checkout.rs", "effective_ignore_case", "trim", 1, "Compares the fixed ASCII Git boolean true, not a ref or path name."),
+    ("crates/codeflow-core/src/root_checkout.rs", "git_run", "trim", 1, "Git error diagnostic shown to the operator, never used as identity."),
+    ("crates/codeflow-core/src/git/ci.rs", "parse_pr_checks_output", "trim", 1, "GitHub CLI error diagnostic shown to the operator, never used as identity."),
     ("crates/codeflow-core/src/security/dangerous.rs", "command_tokens", "is_whitespace", 1, "Multi-language catastrophe fallback also reads raw PowerShell, whose grammar includes Unicode separators. POSIX deletion has its own exact reader; this fallback does not compare protected ref names."),
     ("crates/codeflow-core/src/hooks/conflict_markers.rs", "marker_sizes", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
     ("crates/codeflow-core/src/hooks/delegate_turn.rs", "signal_tmux", "trim", 1, "Diagnostic text only; never parsed as a command or identity."),
@@ -700,10 +706,15 @@ fn guard_whitespace_uses_explicit_separator_rules() {
     for dir in [
         "crates/codeflow-core/src/hooks",
         "crates/codeflow-core/src/security",
+        "crates/codeflow-core/src/git",
         "crates/codeflow-cli/src/cmd",
     ] {
         rust_files(&root.join(dir), &mut files);
     }
+    files.extend([
+        root.join("crates/codeflow-core/src/root_checkout.rs"),
+        root.join("crates/codeflow-core/src/portable_path.rs"),
+    ]);
     let mut actual = BTreeMap::new();
     for file in files {
         let name = relative(&root, &file);

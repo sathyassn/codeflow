@@ -7042,3 +7042,27 @@ fn unicode_branch_and_unreadable_aliases_reach_the_hook_refusals() {
         );
     }
 }
+
+#[test]
+fn root_branch_with_unicode_whitespace_is_compared_exactly_by_the_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "release");
+    write_agent_policy(
+        dir.path(),
+        r#"{"git":{"root_branch":"release\u00a0","root_checkout_commits":"block"}}"#,
+    );
+    git(dir.path(), &["branch", "release\u{a0}"]);
+    let run = || {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "git-guard"])
+                .current_dir(dir.path()),
+            &guard_payload("git commit -m 'fix: fixture'", dir.path()),
+        )
+    };
+    let wrong = run();
+    assert_eq!(wrong.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("git.root_checkout_commits"));
+    git(dir.path(), &["checkout", "release\u{a0}"]);
+    assert_eq!(run().status.code(), Some(0));
+}

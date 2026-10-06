@@ -245,7 +245,7 @@ pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch
 /// The root branch: `git.root_branch` when set, else the default branch.
 #[must_use]
 pub fn root_branch(repo: &git2::Repository, policy: &GitPolicy) -> RootBranch {
-    let configured = policy.root_branch.trim();
+    let configured = policy.root_branch.as_str();
     if configured.is_empty() {
         default_branch(repo, policy)
     } else {
@@ -1188,7 +1188,7 @@ pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec
     let nested = nested_repositories(&repo);
     let submodules = submodule_paths(&repo);
     let gitlinks = stray_gitlinks(&repo, &submodules);
-    let workspace = !policy.root_branch.trim().is_empty() && !nested.is_empty();
+    let workspace = !policy.root_branch.is_empty() && !nested.is_empty();
 
     let mut out = vec![Finding {
         severity: Severity::Info,
@@ -1213,7 +1213,7 @@ pub fn doctor_report(root: &Path, policy: &GitPolicy, env: EnvLookup<'_>) -> Vec
     out.extend(missing_branch_finding(&repo, &root_branch, &repo_label));
     out.extend(head_finding(&repo, policy, &root_branch, &repo_label));
 
-    if policy.root_branch.trim().is_empty() && !nested.is_empty() {
+    if policy.root_branch.is_empty() && !nested.is_empty() {
         out.push(workspace_hint_finding(&repo_label, &nested));
     }
     out.extend(nested_findings(&repo_label, &nested, &gitlinks));
@@ -1392,7 +1392,7 @@ fn workspace_hint_finding(repo_label: &str, nested: &[NestedRepo]) -> Finding {
 /// repositories and names no root branch. They switch nothing.
 #[must_use]
 pub fn workspace_hint(root: &Path, policy: &GitPolicy) -> Option<Finding> {
-    if !policy.root_branch.trim().is_empty() {
+    if !policy.root_branch.is_empty() {
         return None;
     }
     let repo = git2::Repository::open(root).ok()?;
@@ -1580,7 +1580,7 @@ fn switch_failed(repo_label: &str, target: &str, reason: &str) -> WorkspaceError
 /// The branch `init --workspace` puts the root on.
 #[must_use]
 pub fn workspace_branch_name(policy: &GitPolicy) -> String {
-    let configured = policy.root_branch.trim();
+    let configured = policy.root_branch.as_str();
     if configured.is_empty() {
         WORKSPACE_ROOT_BRANCH.to_string()
     } else {
