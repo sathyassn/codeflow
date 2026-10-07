@@ -7304,13 +7304,12 @@ fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>)
                     || policy.commit_emoji.is_active()
                     || policy.policy_characters.is_active() =>
             {
-                out.push(Violation::new(
+                // A body that cannot be read is unscanned, whatever level
+                // the scans it would have run hold: a fixed block (R-80).
+                out.push(Violation::always_blocking(
                     "git.pr_body",
-                    PolicyLevel::Block,
                     error,
-                    crate::remedy::Remedy::sanctioned(
-                        "use a readable UTF-8 body file or an inline body",
-                    ),
+                    "use a readable UTF-8 body file or an inline body",
                 ));
             }
             Err(_) => {}
