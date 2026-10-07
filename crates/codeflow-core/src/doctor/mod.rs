@@ -2140,7 +2140,9 @@ fn check_permissions(opts: &Options) -> CheckResult {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if config_dir.try_exists().unwrap_or(true) {
+        // Only a proven missing .codeflow skips the check; a dangling link
+        // or an unreadable path reaches the metadata read and fails.
+        if !matches!(crate::absence::proven_absent(&config_dir), Ok(true)) {
             let meta = match std::fs::metadata(&config_dir) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -2694,7 +2696,13 @@ fn check_repo_integrity(opts: &Options) -> CheckResult {
         Ok(value) => value.strip_suffix('\n').unwrap_or(&value) == "true",
         Err(error) => return fail(format!("cannot read repository bare state: {error}")),
     };
-    if is_bare && root.join(".git").exists() {
+    let git_entry = root.join(".git");
+    let has_working_tree = is_bare
+        && match crate::absence::proven_absent(&git_entry) {
+            Ok(absent) => !absent,
+            Err(error) => return fail(format!("cannot inspect {}: {error}", git_entry.display())),
+        };
+    if has_working_tree {
         return fail(
             "core.bare=true on a repo with a working tree — a merge/worktree mishap flipped it; run `git config core.bare false`".into(),
         );
@@ -2908,8 +2916,10 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let mut found = None;
     for dest in [github.as_str(), ".gitlab-ci.yml", "bitbucket-pipelines.yml"] {
         let path = root.join(dest);
-        match path.try_exists() {
-            Ok(false) => continue,
+        // Only a proven missing file is skipped; a dangling link is read and
+        // fails.
+        match crate::absence::proven_absent(&path) {
+            Ok(true) => continue,
             Err(error) => {
                 return CheckResult {
                     name: "ci-perimeter".into(),
@@ -2918,7 +2928,7 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
                     duration: start.elapsed(),
                 }
             }
-            Ok(true) => {}
+            Ok(false) => {}
         }
         match std::fs::read_to_string(path) {
             Ok(content) => {
@@ -3179,7 +3189,12 @@ fn check_customization(opts: &Options) -> CheckResult {
         message: format!("cannot read customization inputs: {error}"),
         duration: start.elapsed(),
     };
-    let exists = |path: &Path| path.try_exists().map_err(|error| error.to_string());
+    // Present unless proven missing: a dangling link is read and refused.
+    let exists = |path: &Path| {
+        crate::absence::proven_absent(path)
+            .map(|absent| !absent)
+            .map_err(|error| error.to_string())
+    };
     let presence = exists(&product)
         .and_then(|product| exists(&architecture).map(|architecture| (product, architecture)));
     let (product_exists, architecture_exists) = match presence {
@@ -3217,7 +3232,10 @@ fn check_customization(opts: &Options) -> CheckResult {
                 incomplete.push(path.to_string());
             }
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(crate::absence::proven_absent(&root.join(path)), Ok(true)) =>
+            {
                 incomplete.push(format!("{path} (missing)"));
             }
             Err(error) => return refused(format!("{path}: {error}")),
@@ -3344,7 +3362,7 @@ fn reading_location(subject: &str, skill_tree: &str) -> String {
 
 fn reading_kernel(root: &Path) -> std::io::Result<Option<String>> {
     let path = root.join("AGENTS.md");
-    if !path.try_exists()? {
+    if crate::absence::proven_absent(&path)? {
         return Ok(None);
     }
     std::fs::read_to_string(path).map(Some)
@@ -3516,7 +3534,7 @@ fn instruction_chains(
 fn instruction_file(dir: &Path) -> std::io::Result<Option<(&'static str, usize)>> {
     for name in ["AGENTS.override.md", "AGENTS.md"] {
         let path = dir.join(name);
-        if !path.try_exists()? {
+        if crate::absence::proven_absent(&path)? {
             continue;
         }
         let bytes = std::fs::metadata(path)?.len();
@@ -6131,6 +6149,114 @@ mod tests {
         let r = check_repo_integrity(&opts);
         assert_eq!(r.status, Status::Fail);
         assert!(r.message.contains("cannot read repository bare state"));
+    }
+
+    /// A link to nothing at `path`, with its parent created.
+    #[cfg(unix)]
+    fn dangling(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("gone", path).unwrap();
+    }
+
+    fn opts_at(dir: &Path) -> Options {
+        Options {
+            project_dir: dir.to_string_lossy().into_owned(),
+            ..test_opts()
+        }
+    }
+
+    /// A dangling link where doctor reads an input is an input that cannot
+    /// be read, never a missing one: each check fails instead of passing
+    /// as not applicable. Missing inputs keep their passing results.
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_customization_docs_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_customization(&opts_at(dir.path())).status, Status::Pass);
+        dangling(&dir.path().join("docs").join("product.md"));
+        let result = check_customization(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_codeflow_dir_fails_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_permissions(&opts_at(dir.path())).status, Status::Pass);
+        dangling(&dir.path().join(".codeflow"));
+        let result = check_permissions(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_git_entry_is_not_a_missing_working_tree() {
+        let bare = |dir: &Path| {
+            let mut opts = opts_at(dir);
+            opts.exec_command = Some(|_, args| {
+                if args.contains(&"--is-bare-repository") {
+                    Ok("true\n".into())
+                } else {
+                    Ok(String::new())
+                }
+            });
+            check_repo_integrity(&opts)
+        };
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(bare(dir.path()).status, Status::Pass);
+        dangling(&dir.path().join(".git"));
+        let result = bare(dir.path());
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_ci_file_fails_the_perimeter() {
+        let dir = tempfile::tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap();
+        let before = check_ci_perimeter(&opts_at(dir.path()));
+        assert_ne!(before.status, Status::Fail, "{}", before.message);
+        dangling(&dir.path().join(".gitlab-ci.yml"));
+        let result = check_ci_perimeter(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+        assert!(result.message.contains(".gitlab-ci.yml"), "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_instruction_file_fails_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_instructions(&opts_at(dir.path())).status, Status::Pass);
+        dangling(&dir.path().join("AGENTS.md"));
+        let result = check_instructions(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_kernel_or_skill_tree_fails_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = check_reading(&opts_at(dir.path()));
+        assert_ne!(control.status, Status::Fail, "{}", control.message);
+        dangling(&dir.path().join("AGENTS.md"));
+        let result = check_reading(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+
+        let dir = tempfile::tempdir().unwrap();
+        dangling(&dir.path().join(".claude").join("skills"));
+        let result = check_reading(&opts_at(dir.path()));
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn r23_dangling_pin_input_fails_the_ci_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let control = ci_pin::report(dir.path());
+        assert_ne!(control.status, Status::Fail, "{}", control.message);
+        dangling(&dir.path().join(".codeflow").join("project.toml"));
+        let result = ci_pin::report(dir.path());
+        assert_eq!(result.status, Status::Fail, "{}", result.message);
     }
 
     // --- ci-perimeter -------------------------------------------------------

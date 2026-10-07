@@ -781,7 +781,8 @@ impl Inventory<'static> {
 /// # Errors
 /// Returns the obtaining error for a directory, entry, or text file.
 pub fn load_skill_tree(dir: &Path, files: &mut SkillFiles) -> std::io::Result<()> {
-    if !dir.try_exists()? {
+    // Only a proven missing tree is empty; a dangling link fails the read.
+    if crate::absence::proven_absent(dir)? {
         return Ok(());
     }
     load_under(dir, dir, files)

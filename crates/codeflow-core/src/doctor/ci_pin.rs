@@ -123,7 +123,9 @@ struct PinInputs {
 fn current_inputs(root: &Path) -> Result<PinInputs, String> {
     let read = |name: &str| -> Result<Option<String>, String> {
         let path = root.join(name);
-        if !path.try_exists().map_err(|error| error.to_string())? {
+        // Only a proven missing input is absent; a dangling link is read
+        // and refused.
+        if crate::absence::proven_absent(&path).map_err(|error| format!("{name}: {error}"))? {
             return Ok(None);
         }
         std::fs::read_to_string(path)
