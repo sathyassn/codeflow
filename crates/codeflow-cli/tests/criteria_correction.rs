@@ -373,6 +373,71 @@ fn the_criteria_set_stays_frozen() {
     }
 }
 
+/// AC-3: the checkbox form and the section's structure are part of what a
+/// correction keeps. Adding or removing a checkbox mark, or a list item that
+/// is no criterion, with every criterion's text unchanged is refused with
+/// the reason, never passed over in silence; ticking a box stays quiet.
+#[test]
+fn a_checkbox_form_change_is_refused() {
+    let dir = repo();
+    let root = dir.path();
+    let reason = "this changes the tags of AC-1";
+
+    // A mark added.
+    let boxed = CRITERIA.replace("- AC-1 ", "- [ ] AC-1 ");
+    correct(root, PLAN, "TSK-003", &boxed);
+    assert_blocks(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "a checkbox mark added with the text unchanged",
+        &["work.criteria_frozen", FROZEN, reason],
+    );
+
+    // A mark removed: the target holds AC-1 as a legacy checkbox.
+    git(root, &["switch", "main"]);
+    rewrite(root, "TSK-003", &boxed);
+    commit(root, "docs(records): keep AC-1 as a checkbox");
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let path = root.join(record_path("TSK-003"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, current.replace("- [ ] AC-1 ", "- AC-1 ")).unwrap();
+    commit(root, "docs(records): drop the checkbox");
+    assert_blocks(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "a checkbox mark removed with the text unchanged",
+        &["work.criteria_frozen", FROZEN, reason],
+    );
+
+    // A list item that is no criterion, with every text unchanged.
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        current.replace(
+            "command shall succeed.\n",
+            "command shall succeed.\n- Reviewed by the release owner.\n",
+        ),
+    )
+    .unwrap();
+    commit(root, "docs(records): add a list item");
+    assert_blocks(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "a list item that is no criterion, with the text unchanged",
+        &[
+            "work.criteria_frozen",
+            FROZEN,
+            "this changes the structure of its criteria section",
+        ],
+    );
+
+    // Ticking the box changes no criterion.
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, current.replace("- [ ] AC-1 ", "- [x] AC-1 ")).unwrap();
+    commit(root, "docs(records): tick AC-1");
+    let ticked = ci(root, PLAN, "Task: TSK-003");
+    assert!(!ticked.1.contains("work.criteria_frozen"), "{}", ticked.1);
+}
+
 /// AC-4: the route needs a range of planning records only, a `Task:` line
 /// naming the task or its follow-up, and a standalone task; an epic task
 /// keeps the planning amendment that names its epic (ADR-0078).

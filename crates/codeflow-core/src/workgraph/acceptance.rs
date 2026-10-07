@@ -1862,12 +1862,41 @@ pub fn frozen_criteria(
             .map(|r| r.criteria.items.as_slice())
             .unwrap_or_default();
         let new = &record.criteria.items;
-        if before.is_some_and(|r| r.criteria.signature() == record.criteria.signature()) {
-            continue;
-        }
         let refusal = || {
             format!("{} changes its criteria on this branch; another task's criteria change by its own PR or by a planning amendment that names its epic (ADR-0078)", record.id)
         };
+        let structural = |problem: String| {
+            finding(
+                FROZEN_RULE,
+                format!("{}; a correction of a completed standalone task changes only the text of its existing criteria, and {problem}", refusal()),
+            )
+        };
+        // What a correction (ADR-0080) may not change: the criteria set, the
+        // tags and form, and the section's structure.
+        let structure_problem = || {
+            let errors = before
+                .map(|r| r.criteria.errors.as_slice())
+                .unwrap_or_default();
+            correction_problem(old, new).or_else(|| {
+                (record.criteria.errors.as_slice() != errors).then(|| {
+                    format!(
+                        "this changes the structure of its criteria section ({})",
+                        record.criteria.errors.join("; ")
+                    )
+                })
+            })
+        };
+        if before.is_some_and(|r| r.criteria.signature() == record.criteria.signature()) {
+            // The signature leaves out the checkbox mark, so ticking a box
+            // is no change; a correction still keeps the form and the
+            // structure, so adding or removing the mark, or a list item
+            // that is no criterion, with the text unchanged is refused,
+            // never passed over.
+            if correctable.contains(&record.id) {
+                found.extend(structure_problem().map(structural));
+            }
+            continue;
+        }
         if exempt.contains(&record.id) {
             let delta = criteria_delta(old, new);
             if !delta.is_empty() {
@@ -1879,17 +1908,7 @@ pub fn frozen_criteria(
                 });
             }
         } else if correctable.contains(&record.id) {
-            let errors = before
-                .map(|r| r.criteria.errors.as_slice())
-                .unwrap_or_default();
-            match correction_problem(old, new).or_else(|| {
-                (record.criteria.errors.as_slice() != errors).then(|| {
-                    format!(
-                        "this changes the structure of its criteria section ({})",
-                        record.criteria.errors.join("; ")
-                    )
-                })
-            }) {
+            match structure_problem() {
                 None => found.push(Finding {
                     epic_record: None,
                     rule: FROZEN_RULE,
@@ -1900,10 +1919,7 @@ pub fn frozen_criteria(
                     ),
                     note: true,
                 }),
-                Some(problem) => found.push(finding(
-                    FROZEN_RULE,
-                    format!("{}; a correction of a completed standalone task changes only the text of its existing criteria, and {problem}", refusal()),
-                )),
+                Some(problem) => found.push(structural(problem)),
             }
         } else if before.is_some() {
             found.push(finding(FROZEN_RULE, refusal()));
