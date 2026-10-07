@@ -279,6 +279,16 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **The docs portal starter takes fixed dependency releases.** New
+  advisories against `postcss-selector-parser`, `smol-toml`,
+  `source-map-js` and `http-cache-semantics` failed a blocking dependency
+  audit in a project with the portal. The starter's `package.json` now overrides `postcss-nested` to
+  8.0.1, and its lockfile moves to `postcss-selector-parser` 7.1.6,
+  `smol-toml` 1.9.0, `source-map-js` 1.2.2 and `http-cache-semantics`
+  4.3.0. `codeflow update` installs both files; the portal's recorded
+  runtime scripts are unchanged.
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any
@@ -563,14 +573,8 @@ erratum below, never an edit of the section.
   When the CI template's audit step fails, it told you to record a
   justified suppression in `.osv-scanner.toml`, a name osv-scanner never
   reads. It now names `osv-scanner.toml` in the same directory as the
-  lockfile it covers. A docs portal scaffolded by CodeFlow currently reports
-  GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which has no fixed
-  version; Astro uses it only to time its build-time cache of remote
-  images. A new portal now starts with an `osv-scanner.toml` that ignores
-  it, with that reason, until 2026-11-30; the file is yours to edit or
-  delete. An existing portal is not changed: if your policy blocks on
-  advisories and you accept the reasoning, add the same entry to
-  `docs-portal/osv-scanner.toml`.
+  lockfile it covers. A new docs portal starts with that file, holding a
+  header and no ignores, so a justified suppression has a home.
 
 <!-- codeflow:release-impact patch -->
 - **The scaffold passes its own secret scan.** In every repository
