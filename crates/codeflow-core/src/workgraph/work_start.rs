@@ -1295,12 +1295,6 @@ pub fn check_work_start_on(
             )));
         }
     }
-    let branch = repo
-        .head()
-        .ok()
-        .map(|r| head_branch_text(&r, task_id))
-        .transpose()?
-        .unwrap_or_default();
     // The report names the branch whose identity was checked, as the plain
     // start does, so the caller can tell it from other carriers.
     let mut report = check_task_anchor(root, task_id, target, &branch, false, pins, None)?;

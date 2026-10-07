@@ -1030,26 +1030,24 @@ pub fn refresh_claim(repo_root: &Path, task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The head commit, the new standalone record and the checked-out branch
+/// that a claim renames, read from one HEAD read whose errors refuse.
 fn standalone_claim_base(
     root: &Path,
     repo: &Repository,
     task_id: &str,
     target: git2::Oid,
-) -> Result<Option<(git2::Oid, Record)>, String> {
-    let head = repo
-        .head()
-        .and_then(|head| head.peel_to_commit())
+) -> Result<Option<(git2::Oid, Record, crate::git::GitName)>, String> {
+    let reference = repo.head().map_err(|error| error.to_string())?;
+    let current = crate::git::name::reference_shorthand(&reference);
+    let head = reference
+        .peel_to_commit()
         .map_err(|error| error.to_string())?;
     let here = records_from_tree(repo, &head.tree().map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
     let Some(task) = here.get(task_id).filter(|task| task.epic_id.is_none()) else {
         return Ok(None);
     };
-    let current = repo
-        .head()
-        .ok()
-        .map(|head| crate::git::name::reference_shorthand(&head))
-        .unwrap_or_default();
     if crate::hooks::policy::Policy::load(root)?
         .git
         .branch_is_protected_name(&current)
@@ -1059,7 +1057,7 @@ fn standalone_claim_base(
     if head.id() != target && !repo.graph_descendant_of(head.id(), target).unwrap_or(false) {
         return Err("the standalone branch must contain its current target".into());
     }
-    Ok(Some((head.id(), task.clone())))
+    Ok(Some((head.id(), task.clone(), current)))
 }
 
 /// Claim from reviewed predecessors, or rename the branch holding a new standalone record.
@@ -1087,17 +1085,16 @@ pub fn claim_on(
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let mut records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
-    let current = repo
-        .head()
-        .ok()
-        .map(|head| crate::git::name::reference_shorthand(&head))
-        .unwrap_or_default();
-    let mut rename = false;
+    // The branch a standalone claim renames, read once with the head it
+    // was judged on.
+    let mut renamed = None;
     if !records.contains_key(task_id) && stack.is_none() {
-        if let Some((head, task)) = standalone_claim_base(repo_root, &repo, task_id, target_tip)? {
+        if let Some((head, task, current)) =
+            standalone_claim_base(repo_root, &repo, task_id, target_tip)?
+        {
             records.insert(task_id.to_string(), task);
             tip = head;
-            rename = true;
+            renamed = Some(current);
         }
     }
     let reference_shown = shown(&reference);
@@ -1121,8 +1118,8 @@ pub fn claim_on(
     for remote in listed {
         carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
     }
-    if rename {
-        carried.retain(|(name, _)| name != &current);
+    if let Some(current) = &renamed {
+        carried.retain(|(name, _)| name != current);
     }
     let (open, _) = split_landed(&repo, repo_root, &carried, target_tip);
     if !open.is_empty() {
@@ -1136,7 +1133,7 @@ pub fn claim_on(
         .get(task_id)
         .map_or("", |record| record.title.as_str());
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
-    if rename {
+    if renamed.is_some() {
         git(repo_root, &["branch", "-m", &branch])?;
     } else {
         git(repo_root, &["branch", &branch, &tip.to_string()])?;

@@ -83,6 +83,7 @@ const OBTAIN: &[&str] = &[
     "find_commit",
     "find_object",
     "find_reference",
+    "head",
     "graph_descendant_of",
     "merge_base",
     "into_string",
@@ -2185,6 +2186,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "grammar:git-diagnostic",
     ),
+    // A HEAD that cannot be read diffs the whole index as added, a superset of the staged change, so findings can only grow.
+    (
+        "crates/codeflow-core/src/hooks/conflict_markers.rs",
+        "staged",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // A HEAD that cannot be read scans the whole index as added, a superset of the staged change, so findings can only grow.
     (
         "crates/codeflow-core/src/hooks/conflict_markers.rs",
@@ -3217,6 +3226,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // Any HEAD read error refuses with the no-commit stop; the wording assumes an unborn branch, but nothing proceeds.
+    (
+        "crates/codeflow-core/src/root_checkout.rs",
+        "prepare_branch",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // The name is compared with GIT_HOOK_NAMES, all ASCII, so a name that is not UTF-8 is none of them; the list feeds only advisory doctor and update notes.
     (
         "crates/codeflow-core/src/scaffold/detect.rs",
@@ -3449,6 +3466,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Cleanup advice only: an unread root HEAD leaves its branch out of the checked-out set, which can only add a removal suggestion that git refuses for a checked-out branch, and an unread linked worktree HEAD gives no tip, so classify_cleanup returns RetainUnproven.
+    (
+        "crates/codeflow-core/src/status.rs",
+        "collect_cleanup",
+        "obtain-absent:head",
+        2,
+        "display",
+    ),
     // A failed peel leaves the tip unknown, and classify_cleanup returns RetainUnproven (landing target or revision unavailable).
     (
         "crates/codeflow-core/src/status.rs",
@@ -3464,6 +3489,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:Repository::open",
         1,
         "unproven",
+    ),
+    // The branch only labels the printed status view; codeflow status exits 0 and decides nothing from it.
+    (
+        "crates/codeflow-core/src/status.rs",
+        "collect_status",
+        "obtain-absent:head",
+        1,
+        "display",
     ),
     // A failed open returns None, and classify_cleanup maps an unknown working state to RetainUnproven.
     (
@@ -3526,6 +3559,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-core/src/testing/delivery.rs",
         "revision",
         "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    // None becomes an empty revision, so the gate writes no durable evidence and an empty revision never matches a base in green_base; selection then runs every target.
+    (
+        "crates/codeflow-core/src/testing/delivery.rs",
+        "revision",
+        "obtain-absent:head",
         1,
         "unproven",
     ),
@@ -3993,6 +4034,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // False is the strict side: the range is then judged as possibly reopening the task, which only adds reopen findings and withholds stacking on its review.
+    (
+        "crates/codeflow-core/src/workgraph/acceptance.rs",
+        "head_is_declared_target",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
     // A tree that cannot be read returns Some(the trees cannot be read), which reviewed_span_problem and stacked turn into a refusal finding.
     (
         "crates/codeflow-core/src/workgraph/acceptance.rs",
@@ -4373,7 +4422,23 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/workgraph/status_verb.rs",
         "binding",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // An unreadable HEAD returns the finding no HEAD commit to bind the acceptance block to, which gate_binding refuses at block level and carries as a warning otherwise.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "binding",
         "obtain-absent:peel_to_commit",
+        1,
+        "unproven",
+    ),
+    // An unreadable HEAD becomes a binding finding that gate_binding refuses where git.work_records blocks.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "epic_binding",
+        "obtain-absent:head",
         1,
         "unproven",
     ),
@@ -4392,6 +4457,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim_end_matches",
         3,
         "format-contract",
+    ),
+    // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
+    (
+        "crates/codeflow-core/src/workgraph/status_verb.rs",
+        "own_range_base",
+        "obtain-absent:head",
+        1,
+        "unproven",
     ),
     // None withholds the own-range waiver route: waiver_problem then returns a problem, so a failure can only add a binding finding.
     (
@@ -4424,6 +4497,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
+    ),
+    // An unread HEAD gives an empty branch, which carries no task, so standalone_at_head refuses a standalone record not yet on the target as not anchored; check_task_anchor reads the branch nowhere else.
+    (
+        "crates/codeflow-core/src/workgraph/work_start.rs",
+        "check_work_start_anchored",
+        "obtain-absent:head",
+        1,
+        "unproven",
     ),
     // unwrap_or(false) makes the pin not an ancestor, and check_work_start_on returns InvalidGraph (pin is not an ancestor of HEAD), so work start refuses.
     (
@@ -5419,7 +5500,6 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/present.rs", "remove_regular_if_present", "ErrorKind::NotFound", 1, "The leaf is under the session's runtime control directory, which runtime_dir creates; NotFound means no stale ready or bootstrap file, and a later service failure ends in the readiness timeout refusal."),
     ("crates/codeflow-cli/src/cmd/present.rs", "remove_regular_if_present", "is_file", 1, "Type check on symlink_metadata whose errors other than NotFound propagate; anything but a regular file refuses as UnsafePath."),
     ("crates/codeflow-cli/src/cmd/present.rs", "start_service", "is_file", 1, "Readiness poll: false only keeps waiting, the loop ends in a ServiceUnavailable refusal on child exit or the deadline, and a true is re-read through read_bounded_regular."),
-    ("crates/codeflow-cli/src/cmd/remote.rs", "run", "is_file", 1, "Only prints a note; ProtectionPlan::from_policy_file decides absence with proven_absent and refuses an unreadable policy."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "collect_record_files", "is_dir", 1, "Type check on std::fs::metadata whose error propagates, so an unreadable entry or a dangling link makes validate_records report cannot read and fail."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_policy", "exists", 1, "Reached only after policy_schema::validate_policy returned Ok; it only picks the clean or defaults-apply message, and the verdict is already true."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
