@@ -767,7 +767,10 @@ fn r23_update_refuses_a_dangling_policy_beside_a_kept_template() {
     let out = codeflow(dir.path(), &["update"]);
     let all = text(&out);
     assert_ne!(out.status.code(), Some(0), "{all}");
-    assert!(!all.contains("git.pr_section_mapping is diagnosed"), "{all}");
+    assert!(
+        !all.contains("git.pr_section_mapping is diagnosed"),
+        "{all}"
+    );
 }
 
 #[test]

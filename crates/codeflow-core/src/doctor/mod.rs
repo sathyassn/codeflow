@@ -6172,7 +6172,10 @@ mod tests {
     #[test]
     fn r23_dangling_customization_docs_fail() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(check_customization(&opts_at(dir.path())).status, Status::Pass);
+        assert_eq!(
+            check_customization(&opts_at(dir.path())).status,
+            Status::Pass
+        );
         dangling(&dir.path().join("docs").join("product.md"));
         let result = check_customization(&opts_at(dir.path()));
         assert_eq!(result.status, Status::Fail, "{}", result.message);
@@ -6219,14 +6222,21 @@ mod tests {
         dangling(&dir.path().join(".gitlab-ci.yml"));
         let result = check_ci_perimeter(&opts_at(dir.path()));
         assert_eq!(result.status, Status::Fail, "{}", result.message);
-        assert!(result.message.contains(".gitlab-ci.yml"), "{}", result.message);
+        assert!(
+            result.message.contains(".gitlab-ci.yml"),
+            "{}",
+            result.message
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn r23_dangling_instruction_file_fails_the_budget() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(check_instructions(&opts_at(dir.path())).status, Status::Pass);
+        assert_eq!(
+            check_instructions(&opts_at(dir.path())).status,
+            Status::Pass
+        );
         dangling(&dir.path().join("AGENTS.md"));
         let result = check_instructions(&opts_at(dir.path()));
         assert_eq!(result.status, Status::Fail, "{}", result.message);

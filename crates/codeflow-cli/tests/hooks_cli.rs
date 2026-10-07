@@ -5606,7 +5606,10 @@ fn r23_push_set_reads_submodules_whatever_gitmodules_is() {
     std::fs::remove_file(dir.path().join(".gitmodules")).unwrap();
     std::os::unix::fs::symlink("gone", dir.path().join(".gitmodules")).unwrap();
     git(dir.path(), &["add", ".gitmodules"]);
-    git(dir.path(), &["commit", "-q", "-m", "chore: link the mapping"]);
+    git(
+        dir.path(),
+        &["commit", "-q", "-m", "chore: link the mapping"],
+    );
     let head = rev(dir.path(), "HEAD");
     let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
     assert_ne!(code, Some(0), "{err}");
