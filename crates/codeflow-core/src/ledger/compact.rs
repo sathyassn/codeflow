@@ -51,9 +51,11 @@ pub fn compact_ledger_type(
         .truncate(false)
         .open(&lock_path)?;
 
-    lock_file.try_lock_exclusive().map_err(|_| {
-        LedgerError::Lock(format!("compaction already in progress for {type_name}"))
-    })?;
+    if !lock_within(&lock_file, &lock_path)? {
+        return Err(LedgerError::Lock(format!(
+            "compaction already in progress for {type_name}"
+        )));
+    }
 
     // Find compactable fragments.
     let completed_sessions = find_completed_sessions(ledger_dir)?;
@@ -315,12 +317,42 @@ fn acquire_file_locks(
             .write(true)
             .truncate(false)
             .open(target.with_extension("jsonl.lock"))?;
-        if lock.try_lock_exclusive().is_err() {
+        if !lock_within(&lock, &target.with_extension("jsonl.lock"))? {
             return Ok(None);
         }
         held.push(lock);
     }
     Ok(Some(held))
+}
+
+/// How long a compaction waits for a contended lock before it treats the
+/// holder as a real compaction or writer. A child process spawned by any
+/// thread while a lock descriptor was open keeps that lock until it execs,
+/// so a lock just released can read as held for a moment.
+const LOCK_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Take `lock` exclusively, waiting up to [`LOCK_SETTLE`] while it is
+/// contended: `Ok(false)` when it is still held after that, an error when
+/// the lock cannot be taken for another reason.
+fn lock_within(lock: &fs::File, path: &Path) -> Result<bool, LedgerError> {
+    let deadline = std::time::Instant::now() + LOCK_SETTLE;
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => return Ok(true),
+            Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
+                if std::time::Instant::now() >= deadline {
+                    return Ok(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(LedgerError::Lock(format!(
+                    "acquiring lock on {}: {error}",
+                    path.display()
+                )))
+            }
+        }
+    }
 }
 
 /// Parse JSONL events from a file, appending to `events`.
@@ -603,6 +635,71 @@ mod tests {
 #[cfg(all(test, unix))]
 mod r22_regressions {
     use super::*;
+
+    /// A ledger folder with one completed session's work-graph fragment.
+    fn one_fragment() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["sessions", "work-graph"] {
+            std::fs::create_dir(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(dir.path().join("sessions/sessions.jsonl"), "{\"event\":\"session_end\",\"timestamp\":\"2026-01-01T01:00:00Z\",\"session_id\":\"ses-done\"}\n").unwrap();
+        std::fs::write(
+            dir.path().join("work-graph/work-graph-ses-done.jsonl"),
+            "{\"event\":\"task_created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"session_id\":\"ses-done\"}\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// A second descriptor holding the lock at `path`, as a child process
+    /// spawned while the lock was open holds it until it execs; released
+    /// after `held_for`, or never when `None`.
+    fn hold(path: &Path, held_for: Option<std::time::Duration>) -> std::thread::JoinHandle<()> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)
+            .unwrap();
+        lock.lock_exclusive().unwrap();
+        std::thread::spawn(move || {
+            if let Some(held_for) = held_for {
+                std::thread::sleep(held_for);
+                drop(lock);
+            } else {
+                std::mem::forget(lock);
+            }
+        })
+    }
+
+    /// A lock held for a moment, by a child spawned while it was open,
+    /// delays compaction instead of refusing or deferring it; a lock held
+    /// past the wait still refuses or defers.
+    #[test]
+    fn r23_compaction_waits_out_a_briefly_held_lock() {
+        let brief = Some(std::time::Duration::from_millis(100));
+        for lock in [".compaction.lock", "work-graph-ses-done.jsonl.lock"] {
+            let dir = one_fragment();
+            let holder = hold(&dir.path().join("work-graph").join(lock), brief);
+            let result = compact_ledger_type(dir.path(), "work-graph", None).unwrap();
+            assert_eq!(result.merged_count, 1, "{lock}");
+            holder.join().unwrap();
+        }
+
+        let dir = one_fragment();
+        let _held = hold(&dir.path().join("work-graph/.compaction.lock"), None);
+        assert!(matches!(
+            compact_ledger_type(dir.path(), "work-graph", None),
+            Err(LedgerError::Lock(message)) if message.contains("already in progress")
+        ));
+        let dir = one_fragment();
+        let _held = hold(
+            &dir.path().join("work-graph/work-graph-ses-done.jsonl.lock"),
+            None,
+        );
+        let deferred = compact_ledger_type(dir.path(), "work-graph", None).unwrap();
+        assert_eq!(deferred.merged_count, 0);
+    }
 
     #[test]
     fn r22_compaction_directory_and_session_inputs_refuse() {
