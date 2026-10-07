@@ -227,7 +227,7 @@ mod tests {
         );
         assert_eq!(
             preflight(dir.path(), "HEAD", "b", "origin", Path::new("codeflow")).unwrap_err(),
-            "release error: boom"
+            "release error: boom (scripts/release.py exited with code 2)"
         );
         let silent = project("codeflow", Some("print('not json')\n"));
         assert!(
@@ -250,7 +250,7 @@ mod tests {
         );
         assert_eq!(
             structural(bad.path(), "HEAD").unwrap_err(),
-            "release error: stamps disagree"
+            "release error: stamps disagree (scripts/release.py exited with code 2)"
         );
     }
 }
