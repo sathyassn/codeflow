@@ -187,7 +187,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-cli/src/cmd/ci/classification.rs",
-        "range_changes",
+        "name_status",
         "from_utf8_lossy",
         1,
         "display",
@@ -1573,7 +1573,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Formats Git stderr only after command failure.
     (
         "crates/codeflow-cli/src/cmd/ci/classification.rs",
-        "range_changes",
+        "name_status",
         "trim",
         1,
         "display",
@@ -4106,6 +4106,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // A task file that cannot be read is None, which held_at turns into doubt ("cannot be read, so whether it is this task cannot be told"); the tree's answer becomes unproven, never absent.
+    (
+        "crates/codeflow-core/src/workgraph/landing.rs",
+        "RecordStore::text",
+        "obtain-absent:find_blob",
+        1,
+        "unproven",
+    ),
+    // A task file that is not UTF-8 is None, never a lossy rendering that could parse with other values; held_at turns None into doubt, so the answer is unproven.
+    (
+        "crates/codeflow-core/src/workgraph/landing.rs",
+        "RecordStore::text",
+        "obtain-absent:from_utf8",
+        1,
+        "unproven",
+    ),
     // An entry already checked as 40 lowercase hex that Oid::from_str still rejects joins the refused reasons and yields Baseline::Refused; judge_records and the range judges surface baseline_refusal and deny the migration allowance. A lookup error other than NotFound is refused too.
     (
         "crates/codeflow-core/src/workgraph/lifecycle.rs",
@@ -5708,6 +5724,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/lifecycle.rs", "recorded_baseline", "ErrorKind::NotFound", 1, "Gives the empty baseline only after proven_absent confirms the file is missing."),
     ("crates/codeflow-core/src/workgraph/light_paths.rs", "next_adr_id", "ErrorKind::NotFound", 1, "Starts at ADR-0001 only after proven_absent confirms the directory is missing."),
     ("crates/codeflow-core/src/workgraph/record_template.rs", "load", "ErrorKind::NotFound", 1, "Uses the embedded template only when proven_absent confirms the project template is missing; otherwise it refuses."),
+    ("crates/codeflow-core/src/workgraph/release_line.rs", "shallow_boundary", "ErrorKind::NotFound", 1, "Git keeps a linked worktree's shallow list in the common directory, so only a missing file in the worktree's own git directory falls back to it; that read's error, and any other error, refuses with the shallow-boundary reason."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "History::parent_of", "exists", 1, "An object database without the object returns Err with a fetch or unshallow remedy; it never reads as a root or as absent."),
     ("crates/codeflow-core/src/workgraph/release_line.rs", "history_overlay", "ErrorKind::NotFound", 1, "A graft file that cannot be found is unreadable to git and libgit2 as well, so no overlay is in effect for either; other errors refuse."),
     ("crates/codeflow-core/src/workgraph/work_start.rs", "durable_work_tracking_enabled", "ErrorKind::NotFound", 2, "Callers pass the discovered repository root: a .codeflow that is not found there is proven, and the state file is read under a real .codeflow or an absent one."),

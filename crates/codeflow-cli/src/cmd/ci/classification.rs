@@ -358,6 +358,7 @@ pub(super) fn branch_journey(
     git: &GitPolicy,
     branch: &str,
     range: Option<&Range<'_>>,
+    stacked: &[codeflow_core::workgraph::work_start::ReviewedPin],
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -397,19 +398,74 @@ pub(super) fn branch_journey(
         }
     }
     ran.push("journey");
-    match range_changes(root, range.base, range.head) {
-        Ok(changes) => {
-            let files: Vec<GitName> = changes.into_iter().map(|(_, path)| path).collect();
-            journey(root, git, &task_id, range.head, &files, tagged);
+    // A branch stacked on reviewed predecessor heads (issue #69) answers
+    // for the paths it changes after them, and the predecessors' own pull
+    // requests answer for theirs (SPC-013 R-53, TSK-234).
+    let stack = match codeflow_core::workgraph::work_start::stack_base(root, stacked) {
+        Ok(stack) => stack.map(|stack| stack.to_string()),
+        Err(error) => {
+            push_unlisted(tagged, &error);
+            return;
         }
-        // The same finding the pull request check gives for that failure.
-        Err(error) => push(
-            tagged,
-            RULE,
-            format!("cannot list the paths the range changes: {error}"),
-            "pass --base and --head so CI can read the range",
-        ),
+    };
+    match journey_paths(root, range.base, range.head, stack.as_deref()) {
+        Ok(files) => journey(root, git, &task_id, range.head, &files, tagged),
+        Err(error) => push_unlisted(tagged, &error),
     }
+}
+
+/// The paths a range answers for under the journey rule (SPC-013 R-53,
+/// TSK-234): what its own commits change, read per commit, and what each
+/// merge changes against the automatic remerge of its parents
+/// ([`codeflow_core::workgraph::acceptance::owned_paths`]). Without a
+/// stack, the range's net change from its target is included too; with
+/// one, the predecessor's commits up to `stack` are its own pull request's.
+fn journey_paths(
+    root: &Path,
+    base: &str,
+    head: &str,
+    stack: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let mut hide = vec![base];
+    hide.extend(stack);
+    let mut files = codeflow_core::workgraph::acceptance::owned_paths(root, head, &hide)?;
+    if stack.is_none() {
+        // The net change can name a path the walked range never touched
+        // (a merge base shared by two lines), so its names are checked raw
+        // too, as `owned_paths` checks its own.
+        for (_, raw) in parse_name_status_raw(&name_status(root, base, head)?)? {
+            let path = codeflow_core::workgraph::acceptance::rule_name(&raw)?;
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// The journey rule for a pull request's task over its whole range.
+fn range_journey(
+    root: &Path,
+    git: &GitPolicy,
+    task_id: &str,
+    range: &Range<'_>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    match journey_paths(root, range.base, range.head, None) {
+        Ok(paths) => journey(root, git, task_id, range.head, &paths, tagged),
+        Err(error) => push_unlisted(tagged, &error),
+    }
+}
+
+/// The finding for a range whose paths cannot be listed: the one the pull
+/// request check gives for that failure.
+fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
+    push(
+        tagged,
+        RULE,
+        format!("cannot list the paths the range changes: {error}"),
+        "pass --base and --head so CI can read the range; redo an octopus merge as two-parent merges; rename a file whose name is not UTF-8",
+    );
 }
 
 /// Where durable tracking is off: whether the body names exactly one unit
@@ -566,13 +622,13 @@ pub(super) fn dispatch(
                 head: range.head,
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
         Class::ReleaseIntegration { task_id } => {
             println!(
                 "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
             );
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
         untracked => announce(untracked),
     }
@@ -804,7 +860,7 @@ fn journey(
     git: &GitPolicy,
     task_id: &str,
     head: &str,
-    files: &[GitName],
+    files: &[String],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
     let project = match ProjectPaths::load(root) {
@@ -815,16 +871,11 @@ fn journey(
         }
     };
     let sets = path_sets();
-    // A name that is not valid UTF-8 cannot be matched against the path
-    // sets, so it is judged adopter-facing, the strict side.
-    let Some((path, member)) = files.iter().find_map(|path| match path.rule_text() {
-        Ok(text) => sets
-            .adopter_facing_member(text, &project)
-            .map(|member| (path.display().to_string(), member.to_string())),
-        Err(odd) => Some((
-            odd.display().to_string(),
-            "a path whose name is not valid UTF-8, judged adopter-facing".to_string(),
-        )),
+    // `journey_paths` refuses a name that is not UTF-8 before this point
+    // (`acceptance::rule_name`), so every name here is matched as text.
+    let Some((path, member)) = files.iter().find_map(|path| {
+        sets.adopter_facing_member(path, &project)
+            .map(|member| (path, member))
     }) else {
         return;
     };
@@ -864,6 +915,12 @@ pub(super) fn range_changes(
     base: &str,
     head: &str,
 ) -> Result<Vec<(String, GitName)>, String> {
+    parse_name_status(&name_status(root, base, head)?)
+}
+
+/// The raw `git diff -z --name-status` output for the net change from
+/// `base` to `head`.
+fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -882,10 +939,18 @@ pub(super) fn range_changes(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_name_status(&out.stdout)
+    Ok(out.stdout)
 }
 
 fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, GitName)>, String> {
+    Ok(parse_name_status_raw(stdout)?
+        .into_iter()
+        .map(|(status, path)| (status, GitName::from_bytes(&path)))
+        .collect())
+}
+
+/// Each change as its status and the raw name git printed.
+fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut fields = stdout
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -902,7 +967,7 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, GitName)>, String> {
         let path = fields
             .next()
             .ok_or_else(|| format!("git diff output ends after status {status}"))?;
-        changes.push((status, GitName::from_bytes(path)));
+        changes.push((status, path.to_vec()));
     }
     Ok(changes)
 }
@@ -1091,7 +1156,8 @@ mod tests {
 
     /// Round 23: a name that is not valid UTF-8 is judged the strict way by
     /// every rule that reads paths as text: it is never a spike path, never
-    /// a task's own record, and always adopter-facing for the journey rule.
+    /// a task's own record, and the journey rule's path listing refuses it
+    /// (`acceptance::rule_name`), so it never passes as no adopter path.
     #[test]
     fn r23_odd_names_are_judged_strictly_by_path_rules() {
         let odd = GitName::from_bytes(b"docs/research/caf\xe9.md");
@@ -1106,13 +1172,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let git = GitPolicy::default();
         let mut tagged = Vec::new();
-        journey(dir.path(), &git, "TSK-001", "HEAD", &[plain], &mut tagged);
+        let plain_text = plain.rule_text().unwrap().to_string();
+        journey(
+            dir.path(),
+            &git,
+            "TSK-001",
+            "HEAD",
+            &[plain_text],
+            &mut tagged,
+        );
         assert!(tagged.is_empty(), "the control is no adopter-facing path");
-        journey(dir.path(), &git, "TSK-001", "HEAD", &[odd], &mut tagged);
         assert_eq!(
-            tagged.len(),
-            1,
-            "an odd name reaches the journey requirement"
+            codeflow_core::workgraph::acceptance::rule_name(plain.bytes()).as_deref(),
+            Ok("docs/research/cafe.md")
+        );
+        assert!(
+            codeflow_core::workgraph::acceptance::rule_name(odd.bytes()).is_err(),
+            "an odd name refuses the journey listing"
         );
     }
 

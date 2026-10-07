@@ -35,6 +35,7 @@ use codeflow_core::hooks::{
 };
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
+use codeflow_core::workgraph::work_start::ReviewedPin;
 use codeflow_core::workgraph::{
     branch_claims_task_id, declared_work_target, declared_work_target_at_revision,
     durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
@@ -552,6 +553,13 @@ pub fn run(args: &CiArgs) -> i32 {
     // A pull request context: `--into`, or a host's pull request variables,
     // whether or not the host supplied the body.
     let pr_context = args.into.is_some() || is_pr_event(|key| environment.get(key).cloned());
+    // A push of a task branch stacked on reviewed predecessor heads (SPC-013
+    // R-42, issue #69); a pull request check keeps the landing rule.
+    let stacked = if pr_body.is_none() && !pr_context {
+        stacked_pins(&root, &branch, &head)
+    } else {
+        Vec::new()
+    };
     let tracked_claim = work_checks(
         &root,
         git,
@@ -561,12 +569,21 @@ pub fn run(args: &CiArgs) -> i32 {
         &base_candidates,
         &head,
         &line_target,
+        &stacked,
         &mut tagged,
         &mut ran,
     );
 
     let level = git.work_planning_level();
-    let own_task = own_branch_preflight(&root, &branch, &head, level, &mut tagged, &mut ran);
+    let own_task = own_branch_preflight(
+        &root,
+        &branch,
+        &head,
+        &stacked,
+        level,
+        &mut tagged,
+        &mut ran,
+    );
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133).
     if own_task || tracked_claim {
@@ -725,6 +742,30 @@ fn parse_level(text: &str) -> Result<PolicyLevel, String> {
     }
 }
 
+/// Whether the range is a release head and a release range (SPC-013
+/// R-120), which the release checks judge: a release head always, and with
+/// no body also a range into a release branch. The scope is asked once per
+/// run, under any release pattern the default target's policy names, and
+/// only for a range that resolves; the acceptance check asks it for that
+/// range anyway. A failed read is the finding to report.
+fn release_of(
+    root: &Path,
+    names: &Names<'_>,
+    range: Option<&classification::Range<'_>>,
+) -> Result<Option<(bool, bool)>, Violation> {
+    let tracks = range
+        .map(|range| range_tracks_work(root, range))
+        .transpose()
+        .map_err(tracking_state_violation)?
+        .unwrap_or(false);
+    if !tracks {
+        return Ok(None);
+    }
+    acceptance::release_scope(root, names)
+        .map(|scope| scope.map(|(_, scope)| (scope.head, scope.release())))
+        .map_err(acceptance::scope_refusal)
+}
+
 /// Pull request classification (TSK-104), which needs the body, and
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
 /// range: a completion is bound to the head it lands with. Returns whether
@@ -739,6 +780,7 @@ fn work_checks<'a>(
     base_candidates: &'a [String],
     head: &str,
     line_target: &str,
+    stacked: &[ReviewedPin],
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
 ) -> bool {
@@ -758,38 +800,15 @@ fn work_checks<'a>(
         target: line_target,
     });
     let branch = names.branch;
-    // A release range (SPC-013 R-120) is judged by the release checks: a
-    // release head always, and with no body also a range into a release
-    // branch. The scope is asked once per run, under any release pattern
-    // the default target's policy names, and only for a range that
-    // resolves; the acceptance check asks it for that range anyway.
-    let tracks = match range_parts
-        .as_ref()
-        .map(|range| range_tracks_work(root, range))
-        .transpose()
-    {
-        Ok(tracks) => tracks.unwrap_or(false),
-        Err(error) => {
+    let release = match release_of(root, names, range_parts.as_ref()) {
+        Ok(release) => release,
+        Err(violation) => {
             tagged.push(TaggedViolation {
                 sha: None,
-                violation: tracking_state_violation(error),
+                violation,
             });
             return false;
         }
-    };
-    let release = if tracks {
-        match acceptance::release_scope(root, names) {
-            Ok(scope) => scope.map(|(_, scope)| (scope.head, scope.release())),
-            Err(error) => {
-                tagged.push(TaggedViolation {
-                    sha: None,
-                    violation: acceptance::scope_refusal(error),
-                });
-                return false;
-            }
-        }
-    } else {
-        None
     };
     let release_head = release.is_some_and(|(head, _)| head);
     let release_range = release.is_some_and(|(_, range)| range);
@@ -832,7 +851,15 @@ fn work_checks<'a>(
         if pr_context && !release_range {
             classification::bodyless_line_check(root, branch, range_parts.as_ref(), tagged, ran);
         }
-        classification::branch_journey(root, git, branch, range_parts.as_ref(), tagged, ran);
+        classification::branch_journey(
+            root,
+            git,
+            branch,
+            range_parts.as_ref(),
+            stacked,
+            tagged,
+            ran,
+        );
         None
     };
     acceptance::dispatch(
@@ -841,6 +868,7 @@ fn work_checks<'a>(
         range_parts.as_ref(),
         names,
         class.as_ref(),
+        stacked,
         tagged,
         ran,
     );
@@ -1226,6 +1254,7 @@ fn own_branch_preflight(
     root: &Path,
     branch: &str,
     head: &str,
+    stacked: &[ReviewedPin],
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -1243,7 +1272,7 @@ fn own_branch_preflight(
     if branch.starts_with("task/") || claims {
         match durable_work_tracking_enabled(root) {
             Ok(true) => {
-                evaluate_work_start(root, branch, head, level, tagged);
+                evaluate_work_start(root, branch, head, stacked, level, tagged);
                 ran.push("work-start");
                 return true;
             }
@@ -1283,6 +1312,53 @@ fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedV
     }
 }
 
+/// The reviewed predecessor heads a pushed task branch stacks on (SPC-013
+/// R-42, issue #69): `work claim --on` creates such a branch at a reviewed
+/// pin, and every later push of it contains that pin. Each is honoured only
+/// as the claim honoured it, through the same review lookup, so a branch
+/// tip or another movable ref never stands in for review. A candidate that
+/// is not honoured is noted and the ordinary checks judge the range.
+fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
+    // A read that fails honours no pin, the strict side; the work-start
+    // check reads the same task and target and reports the failure.
+    let Ok(Some(task_id)) = branch_task_at(root, branch, head) else {
+        return Vec::new();
+    };
+    let Ok(declared) = work_target_at(root, branch, head, &task_id) else {
+        return Vec::new();
+    };
+    let Ok(Some(target)) = resolve_work_target_checked(root, declared.as_deref()) else {
+        return Vec::new();
+    };
+    match codeflow_core::workgraph::work_start::stacked_pins(
+        root,
+        &task_id,
+        &target.target,
+        head,
+        &|branch, sha, named| super::work::review_lookup(root, branch, sha, named),
+    ) {
+        Ok(pins) => {
+            for pin in &pins {
+                println!(
+                    "codeflow ci: {task_id} stacks on {}'s reviewed head {}; the commits up to it are judged as that pull request",
+                    pin.task_id(),
+                    pin.revision()
+                );
+            }
+            pins
+        }
+        Err(error) => {
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("a predecessor head in this range is not honoured as reviewed: {error}"),
+                codeflow_core::remedy::WORK_START_MERGE_PLANNING
+                    .with(&[("target", &target.target), ("id", &task_id)]),
+            );
+            println!("{}", finding.line("codeflow ci", "note"));
+            Vec::new()
+        }
+    }
+}
+
 /// The task checks for the task the branch carries, at the
 /// `git.work_planning` level (TSK-133).
 pub(super) fn branch_task_at(
@@ -1312,6 +1388,7 @@ fn evaluate_work_start(
     root: &Path,
     branch: &str,
     head: &str,
+    stacked: &[ReviewedPin],
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
 ) {
@@ -1357,8 +1434,8 @@ fn evaluate_work_start(
                 return;
             }
         };
-        if let Err(error) = codeflow_core::workgraph::work_start::check_work_admission(
-            root, &task_id, &target, branch, head,
+        if let Err(error) = codeflow_core::workgraph::work_start::check_work_admission_on(
+            root, &task_id, &target, branch, head, stacked,
         ) {
             tagged.push(TaggedViolation {
                 sha: None,
@@ -2720,6 +2797,7 @@ mod tests {
                 dir.path(),
                 "task/TSK-001-fix",
                 &head,
+                &[],
                 PolicyLevel::Off,
                 &mut tagged,
             );
