@@ -716,6 +716,268 @@ fn an_epic_own_block_does_not_replace_a_live_serving_task() {
     );
 }
 
+// R-62 with R-33 (sathyassn/codeflow#106): an `(after release)` criterion is
+// closed by the epic block's `deferred` line even when a task serves it, since
+// that task is the follow-up and can only run after the epic has landed.
+
+const AFTER_RELEASE: &str =
+    "- AC-1 When released, adopters shall report fewer failed installs (after release)";
+const SERVES_AC1: &str =
+    "- AC-1 When the nightly scan runs, the system shall report no advisory (serves EPC-001 AC-1)";
+
+/// A task outside the epic: a follow-up runs after the epic has landed, and
+/// the epic closes only when its own tasks are terminal.
+fn follow_up(id: &str, status: &str, criteria: &str, closeout: &str) -> String {
+    task(id, status, criteria, closeout).replace(
+        "epic_id: EPC-001\nstandalone_reason: null",
+        "epic_id: null\nstandalone_reason: \"runs after the epic lands\"",
+    )
+}
+
+fn plan_after_release(criteria: &str, tasks: &[(&str, String)]) -> Repo {
+    let repo = Repo::new();
+    repo.write(EPIC_PATH, &epic("planning", "", criteria));
+    for (id, record) in tasks {
+        repo.write(&format!("project-management/tasks/{id}.md"), record);
+    }
+    repo.commit("plan");
+    repo
+}
+
+/// The epic's own block with one result line per `(id, result)`.
+fn epic_results(repo: &Repo, results: &[(&str, &str)], follow_ups: &str) -> String {
+    let mut lines = vec![
+        "acceptance:".to_string(),
+        format!("  reviewed: {}", "a".repeat(40)),
+        "  review: session:abc@sha256:00".to_string(),
+        "  criteria:".to_string(),
+    ];
+    lines.extend(
+        results
+            .iter()
+            .map(|(id, result)| format!("    {id}: {result}")),
+    );
+    lines.push("  journey: none | n/a".to_string());
+    lines.push("  not_verified: none".to_string());
+    lines.push(format!("  follow_ups: {follow_ups}"));
+    lines.push("  verdict: approved".to_string());
+    repo.reviewed(&(lines.join("\n") + "\n"))
+}
+
+fn close_with(repo: &Repo, results: &[(&str, &str)], follow_ups: &str) -> Result<(), VerbError> {
+    let close = StatusChange {
+        acceptance: Some(epic_results(repo, results, follow_ups)),
+        ..change("complete")
+    };
+    set_status(repo.root(), RecordKind::Epic, "EPC-001", &close).map(drop)
+}
+
+const DEFERRED_TO_TSK_002: &str =
+    "deferred | owner: coordinator; window: the first nightly run after release; follow-up: TSK-002";
+
+/// The defect: a todo follow-up that serves the criterion made the epic's
+/// valid `deferred` line unreachable. The verb and the same hand edit agree.
+#[test]
+fn an_after_release_criterion_closes_as_deferred_to_its_open_serving_follow_up() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        )],
+    );
+    let written = verb_and_hand_agree(&repo, EPIC_PATH, || {
+        close_with(&repo, &[("AC-1", DEFERRED_TO_TSK_002)], "TSK-002")
+    });
+    assert!(written.contains("AC-1: deferred | owner: coordinator;"));
+}
+
+/// Each refusal keeps its message: the deferral opens only the case it names.
+#[test]
+#[allow(clippy::too_many_lines)] // One table holds every refusal.
+fn the_deferred_line_does_not_close_what_it_does_not_name() {
+    let after_release_open = [(
+        "TSK-002",
+        follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+    )];
+    let named_task_does_not_serve = [
+        (
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        ),
+        (
+            "TSK-003",
+            follow_up(
+                "TSK-003",
+                "todo",
+                "- AC-1 When x, the system shall y.",
+                "Pending.",
+            ),
+        ),
+    ];
+    let cancelled_beside_open = [
+        (
+            "TSK-002",
+            follow_up(
+                "TSK-002",
+                "cancelled",
+                SERVES_AC1,
+                "- cancelled: replaced\n- scope: moved to TSK-003",
+            ),
+        ),
+        (
+            "TSK-003",
+            follow_up("TSK-003", "todo", SERVES_AC1, "Pending."),
+        ),
+    ];
+    let not_open_follow_up = "no complete serving task verified it, and the epic's acceptance block does not defer it to an open serving task";
+    for (what, criterion, tasks, result, follow_ups, needle) in [
+        (
+            "a criterion that is not after-release",
+            EPIC_CRITERION,
+            &after_release_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-002",
+            "AC-1 is unverified: no complete serving task verified it",
+        ),
+        (
+            "a line naming a task that does not serve it while another open task does",
+            AFTER_RELEASE,
+            &named_task_does_not_serve[..],
+            "deferred | owner: coordinator; window: next release; follow-up: TSK-003",
+            "TSK-003",
+            not_open_follow_up,
+        ),
+        (
+            "a line naming a cancelled serving task beside an open one",
+            AFTER_RELEASE,
+            &cancelled_beside_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-002",
+            not_open_follow_up,
+        ),
+        (
+            "a follow-up the block does not list",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            DEFERRED_TO_TSK_002,
+            "TSK-009",
+            "AC-1's follow-up TSK-002 is not listed in `follow_ups`",
+        ),
+        (
+            "a line without its window",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | owner: coordinator; follow-up: TSK-002",
+            "TSK-002",
+            "AC-1 is deferred without its window",
+        ),
+        (
+            "a line without its owner",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | window: next release; follow-up: TSK-002",
+            "TSK-002",
+            "AC-1 is deferred without its owner",
+        ),
+        (
+            "a line without a follow-up",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "deferred | owner: coordinator; window: next release",
+            "TSK-002",
+            "AC-1 is deferred without a follow-up task",
+        ),
+        (
+            "an after-release criterion recorded as verified",
+            AFTER_RELEASE,
+            &after_release_open[..],
+            "verified | the nightly scan",
+            "TSK-002",
+            "is observable only after release and is never `verified` at build time",
+        ),
+    ] {
+        let repo = plan_after_release(criterion, tasks);
+        let refused = refusal(close_with(&repo, &[("AC-1", result)], follow_ups));
+        assert!(refused.contains(needle), "{what}: {refused}");
+    }
+
+    // With no block at all the epic does not close, and says what would.
+    let repo = plan_after_release(AFTER_RELEASE, &after_release_open);
+    let refused = refusal(close_epic(&repo));
+    assert!(refused.contains(not_open_follow_up), "{refused}");
+    assert!(refused.contains("follow-up: TSK-NNN"), "{refused}");
+}
+
+/// A block that lists other criteria but omits the after-release one
+/// proves nothing about it.
+#[test]
+fn an_own_block_that_omits_the_after_release_criterion_is_refused() {
+    let repo = plan_after_release(
+        &format!("{AFTER_RELEASE}\n- AC-2 When used, the system shall work."),
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-2", "verified | cargo test AC-2")],
+        "none: nothing left",
+    ));
+    assert!(refused.contains("acceptance block omits AC-1"), "{refused}");
+}
+
+/// The deferral names the open serving task among several; a later serving
+/// task that is complete and verified still decides on its own result.
+#[test]
+fn a_complete_serving_task_still_decides_an_after_release_criterion() {
+    let verified = fenced(&block(&["AC-1"], "none | n/a"));
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "complete", SERVES_AC1, &verified),
+        )],
+    );
+    close_epic(&repo).unwrap();
+
+    // The follow-up named in the deferral may sit beside a verified one.
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[
+            (
+                "TSK-002",
+                follow_up("TSK-002", "complete", SERVES_AC1, &verified),
+            ),
+            (
+                "TSK-003",
+                follow_up("TSK-003", "todo", SERVES_AC1, "Pending."),
+            ),
+        ],
+    );
+    close_epic(&repo).unwrap();
+
+    // A complete task whose result does not verify it leaves it unverified.
+    let unrun = verified.replace("verified | cargo test AC-1", "failed | not run");
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "complete", SERVES_AC1, &unrun),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", DEFERRED_TO_TSK_002)],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("does not defer it to an open serving task"),
+        "{refused}"
+    );
+}
+
 #[test]
 fn an_epic_criterion_served_by_a_complete_task_beside_a_cancelled_one_closes() {
     let (repo, _) = project();

@@ -1259,6 +1259,24 @@ pub fn check_block(
     problems
 }
 
+/// The non-empty value of `name` in a `deferred` result's evidence, which
+/// reads `owner: <who>; window: <when>; follow-up: TSK-NNN`.
+fn deferral_field<'r>(result: &'r CriterionResult, name: &str) -> Option<&'r str> {
+    result
+        .evidence
+        .split(';')
+        .filter_map(|part| part.trim().strip_prefix(name))
+        .map(|value| value.trim_start_matches(':').trim())
+        .find(|value| !value.is_empty())
+}
+
+/// The follow-up task a `deferred` result names (R-62), when it reads
+/// `follow-up: <value>`. The value is not checked to be a task id here.
+#[must_use]
+pub fn deferred_follow_up(result: &CriterionResult) -> Option<&str> {
+    deferral_field(result, "follow-up")
+}
+
 /// A criterion observable only after release (R-62) is `deferred` with an
 /// owner, a measurement window and a follow-up task listed in `follow_ups`;
 /// it is never verified at build time.
@@ -1270,23 +1288,15 @@ fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) 
             result.outcome
         )];
     }
-    let field = |name: &str| {
-        result
-            .evidence
-            .split(';')
-            .filter_map(|part| part.trim().strip_prefix(name))
-            .map(|value| value.trim_start_matches(':').trim())
-            .find(|value| !value.is_empty())
-    };
     let mut problems = Vec::new();
     for name in ["owner", "window"] {
-        if field(name).is_none() {
+        if deferral_field(result, name).is_none() {
             problems.push(format!(
                 "{id} is deferred without its {name}; record {shape}"
             ));
         }
     }
-    match field("follow-up") {
+    match deferred_follow_up(result) {
         Some(task) if crate::workgraph::is_valid_task_format_id(task) => {
             if !follow_ups.split(',').any(|listed| listed.trim() == task) {
                 problems.push(format!(
