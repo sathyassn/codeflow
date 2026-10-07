@@ -137,6 +137,8 @@ pub fn structural(root: &Path, reference: &str) -> Result<(), String> {
     }
 }
 
+/// The diagnostic for an unsuccessful run: the script's own text (stderr,
+/// else stdout) with the exit status, which is always named.
 fn failure(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -146,10 +148,14 @@ fn failure(output: &std::process::Output) -> String {
         stderr
     };
     let text = text.trim();
+    let status = match output.status.code() {
+        Some(code) => format!("{SCRIPT} exited with code {code}"),
+        None => format!("{SCRIPT} exited with {}", output.status),
+    };
     if text.is_empty() {
-        format!("{SCRIPT} exited with {}", output.status)
+        status
     } else {
-        text.to_string()
+        format!("{text} ({status})")
     }
 }
 

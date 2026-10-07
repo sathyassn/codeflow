@@ -638,6 +638,16 @@ fn r22_release_preflight_errors_are_precise_nonblocking_notes() {
     .unwrap();
     let note = run(dir.path());
     assert!(note.contains("preflight failure"), "{note}");
+    // The unsuccessful status is named beside the script's own text.
+    assert!(note.contains("exited with code 3"), "{note}");
+    // With no text, the status alone is the diagnostic.
+    std::fs::write(
+        dir.path().join("scripts/release.py"),
+        "import sys\nsys.exit(4)\n",
+    )
+    .unwrap();
+    let note = run(dir.path());
+    assert!(note.contains("exited with code 4"), "{note}");
 }
 
 #[test]
