@@ -1,0 +1,11 @@
+id = "TSK-253"
+uid = "15aa57a0-a35b-49ab-a4b2-adce59281158"
+kind = "TSK"
+title = "A completed standalone task's criteria text can be corrected"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-07T18:47:55Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
