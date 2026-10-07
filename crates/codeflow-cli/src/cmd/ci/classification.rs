@@ -15,10 +15,12 @@ use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
 use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
+use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
-    check_epic_line, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch, task_id_from_branch_at,
+    check_epic_line, check_epic_line_with_adoptions, declared_work_target,
+    declared_work_target_at_revision, durable_work_tracking_enabled,
+    durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
+    task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -470,14 +472,15 @@ pub(super) fn dispatch(
     let amendment_problem =
         |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
+    let epic_line = branch.starts_with("integration/").then(|| {
+        check_epic_line_with_adoptions(root, branch, range.target, range.base, range.head)
+    });
     let input = Input {
         body,
         branch,
         files: &files,
         branch_task: task_id_from_branch(root, branch),
-        epic_line: branch
-            .starts_with("integration/")
-            .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
+        epic_line: epic_line.as_ref().map(epic_line_id),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
@@ -514,20 +517,51 @@ pub(super) fn dispatch(
             );
             journey(root, git, task_id, range.head, &files, tagged);
         }
-        untracked => announce(untracked),
+        untracked => announce(untracked, epic_line.as_ref()),
     }
     Some(class)
 }
 
-/// Print the class of a pull request that names no task.
-fn announce(class: &Class) {
+type EpicLineResult = Result<(String, AdoptionReport), String>;
+
+fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
+    result
+        .as_ref()
+        .map(|(epic, _)| epic.clone())
+        .map_err(Clone::clone)
+}
+
+/// Print the class and the direct commits its reviewer is accepting.
+fn announce(class: &Class, line: Option<&EpicLineResult>) {
+    let adoptions = line
+        .and_then(|result| result.as_ref().ok())
+        .map(|(_, report)| report);
     match class {
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
             epics.join(", ")
         ),
         Class::EpicLine(epic) => {
-            println!("codeflow ci: pull request class: epic integration line of {epic}");
+            print!("codeflow ci: pull request class: epic integration line of {epic}");
+            if let Some(report) = adoptions {
+                for entry in &report.adopted {
+                    print!(
+                        " (adopts {}: {}, reviewed at {})",
+                        &entry.commit[..9],
+                        entry.reason.escape_debug(),
+                        entry.review.escape_debug()
+                    );
+                }
+            }
+            println!();
+            if let Some(report) = adoptions {
+                for entry in &report.outside_range {
+                    println!(
+                        "codeflow ci: note: the {epic} line_adoptions entry for {} names a commit outside the range, so it adopts nothing here",
+                        entry.commit
+                    );
+                }
+            }
         }
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");

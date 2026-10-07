@@ -795,3 +795,6 @@ fn r5_n2_root_dot_patterns_match_protected_names_only() {
 #[cfg(unix)]
 #[path = "refusal_journey/landed.rs"]
 mod landed;
+
+#[path = "refusal_journey/line_adoption.rs"]
+mod line_adoption;

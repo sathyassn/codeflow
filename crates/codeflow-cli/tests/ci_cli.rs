@@ -1890,3 +1890,6 @@ fn the_test_environment_blanks_every_ci_variable_the_product_reads() {
         );
     }
 }
+
+#[path = "ci_cli/line_adoption.rs"]
+mod line_adoption;

@@ -1015,6 +1015,10 @@ pub fn pre_push(
             }
         }
 
+        if branch.starts_with("integration/EPC-") {
+            epic_line_push(root, &repo, r, branch, &mut report);
+        }
+
         if !protected && policy.branch_naming.is_active() && !policy.branch_name_ok(branch) {
             report.violations.push(Violation::new(
                 "git.branch_naming",
@@ -1029,6 +1033,83 @@ pub fn pre_push(
     // each check to the pushed commits: see `run_push_targets`.
 
     Ok(report)
+}
+
+/// The epic-line push rule (SPC-013 R-52, amended by TSK-248): a push to
+/// `integration/EPC-*` must not add a commit made directly on the line that
+/// no landed `line_adoptions` entry names. Only the pushed range is judged,
+/// so a line that already carries an older direct commit still receives the
+/// merges that repair it. It runs only where durable work tracking is on,
+/// as the CI class does. A range it cannot read is a note: CI stays the
+/// hard line (charter D19).
+fn epic_line_push(
+    root: &Path,
+    repo: &Repository,
+    pushed: &PushRef,
+    branch: &str,
+    report: &mut StageReport,
+) {
+    if crate::workgraph::durable_work_tracking_enabled_at(root, &pushed.local_sha) != Ok(true) {
+        return;
+    }
+    let first_push = is_zero_sha(&pushed.remote_sha) || pushed.remote_sha.is_empty();
+    let judged = (|| {
+        let target = crate::workgraph::default_work_target(root)
+            .ok_or("no main or master branch to judge the line against")?;
+        let base = if first_push {
+            let commit = |revision: &str| {
+                repo.revparse_single(revision)
+                    .and_then(|object| object.peel_to_commit())
+                    .map(|commit| commit.id())
+                    .map_err(|e| format!("{revision}: {e}"))
+            };
+            repo.merge_base(commit(&target)?, commit(&pushed.local_sha)?)
+                .map_err(|e| e.to_string())?
+                .to_string()
+        } else {
+            pushed.remote_sha.clone()
+        };
+        let adoptions = crate::workgraph::line_adoption::check_range(
+            root,
+            branch,
+            &target,
+            &base,
+            &pushed.local_sha,
+        )?;
+        Ok::<_, String>((target, adoptions))
+    })();
+    let (target, adoptions) = match judged {
+        Ok(judged) => judged,
+        Err(error) => {
+            report.notes.push(crate::remedy::Finding::new(
+                format!("the epic-line push check for '{branch}' was skipped: {error}"),
+                crate::remedy::HOOK_UNEVALUATED.remedy(),
+            ));
+            return;
+        }
+    };
+    if adoptions.unadopted.is_empty() {
+        return;
+    }
+    let epic = crate::workgraph::line_adoption::epic_id(branch).unwrap_or("its epic");
+    let ids = adoptions
+        .unadopted
+        .iter()
+        .map(|id| &id[..9])
+        .collect::<Vec<_>>()
+        .join(", ");
+    let reset = if first_push {
+        target
+    } else {
+        format!("origin/{branch}")
+    };
+    report.violations.push(Violation::always_blocking(
+        "work.epic_line",
+        format!("{branch} would receive a commit made directly on the line ({ids})"),
+        &format!(
+            "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
+        ),
+    ));
 }
 
 /// The registry's push rule (SPC-013 R-8, R-108, R-109): never deleted or

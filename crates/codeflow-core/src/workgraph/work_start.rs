@@ -222,6 +222,7 @@ pub(crate) struct Record {
     work_type: Option<String>,
     pub(crate) awaiting_selection: Option<String>,
     blocker_reason: Option<String>,
+    pub(crate) line_adoptions: Vec<super::line_adoption::LineAdoption>,
 }
 
 /// The three durable record kinds.
@@ -562,8 +563,8 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
 /// nothing: the name must carry an epic that exists and is not cancelled, a
 /// task of that epic must target this exact line, the pull request must go
 /// to the project's default target, and the line's first-parent history
-/// from the merge-base must hold only merges (no work committed directly on
-/// the line). Returns the epic id.
+/// from the merge-base must hold only merges or direct commits with landed
+/// adoption entries in the epic record. Returns the epic id.
 ///
 /// # Errors
 ///
@@ -576,19 +577,22 @@ pub fn check_epic_line(
     base: &str,
     head: &str,
 ) -> Result<String, String> {
-    let suffix = branch
-        .strip_prefix("integration/")
-        .ok_or_else(|| format!("'{branch}' is not an integration line"))?;
-    let digits = suffix.strip_prefix("EPC-").map_or(0, |rest| {
-        rest.chars().take_while(char::is_ascii_digit).count()
-    });
-    let epic_id = suffix.get(..4 + digits).unwrap_or_default();
-    if digits == 0 || !is_valid_epic_format_id(epic_id) || !suffix[epic_id.len()..].starts_with('-')
-    {
-        return Err(format!(
-            "'{branch}' names no epic; an epic line is integration/EPC-NNN-<slug>"
-        ));
-    }
+    check_epic_line_with_adoptions(repo_root, branch, base_ref, base, head).map(|(epic, _)| epic)
+}
+
+/// Check an epic line as [`check_epic_line`] does and also return the
+/// adopted direct commits and the out-of-range entries to show its reviewer.
+///
+/// # Errors
+/// Returns the same classification and history failures as [`check_epic_line`].
+pub fn check_epic_line_with_adoptions(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<(String, super::line_adoption::AdoptionReport), String> {
+    let epic_id = super::line_adoption::epic_id(branch)?;
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let commit = |revision: &str| {
         repo.revparse_single(revision)
@@ -638,25 +642,17 @@ pub fn check_epic_line(
             logical_target(&destination)
         ));
     }
-    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
-    walk.push(head_commit.id())
-        .and_then(|()| walk.hide(merge_base))
-        .and_then(|()| walk.simplify_first_parent())
-        .map_err(|error| error.to_string())?;
-    for oid in walk {
-        let oid = oid.map_err(|error| error.to_string())?;
-        let parents = repo
-            .find_commit(oid)
-            .map_err(|error| error.to_string())?
-            .parent_count();
-        if parents < 2 {
-            return Err(format!(
-                "'{branch}' has a commit made directly on the line ({}); land work on the line by classified pull requests",
-                &oid.to_string()[..9]
-            ));
-        }
+    let adoptions = super::line_adoption::check_range(
+        repo_root,
+        branch,
+        &target_tip.to_string(),
+        &merge_base.to_string(),
+        &head_commit.id().to_string(),
+    )?;
+    if let Some(refusal) = adoptions.refusal(branch, epic_id) {
+        return Err(refusal);
     }
-    Ok(epic_id.to_string())
+    Ok((epic_id.to_string(), adoptions))
 }
 
 /// Whether a stable target resolves to a real local or remote-tracking branch.
@@ -1898,7 +1894,7 @@ pub(crate) fn records_from_tree(
     records_from_tree_matching(repo, tree, |_, _| true)
 }
 
-fn records_from_tree_matching(
+pub(crate) fn records_from_tree_matching(
     repo: &Repository,
     tree: &git2::Tree<'_>,
     include: impl Fn(&str, RecordKind) -> bool,
@@ -2015,6 +2011,11 @@ pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, St
         awaiting_selection: string(&data, "awaiting_selection")
             .filter(|path| !path.trim().is_empty()),
         blocker_reason: blocker_reason(content),
+        line_adoptions: if kind == RecordKind::Epic {
+            super::line_adoption::parse(data.get(key("line_adoptions")))?
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -3204,5 +3205,78 @@ permission_preset = "strict"
         let error = check_work_start(dir.path(), "TSK-002", "main").unwrap_err();
         assert!(matches!(error, WorkStartError::InvalidGraph(_)));
         assert!(error.to_string().contains("duplicate work id"));
+    }
+
+    /// TSK-248 AC-1 (issue 85): a direct commit on an epic line is accepted
+    /// once its adoption lands by merge or is on the target; an entry still
+    /// on an unmerged direct commit leaves the line refused.
+    #[test]
+    fn epic_line_adoption_accepts_merge_or_target_and_refuses_direct_entry() {
+        for on_target in [false, true] {
+            let dir = fixture();
+            let root = dir.path();
+            let line = "integration/EPC-001-outcome";
+            git(root, &["switch", "main"]);
+            let task = root.join("project-management/tasks/TSK-002.md");
+            fs::write(
+                &task,
+                fs::read_to_string(&task).unwrap().replace(
+                    "integration_target: main",
+                    &format!("integration_target: {line}"),
+                ),
+            )
+            .unwrap();
+            git(root, &["commit", "-am", "bind line"]);
+            git(root, &["switch", "-c", line]);
+            assert!(check_epic_line(root, line, "main", "main", "HEAD").is_ok());
+            fs::write(root.join("repair.txt"), "repair").unwrap();
+            git(root, &["add", "."]);
+            git(root, &["commit", "-m", "direct repair"]);
+            let repo = Repository::open(root).unwrap();
+            let direct = repo
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+                .to_string();
+            assert!(check_epic_line(root, line, "main", "main", "HEAD")
+                .unwrap_err()
+                .contains(&direct[..9]));
+            let epic = root.join("project-management/epics/EPC-001.md");
+            let record = fs::read_to_string(&epic).unwrap().replacen("---\n", &format!("---\nline_adoptions:\n  - commit: '{direct}'\n    reason: repair\n    review: https://example.test/pr/1\n"), 1);
+            if on_target {
+                git(root, &["switch", "main"]);
+            } else {
+                git(root, &["switch", "-c", "plan/adopt"]);
+            }
+            fs::write(&epic, record).unwrap();
+            git(root, &["commit", "-am", "adopt repair"]);
+            if !on_target {
+                // The entry arrived by a second direct commit, so both the
+                // repaired commit and the record change stay unadopted.
+                let error = check_epic_line(root, line, "main", "main", "HEAD").unwrap_err();
+                assert!(
+                    error.contains("commits made directly on the line")
+                        && error.contains(&direct[..9]),
+                    "{error}"
+                );
+            }
+            git(root, &["switch", line]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "land adoption",
+                    if on_target { "main" } else { "plan/adopt" },
+                ],
+            );
+            assert_eq!(
+                check_epic_line(root, line, "main", "main", "HEAD"),
+                Ok("EPC-001".into())
+            );
+        }
     }
 }

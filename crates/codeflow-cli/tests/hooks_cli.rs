@@ -6997,3 +6997,59 @@ fn git_hook_help_matches_the_install_path_constant() {
         "git-hook help names .git/hooks, which the install code does not use"
     );
 }
+
+#[path = "support/line_adoption.rs"]
+mod line_adoption_fixture;
+
+/// TSK-248 AC-3 (issue 85): a push that adds an unadopted direct commit to
+/// an epic line is refused with the `git reset --keep` remedy, on a first
+/// push and on an update; an older direct commit outside the pushed range
+/// does not block later merges, and a landed adoption clears the line.
+#[test]
+fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
+    use line_adoption_fixture::{blocks, output, passes, Line, LINE, ZERO};
+    let f = Line::new();
+    passes(&f.push(ZERO));
+    let direct = f.direct();
+    blocks(&f.push(ZERO), "git reset --keep main");
+    let refused = f.push(&f.git(&["rev-parse", "main"]));
+    blocks(&refused, &direct[..9]);
+    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains("line_adoptions"));
+    // The already shared direct commit must not prevent unrelated merges.
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn work() {}\n");
+    f.commit("feat: build work");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&direct));
+    f.land_adoption(&direct);
+    passes(&f.push(ZERO));
+    passes(&f.push(&direct));
+}
+
+/// TSK-248 AC-3 controls: a push of merges only passes, on an update and on
+/// the line's first push.
+#[test]
+fn epic_line_adoption_pre_push_merge_only_control() {
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    let f = Line::new();
+    let old = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.direct();
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&old));
+    passes(&f.push(ZERO));
+}
+
+/// TSK-248 control: without durable work tracking there is no epic class and
+/// no adoption route, so the push check stays off, as before this change.
+#[test]
+fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
+    use line_adoption_fixture::{passes, Line, ZERO};
+    let f = Line::new();
+    f.git(&["rm", "-q", "project-management/tasks/TSK-001.md"]);
+    f.direct();
+    passes(&f.push(ZERO));
+}
