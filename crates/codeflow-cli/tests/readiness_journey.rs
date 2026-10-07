@@ -802,3 +802,39 @@ fn archive_branches_are_information_until_policy_names_the_remote() {
     );
     assert!(claimed.contains("pushed to origin"), "{claimed}");
 }
+
+/// TSK-249 review: an unconfigured `git.claim_remotes` name is reported by
+/// `work start` as a note, as `work next` and `work claim` refuse it.
+#[test]
+fn work_start_reports_an_unconfigured_claim_remote() {
+    let (_dir, root) = planned_project();
+    git(&root, &["switch", "-q", "-c", "task/TSK-001-root", LINE]);
+    // Control: with no policy value, `work start` prints no note.
+    let clean = ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start with default remotes",
+    );
+    assert!(!clean.contains("not checked"), "{clean}");
+    let policy = root.join(".codeflow/policy.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+    value["git"]["claim_remotes"] = serde_json::json!(["archive"]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let started = ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start with an unconfigured remote",
+    );
+    assert!(
+        started.contains("note: other branches were not checked")
+            && started.contains("git.claim_remotes names 'archive'"),
+        "{started}"
+    );
+    let refused = refused(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "claim with an unconfigured remote",
+    );
+    assert!(
+        refused.contains("git.claim_remotes names 'archive'"),
+        "{refused}"
+    );
+}

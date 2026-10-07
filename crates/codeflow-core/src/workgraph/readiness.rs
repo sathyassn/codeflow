@@ -250,6 +250,13 @@ fn claim_remotes(
         if remote.starts_with('-') || !git2::Remote::is_valid_name(&remote) {
             return Err(format!("invalid remote '{remote}' in git.claim_remotes"));
         }
+        // A name git cannot find as a remote would be read as a path by
+        // `git ls-remote`, so only configured remotes are accepted.
+        if repo.find_remote(&remote).is_err() {
+            return Err(format!(
+                "git.claim_remotes names '{remote}', which is not a configured remote; add the remote with `git remote add` or remove it from git.claim_remotes"
+            ));
+        }
         remotes.insert(remote);
     }
     Ok(remotes)
@@ -1204,15 +1211,17 @@ pub(crate) fn is_open_claim(
 
 /// Other open (unlanded) visible branches carrying `task_id` than `own`: the
 /// own-branch context reports them as a conflict and does not refuse (R-110).
-#[must_use]
-pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String> {
+///
+/// # Errors
+/// Returns the `git.claim_remotes` refusal when the policy names a remote that
+/// is invalid or not configured, so the caller reports it as `work next` and
+/// `work claim` do instead of listing no conflicts.
+pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Result<Vec<String>, String> {
     let Ok(repo) = Repository::discover(repo_root) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let declared = super::declared_work_target(repo_root, task_id).unwrap_or_default();
-    let Ok(remotes) = claim_remotes(&repo, repo_root, &declared) else {
-        return Vec::new();
-    };
+    let remotes = claim_remotes(&repo, repo_root, &declared)?;
     let ids = BTreeSet::from([task_id.to_string()]);
     let carried = visible_work_branches(&repo, &work_prefixes(repo_root), &ids, &remotes)
         .claims
@@ -1226,11 +1235,12 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
         Some(tip) => split_landed(&repo, repo_root, &carried, tip).0,
         None => carried.into_iter().map(|(name, _)| name).collect(),
     };
-    open.into_iter()
+    Ok(open
+        .into_iter()
         .filter(|name| name != own)
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .collect()
+        .collect())
 }
 
 /// Tasks whose `awaiting_selection` the range from the merge-base of `base`
@@ -1646,11 +1656,11 @@ mod tests {
         assert!(waiting.contains("not ready on main"), "{waiting}");
         assert!(backlog(root).unwrap().fetched_at.is_some(), "claim fetched");
         assert_eq!(
-            other_branches(root, "TSK-002", "task/TSK-002-work-tsk-002"),
+            other_branches(root, "TSK-002", "task/TSK-002-work-tsk-002").unwrap(),
             Vec::<String>::new()
         );
         assert_eq!(
-            other_branches(root, "TSK-002", "fix/TSK-002-mine"),
+            other_branches(root, "TSK-002", "fix/TSK-002-mine").unwrap(),
             ["task/TSK-002-work-tsk-002"]
         );
     }
@@ -1967,7 +1977,9 @@ mod tests {
             &["remote", "add", "archive", archive.path().to_str().unwrap()],
         );
         run(root, &["fetch", "-q", "archive"]);
-        assert!(other_branches(root, "TSK-194", "task/TSK-194-own").is_empty());
+        assert!(other_branches(root, "TSK-194", "task/TSK-194-own")
+            .unwrap()
+            .is_empty());
         let claimed = claim(root, "TSK-194").unwrap();
         assert!(claimed.pushed);
         assert_eq!(claimed.informational_branches, ["also on archive: task/TSK-194-old (not a claim: archive does not carry work to main)"]);
@@ -2008,7 +2020,7 @@ mod tests {
         );
         assert_eq!(view.conflicts["TSK-001"], task.branches);
         assert_eq!(
-            other_branches(root, "TSK-001", "task/TSK-001-own"),
+            other_branches(root, "TSK-001", "task/TSK-001-own").unwrap(),
             task.branches
         );
     }
@@ -2099,6 +2111,62 @@ mod tests {
             ],
         );
         claim(root, "TSK-001").unwrap();
+    }
+
+    fn set_claim_remotes(root: &Path, names: &[&str]) {
+        fs::create_dir_all(root.join(".codeflow")).unwrap();
+        let list = names
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            root.join(".codeflow/policy.json"),
+            format!("{{\"schema_version\":1,\"git\":{{\"claim_remotes\":[{list}]}}}}"),
+        )
+        .unwrap();
+    }
+
+    /// TSK-249 review: a `git.claim_remotes` name must be a configured remote,
+    /// and `other_branches` reports the refusal as `work next` does.
+    #[test]
+    fn claim_remotes_must_name_configured_remotes() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit(root, "plan");
+        let _origin = with_origin(root);
+        // An in-tree bare repository that no remote names: git would read the
+        // name as a path.
+        fs::create_dir_all(root.join("sub")).unwrap();
+        run(root, &["init", "-q", "--bare", "sub/evil"]);
+        for bad in ["archive", "sub/evil"] {
+            set_claim_remotes(root, &[bad]);
+            let message = backlog(root).unwrap_err();
+            assert!(
+                message.contains(&format!("git.claim_remotes names '{bad}'"))
+                    && message.contains("not a configured remote"),
+                "{message}"
+            );
+            let refused = claim(root, "TSK-001").unwrap_err();
+            assert!(refused.contains("not a configured remote"), "{refused}");
+            let others = other_branches(root, "TSK-001", "task/TSK-001-own").unwrap_err();
+            assert!(others.contains(&format!("'{bad}'")), "{others}");
+        }
+        // Control: the same name configured as a remote is accepted.
+        let archive = bare_from(root, "main");
+        run(
+            root,
+            &["remote", "add", "archive", archive.path().to_str().unwrap()],
+        );
+        set_claim_remotes(root, &["archive"]);
+        backlog(root).unwrap();
+        assert!(other_branches(root, "TSK-001", "task/TSK-001-own")
+            .unwrap()
+            .is_empty());
+        // Control: an invalid name keeps its existing refusal.
+        set_claim_remotes(root, &["-bad"]);
+        assert!(backlog(root).unwrap_err().contains("invalid remote '-bad'"));
     }
 
     /// T103-4: a claim on origin that a narrow fetch refspec hides still

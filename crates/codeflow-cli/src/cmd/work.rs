@@ -309,12 +309,13 @@ fn plan_check(
     if !report.dependencies.is_empty() {
         println!("  dependencies met: {}", report.dependencies.join(", "));
     }
-    let others = readiness::other_branches(root, task_id, &report.branch);
-    if !others.is_empty() {
-        println!(
+    match readiness::other_branches(root, task_id, &report.branch) {
+        Ok(others) if others.is_empty() => {}
+        Ok(others) => println!(
             "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
             others.join(", ")
-        );
+        ),
+        Err(error) => println!("  note: other branches were not checked: {error}"),
     }
     Ok(())
 }
