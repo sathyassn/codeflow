@@ -300,11 +300,12 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
         // Prune stale rows: a cheap existence check per entry, inside the
         // same lock so concurrent touches never resurrect a pruned path.
-        // try_exists distinguishes "definitively missing" (Ok(false), prune)
-        // from permission/transient stat errors (Err, KEEP) — exists() would
-        // collapse both and could permanently drop a live repo row.
+        // Only a path proven missing is pruned (Ok(true)); a stat error or
+        // a path below a dangling link is kept, since either could hide a
+        // live repo.
         reg.repos.retain(|r| {
-            r.path == entry.path || !matches!(Path::new(&r.path).try_exists(), Ok(false))
+            r.path == entry.path
+                || !matches!(crate::absence::proven_absent(Path::new(&r.path)), Ok(true))
         });
         match reg.repos.iter_mut().find(|r| r.path == entry.path) {
             Some(existing) => *existing = entry.clone(),
@@ -682,6 +683,37 @@ mod tests {
             vec!["guarded", "live"],
             "entry behind a stat error must be kept"
         );
+    }
+
+    /// A row whose path sits below a dangling link (a volume link whose
+    /// target is gone) is not proven missing, so it is kept; a row whose
+    /// directory is truly gone is pruned.
+    #[test]
+    #[cfg(unix)]
+    fn r23_touch_registry_keeps_rows_below_a_dangling_link() {
+        let home = tempfile::tempdir().unwrap();
+        let live = tempfile::tempdir().unwrap();
+        init_repo(live.path(), Some("live"));
+        let parent = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(parent.path()).unwrap();
+        let (linked, gone) = (parent.join("volume").join("linked"), parent.join("gone"));
+        for (path, name) in [(&linked, "linked"), (&gone, "gone")] {
+            std::fs::create_dir_all(path).unwrap();
+            init_repo(path, Some(name));
+            touch_registry(home.path(), path).unwrap();
+        }
+        std::fs::remove_dir_all(parent.join("volume")).unwrap();
+        std::os::unix::fs::symlink("unmounted", parent.join("volume")).unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        touch_registry(home.path(), live.path()).unwrap();
+        let mut names: Vec<String> = list_repos(home.path())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["linked", "live"]);
     }
 
     #[test]

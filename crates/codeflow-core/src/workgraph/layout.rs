@@ -262,7 +262,14 @@ fn real_directory_entries(dir: &Path) -> std::io::Result<Option<fs::ReadDir>> {
     match fs::symlink_metadata(dir) {
         Ok(metadata) if metadata.file_type().is_dir() => fs::read_dir(dir).map(Some),
         Ok(_) => Ok(None),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        // Missing only when proven: below a dangling link the home cannot
+        // be read.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && crate::absence::proven_absent(dir)? =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }
@@ -280,6 +287,23 @@ mod tests {
         assert!(task_record_files(&blocked).is_err());
         assert!(epic_record_files(&blocked).is_err());
         assert!(spec_record_files(&blocked).is_err());
+    }
+
+    /// A record home below a dangling link cannot be read; it is never an
+    /// empty home. A missing home, or one without the folder, stays empty.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_record_home_is_not_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = dir.path().join("project-management");
+        assert!(task_record_files(&pm).unwrap().is_empty());
+        fs::create_dir(&pm).unwrap();
+        assert!(task_record_files(&pm).unwrap().is_empty());
+        assert!(epic_record_files(&pm).unwrap().is_empty());
+        fs::remove_dir(&pm).unwrap();
+        std::os::unix::fs::symlink("gone", &pm).unwrap();
+        assert!(task_record_files(&pm).is_err());
+        assert!(epic_record_files(&pm).is_err());
     }
 
     #[test]
