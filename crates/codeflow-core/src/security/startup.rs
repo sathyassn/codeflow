@@ -661,6 +661,13 @@ impl Line<'_> {
         let cut = known
             .find(['$', '`', '\u{1}', '\u{2}', '*', '?', '[', '{'])
             .unwrap_or(known.len());
+        if cut == known.len() && self.uses_assigned(word) {
+            // Nothing is left to fill in: the assigned reading was judged
+            // as a plain path, and the inherited reading above. A literal
+            // like `/scratch` in `R=/scratch; git -C "$R" ...` is not a
+            // path under the root that may hold a class entry.
+            return None;
+        }
         let literal = &known[..cut];
         let dir_part = literal.rfind('/').map_or("", |at| &literal[..=at]);
         if dir_part.is_empty() {
@@ -1208,7 +1215,8 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     // reads as a path was judged above.
     if line.names(line.text).is_some() && line.expands_unread(segment) {
         if let Some(code) = args.iter().find(|word| {
-            !path_like(value_of(word)) && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
+            !path_like(value_of(word))
+                && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
         }) {
             return Some(finding(format!(
                 "`{name}` is given text `{code}` whose expansion the guard cannot resolve, and the line names a shell startup file"

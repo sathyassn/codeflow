@@ -750,3 +750,26 @@ fn assigned_literals_read_as_values_in_every_body() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// A variable the line assigns a plain path keeps the verdict the path has
+/// when written out (AC-7): `/scratch` is not a directory above a class
+/// entry, while a placement into the home or `/etc` still refuses.
+#[test]
+fn assigned_plain_paths_keep_the_verdict_of_the_literal() {
+    let f = Fixture::new();
+    for command in [
+        "R=/scratch; git -C \"$R\" commit -m x",
+        "R=/scratch git -C \"$R\" commit -m x",
+        "export R=/scratch\ngit -C \"${R}\" commit -m x",
+        "p=notes.txt; echo x > \"$p\"",
+    ] {
+        assert!(!refused(&f.judge(command)), "refused: {command}");
+    }
+    for command in [
+        "R=~; tar -xf a.tar -C \"$R\"",
+        "R=/etc; tar -xf a.tar -C \"$R\"",
+        "p=~/.zshrc; echo x > \"$p\"",
+    ] {
+        assert!(refused(&f.judge(command)), "allowed: {command}");
+    }
+}
