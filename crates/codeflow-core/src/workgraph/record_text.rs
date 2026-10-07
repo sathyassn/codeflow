@@ -1204,7 +1204,7 @@ pub fn check_block(
                 problems.extend(after_release_problems(
                     &criterion.id,
                     result,
-                    &block.follow_ups,
+                    follow_ups_value(&block.follow_ups),
                 ));
             }
             Some((_, result)) => match result.outcome.as_str() {
@@ -1238,7 +1238,7 @@ pub fn check_block(
                 .to_string(),
         );
     }
-    let follow_ups = block.follow_ups.trim();
+    let follow_ups = follow_ups_value(&block.follow_ups);
     let valid_follow_ups = follow_ups.strip_prefix("none:").map_or_else(
         || {
             follow_ups
@@ -1248,7 +1248,9 @@ pub fn check_block(
         |reason| !reason.trim().is_empty(),
     );
     if !valid_follow_ups {
-        problems.push("`follow_ups` must list TSK ids or read `none: <reason>`".to_string());
+        problems.push(
+            "`follow_ups` must list TSK ids or read `none: <reason>`, quoted or not".to_string(),
+        );
     }
     if block.verdict != "approved" {
         problems.push(format!(
@@ -1257,6 +1259,23 @@ pub fn check_block(
         ));
     }
     problems
+}
+
+/// The value of `follow_ups` with one pair of matching YAML quotes removed
+/// (issue #69): `none: <reason>` is not a valid YAML plain scalar, so a
+/// block that a YAML parser must load writes it quoted, as
+/// `"none: <reason>"` or `'none: <reason>'`. Both spellings mean the same,
+/// and a record written either way stays valid.
+fn follow_ups_value(raw: &str) -> &str {
+    let value = raw.trim();
+    ['"', '\'']
+        .into_iter()
+        .find_map(|quote| {
+            value
+                .strip_prefix(quote)
+                .and_then(|inner| inner.strip_suffix(quote))
+        })
+        .map_or(value, str::trim)
 }
 
 /// A criterion observable only after release (R-62) is `deferred` with an
@@ -1342,6 +1361,45 @@ mod tests {
             not_verified: "none".into(),
             follow_ups: "none: nothing left".into(),
             verdict: "approved".into(),
+        }
+    }
+
+    /// Issue #69: `follow_ups: none: <reason>` is no YAML; the quoted
+    /// spelling loads as YAML and both pass, as do quoted task ids.
+    #[test]
+    fn follow_ups_may_be_quoted_so_the_block_loads_as_yaml() {
+        let criteria = parse_criteria(
+            "## Acceptance Criteria\n\n- AC-1 When run, the system shall act.\n- AC-2 When rerun, the system shall act again.\n",
+        )
+        .items;
+        for (follow_ups, yaml) in [
+            ("none: nothing left", false),
+            ("\"none: nothing left\"", true),
+            ("'none: nothing left'", true),
+            ("\"TSK-001, TSK-002\"", true),
+        ] {
+            let mut block = block();
+            block.follow_ups = follow_ups.into();
+            assert!(
+                check_acceptance(&block, &criteria).is_empty(),
+                "{follow_ups}: {:?}",
+                check_acceptance(&block, &criteria)
+            );
+            let text = render_acceptance(&block);
+            assert_eq!(parse_acceptance(&text).as_ref(), Ok(&block), "{follow_ups}");
+            assert_eq!(
+                serde_yaml::from_str::<serde_yaml::Value>(&text).is_ok(),
+                yaml,
+                "{follow_ups}: {text}"
+            );
+        }
+        for invalid in ["\"none:\"", "\"later\"", "'none: unclosed"] {
+            let mut block = block();
+            block.follow_ups = invalid.into();
+            assert!(
+                !check_acceptance(&block, &criteria).is_empty(),
+                "{invalid} passed"
+            );
         }
     }
 
