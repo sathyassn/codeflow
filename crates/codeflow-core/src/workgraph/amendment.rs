@@ -288,7 +288,7 @@ const GITLINK_MODE: i32 = 0o160_000;
 /// [`range_problem`] for revisions named as text, as `codeflow ci` holds
 /// them: the target (`base`) and the head of a range whose changed paths
 /// are `paths`, as git's exact bytes. A path that is not valid UTF-8 is
-/// refused by name, as [`entry_problem`] refuses it, before any rule reads
+/// refused by name, as the entry check of [`range_problem`] refuses it, before any rule reads
 /// the others as text.
 #[must_use]
 pub fn range_problem_at(
