@@ -173,7 +173,14 @@ fn validate_records(root: &Path, path: Option<&Path>) -> bool {
 
     let metadata = match std::fs::metadata(&base) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && path.is_none() => {
+        // Absent only when the name itself is missing: the root is the
+        // discovered repository root, and a dangling link cannot be read.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && path.is_none()
+                && std::fs::symlink_metadata(&base)
+                    .is_err_and(|leaf| leaf.kind() == std::io::ErrorKind::NotFound) =>
+        {
             println!(
                 "validate: {} absent — no records to validate at this tier",
                 base.display()
@@ -307,6 +314,17 @@ fn run_docs_lint(root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// A record home behind a dangling link cannot be read; it is never a
+    /// tier without records. A missing home still validates clean.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_record_home_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::validate_records(dir.path(), None));
+        std::os::unix::fs::symlink("gone", dir.path().join("project-management")).unwrap();
+        assert!(!super::validate_records(dir.path(), None));
+    }
 
     #[test]
     fn r16_unreadable_record_directory_refuses() {

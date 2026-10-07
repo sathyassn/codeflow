@@ -5569,6 +5569,51 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
     assert!(!err.contains("quick targets passed"), "{err}");
 }
 
+/// The submodule state comes from git, never from whether `.gitmodules`
+/// can be found: a `.gitmodules` that is a dangling link is a mapping git
+/// cannot read, so the push refuses instead of judging the checkout whole.
+#[cfg(unix)]
+#[test]
+fn r23_push_set_reads_submodules_whatever_gitmodules_is() {
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
+    let dir = quick_repo("test ! -f vendor/bad.txt");
+    let url = vendor.path().to_str().unwrap();
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            url,
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-q", "-m", "chore: add vendor"]);
+    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
+    // The control: a readable mapping names the uninitialized submodule.
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
+        "{err}"
+    );
+
+    std::fs::remove_file(dir.path().join(".gitmodules")).unwrap();
+    std::os::unix::fs::symlink("gone", dir.path().join(".gitmodules")).unwrap();
+    git(dir.path(), &["add", ".gitmodules"]);
+    git(dir.path(), &["commit", "-q", "-m", "chore: link the mapping"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_ne!(code, Some(0), "{err}");
+    assert!(err.contains("cannot read Git submodule answer"), "{err}");
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
 /// SPC-013 R-85: the shims probe the binary's hook capability first. An
 /// older binary refuses with the install command; the current binary dispatches.
 #[cfg(unix)]

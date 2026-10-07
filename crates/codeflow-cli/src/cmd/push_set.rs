@@ -1618,11 +1618,8 @@ fn incomplete_checkout(root: &Path) -> Result<Option<String>, String> {
     if sparse.as_deref() == Some("true\n") {
         return Ok(Some("the checkout is sparse".to_string()));
     }
-    match std::fs::metadata(root.join(".gitmodules")) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot read submodule state: {error}")),
-    }
+    // Git answers whatever `.gitmodules` is: a gitlink without one is still
+    // an uninitialized submodule, and a mapping it cannot read refuses.
     let status = git(root, &["submodule", "status", "--recursive"])?
         .ok_or("cannot read submodule status")?;
     Ok(status.split_terminator('\n').find_map(|line| {
