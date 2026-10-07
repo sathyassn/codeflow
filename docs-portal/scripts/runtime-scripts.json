@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "regenerate": "npm run build && node scripts/runtime-scripts.mjs dist",
-  "lock_sha256": "84f256eec55e0ea43ef58c932bd565d1106864a14c454fa982939b0434681277",
+  "lock_sha256": "c89f269b8641c8cb4393d038a64181cd7ea443d67fe89f13d875428ace30ffd5",
   "pre_paint_template": "(function () {\n  var d = document.documentElement, configured = __THEME__; d.dataset.portalTheme = configured;\n  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }\n  function pick(v, list, def) { return list.indexOf(v) >= 0 ? v : def; }\n  var skin = pick(({instrument:'graphite',technical:'graphite',editorial:'slate',ink:'sage'}[get('cf-portal-skin')]||get('cf-portal-skin')), ['graphite', 'slate', 'sage'], ({folio:'sage',signal:'graphite'}[configured] || configured));\n  var pref = pick(get('starlight-theme'), ['light', 'dark', 'system'], 'system');\n  var dark = pref === 'dark' || (pref === 'system' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);\n  d.setAttribute('data-cfp-skin', skin);\n  d.setAttribute('data-theme', dark ? 'dark' : 'light');\n  d.setAttribute('data-cfp-typeface', pick(({instrument:'archivo',editorial:'inter'}[get('cf-portal-typeface')]||get('cf-portal-typeface')), ['archivo', 'inter', 'plex'], 'inter'));\n  d.setAttribute('data-cfp-scale', pick(get('cf-portal-scale'), ['compact', 'default', 'large'], 'default'));\n  var w = parseInt(get('cf.nav.width'), 10);\n  if (w >= 220 && w <= 360) d.style.setProperty('--cf-nav-w', w + 'px');\n  if (get('cf.nav.open') === 'false') d.setAttribute('data-cf-nav', 'collapsed');\n  if (get('cf.toc.open') === 'false') d.setAttribute('data-cf-toc', 'collapsed');\n  d.setAttribute('data-cf-preload', '');\n})();",
   "scripts": [
     {
