@@ -722,7 +722,7 @@ erratum below, never an edit of the section.
   completed again: `codeflow task status` and `codeflow ci` refused with
   "a reopened task keeps its criteria as the anchored target has them",
   though the target holds no criteria to keep. Such a task now completes
-  with its new criteria. A task the target already records still keeps
+  with its new criteria. A task that landed on the target still keeps
   its criteria across a reopen, also when the branch moves its record to
   another layout, renumbers it with its uid kept, or retargets it away
   from `main` or from the integration line it was planned on, and
@@ -844,6 +844,56 @@ erratum below, never an edit of the section.
   and managed files you have not edited; a portal whose ownership was
   transferred, or whose managed test file was modified, is not updated.
   The portal's runtime and its claim identity check are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **A task that never landed keeps its own criteria change across a
+  reopen.** A task the target records, but has not completed, may change
+  its criteria in its own pull request, and CI prints the change as a
+  note. When such a task completed on its branch and was then reopened to
+  take a merge of its line, its second completion was refused with "a
+  reopened task keeps its criteria as the anchored target has them", the
+  same change accepted one completion earlier
+  ([#67](https://github.com/sathyassn/codeflow/issues/67)). The freeze now
+  follows landing evidence: a reopened task keeps its criteria when any
+  version of its record in the judged target's history is complete, keeps
+  an acceptance block or records a reopen, however the target changed or
+  deleted the record later, and it keeps the criteria of the newest
+  judged version; a deleted record added back reopened is a reopen. Otherwise `codeflow task status` and `codeflow ci`
+  accept the change and CI prints it for the reviewer. A history that
+  cannot prove the task never landed (a shallow clone, grafts or replace
+  refs, a record or tree that does not read, a task file that does not
+  parse and may name the task, one id with two uids, or lines of history
+  that disagree) refuses a criteria change and nothing else. A landed task's criteria still change
+  only through a planning amendment that names its epic, which now flags
+  any landed task and reads a record the target deleted from its history;
+  a local branch or remote-tracking ref can still only make the check
+  stricter, and readiness still reads a predecessor's current status. The
+  entry on new tasks above now holds for every task whose completion never
+  landed.
+
+<!-- codeflow:release-impact patch -->
+- **A branch claimed on a reviewed predecessor head passes its own push
+  check.** `codeflow work claim <id> --on <pred>@<sha>` accepted a reviewed
+  pin, but the push it then made ran `codeflow ci` over the predecessor's
+  commits as if the successor had made them and refused on the
+  predecessor's own criteria change and on its status at the target
+  ([#69](https://github.com/sathyassn/codeflow/issues/69)). A push of a
+  task branch now honours each predecessor head it contains that a review
+  row names, through the same lookup `work claim` uses: the commits up to
+  it are judged as the predecessor's reviewed pull request, so its criteria
+  change is printed, its completion binds at the pin, its status is read
+  there, and the journey rule holds the successor only to the paths its
+  own commits change and each merge changes against the automatic remerge
+  of its parents, so a deletion of the predecessor's file counts even
+  inside a merge, and an octopus merge refuses. A head
+  no review names is not honoured, a successor that changes, reverts or
+  removes the predecessor's record as the pin has it is refused, and the
+  pull request into the target still waits for the predecessor to land.
+  A pin may now also be the predecessor's tip when the review names the
+  commit before it and the tip adds only the predecessor's status and
+  Closeout, as cf-ship records the completion after review. An acceptance
+  block may write `follow_ups: "none: <reason>"`, quoted, so the block
+  loads as YAML; the plain form stays valid.
 
 <!-- codeflow:release-impact patch -->
 - **exec-guard no longer refuses prose that only quotes a launcher word.**
