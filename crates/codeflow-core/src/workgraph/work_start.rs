@@ -2494,6 +2494,15 @@ mod tests {
             Err(WorkStartError::Repository(_)) => {}
             other => panic!("expected a repository error, got {other:?}"),
         }
+        drop(repo);
+        // A missing ancestor object is also an unreadable history, never a
+        // missing common ancestor.
+        fs::remove_file(&object).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        match anchored_records(&repo, "main", side) {
+            Err(WorkStartError::Repository(_)) => {}
+            other => panic!("expected a repository error, got {other:?}"),
+        }
     }
 
     #[test]

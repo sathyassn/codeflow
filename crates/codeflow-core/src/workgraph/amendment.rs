@@ -413,7 +413,17 @@ fn special(mode: i32) -> Option<&'static str> {
 /// is refused. The fault comes with the path of the entry at fault, empty
 /// when the range cannot be read.
 fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, String)> {
-    let from = repo.merge_base(base, head).unwrap_or(base);
+    // A range with no common ancestor is read from the target; a history
+    // that cannot be read is no range at all.
+    let from = match super::acceptance::common_base(repo, base, head) {
+        Ok(found) => found.unwrap_or(base),
+        Err(error) => {
+            return Some((
+                String::new(),
+                format!("cannot read the range to classify it: {error}"),
+            ))
+        }
+    };
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
     let diff = tree(from)
         .and_then(|before| {
@@ -621,6 +631,65 @@ mod tests {
         assert!(problem.contains("not plain UTF-8"), "{problem}");
         let plain = crate::git::GitName::from_text("docs/cafe.md");
         let problem = range_problem_at(dir.path(), "HEAD", "HEAD", &[plain]).unwrap();
+        assert!(problem.contains("cannot read the range"), "{problem}");
+    }
+
+    /// A history whose shared ancestor cannot be read is refused; it is
+    /// never read as a range with no common ancestor and diffed from the
+    /// target.
+    #[test]
+    fn r23_an_unreadable_shared_ancestor_refuses_the_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = "project-management/tasks/TSK-002.md".to_string();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"1")]);
+        let base = crate::git::add_commit(&repo, &[(b"a", b"2")]);
+        let who = git2::Signature::now("Test", "test@example.com").unwrap();
+        let (head, orphan) = {
+            let parent = repo.find_commit(first).unwrap();
+            let mut index = repo.index().unwrap();
+            index.read_tree(&parent.tree().unwrap()).unwrap();
+            let blob = repo.blob(b"y").unwrap();
+            index
+                .add(&git2::IndexEntry {
+                    ctime: git2::IndexTime::new(0, 0),
+                    mtime: git2::IndexTime::new(0, 0),
+                    dev: 0,
+                    ino: 0,
+                    mode: 0o100_644,
+                    uid: 0,
+                    gid: 0,
+                    file_size: 1,
+                    id: blob,
+                    flags: 0,
+                    flags_extended: 0,
+                    path: record.as_bytes().to_vec(),
+                })
+                .unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let head = repo
+                .commit(None, &who, &who, "record", &tree, &[&parent])
+                .unwrap();
+            let orphan = repo.commit(None, &who, &who, "orphan", &tree, &[]).unwrap();
+            (head, orphan)
+        };
+        let paths = std::slice::from_ref(&record);
+        // The controls: an ordinary planning range, and disjoint histories
+        // read from the target, both pass.
+        assert_eq!(range_problem(&repo, base, head, paths), None);
+        assert_eq!(range_problem(&repo, base, orphan, paths), None);
+        drop(repo);
+
+        let hex = first.to_string();
+        std::fs::remove_file(
+            dir.path()
+                .join(".git")
+                .join("objects")
+                .join(&hex[..2])
+                .join(&hex[2..]),
+        )
+        .unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let problem = range_problem(&repo, base, head, paths).expect("refused");
         assert!(problem.contains("cannot read the range"), "{problem}");
     }
 

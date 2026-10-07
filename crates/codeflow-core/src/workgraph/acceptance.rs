@@ -101,7 +101,11 @@ fn is_ancestor_or_same(repo: &Repository, ancestor: Oid, of: Oid) -> Result<bool
 }
 
 /// A missing common ancestor is absence only when both histories can be read.
-fn common_base(repo: &Repository, left: Oid, right: Oid) -> Result<Option<Oid>, String> {
+pub(crate) fn common_base(
+    repo: &Repository,
+    left: Oid,
+    right: Oid,
+) -> Result<Option<Oid>, String> {
     let unreadable = |error: git2::Error| {
         format!("cannot read the common ancestry of {left} and {right}: {error}")
     };
