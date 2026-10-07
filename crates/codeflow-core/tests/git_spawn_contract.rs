@@ -53,8 +53,20 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/hooks/git_guard.rs",
         "std::env::current_exe().unwrap()",
+        4,
+        "tests re-running their own binary with an isolated process environment",
+    ),
+    (
+        "codeflow-core/src/security/deletion.rs",
+        "std::env::current_exe().unwrap()",
         1,
-        "a test re-running its own binary with an isolated process environment",
+        "a test re-running its own binary without HOME",
+    ),
+    (
+        "codeflow-cli/src/cmd/mod.rs",
+        "std::env::current_exe().unwrap()",
+        1,
+        "a test re-running its own binary from a removed working directory",
     ),
     (
         "codeflow-core/src/hooks/conflict_markers.rs",
