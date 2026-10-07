@@ -204,8 +204,14 @@ pub(crate) fn enforcement_path(
         cwd: None,
         paths: vec![checked_path(path).map_err(|e| e.to_string())?],
     };
+    // A shell startup file refuses under its own rule; it is not an
+    // enforcement path, so the interpreter check must not call it one.
     evaluate(&request, &ctx)
-        .map(|violations| !violations.is_empty())
+        .map(|violations| {
+            violations
+                .iter()
+                .any(|v| v.rule != crate::security::startup::RULE)
+        })
         .map_err(|e| e.to_string())
 }
 
@@ -935,6 +941,21 @@ mod tests {
             payload["tool_input"]["file_path"] = json!("different.md");
             assert!(parse_payload(&payload.to_string()).is_err());
         }
+    }
+
+    /// A startup file refuses under the startup rule; the interpreter check
+    /// that asks whether a word is an enforcement path must not count it
+    /// (it would add a `git.hook_integrity` finding to the startup one).
+    #[test]
+    fn startup_files_are_not_enforcement_paths() {
+        let f = Fixture::new();
+        for startup in ["~/.zshrc", ".envrc", "sub/.envrc", "/etc/profile"] {
+            assert!(
+                !enforcement_path(startup, &f.root, &f.root, Some(&f.home)).unwrap(),
+                "{startup}"
+            );
+        }
+        assert!(enforcement_path("~/.codex/config.toml", &f.root, &f.root, Some(&f.home)).unwrap());
     }
 
     #[cfg(unix)]
