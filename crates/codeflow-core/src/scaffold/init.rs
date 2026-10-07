@@ -118,7 +118,7 @@ fn init_writes(
         .clone()
         .or_else(|| previous.as_ref().map(|s| s.product_one_liner.clone()))
         .unwrap_or_else(|| project_name.clone());
-    let detected = detect::detect_stack(root);
+    let detected = detect::detect_stack(root)?;
     let stack = if detected == "unset" {
         previous
             .as_ref()

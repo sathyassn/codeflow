@@ -349,7 +349,9 @@ fn update_writes(
         warn_steps_before_secret_scan(root, &entry.dest, &mut report);
     }
     if let Some(kept) = &kept_template {
-        if root.join(".codeflow/policy.json").exists() {
+        // A policy that cannot be read refuses; only a missing one skips
+        // the diagnosis.
+        if super::path_exists(&root.join(".codeflow").join("policy.json"))? {
             let diagnosis = pr_template::diagnose(root, kept, false)?;
             if let Some(line) = pr_template::describe(kept, &diagnosis, false) {
                 report.notes.push(line);

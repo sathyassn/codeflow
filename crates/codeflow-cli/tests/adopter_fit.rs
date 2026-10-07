@@ -746,6 +746,30 @@ fn first_install_diagnoses_the_kept_template_and_warns_until_decided() {
     assert!(!dir.path().join(format!("{TEMPLATE_PATH}.new")).exists());
 }
 
+/// A policy file that cannot be read is never read as no policy: update
+/// refuses instead of skipping the kept template's diagnosis.
+#[cfg(unix)]
+#[test]
+fn r23_update_refuses_a_dangling_policy_beside_a_kept_template() {
+    let dir = tempfile::tempdir().unwrap();
+    brownfield(dir.path(), None);
+    let out = codeflow(dir.path(), &["init", "--minimal", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out));
+    // The control: a readable policy is diagnosed on update.
+    let out = codeflow(dir.path(), &["update"]);
+    let all = text(&out);
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    assert!(all.contains("git.pr_section_mapping is diagnosed"), "{all}");
+
+    let policy = dir.path().join(".codeflow").join("policy.json");
+    std::fs::remove_file(&policy).unwrap();
+    std::os::unix::fs::symlink("gone.json", &policy).unwrap();
+    let out = codeflow(dir.path(), &["update"]);
+    let all = text(&out);
+    assert_ne!(out.status.code(), Some(0), "{all}");
+    assert!(!all.contains("git.pr_section_mapping is diagnosed"), "{all}");
+}
+
 #[test]
 fn upgrade_keeps_an_explicit_block_equal_to_the_default() {
     let dir = tempfile::tempdir().unwrap();

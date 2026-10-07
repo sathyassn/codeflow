@@ -5,17 +5,23 @@ use std::path::{Path, PathBuf};
 use super::{gitutil, ScaffoldError};
 
 /// Detected project stack, used for `{{STACK}}` and recorded in project.toml.
-#[must_use]
-pub fn detect_stack(root: &Path) -> &'static str {
-    if root.join("Cargo.toml").exists() {
-        "rust"
-    } else if root.join("package.json").exists() {
-        "node"
-    } else if root.join("pyproject.toml").exists() {
-        "python"
-    } else {
-        "unset"
+///
+/// # Errors
+///
+/// Returns an error when a marker file's presence cannot be read, a
+/// dangling link included: a marker that cannot be read never lets a later
+/// marker choose the stack.
+pub fn detect_stack(root: &Path) -> Result<&'static str, ScaffoldError> {
+    for (marker, stack) in [
+        ("Cargo.toml", "rust"),
+        ("package.json", "node"),
+        ("pyproject.toml", "python"),
+    ] {
+        if super::path_exists(&root.join(marker))? {
+            return Ok(stack);
+        }
     }
+    Ok("unset")
 }
 
 /// A pre-existing git-hook manager codeflow must not clobber (charter AC #2).
@@ -232,16 +238,32 @@ mod tests {
         }
     }
 
+    /// A marker that cannot be read refuses detection; a later marker never
+    /// chooses the stack in its place.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_stack_marker_refuses_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{}").unwrap();
+        assert_eq!(detect_stack(dir.path()).unwrap(), "node");
+        std::os::unix::fs::symlink("gone", dir.path().join("Cargo.toml")).unwrap();
+        assert!(detect_stack(dir.path()).is_err());
+        std::fs::write(dir.path().join("real.toml"), "").unwrap();
+        std::fs::remove_file(dir.path().join("Cargo.toml")).unwrap();
+        std::os::unix::fs::symlink("real.toml", dir.path().join("Cargo.toml")).unwrap();
+        assert_eq!(detect_stack(dir.path()).unwrap(), "rust");
+    }
+
     #[test]
     fn stack_detection() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(detect_stack(dir.path()), "unset");
+        assert_eq!(detect_stack(dir.path()).unwrap(), "unset");
         std::fs::write(dir.path().join("pyproject.toml"), "").unwrap();
-        assert_eq!(detect_stack(dir.path()), "python");
+        assert_eq!(detect_stack(dir.path()).unwrap(), "python");
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
-        assert_eq!(detect_stack(dir.path()), "node");
+        assert_eq!(detect_stack(dir.path()).unwrap(), "node");
         std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
-        assert_eq!(detect_stack(dir.path()), "rust");
+        assert_eq!(detect_stack(dir.path()).unwrap(), "rust");
     }
 
     #[test]

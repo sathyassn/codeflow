@@ -38,11 +38,19 @@ impl DirSource {
 
 impl AssetSource for DirSource {
     fn read(&self, path: &str) -> std::io::Result<Option<Vec<u8>>> {
+        // Only a proven missing asset is absent: a dangling link is one
+        // that cannot be read.
         let path = self.root.join(path);
-        if !path.try_exists()? {
-            return Ok(None);
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && crate::absence::proven_absent(&path)? =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
         }
-        std::fs::read(path).map(Some)
     }
 }
 
@@ -88,5 +96,17 @@ mod r16_core_regressions {
         std::fs::create_dir(root.path().join("asset")).unwrap();
         let source = super::DirSource::new(root.path());
         assert!(super::read_text(&source, "asset").is_err());
+    }
+
+    /// A dangling link is an asset that cannot be read, never a missing one;
+    /// an asset that is truly missing still reads as absent.
+    #[cfg(unix)]
+    #[test]
+    fn r23_a_dangling_asset_link_is_not_absence() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(root.path().join("gone"), root.path().join("asset")).unwrap();
+        let source = super::DirSource::new(root.path());
+        assert!(super::read_text(&source, "asset").is_err());
+        assert!(super::read_text(&source, "missing").unwrap().is_none());
     }
 }
