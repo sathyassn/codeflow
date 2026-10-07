@@ -1,0 +1,11 @@
+id = "TSK-252"
+uid = "3d5a266c-b422-4234-b784-3bfa3f2f7ec7"
+kind = "TSK"
+title = "An after-release epic criterion closes as deferred while its follow-up task serves it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-07T18:47:14Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
