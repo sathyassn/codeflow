@@ -80,6 +80,30 @@ fn unrelated_project_state_symlink_and_fifo_are_never_opened() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // Drain both pipes while waiting: a host under pipe memory pressure
+    // gives a new pipe a 512-byte buffer, which the report outgrows, so an
+    // undrained pipe would stall the child and read as the FIFO block.
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                std::io::Read::read_to_end(&mut pipe, &mut bytes).unwrap();
+            }
+            bytes
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+    );
     let started = Instant::now();
     while child.try_wait().unwrap().is_none() {
         if started.elapsed() > Duration::from_secs(5) {
@@ -89,9 +113,10 @@ fn unrelated_project_state_symlink_and_fifo_are_never_opened() {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let output = child.wait_with_output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stderr.is_empty());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(1));
+    assert!(!stdout.join().unwrap().is_empty());
+    assert!(stderr.join().unwrap().is_empty());
     assert!(!home.exists());
 }
 
