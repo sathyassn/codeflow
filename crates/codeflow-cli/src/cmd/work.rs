@@ -330,6 +330,8 @@ fn reviewed(
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
     // review_repository returns HOST/OWNER/NAME for gh's --repo argument.
+    // GitHub owner and repository names are case-insensitive, so a remote URL
+    // may differ in case from the API's canonical login and name.
     let mut parts = repository.rsplit('/');
     let name = parts.next().unwrap_or_default();
     let owner = parts.next().unwrap_or_default();
@@ -339,8 +341,12 @@ fn reviewed(
     if proof["headRefName"].as_str() != Some(branch)
         || proof["headRefOid"].as_str() != Some(sha)
         || proof["isCrossRepository"].as_bool() != Some(false)
-        || proof["headRepository"]["name"].as_str() != Some(name)
-        || proof["headRepositoryOwner"]["login"].as_str() != Some(owner)
+        || !proof["headRepository"]["name"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(name))
+        || !proof["headRepositoryOwner"]["login"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(owner))
     {
         return Err(format!("predecessor PR identity or tip differs from the pin {sha}; rebase on its new reviewed head and recheck"));
     }

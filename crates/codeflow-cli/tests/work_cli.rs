@@ -827,6 +827,7 @@ fn start_stack(root: &Path, bin: &Path, tip: &str) -> Output {
 fn tsk250_real_repository_identity_accepts_and_refuses_mismatches() {
     for (owner, name, cross, branch, tip_matches) in [
         ("owner", "project", false, "task/TSK-001-work", true),
+        ("Owner", "Project", false, "task/TSK-001-work", true),
         ("other", "project", false, "task/TSK-001-work", true),
         ("owner", "other", false, "task/TSK-001-work", true),
         ("owner", "project", true, "task/TSK-001-work", true),
@@ -841,8 +842,8 @@ fn tsk250_real_repository_identity_accepts_and_refuses_mismatches() {
         };
         review_tool_with(bin.path(), branch, tip, &reviewed, true, owner, name, cross);
         let out = start_stack(dir.path(), bin.path(), &reviewed);
-        if owner == "owner"
-            && name == "project"
+        if owner.eq_ignore_ascii_case("owner")
+            && name.eq_ignore_ascii_case("project")
             && !cross
             && branch == "task/TSK-001-work"
             && tip_matches
