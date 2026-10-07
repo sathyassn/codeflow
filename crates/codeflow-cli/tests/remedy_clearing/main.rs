@@ -221,6 +221,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("SESSION_SUMMARY_UNWRITTEN", Runs),
     ("REFUSAL_UNRECORDED", Runs),
     ("REGISTRY_UNWRITTEN", Runs),
+    ("REGISTRY_ROOT_UNREADABLE", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];
 

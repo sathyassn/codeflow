@@ -227,10 +227,15 @@ pub fn touch_registry_best_effort() {
     let Ok(cwd) = std::env::current_dir() else {
         return;
     };
-    let root = match registry::find_repo_root(&cwd) {
+    let root = match registry::find_repo_root_checked(&cwd) {
         Ok(root) => root,
-        Err(error) => {
-            eprintln!("codeflow: warning: cannot locate repository for registry touch: {error}; repair .codeflow paths");
+        Err(unreadable) => {
+            let path = unreadable.path.display().to_string();
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("registry touch skipped: {unreadable}"),
+                codeflow_core::remedy::REGISTRY_ROOT_UNREADABLE.with(&[("path", &path)]),
+            );
+            eprintln!("{}", finding.line("codeflow", "warning"));
             return;
         }
     };

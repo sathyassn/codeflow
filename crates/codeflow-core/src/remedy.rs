@@ -653,6 +653,10 @@ catalog! {
     /// The per-user project registry that could not be written.
     REGISTRY_UNWRITTEN = Step::Edit("{path}"),
         "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";
+    /// A candidate project root whose `CodeFlow` state could not be
+    /// inspected, so the per-user registry was not updated.
+    REGISTRY_ROOT_UNREADABLE = Step::Edit("{path}"),
+        "repair {path} or its parent directories, or remove it where that directory is no CodeFlow project; the next codeflow command then records the project in the per-user registry";
 
     /// An action reserved for the operator, including a secret-store read.
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),

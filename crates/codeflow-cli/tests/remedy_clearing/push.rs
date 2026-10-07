@@ -678,6 +678,45 @@ fn clears_registry_unwritten() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clears_registry_root_unreadable() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    // A folder inside the project whose CodeFlow state is a dangling link:
+    // whether it is a project of its own cannot be established.
+    let sub = root.join("sub");
+    std::fs::create_dir_all(sub.join(".codeflow")).unwrap();
+    let link = sub.join(".codeflow").join("project.toml");
+    std::os::unix::fs::symlink("missing.toml", &link).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let status = || {
+        text(
+            &command(exe().to_str().unwrap(), &sub)
+                .env("CODEFLOW_HOME", home.path())
+                .arg("status")
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "REGISTRY_ROOT_UNREADABLE",
+        "registry touch skipped",
+        status,
+        |printed| {
+            let named = printed
+                .split("repair ")
+                .nth(1)
+                .and_then(|rest| rest.split(" or its parent directories").next())
+                .unwrap_or_else(|| panic!("no path printed:\n{printed}"));
+            assert_eq!(Path::new(named), link, "{printed}");
+            std::fs::remove_file(named).unwrap();
+        },
+    );
+    let written = std::fs::read_to_string(home.path().join("registry.json")).unwrap();
+    assert!(written.contains("\"repos\""), "{written}");
+}
+
 #[test]
 fn clears_secret_scan_incomplete() {
     let dir = scaffolded("--standard");

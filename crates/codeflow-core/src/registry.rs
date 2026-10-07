@@ -86,16 +86,49 @@ pub fn qualified_bindings_path(home: &Path) -> PathBuf {
 // Repo shape helpers
 // ---------------------------------------------------------------------------
 
+/// A candidate project root whose `CodeFlow` state could not be inspected:
+/// the file read and the error, so a caller can name what to repair.
+#[derive(Debug)]
+pub struct RootUnreadable {
+    /// The `.codeflow` file whose presence could not be established.
+    pub path: PathBuf,
+    /// The metadata error.
+    pub error: std::io::Error,
+}
+
+impl std::fmt::Display for RootUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot inspect {}: {}", self.path.display(), self.error)
+    }
+}
+
+impl std::error::Error for RootUnreadable {}
+
+impl From<RootUnreadable> for std::io::Error {
+    fn from(unreadable: RootUnreadable) -> Self {
+        Self::new(unreadable.error.kind(), unreadable.to_string())
+    }
+}
+
 /// Whether `repo_root` looks like an initialized codeflow repo: a
 /// `.codeflow/` directory containing `project.toml` or `policy.json`.
 /// # Errors
-/// Returns metadata errors instead of skipping a possible repository root.
+/// Returns metadata errors, naming the file, instead of skipping a possible
+/// repository root.
 pub fn is_initialized(repo_root: &Path) -> std::io::Result<bool> {
+    initialized_at(repo_root).map_err(Into::into)
+}
+
+fn initialized_at(repo_root: &Path) -> Result<bool, RootUnreadable> {
     let dir = repo_root.join(".codeflow");
     for name in ["project.toml", "policy.json"] {
         let path = dir.join(name);
-        if !crate::absence::proven_absent(&path)? && std::fs::metadata(&path)?.is_file() {
-            return Ok(true);
+        let file = crate::absence::proven_absent(&path)
+            .and_then(|absent| Ok(!absent && std::fs::metadata(&path)?.is_file()));
+        match file {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => return Err(RootUnreadable { path, error }),
         }
     }
     Ok(false)
@@ -106,9 +139,16 @@ pub fn is_initialized(repo_root: &Path) -> std::io::Result<bool> {
 /// # Errors
 /// Returns an error when a candidate root cannot be inspected.
 pub fn find_repo_root(start: &Path) -> std::io::Result<Option<PathBuf>> {
+    find_repo_root_checked(start).map_err(Into::into)
+}
+
+/// [`find_repo_root`], with the file that could not be inspected.
+/// # Errors
+/// Returns the candidate file whose presence could not be established.
+pub fn find_repo_root_checked(start: &Path) -> Result<Option<PathBuf>, RootUnreadable> {
     let mut current = Some(start);
     while let Some(dir) = current {
-        if is_initialized(dir)? {
+        if initialized_at(dir)? {
             return Ok(Some(dir.to_path_buf()));
         }
         current = dir.parent();
@@ -831,5 +871,12 @@ mod r22_regressions {
         );
         std::os::unix::fs::symlink("missing", nested.join(".codeflow")).unwrap();
         assert!(find_repo_root(&nested).is_err());
+        // The checked form names the file whose presence it could not
+        // establish, for the remedy to point at.
+        let unreadable = find_repo_root_checked(&nested).unwrap_err();
+        assert_eq!(
+            unreadable.path,
+            nested.join(".codeflow").join("project.toml")
+        );
     }
 }
