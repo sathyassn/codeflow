@@ -305,6 +305,26 @@ erratum below, never an edit of the section.
   copier option is a residual, not a new member of the startup class.
 
 <!-- codeflow:release-impact patch -->
+- **The docs portal starter takes fixed dependency releases.** New
+  advisories against `postcss-selector-parser`, `smol-toml`,
+  `source-map-js` and `http-cache-semantics` failed a blocking dependency
+  audit in a project with the portal. The starter's `package.json` now overrides `postcss-nested` to
+  8.0.1, and its lockfile moves to `postcss-selector-parser` 7.1.6,
+  `smol-toml` 1.9.0, `source-map-js` 1.2.2 and `http-cache-semantics`
+  4.3.0. `codeflow update` installs both files; the portal's recorded
+  runtime scripts are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **The docs portal starter takes the fixed `sharp` release.** Advisory
+  GHSA-wq5f-xc86-pv6w (high) affects `sharp` 0.35.4, the version the
+  starter pinned, and failed a blocking dependency audit in a project with
+  the portal. The starter's `package.json` now pins `sharp` to 0.35.5, and
+  its lockfile moves `sharp` and its `@img/*` packages to the matching
+  releases, with `@img/sharp-libvips-*` at 1.3.4. `codeflow update`
+  installs both files; the portal's recorded runtime scripts are
+  unchanged.
+
+<!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with
   enough folders, `codeflow init` could block forever: it wrote all of the
   folder names to `git check-ignore -v -n --stdin -z` before reading any
@@ -589,14 +609,8 @@ erratum below, never an edit of the section.
   When the CI template's audit step fails, it told you to record a
   justified suppression in `.osv-scanner.toml`, a name osv-scanner never
   reads. It now names `osv-scanner.toml` in the same directory as the
-  lockfile it covers. A docs portal scaffolded by CodeFlow currently reports
-  GHSA-ch52-4w7c-c8xp in `http-cache-semantics`, which has no fixed
-  version; Astro uses it only to time its build-time cache of remote
-  images. A new portal now starts with an `osv-scanner.toml` that ignores
-  it, with that reason, until 2026-11-30; the file is yours to edit or
-  delete. An existing portal is not changed: if your policy blocks on
-  advisories and you accept the reasoning, add the same entry to
-  `docs-portal/osv-scanner.toml`.
+  lockfile it covers. A new docs portal starts with that file, holding a
+  header and no ignores, so a justified suppression has a home.
 
 <!-- codeflow:release-impact patch -->
 - **The scaffold passes its own secret scan.** In every repository
@@ -841,6 +855,45 @@ erratum below, never an edit of the section.
   and managed files you have not edited; a portal whose ownership was
   transferred, or whose managed test file was modified, is not updated.
   The portal's runtime and its claim identity check are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **exec-guard no longer refuses prose that only quotes a launcher word.**
+  The privilege, headless and dangerous checks matched a privileged word as a
+  substring of the raw line, so text such as "; supersedes", "; su" or "such
+  as" inside a heredoc, an `echo` or a `grep` pattern was blocked as a chained
+  `su`, `sudo` or `doas` (sathyassn/codeflow#66). A word-boundary edit to
+  those checks cannot be proved safe, because a shell reaches a launcher
+  through globs, extglob, zsh qualifiers and namerefs without its name
+  appearing as a word, so every 3.0.0 rule is unchanged and still decides
+  every line. Relief comes from a separate strict tokenizer that certifies a
+  line only when all of it is `echo`, `printf` (a format of `%s`, `%%`, `\n`, `\t` and `\\` only),
+  `grep` and `cat` with plain, single-quoted or double-quoted words (no
+  backslash, `$` or backtick), the separators `;`, `&&`, `||`, `|` and
+  newline, redirects to a document file (`.md`, `.markdown`, `.txt`, `.rst`,
+  `.log`) that is new or an existing plain, non-executable file with one
+  hard link (never a symbolic link, hard-linked file, pipe, device or
+  executable, or a path under `/dev`, `/proc` or `/sys`), and one quoted
+  heredoc for `cat`. A
+  certified line skips only the privilege, headless and dangerous checks;
+  every other guard still runs, PowerShell lines are never certified, and a
+  `run_terminal_command` call is certified only on a Unix host whose `SHELL`
+  names bash or zsh. The
+  issue's `printf`, `grep '; su'`, quoted-heredoc and `echo "...; supersedes
+  ..."` lines now pass. A heredoc needs a quoted delimiter (`cat <<'EOF'`);
+  with an unquoted one the line keeps the raw rules. Lines with a
+  double-quoted backslash, and `git commit -m` or `gh pr create --body` text,
+  are not certified and still refuse: write that text to a file with the
+  editor tool and pass the file by path. Two limits remain: a definition in
+  a shell startup file that changes how a certified line runs, such as an
+  alias or function shadowing `echo`, `printf`, `grep` or `cat` or a zsh
+  global alias that expands an argument, is not seen, as an alias for `ls`
+  was not seen before (agents are blocked from writing startup files where a
+  sandbox exists and the guard refuses it on a best-effort basis elsewhere,
+  issue 86); and a certified line can create a document that a later call runs
+  as a script, as a plain `printf` into a `.sh` file already could. Projects
+  need no change: this is a binary change with no policy default, scaffold or
+  managed file behind it, and it allows certified prose without refusing
+  anything allowed before.
 
 ## [3.0.0]
 
