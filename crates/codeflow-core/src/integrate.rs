@@ -150,7 +150,9 @@ impl std::fmt::Display for IntegrateOutcome {
 /// OS text rule (issue 79): a failed landing puts the checkout back on this
 /// branch by name. A name that is not valid UTF-8 cannot be given back
 /// exactly, and falling back to another name would restore the wrong
-/// checkout, so integrate refuses before it changes anything.
+/// checkout, so integrate refuses before it changes anything. A HEAD that
+/// cannot be read is refused the same way; only an unborn branch restores
+/// the target.
 fn checked_out_branch(repo: &git2::Repository, target: &str) -> Result<String, IntegrateError> {
     match repo.head() {
         Ok(head) => match crate::git::name::reference_shorthand(&head).rule_text() {
@@ -161,7 +163,13 @@ fn checked_out_branch(repo: &git2::Repository, target: &str) -> Result<String, I
                     .to_string(),
             )),
         },
-        Err(_) => Ok(target.to_string()),
+        // An unborn branch has nothing to restore but the target; any other
+        // failure is a checkout integrate cannot name, so it refuses.
+        Err(error) if error.code() == git2::ErrorCode::UnbornBranch => Ok(target.to_string()),
+        Err(error) => Err(IntegrateError::Preflight(format!(
+            "cannot read the checked-out branch, so integrate could not restore it after a \
+             failure: {error}"
+        ))),
     }
 }
 
@@ -683,6 +691,48 @@ mod tests {
             "{error}"
         );
         assert_eq!(before, branch_oid(dir.path(), "feat/x"));
+    }
+
+    /// A checked-out branch that cannot be read is no branch to restore:
+    /// integrate refuses before any change instead of restoring the target.
+    /// An unborn branch still restores the target, as nothing else exists.
+    #[test]
+    fn r23_an_unreadable_head_is_refused_before_any_change() {
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "true");
+        // Nothing staged, so git status, which reads the broken HEAD as
+        // unborn, sees a clean tree and only the HEAD read can refuse.
+        git(dir.path(), &["rm", "-q", "-r", "--cached", "base.txt"]);
+        fs::remove_file(dir.path().join("base.txt")).unwrap();
+        fs::write(
+            dir.path().join(".git/refs/heads/broken"),
+            b"not an object id\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/broken\n").unwrap();
+        let before = branch_oid(dir.path(), "feat/x");
+        let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(
+            matches!(error, IntegrateError::Preflight(ref why) if why.contains("cannot read the checked-out branch")),
+            "{error}"
+        );
+        assert_eq!(before, branch_oid(dir.path(), "feat/x"));
+
+        // The control: an unborn branch with nothing staged lands and puts
+        // the checkout on the target.
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "true");
+        git(dir.path(), &["rm", "-q", "-r", "--cached", "base.txt"]);
+        fs::remove_file(dir.path().join("base.txt")).unwrap();
+        fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/orphan\n").unwrap();
+        let tested = branch_oid(dir.path(), "feat/x");
+        let outcome = integrate(dir.path(), "feat/x", "main");
+        assert!(
+            outcome.is_ok(),
+            "{:?}",
+            outcome.err().map(|e| e.to_string())
+        );
+        assert_eq!(branch_oid(dir.path(), "main"), tested);
     }
 
     /// Review finding on issue 79: the path of another worktree that holds the
