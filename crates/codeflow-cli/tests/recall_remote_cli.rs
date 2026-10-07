@@ -157,6 +157,39 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
     assert!(text.contains("status: dry-run"), "{text}");
 }
 
+/// Round 23: `remote protect` finds its project as main does, the nearest
+/// directory initialized for `CodeFlow`, never the git work tree root, so a
+/// project nested inside another repository protects its own branches.
+#[test]
+fn r23_remote_protect_reads_the_nearest_initialized_project() {
+    let home = tempfile::tempdir().unwrap();
+    let outer = tempfile::tempdir().unwrap();
+    // The outer repository's work tree root, with no CodeFlow state.
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(outer.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap()
+        .success());
+    let project = outer.path().join("nested");
+    init_repo(&project, "nested");
+    let deeper = project.join("src/module");
+    fs::create_dir_all(&deeper).unwrap();
+    let out = run_in(&deeper, home.path(), &["remote", "protect", "--dry-run"]);
+    let text = stdout(&out);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("release/* [ruleset (glob pattern)]:"),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("not found"));
+}
+
 #[cfg(unix)]
 #[test]
 fn remote_protect_degrades_legibly_on_free_plan_403() {
