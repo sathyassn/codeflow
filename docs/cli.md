@@ -341,7 +341,12 @@ Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 A pull request's `Task:` line may list several epics, `Task: EPC-001,
 EPC-002`, only for a planning amendment; `codeflow ci` then prints one
 `work.planning_amendment` note per change, grouped by epic, and refuses a
-change to a record of an epic the line does not name (ADR-0078).
+change to a record of an epic the line does not name (ADR-0078). A
+pull request of planning records only whose `Task:` line names a completed
+standalone task, or a follow-up of it, may correct the wording of that
+task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
+note and still refuses an added, removed, renumbered or reordered
+criterion or a changed tag (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist.
 

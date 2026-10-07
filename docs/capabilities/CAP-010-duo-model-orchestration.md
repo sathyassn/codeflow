@@ -461,7 +461,11 @@ completed with. It still reviews its own range.
 A task pull request may change its own criteria, and CI prints the change
 for the reviewer; a reopened task whose record is on the target keeps its
 criteria, and another task's criteria change only in its own pull request,
-a planning-only change or a checked epic line. A range touching
+a planning-only change or a checked epic line. A completed standalone task
+has no epic amendment: a range of planning records only whose `Task:` line
+names it, or a follow-up of it, may correct the wording of its criteria,
+keeping every criterion and tag, while CI prints the delta for the reviewer
+(ADR-0080). A range touching
 the adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a

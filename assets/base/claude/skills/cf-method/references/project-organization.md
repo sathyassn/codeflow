@@ -300,7 +300,12 @@ the binding when the merge's recorded result equals the conflict-free
 automatic merge of its parents, so refreshing a stale base needs no new
 review; any other merge or a later code change needs one. A reopened task
 keeps its criteria once its record is on the target; before that, a reopen
-inside its own pull request may change them.
+inside its own pull request may change them. A completed standalone task has
+no epic amendment, so its criteria wording (a typo, a person's name) is
+corrected by a pull request of planning records only, off its own task
+branch, whose `Task:` line names the task or a follow-up of it: every
+criterion and tag stays, CI prints the delta, the reviewer confirms the
+meaning is unchanged, and the task stays complete (ADR-0080).
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
