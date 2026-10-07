@@ -110,6 +110,16 @@ reviewed task heads, each batch gated once as one candidate (see
 reaches `main`, via one human-reviewed PR that the operator merges. See
 cf-method, "Managing a body of work" (standard and full tiers).
 
+Direct commits on an epic line are refused at push. Move an unpushed one
+into a pull request: keep it on a task or planning branch, run
+`git reset --keep origin/integration/EPC-NNN-<slug>` on the line (the
+default target on its first push), then open the pull request to the line.
+A direct commit already on the remote is adopted by an entry in the epic
+record's `line_adoptions` list: its full 40-hex `commit`, a `reason` and
+the `review` where it was reviewed. The entry lands on the line by a
+reviewed planning pull request that names the epic, or is already on the
+target, and CI prints each adoption on the line's class line.
+
 ## PR bodies
 
 **PR bodies:** follow the template and the sections `codeflow ci` requires

@@ -1183,3 +1183,44 @@ fn every_tier_map_states_the_plain_writing_rule() {
         );
     }
 }
+
+/// TSK-248 AC-5 (issue 85): the managed git rule and SPC-013 R-52 carry the
+/// epic-line push refusal, its `git reset --keep` remedy and the adoption
+/// route, and the installed copy matches the shipped source.
+#[test]
+fn epic_line_adoption_rule_documents_push_refusal_and_landed_repair() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let rule = std::fs::read_to_string(root.join("assets/base/rules/git-rules.md")).unwrap();
+    let bodies = rule
+        .split("## Bodies of work")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("git-rules.md has a Bodies of work section");
+    for sentence in [
+        "Direct commits on an epic line are refused at push.",
+        "`git reset --keep origin/integration/EPC-NNN-<slug>`",
+        "A direct commit already on the remote is adopted by an entry in the epic\nrecord's `line_adoptions` list",
+        "reviewed planning pull request that names the epic",
+    ] {
+        assert!(bodies.contains(sentence), "Bodies of work lacks: {sentence}");
+    }
+    let installed = std::fs::read_to_string(root.join(".codeflow/rules/git-rules.md")).unwrap();
+    assert_eq!(
+        installed, rule,
+        "the installed git-rules.md drifted from assets/base"
+    );
+    let spec = std::fs::read_to_string(root.join("project-management/specs/SPC-013.md")).unwrap();
+    let r52 = spec
+        .split("- R-52.")
+        .nth(1)
+        .and_then(|rest| rest.split("- R-53.").next())
+        .expect("SPC-013 has R-52");
+    for phrase in [
+        "lists the commit's full 40-hex id, a non-empty reason",
+        "first arrived\n  on the line by a merge commit or already exists at the target tip",
+        "pre-push refuses a push to `integration/EPC-*`",
+        "(Amended 2026-10-06 by TSK-248",
+    ] {
+        assert!(r52.contains(phrase), "R-52 lacks: {phrase}");
+    }
+}
