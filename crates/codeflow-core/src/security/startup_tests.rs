@@ -687,3 +687,66 @@ fn declarations_keep_their_write_checks() {
         );
     }
 }
+
+/// Review of e4536456b: a literal the line assigns reads as its value in
+/// every body the guard reads as code, not only in redirects and path words.
+const ASSIGNED_BODIES: &[&str] = &[
+    "p=~/.zshrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=src/.envrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=.envrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=src/.envrc; node -e \"require('fs').appendFileSync('$p','x')\"",
+    "p=src/.envrc; perl -e \"open(F,'>>$p')\"",
+    "p=src/.envrc; ruby -e \"File.write('$p','x')\"",
+    "p=src/.envrc; awk \"BEGIN{print 1 > \\\"$p\\\"}\"",
+    "p=src/.envrc; sh -c \"echo x >> $p\"",
+    "p=src/.envrc; bash -c \"echo x >> $p\"",
+    "p=src/.envrc; zsh -c \"echo x >> $p\"",
+    "p=src/.envrc; eval \"echo x >> $p\"",
+    "p=src/.envrc; echo x | xargs sh -c \"echo x >> $p\"",
+    "p=src/.envrc; find . -maxdepth 0 -exec sh -c \"echo x >> $p\" \\;",
+    "p=src/.envrc; parallel \"echo x >> $p\" ::: a",
+    "d=src; f=.envrc; python3 -c \"open('$d/$f','a')\"",
+    "d=~; f=.zshrc; python3 -c \"open('${d}/${f}','a')\"",
+    "export p=src/.envrc; python3 -c \"open('$p','a')\"",
+    "p=src/.envrc python3 -c \"open('$p','a')\"",
+];
+
+/// An unreadable expansion in a body, on a line that names a class file,
+/// refuses as the redirect path does.
+const UNRESOLVED_BODIES: &[&str] = &[
+    "cat ~/.zshrc; python3 -c \"open('$NAME','a').write('x')\"",
+    "p=$HOME/.zshrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=$(echo ~/.zshrc); python3 -c \"open('$p','a').write('x')\"",
+    "cat ~/.zshrc; node -e \"require('fs').appendFileSync(`$DEST`,'x')\"",
+    "cat ~/.zshrc; sh -c \"echo x >> $(pwd)/f\"",
+];
+
+const BODY_CONTROLS: &[&str] = &[
+    "python3 -c 'print(1)'",
+    "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
+    "p=notes.txt; node -e \"require('fs').appendFileSync('$p','x')\"",
+    "p=notes.txt; sh -c \"echo x >> $p\"",
+    "cat ~/.zshrc; python3 -c 'print(1)'",
+    "grep alias ~/.zshrc | awk '{print $2}'",
+    "grep alias ~/.zshrc; perl -ne 'print $_' notes.txt",
+    "python3 -c \"open('$NAME','a').write('x')\"",
+    // The program reads the path at run time: the stated residual.
+    "export p=~/.zshrc; python3 -c 'import os; open(os.environ[\"p\"],\"a\").write(\"x\")'",
+];
+
+#[test]
+fn assigned_literals_read_as_values_in_every_body() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in ASSIGNED_BODIES.iter().chain(UNRESOLVED_BODIES) {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in BODY_CONTROLS {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

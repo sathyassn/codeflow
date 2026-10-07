@@ -316,6 +316,10 @@ level:
 - an archive, sync, download or checkout that writes into the home, `/etc`
   or a startup directory, where it can place a file it does not name;
 - a path the guard cannot resolve near the class, such as `~/$NAME`;
+- code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
+  class file once the line's own literal assignments are filled in
+  (`p=src/.envrc; python3 -c "open('$p','a')"`), and such code that carries
+  an expansion the guard cannot read on a line that names a class file;
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
@@ -341,8 +345,10 @@ What stays open, by harness and platform:
   or moved tree, judge link text from where it lands, emulate dereference
   and preserve option semantics, or recognize long-option prefixes beyond
   exact names. Everything built at run time remains outside it, including
-  a path assembled by a program and a script written in one call and run
-  in another. It does not read archive contents. The sandboxes on all three
+  a path assembled by a program, a path an interpreter reads from its
+  environment at run time (`export p=~/.zshrc; python3 -c
+  'open(os.environ["p"])'`) and a script written in one call and run in
+  another. It does not read archive contents. The sandboxes on all three
   harnesses hold writes into the unwritable home; an unsandboxed seat stays
   open. Relocated startup files and writable workspace paths have the
   limits listed below. An interpreter call whose code names a startup file

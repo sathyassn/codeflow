@@ -59,6 +59,14 @@ const REFUSED: &[&str] = &[
     // Review round three.
     "cp -t\"$HOME\" fixtures/.zshrc",
     "sed -n '1e echo x >> sub/.envrc' notes",
+    // Review of e4536456b: a literal the line assigns is read in code bodies.
+    "p=~/.zshrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=src/.envrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=.envrc; python3 -c \"open('$p','a').write('x')\"",
+    "p=src/.envrc; node -e \"require('fs').appendFileSync('$p','x')\"",
+    "p=src/.envrc; perl -e \"open(F,'>>$p')\"",
+    "d=src; f=.envrc; python3 -c \"open('$d/$f','a')\"",
+    "cat ~/.zshrc; python3 -c \"open('$NAME','a').write('x')\"",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -74,6 +82,8 @@ const ALLOWED: &[&str] = &[
     "cargo build",
     "rg --no-config alias ~/.zshrc",
     "sed -n 1,20p ~/.zshrc",
+    "python3 -c 'print(1)'",
+    "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
 ];
 
 #[test]

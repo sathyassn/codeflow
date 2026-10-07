@@ -387,6 +387,66 @@ struct Line<'a> {
 }
 
 impl Line<'_> {
+    /// The startup file `text` names, read as written and with the line's
+    /// literal assignments filled in: a body that spells `$p` after
+    /// `p=src/.envrc` names the file the shell hands it (review of
+    /// e4536456b).
+    fn names(&self, text: &str) -> Option<String> {
+        self.class
+            .named_in(text)
+            .or_else(|| self.class.named_in(&self.substitute(text)))
+    }
+
+    /// Whether the shell fills in part of `segment` at run time from a
+    /// value the guard cannot read: an expansion outside single quotes
+    /// (`$NAME`, `${NAME}`, `$(...)`, a backquote) that is not a literal
+    /// the line assigns or a location of the class. Single-quoted text is
+    /// data to the shell, so an `awk` or `perl` variable there does not
+    /// count.
+    fn expands_unread(&self, segment: &str) -> bool {
+        let known = self.vars();
+        let chars: Vec<char> = segment.chars().collect();
+        let (mut single, mut double, mut at) = (false, false, 0);
+        while at < chars.len() {
+            let c = chars[at];
+            at += 1;
+            match c {
+                '\\' if !single => at += 1,
+                '\'' if !double => single = !single,
+                '"' if !single => double = !double,
+                // A substitution the segmenter lifted out stands as a marker.
+                '`' | '\u{1}' | '\u{2}' if !single => return true,
+                '$' if !single => {
+                    let rest = &chars[at..];
+                    match rest.first() {
+                        Some('(') => return true,
+                        Some('{') => {
+                            let name: String = rest[1..]
+                                .iter()
+                                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                                .collect();
+                            if !name.is_empty() && !known.iter().any(|(n, _)| *n == name) {
+                                return true;
+                            }
+                        }
+                        Some(first) if first.is_ascii_alphabetic() || *first == '_' => {
+                            let name: String = rest
+                                .iter()
+                                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                                .collect();
+                            if !known.iter().any(|(n, _)| *n == name) {
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// The path `word` names from `dir`, or `None` when part of it is
     /// filled in at run time.
     fn expand(&self, word: &str, dir: &Path) -> Option<PathBuf> {
@@ -824,7 +884,7 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         return vec![v];
     }
     for code in super::outward::interpreter_bodies(command) {
-        if let Some(name) = class.named_in(&code) {
+        if let Some(name) = line.names(&code) {
             return vec![finding(format!(
                 "interpreter code names the shell startup file `{name}`, which it can write"
             ))];
@@ -1062,7 +1122,7 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     if !(line.text.contains("<<") || line.text.contains('|')) {
         return None;
     }
-    let name = line.class.named_in(line.text)?;
+    let name = line.names(line.text)?;
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
@@ -1112,7 +1172,7 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
             }
             Judged::Placement(_) | Judged::Ordinary => {
                 if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
-                    if let Some(file) = line.class.named_in(target) {
+                    if let Some(file) = line.names(target) {
                         return Some(finding(format!(
                             "a redirect runs where the guard cannot tell the directory, and `{target}` could name the shell startup file `{file}`"
                         )));
@@ -1141,6 +1201,18 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     for word in args {
         if let Some(v) = word_violation(name, word, line, &dirs) {
             return Some(v);
+        }
+    }
+    // Code whose shell expansion the guard cannot read, on a line that names
+    // a class file, refuses as an unresolved redirect does. A word that
+    // reads as a path was judged above.
+    if line.names(line.text).is_some() && line.expands_unread(segment) {
+        if let Some(code) = args.iter().find(|word| {
+            !path_like(value_of(word)) && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
+        }) {
+            return Some(finding(format!(
+                "`{name}` is given text `{code}` whose expansion the guard cannot resolve, and the line names a shell startup file"
+            )));
         }
     }
     placing_violation(name, args, line, &dirs)
@@ -1402,11 +1474,12 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
     }
     let value = value_of(word);
     if !path_like(value) {
-        return line.class.named_in(word).map(|file| {
-            finding(format!(
+        if let Some(file) = line.names(word) {
+            return Some(finding(format!(
                 "`{name}` is given text that names the shell startup file `{file}`, which it can write"
-            ))
-        });
+            )));
+        }
+        return None;
     }
     // `{}` is filled in by `find -exec`, `xargs -I` or `parallel`.
     let value_owned;
@@ -1427,7 +1500,7 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
         }),
         Judged::Placement(_) | Judged::Ordinary => {
             if line.unknown.is_some() && !value.starts_with(['/', '~', '$']) {
-                if let Some(file) = line.class.named_in(value) {
+                if let Some(file) = line.names(value) {
                     return Some(finding(format!(
                         "`{name}` runs where the guard cannot tell the directory, and `{value}` could name the shell startup file `{file}`"
                     )));
