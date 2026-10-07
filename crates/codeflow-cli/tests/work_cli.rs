@@ -761,3 +761,677 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
         "{text}"
     );
 }
+
+/// A fake `gh` whose pull request for `branch` has `head` as its tip and a
+/// Reviews row approving `named`.
+#[cfg(unix)]
+fn review_tool_naming(bin: &Path, branch: &str, head: &str, named: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let body = format!(
+        "## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {named} | approved |\n"
+    );
+    let json = serde_json::json!({"headRefName":branch,"headRefOid":head,"isCrossRepository":false,"headRepository":{"nameWithOwner":"owner/project"},"body":body}).to_string();
+    write(
+        bin,
+        "gh",
+        &format!("#!/bin/sh\ncat <<'PAYLOAD'\n{json}\nPAYLOAD\n"),
+    );
+    std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// TSK-001's own pull request on `branch`, as issue #69 found it: the
+/// branch corrects TSK-001's criteria and builds, the review names that
+/// commit, and the acceptance is recorded after it in a Closeout commit.
+/// Returns the reviewed commit and the branch tip.
+#[cfg(unix)]
+fn reviewed_predecessor(root: &Path, branch: &str) -> (String, String) {
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    git(root, &["switch", "-qc", branch, "main"]);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &format!(
+            "{}- AC-2 When rerun, the command shall still succeed.\n",
+            record("TSK-001", "[]")
+        ),
+    );
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: build the predecessor"]);
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    let evidence = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(evidence.path(), format!("acceptance:\n  reviewed: {reviewed}\n  review: https://example.test/pr/1#review\n  criteria:\n    AC-1: verified | journey\n    AC-2: verified | unit\n  journey: verified | journey\n  not_verified: none\n  follow_ups: none: fixture\n  verdict: approved\n")).unwrap();
+    succeeds(&cli(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            evidence.path().to_str().unwrap(),
+        ],
+        None,
+    ));
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record the acceptance"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", "-q", "main"]);
+    (reviewed, tip)
+}
+
+/// `codeflow ci` as the pre-push hook runs it for a push of `branch`: no
+/// pull request body, from `main` to `head`.
+#[cfg(unix)]
+fn push_check(root: &Path, branch: &str, head: &str, bin: &Path) -> Output {
+    cli(
+        root,
+        &["ci", "--base", "main", "--head", head, "--branch", branch],
+        Some(bin),
+    )
+}
+
+#[cfg(unix)]
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// Issue #69: `work claim --on` accepts a reviewed pin, and the claim's own
+/// push check, from the target to the pin, judges the commits up to the pin
+/// as the predecessor's reviewed pull request. The claim pushes through the
+/// installed pre-push hook to `origin`, and later pushes of the successor's
+/// own work pass the same check. The pull request into the target still
+/// waits for the predecessor to land (R-42), and the successor may not
+/// change the predecessor's criteria itself.
+#[test]
+#[cfg(unix)]
+fn a_claim_on_a_reviewed_head_passes_its_own_push_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "chore: add the policy"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    let hooks = tempfile::tempdir().unwrap();
+    write(
+        hooks.path(),
+        "pre-push",
+        &format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-push \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    );
+    std::fs::set_permissions(
+        hooks.path().join("pre-push"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(
+        root,
+        &["config", "core.hooksPath", hooks.path().to_str().unwrap()],
+    );
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    let on = format!("TSK-001@{pin}");
+
+    let claimed = cli(
+        root,
+        &["work", "claim", "TSK-002", "--on", &on],
+        Some(bin.path()),
+    );
+    assert!(claimed.status.success(), "{}", text(&claimed));
+    let child = "task/TSK-002-work-tsk-002";
+    assert_eq!(
+        git(
+            origin.path(),
+            &["rev-parse", &format!("refs/heads/{child}")]
+        ),
+        pin
+    );
+    let first = push_check(root, child, child, bin.path());
+    assert!(first.status.success(), "{}", text(&first));
+    assert!(
+        text(&first).contains("stacks on TSK-001's reviewed head"),
+        "{}",
+        text(&first)
+    );
+
+    // The successor's own work pushes through the same check.
+    git(root, &["switch", "-q", child]);
+    succeeds(&cli(
+        root,
+        &["work", "start", "TSK-002", "--on", &on],
+        Some(bin.path()),
+    ));
+    write(root, "src/b.rs", "pub fn b() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: build on the predecessor"]);
+    let pushed = Command::new("git")
+        .args(["push", "-q", "origin", child])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert!(pushed.status.success(), "{}", text(&pushed));
+
+    // The pull request into the target still waits for the predecessor.
+    let landing = cli(root, &["ci", "--base", "main", "--branch", child, "--pr-body", "Task: TSK-002\n## Summary\nWork.\n\n- work\n## Changes\n- Work.\n## Testing\nNot tested: nothing."], Some(bin.path()));
+    assert!(!landing.status.success(), "{}", text(&landing));
+    assert!(
+        text(&landing).contains("not complete"),
+        "{}",
+        text(&landing)
+    );
+
+    // The successor cannot change the predecessor's criteria itself.
+    let record = std::fs::read_to_string(root.join("project-management/tasks/TSK-001.md")).unwrap();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record.replace("shall still succeed", "shall mostly succeed"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: change the predecessor"]);
+    let changed = push_check(root, child, "HEAD", bin.path());
+    assert!(!changed.status.success(), "{}", text(&changed));
+    assert!(
+        text(&changed).contains("TSK-001 changes its criteria on this branch"),
+        "{}",
+        text(&changed)
+    );
+}
+
+/// The pin is honoured only while a review row names it: with the row gone,
+/// the same push check refuses, as it does for a branch tip of the
+/// predecessor that no review names (issue #69).
+#[test]
+#[cfg(unix)]
+fn an_unreviewed_predecessor_head_is_not_honoured_by_the_push_check() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    let on = format!("TSK-001@{pin}");
+    succeeds(&cli(
+        root,
+        &["work", "claim", "TSK-002", "--on", &on],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    review_tool(bin.path(), branch, &pin, false);
+    let out = push_check(root, child, child, bin.path());
+    assert!(!out.status.success(), "{}", text(&out));
+    for needle in [
+        "not honoured as reviewed",
+        "TSK-001 changes its criteria on this branch",
+        "whose anchored status is 'todo', not complete",
+    ] {
+        assert!(text(&out).contains(needle), "{needle}: {}", text(&out));
+    }
+}
+
+/// Issue #69: a pin may be the predecessor's tip when the review names the
+/// commit before it and the tip adds only TSK-001's status and Closeout, as
+/// cf-ship records the completion after review. A tip that adds anything
+/// else still needs a review that names it.
+#[test]
+#[cfg(unix)]
+fn a_pin_may_add_only_the_predecessors_status_and_closeout_to_its_review() {
+    for code_after_review in [false, true] {
+        let dir = fixture();
+        let root = dir.path();
+        let bin = tempfile::tempdir().unwrap();
+        let branch = "task/TSK-001-work";
+        let (reviewed, mut tip) = reviewed_predecessor(root, branch);
+        if code_after_review {
+            git(root, &["switch", "-q", branch]);
+            write(root, "src/late.rs", "pub fn late() {}\n");
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "feat: add code after the review"]);
+            tip = git(root, &["rev-parse", "HEAD"]);
+            git(root, &["switch", "-q", "main"]);
+        }
+        review_tool_naming(bin.path(), branch, &tip, &reviewed);
+        let on = format!("TSK-001@{tip}");
+        let out = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        if code_after_review {
+            assert!(!out.status.success(), "{}", text(&out));
+            assert!(text(&out).contains("no review names"), "{}", text(&out));
+        } else {
+            assert!(out.status.success(), "{}", text(&out));
+            let child = "task/TSK-002-work-tsk-002";
+            let check = push_check(root, child, child, bin.path());
+            assert!(check.status.success(), "{}", text(&check));
+        }
+    }
+}
+
+/// Issue #69: a branch stacked on a reviewed predecessor head answers the
+/// journey rule only for the paths it changes after that head; the
+/// predecessor's own pull request answers for its product code, and a merge
+/// of the target brings in nothing the successor answers for. A product
+/// change the successor makes itself still needs its journey criterion,
+/// and so does a deletion of the predecessor's file, which leaves no
+/// difference from the target, also when it is resolved inside a merge
+/// (TSK-234 review rounds 1 and 2). An octopus merge cannot be read
+/// against a remerge, so it refuses (design D4).
+#[test]
+#[cfg(unix)]
+fn a_stacked_branch_answers_the_journey_rule_for_its_own_paths() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[TSK-001]").replace(
+            "- AC-1 When run, the command shall succeed. (journey)\n",
+            "- AC-1 When read, the notes shall explain the work.\n",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan a notes task"]);
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", "-q", child]);
+    write(root, "docs/notes.md", "Notes.\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: write the notes"]);
+    let notes = push_check(root, child, "HEAD", bin.path());
+    assert!(notes.status.success(), "{}", text(&notes));
+    let unmerged = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", "-q", "main"]);
+    write(root, "src/m.rs", "pub fn m() {}\n");
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "feat: other work lands on the target"],
+    );
+    git(root, &["switch", "-qc", "side", "main~1"]);
+    write(root, "docs/side.md", "Side.\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: a side note"]);
+    git(root, &["switch", "-q", child]);
+    git(root, &["merge", "-q", "--no-edit", "main"]);
+    let merged = push_check(root, child, "HEAD", bin.path());
+    assert!(merged.status.success(), "{}", text(&merged));
+    let before = git(root, &["rev-parse", "HEAD"]);
+    for (change, needle) in [
+        ("delete", "src/a.rs"),
+        ("add", "src/c.rs"),
+        ("delete inside the merge", "src/a.rs"),
+        ("octopus merge", "two-parent merge"),
+    ] {
+        git(root, &["reset", "-q", "--hard", &before]);
+        match change {
+            "delete" => {
+                git(root, &["rm", "-q", "src/a.rs"]);
+                git(root, &["commit", "-qm", "feat: change product code too"]);
+            }
+            "add" => {
+                write(root, "src/c.rs", "pub fn c() {}\n");
+                git(root, &["add", "."]);
+                git(root, &["commit", "-qm", "feat: change product code too"]);
+            }
+            "delete inside the merge" => {
+                // The merge's tree matches the target's side for src/a.rs,
+                // so only its difference from the clean remerge shows it.
+                git(root, &["reset", "-q", "--hard", &unmerged]);
+                git(root, &["merge", "-q", "--no-ff", "--no-commit", "main"]);
+                git(root, &["rm", "-q", "src/a.rs"]);
+                git(root, &["commit", "-qm", "chore: merge the target"]);
+            }
+            _ => {
+                git(root, &["reset", "-q", "--hard", &unmerged]);
+                git(root, &["merge", "-q", "--no-edit", "main", "side"]);
+                let parents = git(root, &["rev-list", "--parents", "-n", "1", "HEAD"]);
+                assert_eq!(parents.split(' ').count(), 4, "an octopus merge: {parents}");
+            }
+        }
+        let product = push_check(root, child, "HEAD", bin.path());
+        assert!(!product.status.success(), "{change}: {}", text(&product));
+        assert!(
+            text(&product).contains(needle),
+            "{change}: {}",
+            text(&product)
+        );
+        if change != "octopus merge" {
+            assert!(
+                text(&product).contains("work.journey_criterion"),
+                "{change}: {}",
+                text(&product)
+            );
+        }
+    }
+}
+
+/// Issue #69 keeps the predecessor's record as its review left it: a
+/// branch stacked on a reviewed head that reverts the predecessor's status
+/// and drops its Closeout, keeping its criteria, is refused (TSK-234
+/// review).
+#[test]
+#[cfg(unix)]
+fn a_stacked_branch_keeps_its_predecessors_record() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", "-q", child]);
+    let path = "project-management/tasks/TSK-001.md";
+    let content = std::fs::read_to_string(root.join(path)).unwrap();
+    let reverted = content
+        .split("## Closeout")
+        .next()
+        .unwrap()
+        .replace("status: complete", "status: todo");
+    write(root, path, &reverted);
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: drop the predecessor's completion"],
+    );
+    let out = push_check(root, child, "HEAD", bin.path());
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("TSK-001 differs on this branch from its reviewed head"),
+        "{}",
+        text(&out)
+    );
+}
+
+/// Readiness reads the predecessor's current status, never its history
+/// (TSK-234 design D3a): a predecessor that landed complete and was then
+/// reopened on the target is not a satisfied dependency, so its successor
+/// is not claimed without a reviewed pin.
+#[test]
+#[cfg(unix)]
+fn a_reopened_predecessor_is_not_ready_without_a_pin() {
+    let dir = fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-work";
+    reviewed_predecessor(root, branch);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "chore: land TSK-001",
+            branch,
+        ],
+    );
+    let path = "project-management/tasks/TSK-001.md";
+    let landed = std::fs::read_to_string(root.join(path)).unwrap();
+    assert!(landed.contains("status: complete"), "{landed}");
+    let reopened = landed.replace("status: complete", "status: todo").replace(
+        "acceptance:\n",
+        "acceptance_superseded:\n  reason: fix the predecessor\n",
+    );
+    write(root, path, &reopened);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: reopen TSK-001"]);
+    let claim = cli(root, &["work", "claim", "TSK-002"], None);
+    assert!(!claim.status.success(), "{}", text(&claim));
+    assert!(text(&claim).contains("TSK-001"), "{}", text(&claim));
+}
+
+/// TSK-234 review round 6: a file literally named
+/// `project-management\tasks\TSK-001.md` is not the task's record, so a pin
+/// that adds it after the review changed more than the record's status and
+/// Closeout, and the claim refuses it.
+#[cfg(unix)]
+#[test]
+fn a_pin_cannot_add_a_path_that_reads_like_the_record() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (reviewed, _) = reviewed_predecessor(root, branch);
+    git(root, &["switch", branch]);
+    write(
+        root,
+        r"project-management\tasks\TSK-001.md",
+        "an unreviewed file\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: add an unrelated file"]);
+    let pin = git(root, &["rev-parse", "HEAD"]);
+    review_tool_naming(bin.path(), branch, &pin, &reviewed);
+    git(root, &["switch", "main"]);
+    let out = cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(
+        !out.status.success(),
+        "the pin changed a file outside the record after review:\n{}",
+        text(&out)
+    );
+}
+
+/// TSK-234 review round 7: the journey rule matches the name git records.
+/// With the product pattern `src/a[\]b.rs`, the file `src/a\b.rs` is a
+/// product path; a stacked successor without a journey criterion that adds
+/// it is refused, since no conversion maps it to `src/a/b.rs`.
+#[cfg(unix)]
+#[test]
+fn the_journey_rule_matches_the_name_git_records() {
+    use codeflow_core::workgraph::classify::{path_sets, ProjectPaths};
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let pattern = r"src/a[\]b.rs";
+    let actual = r"src/a\b.rs";
+    let project = ProjectPaths {
+        product: vec![pattern.into()],
+        watched: vec![],
+    };
+    assert!(path_sets()
+        .adopter_facing_member(actual, &project)
+        .is_some());
+    assert!(path_sets()
+        .adopter_facing_member("src/a/b.rs", &project)
+        .is_none());
+    write(
+        root,
+        ".codeflow/policy.json",
+        &serde_json::json!({"schema_version": 1, "git": {"product_paths": [pattern]}}).to_string(),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[TSK-001]").replace(" (journey)", ""),
+    );
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: plan a successor without a journey"],
+    );
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", child]);
+    write(root, actual, "pub fn unreviewed() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: its own product change"]);
+    let out = push_check(root, child, "HEAD", bin.path());
+    assert!(
+        !out.status.success(),
+        "an own product change needs a journey:\n{}",
+        text(&out)
+    );
+}
+
+/// TSK-234 review round 10: no rendering of a name that is not UTF-8 keeps
+/// what a glob matches (`src/*[!0-9].rs` matches a lossy `src/\u{fffd}.rs`
+/// but not an escaped `src/\377.rs`), so a stacked successor that adds
+/// `src/<FF>.rs` is refused for the name instead of passing the journey
+/// rule.
+#[cfg(unix)]
+#[test]
+fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
+    use std::io::Write as _;
+    use std::os::unix::ffi::OsStringExt;
+    use std::process::{Command, Stdio};
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let pattern = "src/*[!0-9].rs";
+    write(
+        root,
+        ".codeflow/policy.json",
+        &serde_json::json!({"schema_version": 1, "git": {"product_paths": [pattern]}}).to_string(),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[TSK-001]").replace(" (journey)", ""),
+    );
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-qm", "docs: plan a successor without a journey"],
+    );
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool_naming(bin.path(), branch, &pin, &pin);
+    succeeds(&cli(
+        root,
+        &[
+            "work",
+            "claim",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{pin}"),
+        ],
+        Some(bin.path()),
+    ));
+    let child = "task/TSK-002-work-tsk-002";
+    git(root, &["switch", child]);
+    let mut hash = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hash.stdin
+        .take()
+        .unwrap()
+        .write_all(b"pub fn own_change() {}\n")
+        .unwrap();
+    let blob = String::from_utf8(hash.wait_with_output().unwrap().stdout).unwrap();
+    let raw = std::ffi::OsString::from_vec(b"src/\xff.rs".to_vec());
+    let out = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "100644",
+            blob.trim(),
+        ])
+        .arg(&raw)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    git(root, &["commit", "-qm", "feat: its own product change"]);
+    let out = push_check(root, child, "HEAD", bin.path());
+    let shown = text(&out);
+    assert!(!out.status.success(), "the name passed:\n{shown}");
+    assert!(shown.contains("not UTF-8"), "{shown}");
+}
