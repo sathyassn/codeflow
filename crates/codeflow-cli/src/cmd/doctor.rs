@@ -145,7 +145,13 @@ mod tests {
         let cf = dir.path().join(".codeflow");
         std::fs::create_dir_all(&cf).unwrap();
         std::fs::write(cf.join("policy.json"), "{\"schema_version\": 1}\n").unwrap();
-        std::fs::write(cf.join("manifest.json"), "{\"files\": {}}\n").unwrap();
+        // A complete installed-file record: doctor refuses one it cannot
+        // parse instead of skipping the checks that read it.
+        std::fs::write(
+            cf.join("manifest.json"),
+            "{\"schema_version\": 1, \"scaffold_version\": \"3.1.0\", \"files\": {}}\n",
+        )
+        .unwrap();
         std::fs::write(
             cf.join("project.toml"),
             "schema_version = 1\ntier = \"standard\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = false\ngit_hooks = \"unwired\"\npermission_preset = \"acceptEdits\"\n",
