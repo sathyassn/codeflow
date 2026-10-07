@@ -105,7 +105,8 @@ each batch.
 - A later task may build on a predecessor before it lands, named with
   `--on TSK-NNN@<sha>`. The pin names the predecessor branch tip. Its Reviews
   section must approve that tip or an ancestor whose later commits change
-  only the predecessor's own task record. Every intervening commit is
+  only the predecessor's own task record, and in it only its status and
+  Closeout. Every intervening commit is
   checked, including merged commits and changes later reverted. The
   predecessor still lands first. Any other post-review change needs a new
   review, then a rebase and a recheck.

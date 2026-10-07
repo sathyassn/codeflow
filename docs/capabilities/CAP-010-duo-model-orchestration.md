@@ -338,7 +338,8 @@ A pin left out keeps the edge unmet.
   not complete only through `--on TSK-NNN@<sha>`. The pin must equal the
   predecessor branch's tip. The Reviews section must approve that tip or an
   ancestor whose later commits change only the predecessor's own record path,
-  read from the pinned work graph.
+  read from the pinned work graph, and in that record only its status and
+  Closeout.
   Every commit is checked, including merged commits and changes later
   reverted. A review may name a full revision or a uniquely resolved
   hexadecimal abbreviation of at least 7 characters. Repository owner,

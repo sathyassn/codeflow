@@ -800,6 +800,10 @@ fn carried_task_id(suffix: &str, ids: &std::collections::BTreeSet<String>) -> Op
         .map(str::to_owned)
 }
 
+/// The task records one graph holds, by id with their paths, or why that
+/// graph cannot be read.
+type TaskPaths = Result<BTreeMap<String, String>, String>;
+
 /// The visible work branches, local and remote-tracking, grouped by the task
 /// id each carries: read once, so a caller judging many pins or tasks never
 /// walks the refs and the record files again per branch.
@@ -808,11 +812,10 @@ pub(crate) struct PinBranches {
     tips: BTreeMap<String, BTreeMap<String, std::collections::BTreeSet<Oid>>>,
     /// A branch of the task whose tip could not be read.
     unreadable: BTreeMap<String, String>,
-    /// The task ids whose record the graph at a revision holds, parsed once
-    /// per revision however many pins name it.
-    task_ids: std::cell::RefCell<
-        std::collections::HashMap<Oid, Result<std::collections::BTreeSet<String>, String>>,
-    >,
+    /// The task records the graph at a revision holds, by id with their
+    /// paths, parsed once per revision however many pins name it and
+    /// whichever check asks.
+    task_paths: std::cell::RefCell<std::collections::HashMap<Oid, TaskPaths>>,
 }
 
 impl PinBranches {
@@ -859,7 +862,7 @@ impl PinBranches {
         Ok(Self {
             tips,
             unreadable,
-            task_ids: std::cell::RefCell::default(),
+            task_paths: std::cell::RefCell::default(),
         })
     }
 
@@ -930,8 +933,27 @@ impl PinBranches {
         repo: &Repository,
         pin: &ReviewedPin,
     ) -> Result<(), String> {
-        let holds = self
-            .task_ids
+        if self.record_path(repo, pin)?.is_none() {
+            return Err(format!(
+                "{} pin does not hold that task's record",
+                pin.task_id
+            ));
+        }
+        Ok(())
+    }
+
+    /// The path of the pinned task's record in the graph at the pin, `None`
+    /// when that graph holds no such task. The graph is parsed once per
+    /// revision for every pin and check that asks (R-103).
+    ///
+    /// # Errors
+    /// Returns why the graph at the pin cannot be read.
+    pub(crate) fn record_path(
+        &self,
+        repo: &Repository,
+        pin: &ReviewedPin,
+    ) -> Result<Option<String>, String> {
+        self.task_paths
             .borrow_mut()
             .entry(pin.revision)
             .or_insert_with(|| {
@@ -941,21 +963,14 @@ impl PinBranches {
                             .records
                             .into_iter()
                             .filter(|(_, record)| record.kind == RecordKind::Task)
-                            .map(|(id, _)| id)
+                            .map(|(id, record)| (id, record.path))
                             .collect()
                     },
                 )
             })
             .as_ref()
-            .map_err(Clone::clone)?
-            .contains(&pin.task_id);
-        if !holds {
-            return Err(format!(
-                "{} pin does not hold that task's record",
-                pin.task_id
-            ));
-        }
-        Ok(())
+            .map_err(Clone::clone)
+            .map(|paths| paths.get(&pin.task_id).cloned())
     }
 
     /// The branch a reviewed pin names: [`Self::pin_name`], then
@@ -1012,89 +1027,41 @@ pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> bool {
 
 /// A reviewed predecessor pin. The lookup names its exact branch and commit;
 /// matching this evidence is structural, not authentication of the verdict.
+/// Only [`reviewed_pins`] and [`stacked_pins`] build one, after a review row
+/// named it, so a branch tip or any other movable ref cannot stand in for
+/// it (issue #69).
 #[derive(Debug, Clone)]
 pub struct ReviewedPin {
-    pub task_id: String,
-    pub revision: git2::Oid,
+    task_id: String,
+    revision: git2::Oid,
 }
 
-/// Whether an approved revision covers this predecessor branch's pinned tip.
-/// A uniquely resolved hexadecimal abbreviation is accepted. Every commit
-/// after review, including merged commits, must touch only the task record
-/// path read from the pinned graph. Comparing just the endpoints would miss
-/// a source change followed by a revert.
-///
-/// # Errors
-/// Returns the reason the repository, graph, history or diff cannot be read.
-pub fn review_covers_pin(
-    root: &Path,
-    branch: &str,
-    reviewed: &str,
-    tip: &str,
-) -> Result<bool, String> {
-    if !(7..=40).contains(&reviewed.len()) || !reviewed.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return Ok(false);
+impl ReviewedPin {
+    /// The predecessor task the pin is for.
+    #[must_use]
+    pub fn task_id(&self) -> &str {
+        &self.task_id
     }
-    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
-    let Ok(review) = repo.find_commit_by_prefix(reviewed) else {
-        return Ok(false);
-    };
-    let pin = Oid::from_str(tip).map_err(|e| e.to_string())?;
-    if review.id() == pin {
-        return Ok(true);
+
+    /// The reviewed head the pin names.
+    #[must_use]
+    pub fn revision(&self) -> git2::Oid {
+        self.revision
     }
-    if !repo
-        .graph_descendant_of(pin, review.id())
-        .map_err(|e| e.to_string())?
-    {
-        return Ok(false);
-    }
-    let task_id = task_id_from_branch_at(root, branch, tip)
-        .ok_or_else(|| format!("{tip}: predecessor branch has no task record"))?;
-    let graph = super::lifecycle::Graph::from_revision(&repo, tip)?;
-    let record = graph
-        .records
-        .get(&task_id)
-        .filter(|record| record.kind == RecordKind::Task)
-        .ok_or_else(|| format!("{tip}: predecessor has no task record"))?;
-    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
-    walk.push(pin).map_err(|e| e.to_string())?;
-    walk.hide(review.id()).map_err(|e| e.to_string())?;
-    for revision in walk {
-        let commit = repo
-            .find_commit(revision.map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let tree = commit.tree().map_err(|e| e.to_string())?;
-        // A merged side history may have a root commit of its own.
-        let parents = commit.parent_count().max(1);
-        for index in 0..parents {
-            let parent = if commit.parent_count() == 0 {
-                None
-            } else {
-                Some(
-                    commit
-                        .parent(index)
-                        .and_then(|p| p.tree())
-                        .map_err(|e| e.to_string())?,
-                )
-            };
-            let mut options = git2::DiffOptions::new();
-            options.include_typechange(true);
-            let diff = repo
-                .diff_tree_to_tree(parent.as_ref(), Some(&tree), Some(&mut options))
-                .map_err(|e| e.to_string())?;
-            if diff.deltas().any(|delta| {
-                [delta.old_file(), delta.new_file()].iter().any(|file| {
-                    file.path_bytes()
-                        .is_some_and(|path| path != record.path.as_bytes())
-                })
-            }) {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
 }
+
+/// Whether a revision an approving review row names covers a pin: the pin
+/// itself, or an ancestor the pin follows only by changes to the pinned
+/// record's status and Closeout. A lookup calls it only once it has found the
+/// pull request with the pin as its head, so a lookup that finds none
+/// never reads the predecessor's history.
+pub type ReviewCovers<'a> = dyn Fn(&str) -> Result<bool, String> + 'a;
+
+/// How a pin's review is looked up: the predecessor's branch, the pin (its
+/// tip), and [`ReviewCovers`] for that pin. It answers whether the pull
+/// request of that branch has the pin as its head and an approving review
+/// row naming a revision that covers it.
+pub type ReviewLookup<'a> = dyn Fn(&str, &str, &ReviewCovers<'_>) -> Result<bool, String> + 'a;
 
 /// Resolve explicit pins against predecessor branches and review evidence.
 ///
@@ -1103,7 +1070,7 @@ pub fn review_covers_pin(
 pub fn reviewed_pins(
     root: &Path,
     values: &[String],
-    lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
+    lookup: &ReviewLookup<'_>,
 ) -> Result<Vec<ReviewedPin>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let mut branches = None;
@@ -1117,7 +1084,7 @@ pub(crate) fn reviewed_pins_in(
     repo: &Repository,
     branches: &mut Option<PinBranches>,
     values: &[String],
-    lookup: &dyn Fn(&str, &str) -> Result<bool, String>,
+    lookup: &ReviewLookup<'_>,
     review_first: bool,
 ) -> Result<Vec<ReviewedPin>, String> {
     let mut pins = Vec::new();
@@ -1144,9 +1111,15 @@ pub(crate) fn reviewed_pins_in(
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
-        if !lookup(&branch, &revision.to_string())? {
+        // Read only when a pull request with this head is found. Without
+        // the record's path at the pin, only the pin itself is covered.
+        let covers = |reviewed: &str| match branches.record_path(repo, &pin) {
+            Ok(Some(path)) => review_covers_pin(repo, &pin, &path, reviewed),
+            _ => Ok(resolve_reviewed(repo, reviewed) == Some(pin.revision)),
+        };
+        if !lookup(&branch, &revision.to_string(), &covers)? {
             return Err(format!(
-                "no review names {task_id}@{sha}; cannot verify review for this pin"
+                "no review names {task_id}@{sha}, or a commit it follows only by {task_id}'s status and Closeout; cannot verify review for this pin"
             ));
         }
         if review_first {
@@ -1155,6 +1128,69 @@ pub(crate) fn reviewed_pins_in(
         pins.push(pin);
     }
     Ok(pins)
+}
+
+/// The commit a review row names by `reviewed`, a full revision or a
+/// uniquely resolved hexadecimal abbreviation of at least 7 characters;
+/// `None` when it names none or several.
+fn resolve_reviewed(repo: &Repository, reviewed: &str) -> Option<Oid> {
+    if !(7..=40).contains(&reviewed.len()) || !reviewed.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    repo.find_commit_by_prefix(reviewed)
+        .ok()
+        .map(|commit| commit.id())
+}
+
+/// Whether a review that approves `reviewed` covers `pin` (SPC-013 R-42,
+/// issue #69, TSK-250): `reviewed` resolves to the pin, or to an ancestor
+/// of it that the pin follows only by commits that change the pinned
+/// task's own record and nothing in it but its status and Closeout. A
+/// completion recorded after the review, as cf-ship asks, so needs no
+/// second review before a successor stacks on it. Every commit in the span
+/// is judged against each of its parents, merged side commits included,
+/// so a change followed by its revert still refuses; a root commit in the
+/// span refuses, since the record appears in it unreviewed. `path` is the
+/// pinned record's path at the pin ([`PinBranches::record_path`]).
+///
+/// # Errors
+/// Returns why the history between the review and the pin cannot be read.
+pub(crate) fn review_covers_pin(
+    repo: &Repository,
+    pin: &ReviewedPin,
+    path: &str,
+    reviewed: &str,
+) -> Result<bool, String> {
+    let Some(review) = resolve_reviewed(repo, reviewed) else {
+        return Ok(false);
+    };
+    if review == pin.revision {
+        return Ok(true);
+    }
+    if !repo
+        .graph_descendant_of(pin.revision, review)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(false);
+    }
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.push(pin.revision).map_err(|e| e.to_string())?;
+    walk.hide(review).map_err(|e| e.to_string())?;
+    for revision in walk {
+        let revision = revision.map_err(|e| e.to_string())?;
+        let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
+        let Some(content) = super::acceptance::blob_at(repo, revision, path) else {
+            return Ok(false);
+        };
+        if commit.parent_count() == 0
+            || commit.parent_ids().any(|parent| {
+                super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
+            })
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<String, String> {
@@ -1345,6 +1381,107 @@ pub fn check_work_admission(
     head: &str,
 ) -> Result<WorkStartReport, WorkStartError> {
     check_task_anchor(repo_root, task_id, target, branch, true, &[], Some(head))
+}
+
+/// [`check_work_admission`] for a push of a branch stacked on reviewed
+/// predecessor heads ([`stacked_pins`]): each pinned code dependency is met
+/// by its pin, as `work claim --on` and `work start --on` meet it, instead
+/// of by its status at the merge-base (SPC-013 R-42, issue #69).
+///
+/// # Errors
+/// Returns an identity, anchor or structural readiness refusal.
+pub fn check_work_admission_on(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+    branch: &str,
+    head: &str,
+    pins: &[ReviewedPin],
+) -> Result<WorkStartReport, WorkStartError> {
+    check_task_anchor(repo_root, task_id, target, branch, true, pins, Some(head))
+}
+
+/// The reviewed predecessor heads a push of `task_id`'s branch stacks on
+/// (SPC-013 R-42, issue #69). For each code dependency that is not
+/// complete at the merge-base of `head` with `target`, the one visible
+/// branch tip of that predecessor that `head` contains and the merge-base
+/// does not is its candidate pin. A candidate is honoured only as `work
+/// claim --on` honours it ([`reviewed_pins`]): the unique tip of the
+/// predecessor's branch, holding its record, with a review row naming it
+/// or a commit it follows only by the predecessor's status and Closeout.
+/// Branch tips only nominate; the review row decides. Returns the honoured
+/// pins, none when nothing is stacked.
+///
+/// # Errors
+/// Returns why a candidate is not honoured, or why the range cannot be read.
+pub fn stacked_pins(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+    head: &str,
+    lookup: &ReviewLookup<'_>,
+) -> Result<Vec<ReviewedPin>, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let head_id = head_commit(&repo, Some(head)).map_err(|error| error.to_string())?;
+    let (merge_base, mut records) =
+        anchored_records(&repo, target, head_id).map_err(|error| error.to_string())?;
+    let merge_base = Oid::from_str(&merge_base).map_err(|error| error.to_string())?;
+    if !records.contains_key(task_id) {
+        // A standalone record new on this branch carries its edges at head.
+        let tree = repo
+            .find_commit(head_id)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?;
+        if let Some(task) = records_from_tree(&repo, &tree)
+            .map_err(|error| error.to_string())?
+            .remove(task_id)
+        {
+            records.insert(task_id.to_string(), task);
+        }
+    }
+    let Some(task) = records.get(task_id) else {
+        return Ok(Vec::new());
+    };
+    let mut branches = None;
+    let mut values = Vec::new();
+    for dependency in &task.depends_on {
+        if dependency.kind != DependencyKind::Code
+            || records
+                .get(&dependency.id)
+                .is_some_and(|record| record.status == "complete")
+        {
+            continue;
+        }
+        let contained: std::collections::BTreeSet<Oid> = PinBranches::once(&mut branches, &repo)?
+            .tips_of(&dependency.id)?
+            .into_iter()
+            .filter(|tip| {
+                (*tip == head_id || repo.graph_descendant_of(head_id, *tip).unwrap_or(false))
+                    && *tip != merge_base
+                    && !repo.graph_descendant_of(merge_base, *tip).unwrap_or(false)
+            })
+            .collect();
+        match contained.len() {
+            0 => {}
+            1 => values.push(format!(
+                "{}@{}",
+                dependency.id,
+                contained.first().copied().unwrap_or(merge_base)
+            )),
+            _ => {
+                return Err(format!(
+                "this branch contains several tips of {}'s branches; stack on one reviewed head",
+                dependency.id
+            ))
+            }
+        }
+    }
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pins = reviewed_pins_in(&repo, &mut branches, &values, lookup, false)?;
+    stack_base_in(&repo, &mut branches, &pins)?;
+    Ok(pins)
 }
 
 fn check_task_anchor(
@@ -2496,7 +2633,7 @@ mod tests {
             };
             assert_eq!(branches.pin_branch(&repo, &pin).unwrap(), branch);
         }
-        assert_eq!(branches.task_ids.borrow().len(), 1);
+        assert_eq!(branches.task_paths.borrow().len(), 1);
     }
 
     fn replace_on_main(

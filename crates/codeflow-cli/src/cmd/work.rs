@@ -95,16 +95,21 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         let Ok(hints) = hints.as_mut() else {
             break;
         };
-        if let Ok(pins) = hints.hint(&root, &entry.task_id, &entry.target, &|branch, sha| {
-            let repository = repositories
-                .get_or_init(|| {
-                    codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
-                })
-                .as_ref()
-                .map_err(Clone::clone)?
-                .repository(branch)?;
-            reviewed(&root, &repository, branch, sha)
-        }) {
+        if let Ok(pins) = hints.hint(
+            &root,
+            &entry.task_id,
+            &entry.target,
+            &|branch, sha, covers| {
+                let repository = repositories
+                    .get_or_init(|| {
+                        codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .repository(branch)?;
+                reviewed(&root, &repository, branch, sha, covers)
+            },
+        ) {
             let noun = if pins.len() == 1 {
                 "that pin is"
             } else {
@@ -315,18 +320,34 @@ fn resolve_pins(
     root: &std::path::Path,
     on: &[String],
 ) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
-    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha| {
-        let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
-        reviewed(root, &repository, branch, sha)
+    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, covers| {
+        review_lookup(root, branch, sha, covers)
     })
 }
 
-/// Whether the pull request of `branch` in `repository` names `sha` reviewed.
+/// The review lookup `work claim`, `work start` and `codeflow ci` share
+/// (SPC-013 R-42): the hosted repository of `branch`, then [`reviewed`].
+pub(super) fn review_lookup(
+    root: &std::path::Path,
+    branch: &str,
+    sha: &str,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
+) -> Result<bool, String> {
+    let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
+    reviewed(root, &repository, branch, sha, covers)
+}
+
+/// Whether the pull request of `branch` in `repository` has `sha` as its
+/// head, from the same owner and repository, and an approving review row
+/// naming a revision that `covers` accepts: the head itself, or a commit
+/// the head follows only by the predecessor's status and Closeout. The
+/// revisions are judged only once that pull request is found.
 fn reviewed(
     root: &std::path::Path,
     repository: &str,
     branch: &str,
     sha: &str,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
     // review_repository returns HOST/OWNER/NAME for gh's --repo argument.
@@ -358,17 +379,15 @@ fn reviewed(
         &headings[0],
     );
     for revision in &revisions {
-        if codeflow_core::workgraph::work_start::review_covers_pin(root, branch, revision, sha)
-            .map_err(|error| {
-                format!("cannot verify reviewed revision {revision} for pin {sha}: {error}")
-            })?
-        {
+        if covers(revision).map_err(|error| {
+            format!("cannot verify reviewed revision {revision} for pin {sha}: {error}")
+        })? {
             return Ok(true);
         }
     }
     if !revisions.is_empty() {
         return Err(format!(
-            "no review names pin {sha}; judged revisions {} are not ancestors with only the predecessor's own record changed; cannot verify review for this pin",
+            "no review names pin {sha}, or a commit it follows only by the predecessor's status and Closeout; approved revisions {} do not cover it; cannot verify review for this pin",
             revisions.join(", ")
         ));
     }
