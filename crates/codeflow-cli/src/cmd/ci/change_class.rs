@@ -180,7 +180,7 @@ pub(super) fn classify(entries: Option<&[RangeEntry]>, project: &ProjectPaths) -
     };
     let docs_only = entries
         .iter()
-        .all(|entry| regular(entry) && entry.path.rule_text().is_ok_and(|path| is_docs_path(path)));
+        .all(|entry| regular(entry) && entry.path.rule_text().is_ok_and(is_docs_path));
     ChangeClass {
         docs_only,
         light: docs_only
