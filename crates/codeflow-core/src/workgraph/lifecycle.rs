@@ -2029,11 +2029,13 @@ pub fn changed_paths(
         repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options))
     }
     .map_err(|error| format!("cannot diff from {base}: {}", error.message()))?;
+    // Each name as git records it ([`super::acceptance::git_name`]): a
+    // backslash or a byte that is not UTF-8 never reads as a record's path.
     let mut paths: Vec<String> = diff
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map(|path| super::acceptance::git_name(path.as_os_str().as_encoded_bytes()))
         .collect();
     paths.sort();
     paths.dedup();
