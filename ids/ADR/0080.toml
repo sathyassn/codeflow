@@ -1,0 +1,11 @@
+id = "ADR-0080"
+uid = "e0199111-9f1a-4c96-8741-ab653efd7d27"
+kind = "ADR"
+title = "A completed standalone task's criteria text is corrected by a planning records pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-07T19:01:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
