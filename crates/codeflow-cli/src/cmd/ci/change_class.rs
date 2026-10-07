@@ -16,15 +16,16 @@
 
 use std::path::Path;
 
+use codeflow_core::git::GitName;
 use codeflow_core::workgraph::classify::{path_sets, ProjectPaths};
 
 use super::is_docs_path;
 
-/// One path the range changes, with its Git mode before and after
-/// (`000000` on the side where the path does not exist).
+/// One path the range changes, as git's exact bytes, with its Git mode
+/// before and after (`000000` on the side where the path does not exist).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RangeEntry {
-    pub path: String,
+    pub path: GitName,
     pub old_mode: String,
     pub new_mode: String,
 }
@@ -81,8 +82,9 @@ pub(super) fn range_inventory(
 
 /// Parse `git diff --raw -z --no-renames`: each change is a
 /// `:<old mode> <new mode> <old id> <new id> <status>` field followed by one
-/// path field. Anything else is unproven: `range_inventory` maps None to a
-/// cannot-read error, which `ci::run` refuses.
+/// path field, kept as git's exact bytes. Anything else is unproven:
+/// `range_inventory` maps None to a cannot-read error, which `ci::run`
+/// refuses.
 fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
     let mut fields = stdout.split(|byte| *byte == 0);
     let mut entries = Vec::new();
@@ -98,14 +100,13 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
             return None;
         }
         let path = fields.next().filter(|path| !path.is_empty())?;
-        // OS text rule (issue 79): the path is matched against policy globs
-        // and prefixes, which need text, and a lossy spelling can match a
-        // pattern the real bytes do not (`docs/caf[!x].md`), which would
-        // lighten the checks. A path that is not valid UTF-8 makes the
-        // inventory unproven; range_inventory returns an error and `ci::run` refuses.
-        let path = std::str::from_utf8(path).ok()?;
+        // OS text rule (issue 79): a successfully listed path is part of the
+        // inventory whatever its bytes. `classify` judges a path that is not
+        // valid UTF-8 the strict way (code, never light), since policy globs
+        // and prefixes need text and a lossy spelling could match a pattern
+        // the real bytes do not (`docs/caf[!x].md`).
         entries.push(RangeEntry {
-            path: path.to_string(),
+            path: GitName::from_bytes(path),
             old_mode: old_mode.to_string(),
             new_mode: new_mode.to_string(),
         });
@@ -116,7 +117,9 @@ fn parse_raw(stdout: &[u8]) -> Option<Vec<RangeEntry>> {
 /// The project paths the shared path sets read: the checkout's effective
 /// policy (or its stack default), widened by the target side's own
 /// `git.product_paths` and `git.breaking_watch_paths` at `base`, so neither
-/// side can narrow the surfaces the other names.
+/// side can narrow the surfaces the other names. The target side is read
+/// strictly: a present key that is not an array of strings, or a glob that
+/// does not parse, refuses; an absent key adds nothing.
 pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, String> {
     let mut project = ProjectPaths::load(root)?;
     let target = codeflow_core::hooks::landed_policy::policy_text_at(root, base)?
@@ -126,38 +129,67 @@ pub(super) fn project_paths(root: &Path, base: &str) -> Result<ProjectPaths, Str
         })
         .transpose()?;
     if let Some(policy) = target {
-        let list = |key: &str| -> Vec<String> {
-            policy["git"][key]
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| item.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default()
+        let target = ProjectPaths {
+            product: target_globs(&policy, "product_paths")?,
+            watched: target_globs(&policy, "breaking_watch_paths")?,
         };
-        project.product.extend(list("product_paths"));
-        project.watched.extend(list("breaking_watch_paths"));
+        target
+            .validate()
+            .map_err(|error| format!("cannot read target path policy: {error}"))?;
+        project.product.extend(target.product);
+        project.watched.extend(target.watched);
     }
     Ok(project)
 }
 
+/// One of the target policy's `git` path lists. Absent adds nothing, as
+/// does `git.product_paths: null`, which the policy reads as the stack
+/// default; any other value that is not an array of strings refuses.
+fn target_globs(policy: &serde_json::Value, key: &str) -> Result<Vec<String>, String> {
+    use serde_json::Value;
+    let unreadable = |what: &str| format!("cannot read target path policy: {what}");
+    let Value::Object(policy) = policy else {
+        return Err(unreadable("the policy is not a JSON object"));
+    };
+    let git = match policy.get("git") {
+        None => return Ok(Vec::new()),
+        Some(Value::Object(git)) => git,
+        Some(_) => return Err(unreadable("git is not an object")),
+    };
+    match git.get(key) {
+        None => Ok(Vec::new()),
+        Some(Value::Null) if key == "product_paths" => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str().map(str::to_string).ok_or_else(|| {
+                    unreadable(&format!("git.{key} holds a value that is not a string"))
+                })
+            })
+            .collect(),
+        Some(_) => Err(unreadable(&format!("git.{key} is not an array of strings"))),
+    }
+}
+
 /// The class of a range from its inventory. `None` (unlisted) and an empty
-/// inventory are code, the conservative direction.
+/// inventory are code, the conservative direction, and so is a range with a
+/// path that is not valid UTF-8: no prose or light rule can read its name.
 pub(super) fn classify(entries: Option<&[RangeEntry]>, project: &ProjectPaths) -> ChangeClass {
     let Some(entries) = entries.filter(|entries| !entries.is_empty()) else {
         return ChangeClass::CODE;
     };
     let docs_only = entries
         .iter()
-        .all(|entry| regular(entry) && is_docs_path(&entry.path));
+        .all(|entry| regular(entry) && entry.path.rule_text().is_ok_and(|path| is_docs_path(path)));
     ChangeClass {
         docs_only,
         light: docs_only
-            && entries
-                .iter()
-                .all(|entry| is_light_path(&entry.path, project)),
+            && entries.iter().all(|entry| {
+                entry
+                    .path
+                    .rule_text()
+                    .is_ok_and(|path| is_light_path(path, project))
+            }),
     }
 }
 
@@ -189,20 +221,115 @@ mod tests {
 
     fn entry(path: &str, old_mode: &str, new_mode: &str) -> RangeEntry {
         RangeEntry {
-            path: path.to_string(),
+            path: GitName::from_text(path),
             old_mode: old_mode.to_string(),
             new_mode: new_mode.to_string(),
         }
     }
 
-    /// Issue 79: a path that is not valid UTF-8 makes the inventory unknown (so
-    /// the change reads as code), and is never matched as its lossy spelling.
+    /// Issue 79: a listed path that is not valid UTF-8 stays in the
+    /// inventory as its exact bytes, and its range reads as code: it is never
+    /// matched as its lossy spelling, and never makes the inventory unproven.
     #[test]
-    fn a_raw_path_that_is_not_utf8_makes_the_inventory_unknown() {
+    fn a_raw_path_that_is_not_utf8_is_listed_and_judged_as_code() {
+        let project = ProjectPaths::default();
         let valid = b":100644 100644 aaaa bbbb M\0docs/a.md\0";
-        assert_eq!(parse_raw(valid).map(|entries| entries.len()), Some(1));
+        let entries = parse_raw(valid).unwrap();
+        assert!(classify(Some(&entries), &project).light);
         let odd = b":100644 100644 aaaa bbbb M\0docs/caf\xe9.md\0";
-        assert!(parse_raw(odd).is_none());
+        let entries = parse_raw(odd).unwrap();
+        assert_eq!(entries[0].path.bytes(), b"docs/caf\xe9.md");
+        assert_eq!(classify(Some(&entries), &project), ChangeClass::CODE);
+        // One odd name beside a prose file makes the whole range code.
+        let mixed = b":100644 100644 aaaa bbbb M\0docs/a.md\0\
+:100644 100644 aaaa bbbb M\0docs/caf\xe9.md\0";
+        let entries = parse_raw(mixed).unwrap();
+        assert_eq!(classify(Some(&entries), &project), ChangeClass::CODE);
+    }
+
+    /// A repository whose one commit holds `policy` as its policy file, with
+    /// the file then removed from the working tree so the checkout reads the
+    /// shipped default and only the target side carries the policy under
+    /// test.
+    fn target_policy_repo(policy: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join(".codeflow").join("policy.json");
+        std::fs::create_dir(root.join(".codeflow")).unwrap();
+        std::fs::write(&file, policy).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["add", "."],
+            &["commit", "-q", "-m", "policy"],
+        ] {
+            let out = codeflow_core::git::command()
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@example.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@example.com")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        }
+        std::fs::remove_file(&file).unwrap();
+        dir
+    }
+
+    /// Round 23: the target side's path lists are read strictly. A present
+    /// key that is not an array of strings, an item that is not a string or
+    /// a glob that does not parse refuses instead of being dropped.
+    #[test]
+    fn r23_target_path_policy_refuses_unreadable_lists_and_globs() {
+        for (policy, expected) in [
+            (
+                r#"{"git": {"product_paths": ["docs/**", 5]}}"#,
+                "not a string",
+            ),
+            (r#"{"git": {"product_paths": "docs/**"}}"#, "not an array"),
+            (
+                r#"{"git": {"breaking_watch_paths": {"a": 1}}}"#,
+                "not an array",
+            ),
+            (r#"{"git": {"breaking_watch_paths": null}}"#, "not an array"),
+            (
+                r#"{"git": {"product_paths": ["src/["]}}"#,
+                "invalid git.product_paths glob",
+            ),
+            (
+                r#"{"git": {"breaking_watch_paths": ["docs/["]}}"#,
+                "invalid git.breaking_watch_paths glob",
+            ),
+            (r#"{"git": 5}"#, "git is not an object"),
+            ("[]", "not a JSON object"),
+        ] {
+            let dir = target_policy_repo(policy);
+            let error = project_paths(dir.path(), "HEAD").unwrap_err();
+            assert!(
+                error.contains("cannot read target path policy") && error.contains(expected),
+                "{policy}: {error}"
+            );
+        }
+    }
+
+    /// The control: an absent key or section adds nothing, a null
+    /// `product_paths` reads as absent, and valid lists widen the project.
+    #[test]
+    fn r23_target_path_policy_keeps_absent_keys_and_valid_globs() {
+        let base = project_paths(target_policy_repo("{}").path(), "HEAD").unwrap();
+        for policy in [r#"{"git": {}}"#, r#"{"git": {"product_paths": null}}"#] {
+            let paths = project_paths(target_policy_repo(policy).path(), "HEAD").unwrap();
+            assert_eq!(paths.product, base.product, "{policy}");
+            assert_eq!(paths.watched, base.watched, "{policy}");
+        }
+        let policy = r#"{"git": {"product_paths": ["docs/runtime/**"], "breaking_watch_paths": ["docs/api.md"]}}"#;
+        let paths = project_paths(target_policy_repo(policy).path(), "HEAD").unwrap();
+        assert!(paths.product.iter().any(|path| path == "docs/runtime/**"));
+        assert!(paths.watched.iter().any(|path| path == "docs/api.md"));
     }
 
     fn class(paths: &[&str], project: &ProjectPaths) -> ChangeClass {

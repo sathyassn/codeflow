@@ -287,14 +287,24 @@ const GITLINK_MODE: i32 = 0o160_000;
 
 /// [`range_problem`] for revisions named as text, as `codeflow ci` holds
 /// them: the target (`base`) and the head of a range whose changed paths
-/// are `paths`.
+/// are `paths`, as git's exact bytes. A path that is not valid UTF-8 is
+/// refused by name, as [`entry_problem`] refuses it, before any rule reads
+/// the others as text.
 #[must_use]
 pub fn range_problem_at(
     repo_root: &std::path::Path,
     base: &str,
     head: &str,
-    paths: &[String],
+    paths: &[crate::git::GitName],
 ) -> Option<String> {
+    let mut texts = Vec::with_capacity(paths.len());
+    for path in paths {
+        match path.rule_text() {
+            Ok(text) => texts.push(text.to_string()),
+            Err(odd) => return Some(odd_name_problem(odd.display())),
+        }
+    }
+    let paths = texts.as_slice();
     let resolved = Repository::discover(repo_root)
         .map_err(|error| error.message().to_string())
         .and_then(|repo| {
@@ -377,6 +387,14 @@ pub fn range_problem(repo: &Repository, base: Oid, head: Oid, paths: &[String]) 
     None
 }
 
+/// Why an entry named `shown` cannot ride in a planning amendment: its name
+/// is not plain UTF-8 or holds a backslash.
+fn odd_name_problem(shown: &str) -> String {
+    format!(
+        "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
+    )
+}
+
 /// What an entry of `mode` is when it is not a regular file or folder.
 fn special(mode: i32) -> Option<&'static str> {
     match mode {
@@ -419,9 +437,7 @@ fn entry_problem(repo: &Repository, base: Oid, head: Oid) -> Option<(String, Str
             };
             let shown = crate::git::GitName::from_bytes(name).display().to_string();
             if std::str::from_utf8(name).is_err() || name.contains(&b'\\') {
-                let message = format!(
-                    "a planning-only pull request changes {shown}, whose name is not plain UTF-8 or holds a backslash; a planning amendment carries plainly named files only"
-                );
+                let message = odd_name_problem(&shown);
                 return Some((shown, message));
             }
             if let Some(kind) = special(i32::from(file.mode())) {
@@ -592,6 +608,21 @@ pub(super) fn landing_problem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round 23: a changed path that is not valid UTF-8 is refused by name
+    /// before any rule reads the paths as text, with or without a readable
+    /// repository; a plainly named path reaches the repository read.
+    #[test]
+    fn r23_range_problem_at_refuses_an_odd_name_by_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let odd = crate::git::GitName::from_bytes(b"docs/caf\xe9.md");
+        let problem = range_problem_at(dir.path(), "HEAD", "HEAD", &[odd]).unwrap();
+        assert!(problem.contains(r"docs/caf\xe9.md"), "{problem}");
+        assert!(problem.contains("not plain UTF-8"), "{problem}");
+        let plain = crate::git::GitName::from_text("docs/cafe.md");
+        let problem = range_problem_at(dir.path(), "HEAD", "HEAD", &[plain]).unwrap();
+        assert!(problem.contains("cannot read the range"), "{problem}");
+    }
 
     #[test]
     fn r22_historical_project_paths_reject_invalid_globs_and_keep_absence() {

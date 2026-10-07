@@ -287,7 +287,7 @@ fn criteria(
 /// against the target at the base (ADR-0078): the push-side twin of the
 /// planning class.
 fn planning_amendment_range(root: &Path, range: &Range<'_>) -> Result<bool, String> {
-    let paths: Vec<String> = range_changes(root, range.base, range.head)?
+    let paths: Vec<codeflow_core::git::GitName> = range_changes(root, range.base, range.head)?
         .into_iter()
         .map(|(_, path)| path)
         .collect();

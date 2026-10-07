@@ -3559,7 +3559,7 @@ mod tests {
             files
                 .iter()
                 .map(|path| change_class::RangeEntry {
-                    path: path.clone(),
+                    path: codeflow_core::git::GitName::from_text(path),
                     old_mode: "100644".into(),
                     new_mode: "100644".into(),
                 })
