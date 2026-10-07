@@ -231,7 +231,7 @@ pub const SCHEMA: [KeySpec; 66] = [
     KeySpec {
         path: "git.claim_remotes",
         kind: KeyKind::StringList,
-        valid: "an array of remote names, none starting with a dash",
+        valid: "an array of configured remote names, none starting with a dash",
         purpose: "Additional remotes whose branches count as advisory work claims.",
         notes: "Origin and the target's fetch remote always count. Empty by default; \
                 other remote branches are reported as information. Named remotes \
