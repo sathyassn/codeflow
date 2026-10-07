@@ -1531,12 +1531,12 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
-    // parse_raw returns unproven None for unreadable raw metadata/path; range_inventory converts None to cannot-read Err and ci::run refuses.
+    // parse_raw returns unproven None for raw metadata that is not UTF-8 (git's own ASCII modes and status); range_inventory converts None to cannot-read Err and ci::run refuses. The path field is kept as GitName bytes, not decoded.
     (
         "crates/codeflow-cli/src/cmd/ci/change_class.rs",
         "parse_raw",
         "obtain-absent:from_utf8",
-        2,
+        1,
         "unproven",
     ),
     // Formats Git stderr only after command failure.
@@ -2906,14 +2906,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
-    ),
-    // Scans CRLF/LF prose lines for forbidden literal model tokens; line splitting does not rewrite matched tokens or model IDs.
-    (
-        "crates/codeflow-core/src/model_catalog/scan.rs",
-        "scan",
-        "lines",
-        1,
-        "framing:model-catalog-scan-scan-records",
     ),
     // Rejects whitespace-only schema strings; accepted catalog identity strings remain byte-for-byte unchanged.
     (
@@ -4590,11 +4582,6 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "anchored_override",
     ),
     (
-        "model-catalog-scan-scan-records",
-        "crates/codeflow-core/src/model_catalog/scan.rs",
-        "scan",
-    ),
-    (
         "pr-task-lines",
         "crates/codeflow-cli/src/cmd/ci/adopter.rs",
         "supply_task",
@@ -4751,6 +4738,31 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Fail with each site found but not listed, each count that differs, and
+/// each stale row, one per line, so a widened scan names what to triage.
+fn assert_listed(
+    actual: &BTreeMap<(String, String, String), usize>,
+    allowed: &BTreeMap<(String, String, String), usize>,
+    rule: &str,
+) {
+    let mut problems = Vec::new();
+    for (key, count) in actual {
+        match allowed.get(key) {
+            None => problems.push(format!("unlisted: {key:?} {count}")),
+            Some(listed) if listed != count => {
+                problems.push(format!("count: {key:?} listed {listed}, found {count}"));
+            }
+            Some(_) => {}
+        }
+    }
+    for (key, count) in allowed {
+        if !actual.contains_key(key) {
+            problems.push(format!("stale: {key:?} {count}"));
+        }
+    }
+    assert!(problems.is_empty(), "{rule}:\n{}", problems.join("\n"));
+}
+
 fn valid_framing_owner(reason: &str, file: &str, item: &str) -> bool {
     reason
         .strip_prefix("framing:")
@@ -4788,7 +4800,11 @@ fn guard_whitespace_uses_explicit_separator_rules() {
             )
             .is_none());
     }
-    assert_eq!(actual, allowed, "Unicode whitespace in a guard needs a reviewed reason; shell and git names keep non-separator characters");
+    assert_listed(
+        &actual,
+        &allowed,
+        "Unicode whitespace in a guard needs a reviewed reason; shell and git names keep non-separator characters",
+    );
 }
 
 #[test]
@@ -5029,9 +5045,10 @@ fn hook_and_guard_absence_is_proven() {
             )
             .is_none());
     }
-    assert_eq!(
-        actual, allowed,
-        "absence needs proven_absent or a counted proof with a reason"
+    assert_listed(
+        &actual,
+        &allowed,
+        "absence needs proven_absent or a counted proof with a reason",
     );
 }
 
