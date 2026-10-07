@@ -190,6 +190,37 @@ fn r23_remote_protect_reads_the_nearest_initialized_project() {
     assert!(!String::from_utf8_lossy(&out.stderr).contains("not found"));
 }
 
+/// The defaults note is printed only for a policy proven missing; a policy
+/// behind a dangling link refuses without claiming it was not found.
+#[cfg(unix)]
+#[test]
+fn r23_remote_protect_names_defaults_only_for_a_missing_policy() {
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "notes");
+    let policy = repo.path().join(".codeflow").join("policy.json");
+    fs::remove_file(&policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{errors}");
+    assert!(errors.contains("not found"), "{errors}");
+
+    std::os::unix::fs::symlink("gone.json", &policy).unwrap();
+    let out = run_in(
+        repo.path(),
+        home.path(),
+        &["remote", "protect", "--dry-run"],
+    );
+    let errors = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!out.status.success(), "{errors}");
+    assert!(errors.contains("cannot read policy"), "{errors}");
+    assert!(!errors.contains("not found"), "{errors}");
+}
+
 #[cfg(unix)]
 #[test]
 fn remote_protect_degrades_legibly_on_free_plan_403() {

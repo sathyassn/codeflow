@@ -47,16 +47,18 @@ pub fn run(args: &RemoteArgs) -> anyhow::Result<()> {
         .context("cannot locate repository; repair .codeflow paths before applying protection")?
         .unwrap_or(cwd);
     let policy_path = root.join(".codeflow/policy.json");
-    if !policy_path.is_file() {
+    let mut plan = match ProtectionPlan::from_policy_file(&policy_path) {
+        Ok(plan) => plan,
+        Err(error) => return Err(anyhow::Error::msg(error)),
+    };
+    // Only a policy proven missing gives the defaults; an unreadable one
+    // was refused above.
+    if ProtectionPlan::policy_absent(&policy_path).map_err(anyhow::Error::msg)? {
         eprintln!(
             "note: {} not found — using charter defaults (main, master)",
             policy_path.display()
         );
     }
-    let mut plan = match ProtectionPlan::from_policy_file(&policy_path) {
-        Ok(plan) => plan,
-        Err(error) => return Err(anyhow::Error::msg(error)),
-    };
     // The registry's data profile (SPC-013 R-6, R-22) joins the plan where
     // durable work is tracked; the rules of every other branch are unchanged.
     let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(&root)?;

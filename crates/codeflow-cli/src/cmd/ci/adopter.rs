@@ -118,7 +118,12 @@ pub(super) fn resolve(
         );
     }
 
-    let tracked = codeflow_core::workgraph::durable_work_tracking_enabled(root).unwrap_or(false);
+    let (tracked, unread) = tracking_for_levels(
+        codeflow_core::workgraph::durable_work_tracking_enabled(root),
+    );
+    if let Some(unread) = unread {
+        println!("codeflow ci: {unread}");
+    }
     print_levels(
         raw,
         git,
@@ -294,6 +299,21 @@ struct Ran {
     tracked: bool,
 }
 
+/// Whether the work-record level lines are printed, and the line that says
+/// why they are not when tracking cannot be read. The enforcement reads
+/// tracking itself and surfaces the error; these lines only report levels.
+fn tracking_for_levels<E: std::fmt::Display>(read: Result<bool, E>) -> (bool, Option<String>) {
+    match read {
+        Ok(tracked) => (tracked, None),
+        Err(error) => (
+            false,
+            Some(format!(
+                "the work_records and work_planning levels are not shown: cannot read whether durable work tracking is on: {error}"
+            )),
+        ),
+    }
+}
+
 /// The levels adopter fit resolves before the profile applies, with their
 /// origins.
 #[derive(Clone, Copy)]
@@ -389,6 +409,21 @@ fn print_levels(
 
 #[cfg(test)]
 mod tests {
+    /// A tracking read that fails says so in place of the work-record
+    /// level lines; a read that succeeds prints them or not as before.
+    #[test]
+    fn r23_level_lines_name_an_unread_tracking_state() {
+        let (tracked, unread) = super::tracking_for_levels(Err("boom"));
+        assert!(!tracked);
+        let unread = unread.expect("the failed read is named");
+        assert!(unread.contains("cannot read whether durable work tracking is on: boom"));
+        assert_eq!(super::tracking_for_levels::<String>(Ok(true)), (true, None));
+        assert_eq!(
+            super::tracking_for_levels::<String>(Ok(false)),
+            (false, None)
+        );
+    }
+
     #[test]
     fn r20_head_config_refuses_failed_git_read() {
         let directory = tempfile::tempdir().unwrap();

@@ -163,6 +163,18 @@ pub struct ProtectionPlan {
 }
 
 impl ProtectionPlan {
+    /// Whether the policy file at `path` is proven missing, so the plan
+    /// uses the charter defaults; a dangling link or an unreadable ancestor
+    /// is an error, never absence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path's presence cannot be read.
+    pub fn policy_absent(path: &Path) -> Result<bool, String> {
+        crate::absence::proven_absent(path)
+            .map_err(|error| format!("cannot read policy {}: {error}", path.display()))
+    }
+
     /// Build the plan from a `policy.json` file. Reads
     /// `git.protected_branches` (falling back to a top-level
     /// `protected_branches`, then to `main`/`master`) and derives rule
@@ -174,14 +186,13 @@ impl ProtectionPlan {
     /// Returns an error when the policy cannot be read or its protection fields are invalid.
     pub fn from_policy_file(path: &Path) -> Result<Self, String> {
         let unreadable = |error| format!("cannot read policy {}: {error}", path.display());
-        let policy: serde_json::Value =
-            if crate::absence::proven_absent(path).map_err(unreadable)? {
-                serde_json::json!({})
-            } else {
-                let bytes = std::fs::read(path).map_err(unreadable)?;
-                serde_json::from_slice(&bytes)
-                    .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?
-            };
+        let policy: serde_json::Value = if Self::policy_absent(path)? {
+            serde_json::json!({})
+        } else {
+            let bytes = std::fs::read(path).map_err(unreadable)?;
+            serde_json::from_slice(&bytes)
+                .map_err(|error| format!("cannot parse policy {}: {error}", path.display()))?
+        };
         if !policy.is_object() {
             return Err("policy must be an object".into());
         }

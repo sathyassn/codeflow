@@ -318,8 +318,10 @@ erratum below, never an edit of the section.
   and refuses an issuer email that is not UTF-8. An `origin` URL that is not
   UTF-8 refuses the release policy lookup, a remote name that holds `/` is
   split by the configured remotes, and the release script reads changed paths
-  as exact bytes. One rule is in
-  `docs/architecture.md`, a source scan fails on a new lossy decode that
+  as exact bytes. Ledger compaction waits up to one second for a lock
+  another process holds for a moment, as a child process started while the
+  lock was open does, and still refuses a lock that stays held. One rule is
+  in `docs/architecture.md`, a source scan fails on a new lossy decode that
   is not listed with its reason, and each site that stays strict says why
   next to the code.
 
