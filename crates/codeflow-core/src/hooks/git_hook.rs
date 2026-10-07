@@ -1039,9 +1039,11 @@ pub fn pre_push(
 /// `integration/EPC-*` must not add a commit made directly on the line that
 /// no landed `line_adoptions` entry names. Only the pushed range is judged,
 /// so a line that already carries an older direct commit still receives the
-/// merges that repair it. It runs only where durable work tracking is on,
-/// as the CI class does. A range it cannot read is a note: CI stays the
-/// hard line (charter D19).
+/// merges that repair it. It runs where durable work tracking is on at the
+/// pushed tip or at the default target, as CI's `tracking_on` judges it at
+/// the head or the target, so a direct commit cannot switch the check off
+/// by deleting the records. A tracking state or range it cannot read is a
+/// note: CI stays the hard line (charter D19).
 fn epic_line_push(
     root: &Path,
     repo: &Repository,
@@ -1049,13 +1051,30 @@ fn epic_line_push(
     branch: &str,
     report: &mut StageReport,
 ) {
-    if crate::workgraph::durable_work_tracking_enabled_at(root, &pushed.local_sha) != Ok(true) {
+    let skipped = |report: &mut StageReport, error: &str| {
+        report.notes.push(crate::remedy::Finding::new(
+            format!("the epic-line push check for '{branch}' was skipped: {error}"),
+            crate::remedy::HOOK_UNEVALUATED.remedy(),
+        ));
+    };
+    let default_target = crate::workgraph::default_work_target(root);
+    let tracking = [Some(pushed.local_sha.as_str()), default_target.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(|revision| crate::workgraph::durable_work_tracking_enabled_at(root, revision))
+        .collect::<Vec<_>>();
+    if !tracking.iter().any(|state| state == &Ok(true)) {
+        if let Some(Err(error)) = tracking.iter().find(|state| state.is_err()) {
+            skipped(
+                report,
+                &format!("durable work tracking cannot be read: {error}"),
+            );
+        }
         return;
     }
     let first_push = is_zero_sha(&pushed.remote_sha) || pushed.remote_sha.is_empty();
     let judged = (|| {
-        let target = crate::workgraph::default_work_target(root)
-            .ok_or("no main or master branch to judge the line against")?;
+        let target = default_target.ok_or("no main or master branch to judge the line against")?;
         let base = if first_push {
             let commit = |revision: &str| {
                 repo.revparse_single(revision)
@@ -1081,10 +1100,7 @@ fn epic_line_push(
     let (target, adoptions) = match judged {
         Ok(judged) => judged,
         Err(error) => {
-            report.notes.push(crate::remedy::Finding::new(
-                format!("the epic-line push check for '{branch}' was skipped: {error}"),
-                crate::remedy::HOOK_UNEVALUATED.remedy(),
-            ));
+            skipped(report, &error);
             return;
         }
     };

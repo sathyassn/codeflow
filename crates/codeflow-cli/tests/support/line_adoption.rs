@@ -16,6 +16,14 @@ pub struct Line {
 }
 impl Line {
     pub fn new() -> Self {
+        Self::with_tracking(true)
+    }
+    /// A line in a repository that has never had durable work tracking: no
+    /// task record on the target or the line.
+    pub fn untracked() -> Self {
+        Self::with_tracking(false)
+    }
+    fn with_tracking(tracked: bool) -> Self {
         let f = Self {
             dir: tempfile::tempdir().unwrap(),
             home: tempfile::tempdir().unwrap(),
@@ -24,7 +32,9 @@ impl Line {
         f.git(&["config", "user.name", "Test"]);
         f.git(&["config", "user.email", "test@example.test"]);
         f.write(EPIC_PATH, EPIC);
-        f.write("project-management/tasks/TSK-001.md", &format!("---\nid: TSK-001\nepic_id: EPC-001\ntitle: Work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {LINE}\ncreated: 2026-10-06\n---\n\n# Work\n\n## Description\n\nDeliver work.\n\n## Acceptance Criteria\n\n- AC-1 Work runs.\n- AC-2 The command succeeds. (journey)\n"));
+        if tracked {
+            f.write("project-management/tasks/TSK-001.md", &format!("---\nid: TSK-001\nepic_id: EPC-001\ntitle: Work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\nintegration_target: {LINE}\ncreated: 2026-10-06\n---\n\n# Work\n\n## Description\n\nDeliver work.\n\n## Acceptance Criteria\n\n- AC-1 Work runs.\n- AC-2 The command succeeds. (journey)\n"));
+        }
         f.write(".codeflow/policy.json", "{\"schema_version\":1,\"git\":{\"product_paths\":[\"src/**\"],\"test_gate_on_push\":\"off\"}}\n");
         f.write("src/lib.rs", "pub fn base() {}\n");
         f.commit("chore: plan work");

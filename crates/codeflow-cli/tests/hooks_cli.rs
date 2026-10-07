@@ -7043,13 +7043,28 @@ fn epic_line_adoption_pre_push_merge_only_control() {
     passes(&f.push(ZERO));
 }
 
-/// TSK-248 control: without durable work tracking there is no epic class and
-/// no adoption route, so the push check stays off, as before this change.
+/// TSK-248 control: in a repository that never had durable work tracking
+/// (no task record on the target or the line) there is no epic class and no
+/// adoption route, so the push check stays off, as before this change.
 #[test]
 fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
     use line_adoption_fixture::{passes, Line, ZERO};
+    let f = Line::untracked();
+    let first = f.direct();
+    passes(&f.push(ZERO));
+    f.write("src/lib.rs", "pub fn again() {}\n");
+    f.commit("fix: second direct change");
+    passes(&f.push(&first));
+}
+
+/// TSK-248 review finding: tracking is on when the target or the pushed tip
+/// has it, as in CI (SPC-013 R-70), so a direct commit that deletes the only
+/// task record is still refused while the target keeps tracking on.
+#[test]
+fn epic_line_adoption_pre_push_refuses_a_tip_that_drops_tracking() {
+    use line_adoption_fixture::{blocks, Line, ZERO};
     let f = Line::new();
     f.git(&["rm", "-q", "project-management/tasks/TSK-001.md"]);
-    f.direct();
-    passes(&f.push(ZERO));
+    let direct = f.direct();
+    blocks(&f.push(ZERO), &direct[..9]);
 }
