@@ -277,6 +277,23 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **An after-release epic criterion closes as deferred while its follow-up
+  task serves it.** An epic criterion tagged `(after release)` is observable
+  only once the epic has landed, so its follow-up task is the task that
+  serves it and can only run later. Epic close counted a serving task's
+  result alone, so the epic block's valid `deferred` line was ignored and
+  `codeflow epic status <id> complete` refused with `no complete serving
+  task verified it`, `codeflow validate` and `codeflow ci` with it. The
+  `deferred` line now closes the criterion when its `follow-up` names a
+  serving task that is still open and the block lists it in `follow_ups`.
+  A complete serving task's `verified` or `waived` result still decides; a
+  criterion that is not after-release, a line that names a task which does
+  not serve it, a complete or cancelled follow-up, and a malformed line are
+  refused as before. File the follow-up outside the epic, which still
+  closes only when its own tasks are terminal (SPC-013 R-33 and R-62,
+  sathyassn/codeflow#106).
+
+<!-- codeflow:release-impact patch -->
 - **The docs portal starter takes fixed dependency releases.** New
   advisories against `postcss-selector-parser`, `smol-toml`,
   `source-map-js` and `http-cache-semantics` failed a blocking dependency
