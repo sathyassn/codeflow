@@ -1565,9 +1565,15 @@ fn anchored_records(
 ) -> Result<(String, BTreeMap<String, Record>), WorkStartError> {
     let target_commit = target_reference(repo, target)?
         .ok_or_else(|| WorkStartError::Target(target.to_string()))?;
-    let merge_base = repo
-        .merge_base(head_id, target_commit.id())
-        .map_err(|_| WorkStartError::MergeBase(target.to_string()))?;
+    // Only git's "not found" means the two have no common ancestor; any
+    // other error is a history that could not be read.
+    let merge_base = match repo.merge_base(head_id, target_commit.id()) {
+        Ok(merge_base) => merge_base,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Err(WorkStartError::MergeBase(target.to_string()))
+        }
+        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+    };
     let commit = repo
         .find_commit(merge_base)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
@@ -2440,6 +2446,55 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Round 23: only git's "not found" from the merge-base walk is a
+    /// missing common ancestor; a history object that cannot be read is a
+    /// repository error, which blocks as unreadable tracking state.
+    #[test]
+    fn r23_merge_base_reader_errors_are_repository_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, first) = crate::git::repo_with_tree(dir.path(), &[(b"a", b"1")]);
+        crate::git::add_commit(&repo, &[(b"a", b"2")]);
+        let who = git2::Signature::now("Test", "test@example.com").unwrap();
+        let (side, orphan) = {
+            let parent = repo.find_commit(first).unwrap();
+            let tree = parent.tree().unwrap();
+            let side = repo
+                .commit(None, &who, &who, "side", &tree, &[&parent])
+                .unwrap();
+            let orphan = repo.commit(None, &who, &who, "orphan", &tree, &[]).unwrap();
+            (side, orphan)
+        };
+        drop(repo);
+
+        // The control: no common ancestor is the semantic merge-base error.
+        let repo = Repository::open(dir.path()).unwrap();
+        assert!(matches!(
+            anchored_records(&repo, "main", orphan),
+            Err(WorkStartError::MergeBase(_))
+        ));
+        drop(repo);
+
+        // The shared parent's loose object is damaged, so the walk cannot
+        // read it.
+        let hex = first.to_string();
+        let object = dir
+            .path()
+            .join(".git")
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]);
+        let mut permissions = fs::metadata(&object).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&object, permissions).unwrap();
+        fs::write(&object, b"not a zlib stream").unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        match anchored_records(&repo, "main", side) {
+            Err(WorkStartError::Repository(_)) => {}
+            other => panic!("expected a repository error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn r16_declared_target_does_not_hide_unreadable_record() {
