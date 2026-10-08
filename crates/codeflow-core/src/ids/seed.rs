@@ -625,7 +625,7 @@ fn renumber_files(
         // The renamed record keeps the permissions of the file it is
         // renamed from.
         let permissions = tree.metadata(rel)?.permissions();
-        tree.create_new_keeping(&new, record.after.as_bytes(), Some(permissions))?;
+        tree.create_new_keeping(&new, record.after.as_bytes(), Some(&permissions))?;
     }
     if let Err(error) = rewrite_links(&tree, &planned) {
         return Err(retarget_rollback_error(

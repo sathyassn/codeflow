@@ -276,13 +276,15 @@ impl Tree {
         &self,
         relative: &str,
         bytes: &[u8],
-        permissions: Option<std::fs::Permissions>,
+        permissions: Option<&std::fs::Permissions>,
     ) -> io::Result<()> {
         self.explained(relative, || {
             let (parent, name) = self.parent(relative, true)?;
             let mut file = platform::create_file(&parent, &name, true)?;
             #[cfg(unix)]
-            let kept = permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions));
+            let kept = permissions.map_or(Ok(()), |permissions| {
+                file.set_permissions(permissions.clone())
+            });
             #[cfg(not(unix))]
             let kept = {
                 let _ = permissions;
