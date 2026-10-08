@@ -1180,11 +1180,22 @@ fn ticked_ordinary(criterion: &Criterion) -> bool {
 }
 
 /// Whether every task serving `criterion` is cancelled. A cancelled child
-/// never satisfies the epic's outcome (R-33), so such a criterion is proven
-/// by the epic's own acceptance block, as an unserved one is.
+/// never satisfies the epic's outcome (R-33).
 fn served_only_by_cancelled(epic: &RecordView, criterion: &Criterion, graph: &Graph) -> bool {
     let serving = serving_tasks(epic, criterion, graph);
     !serving.is_empty() && serving.iter().all(|(task, _)| task.status == "cancelled")
+}
+
+/// Whether the epic's own acceptance block proves `criterion`, as it does an
+/// unserved one: it is served only by cancelled tasks and is not observable
+/// only after release. An `(after release)` criterion has no open serving
+/// task to defer to (R-62), so the block alone never closes it.
+fn proven_by_own_block_after_cancellation(
+    epic: &RecordView,
+    criterion: &Criterion,
+    graph: &Graph,
+) -> bool {
+    !criterion.is_after_release() && served_only_by_cancelled(epic, criterion, graph)
 }
 
 /// Whether a task serving `criterion` has verified it: a complete task with
@@ -1226,7 +1237,8 @@ fn awaits_follow_up(epic: &RecordView, criterion: &Criterion, graph: &Graph) -> 
 /// The epic's own acceptance block, when it is the one active block and it
 /// passes the structural rules of R-60 for the criteria it must prove: those
 /// no task serves, unless a legacy tick verifies them, those served only by
-/// cancelled tasks, which a tick never verifies, and the after-release
+/// cancelled tasks, which a tick never verifies (an after-release one is
+/// refused whatever the block says), and the after-release
 /// criteria a task serves but has not verified, which the block defers.
 /// Problems with it are reported, and an invalid block proves nothing.
 fn epic_own_block(
@@ -1239,7 +1251,7 @@ fn epic_own_block(
         .items
         .iter()
         .filter(|criterion| {
-            served_only_by_cancelled(epic, criterion, graph)
+            proven_by_own_block_after_cancellation(epic, criterion, graph)
                 || awaits_follow_up(epic, criterion, graph)
                 || (serving_tasks(epic, criterion, graph).is_empty() && !ticked_ordinary(criterion))
         })
@@ -1308,7 +1320,7 @@ fn epic_criterion_verified(
 ) -> Result<(), String> {
     let serving = serving_tasks(epic, criterion, graph);
     if !serving.is_empty() {
-        if serving.iter().all(|(task, _)| task.status == "cancelled") {
+        if proven_by_own_block_after_cancellation(epic, criterion, graph) {
             // A valid own block was checked against every criterion served
             // only by cancelled tasks; cancelling a task proves nothing.
             return if own_block.is_some() {
@@ -1317,6 +1329,8 @@ fn epic_criterion_verified(
                 Err("served only by cancelled tasks, and the epic has no valid acceptance block verifying it".into())
             };
         }
+        // An after-release criterion whose serving tasks are all cancelled
+        // falls through: no serving task is open, so no deferral stands.
         if serving_verified(criterion, &serving, graph)
             || deferred_to_open_follow_up(criterion, &serving, own_block)
         {

@@ -411,9 +411,10 @@ erratum below, never an edit of the section.
   A complete serving task's `verified` or `waived` result still decides; a
   criterion that is not after-release, a line that names a task which does
   not serve it, a complete or cancelled follow-up, and a malformed line are
-  refused as before. File the follow-up outside the epic, which still
-  closes only when its own tasks are terminal (SPC-013 R-33 and R-62,
-  sathyassn/codeflow#106).
+  refused as before, and so is an after-release criterion whose serving
+  tasks are all cancelled, since none is open to defer to. File the
+  follow-up outside the epic, which still closes only when its own tasks
+  are terminal (SPC-013 R-33 and R-62, sathyassn/codeflow#106).
 
 <!-- codeflow:release-impact patch -->
 - **A pull request can no longer lower its own security review.** The

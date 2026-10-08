@@ -1112,8 +1112,9 @@ fn deferred_epic_block(reviewed: &str, result: &str, follow_ups: &str) -> String
 /// sathyassn/codeflow#106 (SPC-013 R-33, R-62): an `(after release)` epic
 /// criterion served by an open follow-up task closes on the epic block's
 /// `deferred` line that names that task, through the verb and CI. The same
-/// block still refuses a criterion that is not after-release and a line that
-/// names a task which does not serve it.
+/// block still refuses a criterion that is not after-release, a line that
+/// names a task which does not serve it, and any line once every serving task
+/// is cancelled.
 #[test]
 #[allow(clippy::too_many_lines)] // One fixture walks the controls, the verb and CI in order.
 fn an_after_release_epic_criterion_closes_as_deferred_to_its_open_follow_up() {
@@ -1201,6 +1202,38 @@ fn an_after_release_epic_criterion_closes_as_deferred_to_its_open_follow_up() {
         out.contains("no complete serving task verified it"),
         "{out}"
     );
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // Control: every serving task cancelled, so no open server exists, and
+    // the line names the cancelled task or an id that is no record.
+    let (code, out) = run(
+        root,
+        &[
+            "task",
+            "status",
+            "TSK-003",
+            "cancelled",
+            "--reason",
+            "replaced",
+            "--scope",
+            "dropped",
+        ],
+    );
+    assert_eq!(code, 0, "{out}");
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-m", "docs(tasks): cancel the follow-up"]);
+    for name in ["TSK-003", "TSK-009"] {
+        let (code, out) = close(deferred_epic_block(
+            &head(root),
+            &deferred.replace("TSK-003", name),
+            name,
+        ));
+        assert_ne!(code, 0, "{name}: {out}");
+        assert!(
+            out.contains("does not defer it to an open serving task"),
+            "{name}: {out}"
+        );
+    }
     git(root, &["reset", "-q", "--hard", "HEAD~1"]);
 
     // The issue's reproduction: the documented block closes the epic.

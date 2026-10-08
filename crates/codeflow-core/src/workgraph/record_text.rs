@@ -1232,7 +1232,13 @@ pub fn check_block(
             ));
         }
     }
-    if criteria.iter().any(Criterion::is_journey) && outcome_word(&block.journey) != "verified" {
+    // A journey criterion that is also after-release is deferred because it
+    // is observable only after release (R-62): the journey has not run.
+    if criteria
+        .iter()
+        .any(|criterion| criterion.is_journey() && !criterion.is_after_release())
+        && outcome_word(&block.journey) != "verified"
+    {
         problems.push(
             "the record has a journey criterion; `journey` must be `verified | <path exercised>`"
                 .to_string(),

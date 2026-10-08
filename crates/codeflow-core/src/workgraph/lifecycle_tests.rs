@@ -909,6 +909,110 @@ fn the_deferred_line_does_not_close_what_it_does_not_name() {
     assert!(refused.contains("follow-up: TSK-NNN"), "{refused}");
 }
 
+const CANCELLED_CLOSEOUT: &str = "- cancelled: replaced\n- scope: moved elsewhere";
+
+/// Every task that serves an after-release criterion is cancelled, so no
+/// open serving task exists to defer to. A structurally valid line that names
+/// the cancelled task closes nothing (R-33), unlike the own-block close of a
+/// criterion that is not after-release.
+#[test]
+fn a_deferred_line_naming_the_cancelled_serving_task_does_not_close() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[(
+            "TSK-002",
+            follow_up("TSK-002", "cancelled", SERVES_AC1, CANCELLED_CLOSEOUT),
+        )],
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", DEFERRED_TO_TSK_002)],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("does not defer it to an open serving task"),
+        "{refused}"
+    );
+}
+
+/// The same state with a line that names a task that does not serve the
+/// criterion: one that exists and is open, and one that is no record at all.
+#[test]
+fn a_deferred_line_naming_a_non_serving_task_does_not_close_beside_cancelled_servers() {
+    let repo = plan_after_release(
+        AFTER_RELEASE,
+        &[
+            (
+                "TSK-002",
+                follow_up("TSK-002", "cancelled", SERVES_AC1, CANCELLED_CLOSEOUT),
+            ),
+            (
+                "TSK-003",
+                follow_up(
+                    "TSK-003",
+                    "todo",
+                    "- AC-1 When x, the system shall y.",
+                    "Pending.",
+                ),
+            ),
+        ],
+    );
+    for task in ["TSK-003", "TSK-009"] {
+        let line =
+            format!("deferred | owner: coordinator; window: next release; follow-up: {task}");
+        let refused = refusal(close_with(&repo, &[("AC-1", &line)], task));
+        assert!(
+            refused.contains("does not defer it to an open serving task"),
+            "{task}: {refused}"
+        );
+    }
+}
+
+// A criterion tagged `(journey)` and `(after release)` is deferred because it
+// is observable only after release (R-62), so its deferral does not require
+// the journey to have run; a journey criterion that is not after-release does.
+#[test]
+fn a_deferred_after_release_journey_criterion_does_not_force_a_verified_journey() {
+    let both = "- AC-1 (journey) When released, adopters shall report fewer failed installs (after release)";
+    let open = [(
+        "TSK-002",
+        follow_up("TSK-002", "todo", SERVES_AC1, "Pending."),
+    )];
+    let repo = plan_after_release(both, &open);
+    // `epic_results` records `journey: none | n/a`.
+    let written = verb_and_hand_agree(&repo, EPIC_PATH, || {
+        close_with(&repo, &[("AC-1", DEFERRED_TO_TSK_002)], "TSK-002")
+    });
+    assert!(written.contains("AC-1: deferred | owner: coordinator;"));
+
+    // A non-deferred outcome is still refused, on its own message.
+    let repo = plan_after_release(both, &open);
+    let refused = refusal(close_with(
+        &repo,
+        &[("AC-1", "verified | the nightly scan")],
+        "TSK-002",
+    ));
+    assert!(
+        refused.contains("is observable only after release and is never `verified`"),
+        "{refused}"
+    );
+
+    // A journey criterion that is not after-release still needs the journey.
+    let repo = plan_after_release(
+        &format!("{AFTER_RELEASE}\n- AC-2 (journey) On a fresh init, the system shall work."),
+        &open,
+    );
+    let refused = refusal(close_with(
+        &repo,
+        &[
+            ("AC-1", DEFERRED_TO_TSK_002),
+            ("AC-2", "verified | cargo test AC-2"),
+        ],
+        "TSK-002",
+    ));
+    assert!(refused.contains("`journey` must be `verified"), "{refused}");
+}
+
 /// A block that lists other criteria but omits the after-release one
 /// proves nothing about it.
 #[test]
