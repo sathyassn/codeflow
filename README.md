@@ -70,7 +70,7 @@ tiers, ownership and the daily flow.
 
 ## Install
 
-From 3.1.0 on, each release publishes archives for macOS (arm64 and x64), Linux
+From 4.0.0 on, each release publishes archives for macOS (arm64 and x64), Linux
 x64 and Windows x64, each with a `.sha256` file, plus a shell installer and a
 PowerShell installer. 3.0.0 published macOS and Linux only.
 
@@ -80,7 +80,7 @@ Install the latest release on macOS or Linux:
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-On native Windows, once 3.1.0 is the latest release, run this in PowerShell (Git
+On native Windows, once 4.0.0 is the latest release, run this in PowerShell (Git
 for Windows is required):
 
 ```powershell

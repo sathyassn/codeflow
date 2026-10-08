@@ -70,7 +70,7 @@ call it.
 
 | Release | Platforms | Assets |
 |---|---|---|
-| 3.1.0 and later | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` | A `.tar.xz` archive per macOS and Linux target, a `.zip` archive for Windows, a `.sha256` file per archive, a `sha256.sum`, a shell installer, a PowerShell installer and a source archive |
+| 4.0.0 and later | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` | A `.tar.xz` archive per macOS and Linux target, a `.zip` archive for Windows, a `.sha256` file per archive, a `sha256.sum`, a shell installer, a PowerShell installer and a source archive |
 | 3.0.0 | `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` | A `.tar.xz` archive per target, a `.sha256` file per archive, a `sha256.sum`, a shell installer and a source archive; no Windows asset |
 | Before 3.0.0 | Varies by release | Check a release's asset list before pinning it |
 
@@ -80,7 +80,7 @@ Linux-native tooling or Claude sandboxing.
 | Path | Use it when |
 |---|---|
 | The shell installer | You install the latest release on macOS or Linux |
-| The PowerShell installer | You install the latest release, 3.1.0 or later, on native Windows; Git for Windows is required |
+| The PowerShell installer | You install the latest release, 4.0.0 or later, on native Windows; Git for Windows is required |
 | `cargo install --path crates/codeflow-cli` | You build from a checkout and have a Rust toolchain |
 | One platform archive checked against its `.sha256` file | You are pinning a version or scripting the install |
 
@@ -381,14 +381,14 @@ script. It reads the pin from the target branch's current commit, installs
 that release with the same verification, and runs `codeflow ci` from
 a checkout of that commit, so the target's policy judges the change.
 
-| Managed CI, 3.1.0 | What it does |
+| Managed CI, 4.0.0 | What it does |
 |---|---|
 | Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, since whoever replaces a release asset can replace `sha256.sum` too |
 | A table CI cannot use | One from another version, missing the runner's platform, declared or keyed twice, written as a quoted header, an inline or dotted table or a sub-table, a table holding any line but plain `key = "value"` entries, or a state with a backslash in a header or before a line's first `=`, three quote marks in a row on any line but a full-line comment (they could open a multi-line string), a line starting with a character that is not printable ASCII (a byte-order mark or a Unicode space could hide the header), a control character other than a tab, a header or key name outside printable ASCII, or a carriage return inside a line fails the job closed, even where a value, an array element or a comment happens to match. CodeFlow writes the values it serializes so they never match; a name you wrote yourself is kept, so `--pin` refuses and doctor names the line to rewrite. Keep the plain table `--pin` writes |
 | No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request adding the table pass |
 | Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
 | Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit. To adopt: run `codeflow update`, review the merged workflow, land it on the default branch (the only place the schedule runs) and check the scheduled run appears |
-| Security review levels | The `security review` job reads `git.security_review`, `git.dep_audit` and the `osv-scanner.toml` suppressions from the trusted commit (the pull request's base, or the pushed commit), so a pull request cannot lower them; osv-scanner runs with `--no-ignore`. A missing file, key or unknown value fails the job, so land missing keys (`codeflow update` adds them) before the 3.1.0 workflow. `codeflow ci` names a change that lowers either key or edits the setup hook |
+| Security review levels | The `security review` job reads `git.security_review`, `git.dep_audit` and the `osv-scanner.toml` suppressions from the trusted commit (the pull request's base, or the pushed commit), so a pull request cannot lower them; osv-scanner runs with `--no-ignore`. A missing file, key or unknown value fails the job, so land missing keys (`codeflow update` adds them) before the 4.0.0 workflow. `codeflow ci` names a change that lowers either key or edits the setup hook |
 | `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
 
 Details: `assets/base/ci/README.md`.

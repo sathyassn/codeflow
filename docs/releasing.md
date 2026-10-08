@@ -538,7 +538,7 @@ CodeFlow's routes for a critical defect:
 | Marking | The `critical` label at intake, naming the criterion that holds; the bug report template asks the reporter for the same criteria | the primary |
 | Interim guidance | A workaround that is true now, tested before it is posted, in the issue the same day and in the release plan when adopters are affected; it needs no release and changes no guard | the primary |
 | Prioritized fix | The fix moves ahead of planned work in its own epic | the primary; the operator when it moves another epic's planned work or work the operator ordered |
-| Release | Only from the current tip of `main`, so every pending change rides with the fix; the fix lands first and `main` stays green and releasable. Issue 48 (the 3.0.0 managed secret scan covers every branch, so one branch's finding turns an adopter's pull requests red) is fixed in 3.1.0 this way, not in a 3.0.1 patch | the operator dispatches |
+| Release | Only from the current tip of `main`, so every pending change rides with the fix; the fix lands first and `main` stays green and releasable. Issue 48 (the 3.0.0 managed secret scan covers every branch, so one branch's finding turns an adopter's pull requests red) is fixed in 4.0.0 this way, not in a 3.0.1 patch | the operator dispatches |
 | Adopters told | The issue comment, the `CHANGELOG.md` entry with its `Migration` line and the release notes; a security defect goes through [private vulnerability reporting](SECURITY.md), never a public issue | the primary writes, the operator publishes |
 
 #### Why there is no maintenance branch

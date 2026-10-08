@@ -54,7 +54,7 @@ dated evidence.
 ### Platform assurance
 
 - CodeFlow releases target macOS, Linux, and x86-64 native Windows. 3.0.0 was
-  the one release without native Windows, which returns in 3.1.0.
+  the one release without native Windows, which returns in 4.0.0.
 - Windows users can also run the Linux build inside WSL2. This is the preferred
   route for a Linux-native toolchain or Claude work that needs OS-enforced
   sandboxing.
