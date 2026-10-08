@@ -473,6 +473,52 @@ fn a_follow_up_of_an_open_task_still_runs_the_preflight() {
     );
 }
 
+/// AC-4: a follow-up that exists only at the head is no correction. A
+/// `plan/` range adds TSK-005 (blocked, `follow_up_of` the completed
+/// TSK-003) and corrects TSK-003; the target does not hold TSK-005, so the
+/// range cannot authorise its own skip and the anchored preflight runs.
+#[test]
+fn a_follow_up_that_exists_only_at_the_head_still_runs_the_preflight() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "main"]);
+    std::fs::remove_file(root.join(record_path("TSK-005"))).unwrap();
+    commit(root, "docs(records): drop the follow-up");
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    write(
+        root,
+        &record_path("TSK-005"),
+        &format!(
+            "{}\n## Blocker\n\n- reason: waiting on the operator\n- owner: operator\n- revisit: approved\n",
+            task(
+                "TSK-005",
+                None,
+                Some("TSK-003"),
+                "blocked",
+                CRITERIA,
+                "Pending.\n"
+            )
+        ),
+    );
+    commit(root, "docs(records): add the follow-up");
+    let result = ci(root, PLAN, "Task: TSK-005");
+    assert_ne!(
+        result.0, 0,
+        "a follow-up that exists only at the head: {}",
+        result.1
+    );
+    assert!(
+        result.1.contains("work.stable_planning_anchor"),
+        "{}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("starts no work"),
+        "the skip sentence must be absent: {}",
+        result.1
+    );
+}
+
 /// AC-3: the criteria set and every tag stay frozen. An added, removed,
 /// renumbered or reordered criterion, a changed `(journey)`,
 /// `(after release)` or `(serves ...)` tag, or a list item the parser does
