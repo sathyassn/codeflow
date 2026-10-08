@@ -219,6 +219,11 @@ not from its event, so the newest body is judged whichever run survives; for
 that, the job's token gains `pull-requests: read` and stays read-only. Push,
 schedule and dispatch runs each get a group of their own and are never
 cancelled, so a registry check is never replaced by a newer event.
+Concurrency groups are shared across the repository, so any workflow that
+names the same group can cancel the policy check; that fails closed, since
+a cancelled check never passes, and requiring approval to run workflows
+from outside collaborators (the repository's Actions settings) limits who
+can start such a workflow.
 
 ## Project setup hook
 

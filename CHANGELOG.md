@@ -345,7 +345,8 @@ erratum below, never an edit of the section.
   judges reads the pull request's body from the API when it runs, so the
   newest body is judged whichever run survives; the job's token gains
   `pull-requests: read` and stays read-only. Push, schedule and dispatch
-  runs are never grouped or cancelled. CodeFlow's own CI also bounds every
+  runs each get a group of their own and are never cancelled.
+  CodeFlow's own CI also bounds every
   job, installs the Playwright browsers and their system libraries only
   where a browser runs, from cached apt archives with a bounded, retried
   install, and stops a hung read benchmark after 15 minutes instead of 40.

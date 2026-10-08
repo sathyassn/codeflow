@@ -138,14 +138,15 @@ jobs:
       # same evening. The runner image lacks about 180 of those packages, so
       # the step cannot skip them. apt keeps what it downloads in this cache
       # and reuses it, so a run fetches only the package lists and what
-      # changed since. The key follows the runner image; an older image's
-      # archives seed a new one, and apt checks each against its lists.
+      # changed since. Only the exact key restores, with no fallback to an
+      # older entry; the key names the runner image and the Playwright
+      # version. apt verifies the archives it downloads against the signed
+      # package lists, and the lists are always fetched fresh.
       - uses: actions/cache@v6
         if: matrix.part == 'present'
         with:
           path: ~/.cache/playwright-apt
           key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
-          restore-keys: playwright-apt-
       # Each attempt is bounded at 10 minutes (a healthy install takes 0.7
       # minutes at the median and 2.4 at p95) and a failed or stalled attempt
       # is retried once. The system-library install runs as root under its
