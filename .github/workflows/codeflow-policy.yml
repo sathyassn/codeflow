@@ -24,7 +24,14 @@
 # R-14, R-20, R-109; ADR-0072), so one target build serves both. Push,
 # schedule and dispatch runs keep their own event's commit and run only the
 # registry check; with durable work tracking off, `codeflow ids check` passes
-# with a note. No concurrency group: a registry run is never replaced by a
+# with a note.
+#
+# Pull request runs share one concurrency group per pull request, so a newer
+# event (a push, then a body edit seconds later) cancels the run it
+# supersedes. The judging run reads the pull request's body from the API
+# when it runs, never from its event, so the newest body is judged whichever
+# run survives. Push, schedule and dispatch runs each get a group of their
+# own run and are never cancelled: a registry run is never replaced by a
 # newer queued event.
 #
 # This repository's copy: CodeFlow is its own first consumer, so the install
@@ -44,10 +51,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.event_name == 'pull_request_target' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-run-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 jobs:
   commit-lint:
     name: commit standards
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Read access to pull requests serves the body step below and nothing
+    # else; the token stays read-only.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # The target, never the pull request head: for a pull request its base
       # commit, otherwise the event's own commit. The binary, the pin and the
@@ -83,6 +100,30 @@ jobs:
             echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); the newer run judges it"; exit 1
           fi
 
+      # The body is read when the job runs, never taken from the event. An
+      # event carries the body as it was when the event fired, and the run
+      # that survives the concurrency group can belong to an older event (one
+      # delivered late, or a re-run), so only the current body is the newest.
+      # The text is written as a step output under a random delimiter and is
+      # never interpolated into a script.
+      - name: Read the pull request's current body
+        id: body
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --max-time 60 \
+            -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -o "${RUNNER_TEMP}/pull.json"
+          delimiter="codeflow_body_$(openssl rand -hex 16)"
+          {
+            echo "text<<${delimiter}"
+            jq -r '.body // ""' "${RUNNER_TEMP}/pull.json"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
       # The PR body reaches `codeflow ci` through `env:`, never interpolated
       # into the script, so an untrusted body cannot inject shell.
       - name: codeflow ci (commit + branch + PR-body standards)
@@ -91,7 +132,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          CODEFLOW_PR_BODY: ${{ steps.body.outputs.text }}
           ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
         run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"
 

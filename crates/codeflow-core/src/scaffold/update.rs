@@ -1371,7 +1371,7 @@ mod tests {
         assert_eq!(scan_order(shipped), none);
         assert_eq!(scan_order(own), none);
 
-        let checkout = "    name: secret scan\n    runs-on: ubuntu-24.04\n    steps:\n      \
+        let checkout = "    name: secret scan\n    runs-on: ubuntu-24.04\n    timeout-minutes: 30\n    steps:\n      \
                         - uses: actions/checkout@v6\n        with:\n          fetch-depth: 0\n";
         assert!(shipped.contains(checkout));
         let added = shipped.replacen(

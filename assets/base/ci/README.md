@@ -202,6 +202,24 @@ itself, as a GitHub `pull_request` workflow does, so a change can edit its
 own install step. The pin does not defend that edit: require review of the
 CI file and `.codeflow/` in the host's rules.
 
+## Timeouts and superseded runs
+
+A job with no `timeout-minutes` runs for up to GitHub's default six hours
+when a step stalls, and holds a runner while it does. The `secret scan` and
+`security review` jobs stop after 30 minutes and the enforcing `commit
+standards` job after 20; a timed-out job fails, never passes. The `gates`
+job has no cap, because it runs your own suite, whose length only you know;
+add one to your copy when you know it (`codeflow update` keeps your edit).
+
+`codeflow-policy.yml` runs once per pull request event, and a push followed
+by a body edit sends two events seconds apart. Pull request runs share one
+concurrency group per pull request, so the newer run cancels the older one.
+The run that judges reads the pull request's body from the API when it runs,
+not from its event, so the newest body is judged whichever run survives; for
+that, the job's token gains `pull-requests: read` and stays read-only. Push,
+schedule and dispatch runs each get a group of their own and are never
+cancelled, so a registry check is never replaced by a newer event.
+
 ## Project setup hook
 
 The gate runs on the runner's default toolchain unless the project sets up
