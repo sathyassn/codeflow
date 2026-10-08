@@ -111,9 +111,17 @@ class GateContracts(unittest.TestCase):
         # The quick gate stays light: no quick target pulls in a build producer
         # (fmt and clippy need no web build; there is no present build.rs).
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}
-        self.assertEqual(quick, {'rust-format', 'rust-clippy', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
+        self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:
             self.assertLessEqual(closure(name), quick, name)
+        # TSK-256: the push set replays `codeflow update` on this repository, so a
+        # shipped asset changed without a resync fails before review. The replay
+        # runs from the quick mode only (essential and full already reach it
+        # through the workspace test run) and requires no producer.
+        replay = targets['repository-update-noop']
+        self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
+        self.assertEqual(replay.get('requires', []), [])
+        self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
         for name in ['present-browser', 'read-benchmark', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])

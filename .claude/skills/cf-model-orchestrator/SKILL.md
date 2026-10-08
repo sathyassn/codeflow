@@ -320,7 +320,10 @@ an approved epic does not repeat discovery; it starts from the epic plan.
 Claude drafts the one plan **from its native session**: the design options
 and recommendation, or the recorded constraint when the brief already
 dictates one clear direction. Codex challenges that plan against its own
-findings: feasibility, failure modes, security, testing, maintainability, and
+findings: feasibility, failure modes, security, testing, maintainability,
+fit to the existing code (the mechanism extended, what is reused, each
+departure with its reason), one failure case composing two mechanisms the
+design names, whether a criterion can pass while the outcome is missed, and
 whether a simpler proportionate design satisfies the same requirements. There
 is no second plan and no reconciliation round. A Grok host does not author
 the design pass. The plan records the fields in the quality contract's plan

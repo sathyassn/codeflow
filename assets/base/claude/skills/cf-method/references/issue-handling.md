@@ -17,11 +17,11 @@ report -> intake -> cause and class -> sibling sweep -> group by cause
    bounded probe, or records why it cannot, as the workflow discipline rules'
    "Navigate blockers" says. It judges the report against the critical
    criteria below and says which one holds, or that none does. The
-   reproduction and the severity call go in an issue comment.
+   reproduction and the severity call go in the PR Summary or the design note.
 2. **Cause and class.** Name the mechanism with file:line and the defect
    class: the rule the code broke, in one sentence someone can search for,
    such as "a strict decode of text the operating system supplies" or "a
-   substring match over prose". They go in the same comment.
+   substring match over prose". They go in the same place.
 3. **Sibling sweep.** Search the tree for the class and list every site with
    file:line, or write "none found" with what was searched. Every site goes
    in the same unit. When a split reason from the planning rules applies (size,
