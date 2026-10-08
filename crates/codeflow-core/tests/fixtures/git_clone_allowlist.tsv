@@ -12,9 +12,10 @@ crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"sh\", \"-c\", \"/u
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"sh\", \"-c\", \"cd x && git -C dir clone --depth 2 a b\"]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"sh\", \"-c\", \"git clone x y\"]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"sh\", \"-c\", \"set -e\\ngit clone a b\"]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
+crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args(\"-C dir clone --depth 2 a b\".split(' '));"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args(\"clone --bare a b\".split(' '));"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"git(dir, &[\"clone\",\"--no-local\",\"-ql\",src,dst]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
-crates/codeflow-core/tests/git_spawn_contract.rs	any(|(at,word)|{*word=="clone"&&(at==0||words[at-1].starts_with('-')||words[..at].iter().any(|before|names_git(before)))})	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
+crates/codeflow-core/tests/git_spawn_contract.rs	any(|(at,word)|{*word=="clone"&&(at==0||words[..at].iter().any(|before|option(before)||names_git(before)))})	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	clone_spans("// git clone x y")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	contains(&"clone")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	format!("{file}: git(dir,&[\"clone\",\"-q\",\"--depth\",\"2\",&url,\"copy\"]): found 1, allowed 0; AC-4 requires review")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.

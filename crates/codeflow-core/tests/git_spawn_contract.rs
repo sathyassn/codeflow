@@ -664,9 +664,10 @@ fn call_span(toks: &[Token], index: usize) -> (usize, usize) {
 /// Whether a decoded literal can carry a clone invocation, read as the shell
 /// commands it could hold: in one command (text between line ends, `;`,
 /// `&`, `|`, backticks or parentheses), whose words are split at blanks and
-/// commas and stripped of quotes and brackets, the word `clone` comes first,
-/// right after an option, or anywhere after a word that names git. An argument
-/// vector element (`"clone"`), a shell line (`"git -C dir clone a b"`) and a
+/// commas and stripped of quotes and brackets, the word `clone` comes first
+/// or after an option (`-C`, `--no-pager`) or a word that names git. An
+/// argument vector element (`"clone"`), a shell line (`"git -C dir clone a
+/// b"`), an argument list without the program (`"-C dir clone a b"`) and a
 /// split command (`"clone --bare a b"`) each match; prose that says "this
 /// clone" or quotes `git fetch` beside it does not, so a message is judged
 /// as text and never needs an allowance.
@@ -679,11 +680,17 @@ fn clone_invocation(value: &str) -> bool {
                 .map(|word| word.trim_matches(|c: char| "\"'[]{}".contains(c)))
                 .filter(|word| !word.is_empty())
                 .collect();
+            let option = |word: &str| {
+                word.strip_prefix('-')
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|c| c == '-' || c.is_ascii_alphanumeric())
+            };
             words.iter().enumerate().any(|(at, word)| {
                 *word == "clone"
                     && (at == 0
-                        || words[at - 1].starts_with('-')
-                        || words[..at].iter().any(|before| names_git(before)))
+                        || words[..at]
+                            .iter()
+                            .any(|before| option(before) || names_git(before)))
             })
         })
 }
@@ -840,6 +847,7 @@ fn clone_literals_refuse_every_invocation_form() {
         r#"cmd.args(["sh", "-c", "/usr/bin/git --no-pager clone a b"]);"#,
         r#"cmd.args(["sh", "-c", "set -e\ngit clone a b"]);"#,
         r#"let js = "spawnSync(\"git\",[\"clone\",a,b])";"#,
+        r#"cmd.args("-C dir clone --depth 2 a b".split(' '));"#,
     ] {
         assert!(!clone_spans(source).is_empty(), "{source}");
     }
@@ -859,6 +867,7 @@ fn clone_prose_is_not_an_invocation() {
         r#"assert!(ok, "clone: {}", err);"#,
         r#"ok(&out, "task new in a second clone");"#,
         r#"dir.join("managed-clone");"#,
+        r#"eprintln!("this repository - a clone of the fixture - is shallow");"#,
     ] {
         assert!(clone_spans(source).is_empty(), "{source}");
     }
