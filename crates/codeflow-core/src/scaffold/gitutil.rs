@@ -376,12 +376,9 @@ mod tests {
         std::fs::create_dir(&main).unwrap();
         crate::git::repo_with_tree(&main, &[(b"a.txt", b"x")]);
         let bare = dir.path().join("meta\r");
-        let clone = crate::git::command()
-            .args(["clone", "-q", "--bare"])
-            .arg(&main)
-            .arg(&bare)
-            .output()
-            .unwrap();
+        let clone = codeflow_fixture::clone(dir.path(), &main, &bare)
+            .bare()
+            .output();
         if !clone.status.success() {
             return; // this volume refuses the name
         }

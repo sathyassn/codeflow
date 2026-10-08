@@ -702,12 +702,9 @@ mod tests {
             assert!(out.status.success(), "{args:?}: {out:?}");
         };
         let target = bare.clone();
-        let clone = crate::git::command()
-            .args(["clone", "-q", "--bare"])
-            .arg(&main)
-            .arg(&target)
-            .output()
-            .unwrap();
+        let clone = codeflow_fixture::clone(dir.path(), &main, &target)
+            .bare()
+            .output();
         if !clone.status.success() {
             return; // this volume refuses the name
         }
