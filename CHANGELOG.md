@@ -270,6 +270,22 @@ erratum below, never an edit of the section.
 
 ### Changed
 
+<!-- codeflow:release-impact major -->
+- **The installed manifest no longer records file digests.**
+  `.codeflow/manifest.json` (schema 2) lists each installed file's source,
+  ownership and exec bit; the pristine copy under `.codeflow/.baseline/` is
+  the one record of what CodeFlow installed, and `update`, `init` and
+  `doctor` compare bytes with it. Two pull requests that change the same
+  managed file no longer conflict in the manifest (issue 119). A file whose
+  baseline is missing is never replaced or removed on the next update: it is
+  proposed as `<path>.new`, or kept and unmanaged, and `doctor` warns.
+  Migration: upgrade to 4.0.0, run `codeflow update` once, and commit
+  `.codeflow/manifest.json` with the rest of the update; if your repository
+  does not track `.codeflow/.baseline/`, commit it in the same change. Move
+  every checkout and CI pin to 4.0.0 with it: a 3.0.0 `codeflow update`
+  fails on the new file with a missing `sha256` field, and a 3.0.0
+  `doctor --check managed-drift` passes without checking.
+
 <!-- codeflow:release-impact minor -->
 - **The managed model roster adds Claude Sonnet 5.5 and adopts GPT-6.1 Sol.**
   The primary seats do not change: the Claude primary seat is Opus 5.5, then
