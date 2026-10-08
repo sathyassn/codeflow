@@ -410,6 +410,92 @@ fn offline_issue_is_pending_and_sync_publishes_or_names_retarget() {
     issue::sync(&b).unwrap();
 }
 
+// --- TSK-241: operator feedback ids ----------------------------------------
+
+/// TSK-241 AC-1 and AC-7: an `FB` id has its own sequence on the shared
+/// registry, an offline one publishes with sync, and a feedback record binds
+/// to its entry by uid in the merge rule and in `ids check`, as a task does.
+#[test]
+fn feedback_ids_take_their_own_sequence_and_bind_like_any_record() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    let b = world.clone_as("b", "b@example.test");
+    let feedback =
+        |root: &Path, title: &str| issue::reserve(root, &Request::issue(Kind::Fb, title, "main"));
+    task(&a, "a task first").unwrap();
+    let first = feedback(&a, "version the api").unwrap();
+    assert_eq!(first.id.to_string(), "FB-001");
+    assert_eq!(first.standing, Standing::Reserved);
+    let second = feedback(&a, "plain titles").unwrap();
+    assert_eq!(second.id.to_string(), "FB-002");
+    let ledger = world.remote_ledger();
+    assert_eq!(ledger.entry(&first.id).unwrap().uid, first.uid);
+    assert_eq!(first.id.registry_path(), "ids/FB/001.toml");
+    let tree = git(
+        &world.bare(),
+        &["ls-tree", "-r", "--name-only", "codeflow/registry"],
+    );
+    assert!(tree.lines().any(|path| path == "ids/FB/001.toml"), "{tree}");
+
+    // Offline: pending, then published by sync.
+    let url = world.bare().to_str().unwrap().to_string();
+    git(&b, &["fetch", "-q", "origin"]);
+    git(
+        &b,
+        &["remote", "set-url", "origin", "/nonexistent/remote.git"],
+    );
+    let pending = feedback(&b, "offline feedback").unwrap();
+    assert_eq!(pending.standing, Standing::Pending);
+    assert_eq!(pending.id.to_string(), "FB-003");
+    git(&b, &["remote", "set-url", "origin", &url]);
+    assert_eq!(issue::sync(&b).unwrap().published, vec![pending.id.clone()]);
+
+    // The merge rule binds a feedback record by its uid; an unreserved one
+    // blocks and names admission.
+    git(&a, &["checkout", "-q", "-b", "integration/one"]);
+    git(&a, &["push", "-q", "origin", "integration/one"]);
+    git(&a, &["checkout", "-q", "-b", "task/TSK-001-feedback"]);
+    let record = |id: &str, uid: &str| {
+        format!("---\nid: {id}\nuid: {uid}\ntitle: \"{id}\"\nstatus: received\n---\n\n## Verbatim\n\n> words\n")
+    };
+    let dir = a.join("project-management/feedback");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("FB-001.md"), record("FB-001", &first.uid)).unwrap();
+    commit_all(&a, "feedback record");
+    let git_a = Git::new(&a);
+    let pass = check::merge_rule(&git_a, "integration/one", "HEAD").unwrap();
+    assert!(pass.passed(), "{:?}", pass.blocks);
+    assert!(pass
+        .info
+        .iter()
+        .any(|line| line == &format!("bound: FB-001 -> {}", first.uid)));
+    std::fs::write(dir.join("FB-040.md"), record("FB-040", &new_uid())).unwrap();
+    commit_all(&a, "unreserved feedback");
+    let blocked = check::merge_rule(&git_a, "integration/one", "HEAD").unwrap();
+    assert!(
+        blocked
+            .blocks
+            .iter()
+            .any(|line| line.contains("FB-040: not reserved")),
+        "{:?}",
+        blocked.blocks
+    );
+    git(&a, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // `ids check`, as the policy workflow runs it, passes and counts the kind.
+    git(&a, &["fetch", "-q", "origin"]);
+    let report = check::check(&git_a, None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+    assert!(
+        report
+            .info
+            .iter()
+            .any(|line| line.starts_with("FB: highest 3")),
+        "{:?}",
+        report.info
+    );
+}
+
 // --- AC-5: admission and crash between reserve and write -------------------
 
 #[test]

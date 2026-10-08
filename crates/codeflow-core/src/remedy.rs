@@ -223,6 +223,9 @@ catalog! {
     /// References into an absent decisions layer.
     DOCS_ADRS_UNCHECKED = Step::Codeflow("codeflow adr new"),
         "create each decision named with `codeflow adr new`, or remove the references to it";
+    /// A written feedback index that no longer matches the items.
+    FEEDBACK_INDEX_STALE = Step::Codeflow("codeflow feedback list"),
+        "regenerate it with `codeflow feedback list --write`, or delete it: the index is optional";
     /// References into an absent capability registry.
     DOCS_CAPABILITIES_UNCHECKED = Step::Edit("docs/capabilities.md"),
         "add each capability named to docs/capabilities.md, or remove the references to it";
