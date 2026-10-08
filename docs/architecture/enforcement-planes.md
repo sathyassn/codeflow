@@ -344,12 +344,23 @@ level:
   stays a residual. This replaces a list of programs that run text, which an
   unlisted spelling always escaped;
 - a command-valued setting that names a class file, on any line, with or
-  without produced text: a global `git -c` or `--config-env` (git with one
-  is not a reader), and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`,
-  `LESSOPEN`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`,
-  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `GIT_CONFIG_VALUE_n` and similar
-  variables, set on the call or exported (`GIT_EDITOR='echo x >> ~/.zshrc'
-  git commit`);
+  without produced text: a global `git -c`, `--config-env` or `--exec-path`
+  whose value names a class file or, on a line that names one, cannot be
+  read, and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`, `LESSOPEN`,
+  `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`,
+  `GIT_ASKPASS`, `GIT_CONFIG_VALUE_n` and similar variables, set on the call
+  or exported (`GIT_EDITOR='echo x >> ~/.zshrc' git commit`). The value is
+  read after the line's own assignments are filled in, including those that
+  only use `$HOME`, `${HOME}`, `$ZDOTDIR`, `$XDG_CONFIG_HOME` or an earlier
+  assigned name (`F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'`). An innocent
+  value (`-c color.ui=never`, `EDITOR=vim`) changes nothing. On a staged line
+  a command-valued setting must also be a bare viewer or editor (`vim`,
+  `less`), since any other command could run what the call wrote, and the
+  variables that pick the program itself (`PATH`, `SHELL`, `LD_*`,
+  `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_EXEC_PATH`,
+  `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`) refuse
+  whatever the value, because a value can point at a program or a
+  configuration file the call wrote;
 - quoting is decoded before any of these checks reads a word: ANSI-C
   `$'\x2ezshrc'` (hex, octal, `\u`, `\U`, `\c` and the letter escapes),
   locale `$"..."`, and adjacent quoted pieces (`'.zs''hrc'`, `.z"s"hrc`);
