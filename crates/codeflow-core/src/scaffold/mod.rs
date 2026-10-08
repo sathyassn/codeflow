@@ -29,6 +29,7 @@ pub mod portal;
 pub mod pr_template;
 pub mod prior_release;
 pub mod region;
+pub mod release_pin;
 pub mod report;
 pub mod rule_map;
 pub mod settings_merge;
