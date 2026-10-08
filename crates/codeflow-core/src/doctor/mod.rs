@@ -6253,6 +6253,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_managed_drift_warns_on_a_matching_legacy_digest_without_a_baseline() {
+        // The digest proves the block unedited, but the baseline is still
+        // missing, so the check warns about that and not about a hand edit.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("# Mine\n\n{REGION_BLOCK}\n"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "scaffold_version": "3.0.0",
+            "files": {"AGENTS.md": {
+                "src": "AGENTS.md.tmpl",
+                "ownership": "managed-region",
+                "sha256": sha256_hex(REGION_BLOCK.as_bytes()),
+            }},
+        });
+        std::fs::write(root.join(".codeflow/manifest.json"), legacy.to_string()).unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(
+            r.message.contains("no baseline") && !r.message.contains("hand-edited"),
+            "{}",
+            r.message
+        );
+    }
+
     // --- test-config --------------------------------------------------------
 
     fn write_test_config(root: &Path, body: &str) {

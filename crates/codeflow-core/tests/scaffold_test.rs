@@ -2258,6 +2258,35 @@ fn update_keeps_a_legacy_digest_while_its_entry_is_ignored_and_drops_it_after() 
 }
 
 #[test]
+fn update_trusts_the_baseline_over_a_legacy_digest_that_matches_the_live_file() {
+    // The baseline is the one record: when it reads, a legacy digest is not
+    // consulted even if it equals the hash of the live bytes. Consulting the
+    // digest first would Replace this edited file with the shipped version.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let mine = read(&root, DEVELOP).replace("step eight", "step eight (mine)");
+    std::fs::write(root.join(DEVELOP), &mine).unwrap();
+    edit_manifest(&root, |m| {
+        m["schema_version"] = 1.into();
+        m["files"][DEVELOP]["sha256"] = scaffold::sha256_hex(mine.as_bytes()).into();
+    });
+    assert_eq!(
+        read(&root, &format!(".codeflow/.baseline/{DEVELOP}")),
+        DEVELOP_V1,
+        "the baseline differs from the live file"
+    );
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_ne!(action_of(&report, DEVELOP), Action::Changed);
+    let live = read(&root, DEVELOP);
+    assert_ne!(live, DEVELOP_V2, "the edited file was replaced");
+    assert!(live.contains("step eight (mine)"), "the edit is kept");
+}
+
+#[test]
 fn update_refuses_a_manifest_schema_newer_than_it_reads() {
     // A3d.
     isolate_git();
