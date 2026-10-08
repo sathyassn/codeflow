@@ -493,10 +493,9 @@ With no remote, `codeflow integrate` replaces the pull request.
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
-The PR shows green required checks, and a human merges it. [How work moves to
-main](delivery.md) covers how a batch of reviewed tasks lands with one full
-gate, how an epic closes into `main`, and what happens when something changes
-midway.
+[How work moves to main](delivery.md) covers how a batch of reviewed tasks
+lands with one full gate, how an epic closes into `main`, and what happens
+when something changes midway.
 
 ### Related guides
 
