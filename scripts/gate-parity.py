@@ -10,11 +10,13 @@ Linux full gate are also checked.
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".codeflow" / "test-config.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "codeflow-ci.yml"
+DIST_CONFIG = ROOT / "dist-workspace.toml"
 
 
 def norm(cmd: str) -> str:
@@ -463,11 +465,23 @@ def gate_binary_problems(cfg: dict) -> list[str]:
 
 
 # TSK-254: a job with no timeout holds a runner for GitHub's default six
-# hours when a step stalls, and its verdict waits as long. Every job names
-# its own `timeout-minutes`, a plain whole number, so a stall frees the slot
-# and fails the verdict.
+# hours when a step stalls, and its verdict waits as long. Every job in every
+# workflow this repository runs or ships names its own `timeout-minutes`, a
+# plain whole number, so a stall frees the slot and fails the verdict. A job
+# that only calls a reusable workflow (`uses:`) cannot carry the key (GitHub
+# rejects it); the called workflow's own jobs carry it and are checked here.
 TIMEOUT_KEY = re.compile(r"^ {4}timeout-minutes:")
 TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: [1-9][0-9]*$")
+CALLER_LINE = re.compile(r"^ {4}uses:", re.M)
+WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
+# A shipped template cannot size a job that runs the adopter's own commands.
+# Each exemption names its reason; a stale one (the job is gone) is drift.
+UNBOUNDED_BY_DESIGN = {
+    "assets/base/ci/codeflow-ci.yml": {
+        "gates": "runs the adopter's own suite, whose length only the adopter knows",
+        "candidate": "tracked in TSK-254 follow-up notes; bound it when this job is next edited",
+    },
+}
 
 
 def jobs_section(workflow: str) -> dict[str, str]:
@@ -476,15 +490,62 @@ def jobs_section(workflow: str) -> dict[str, str]:
     return workflow_jobs("jobs:" + parts[1]) if len(parts) == 2 else {}
 
 
-def timeout_problems(workflow: str) -> list[str]:
+def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None) -> list[str]:
     jobs = jobs_section(workflow)
-    problems = [] if jobs else ["the workflow has no `jobs:` section to check for timeouts"]
+    where = f" in {label}" if label else ""
+    exempt = exempt or {}
+    problems = [] if jobs else [f"the workflow{where} has no `jobs:` section to check for timeouts"]
+    for name in exempt:
+        if name not in jobs:
+            problems.append(f"{label or 'the workflow'} exempts job '{name}' from a timeout but has no such job; "
+                            "drop the stale exemption")
     for name, text in jobs.items():
+        if name in exempt or CALLER_LINE.search(text):
+            continue
         own = [line.rstrip() for line in text.splitlines() if TIMEOUT_KEY.match(line)]
         if len(own) != 1 or not TIMEOUT_LINE.match(own[0]):
-            problems.append(f"job '{name}' must carry exactly one `timeout-minutes: <whole minutes>` "
+            problems.append(f"job '{name}'{where} must carry exactly one `timeout-minutes: <whole minutes>` "
                             f"of its own, so a stalled step cannot hold its runner for six hours; found {own}")
     return problems
+
+
+def workflow_files() -> list[Path]:
+    """Every GitHub workflow this repository runs or ships, relative to ROOT."""
+    found = []
+    for directory in WORKFLOW_DIRS:
+        for path in sorted((ROOT / directory).glob("*.y*ml")):
+            text = path.read_text()
+            # assets/base/ci also holds other CI systems' files; a workflow
+            # names its triggers and jobs at the top level.
+            if directory.parts[0] == ".github" or re.search(r"^(on|\"on\"|'on'|jobs):", text, re.M):
+                found.append(path.relative_to(ROOT))
+    return found
+
+
+def all_timeout_problems() -> list[str]:
+    files = workflow_files()
+    problems = [] if files else ["no workflow files were found to check for timeouts"]
+    for relative in files:
+        problems += timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+                                     UNBOUNDED_BY_DESIGN.get(relative.as_posix()))
+    return problems
+
+
+# dist 0.32 writes release.yml and cannot set a job timeout, so the timeouts
+# are added by hand. dist's integrity check fails `dist plan` on a hand edit
+# unless the config allows it, and with the key removed a `dist generate`
+# rewrites the file without the timeouts (which `all_timeout_problems` then
+# refuses).
+def dist_problems(config_path: Path | None = None, release: Path | None = None) -> list[str]:
+    config_path = config_path or DIST_CONFIG
+    release = release or ROOT / ".github" / "workflows" / "release.yml"
+    if not release.exists() or not config_path.exists():
+        return []
+    allowed = tomllib.loads(config_path.read_text()).get("dist", {}).get("allow-dirty", [])
+    if "ci" in allowed:
+        return []
+    return ["dist-workspace.toml must set `allow-dirty = [\"ci\"]` while release.yml carries hand-added job "
+            "timeouts; otherwise `dist plan` rejects the file and `dist generate` rewrites it without them"]
 
 
 # TSK-254: only the present part launches a browser, so only it touches
@@ -528,7 +589,7 @@ def main() -> int:
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
             + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
-            + timeout_problems(workflow) + playwright_problems(workflow))
+            + all_timeout_problems() + dist_problems() + playwright_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()
@@ -537,7 +598,7 @@ def main() -> int:
     if status == 0:
         print("gate-parity OK: Node targets run on their CI pins, the "
               "real-browser check runs the gate's binary, the gate parts "
-              "run every full-mode target, every job has a timeout, and only "
+              "run every full-mode target, every job of every workflow has a timeout, and only "
               "the present part installs Playwright, bounded and retried")
     return status
 

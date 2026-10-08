@@ -546,5 +546,93 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
                             "job 'windows-tests'", "Playwright step")
 
 
+class EveryWorkflowTimeoutControls(unittest.TestCase):
+    """TSK-254: the timeout rule covers every workflow the repository runs
+    or ships, not only codeflow-ci.yml."""
+
+    OWN = {
+        ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml", ".github/workflows/codeflow-release-integration.yml",
+        ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
+        ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
+        ".github/workflows/release-post-announce.yml",
+    }
+    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
+
+    def files(self) -> dict[str, str]:
+        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+
+    def problems(self, path: str, text: str) -> list[str]:
+        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+
+    def test_every_workflow_file_is_found_and_none_is_unbounded(self):
+        files = self.files()
+        self.assertEqual(set(files), self.OWN | self.SHIPPED, "bitbucket and generic CI files are not workflows")
+        self.assertEqual(parity.all_timeout_problems(), [])
+
+    def test_dropping_any_jobs_timeout_in_any_workflow_is_refused(self):
+        checked = 0
+        for path, text in self.files().items():
+            for name, job in parity.jobs_section(text).items():
+                line = next((l for l in job.splitlines() if parity.TIMEOUT_KEY.match(l)), None)
+                if line is None:
+                    continue
+                with self.subTest(path=path, job=name):
+                    mutated_text = text.replace(job, job.replace(line + "\n", "", 1), 1)
+                    self.assertNotEqual(mutated_text, text)
+                    problems = self.problems(path, mutated_text)
+                    self.assertTrue(any(f"job '{name}'" in p and path in p for p in problems), problems)
+                    checked += 1
+        self.assertGreaterEqual(checked, 25, "every capped job in every workflow is exercised")
+
+    def test_reusable_workflow_callers_are_checked_through_their_called_workflow(self):
+        release = self.files()[".github/workflows/release.yml"]
+        callers = [n for n, j in parity.jobs_section(release).items() if parity.CALLER_LINE.search(j)]
+        self.assertEqual(sorted(callers), ["custom-release-main-recheck", "custom-release-plan-authority",
+                                           "custom-release-post-announce"])
+        self.assertEqual(self.problems(".github/workflows/release.yml", release), [])
+        for called in ("release-main-recheck", "release-plan-authority", "release-post-announce"):
+            text = self.files()[f".github/workflows/{called}.yml"]
+            self.assertEqual(len(parity.jobs_section(text)), 1)
+            self.assertEqual(self.problems(called, text), [])
+            self.assertTrue(self.problems(called, text.replace("    timeout-minutes: 10\n", "")))
+
+    def test_the_adopter_template_exempts_only_its_named_jobs(self):
+        path = "assets/base/ci/codeflow-ci.yml"
+        text = self.files()[path]
+        self.assertEqual(self.problems(path, text), [])
+        self.assertTrue(self.problems(path, text.replace("    timeout-minutes: 30\n", "", 1)))
+        self.assertTrue(parity.timeout_problems(text), "without the exemptions the unbounded jobs are named")
+        stale = parity.timeout_problems("jobs:\n  other:\n    timeout-minutes: 5\n", path, {"gates": "x"})
+        self.assertTrue(any("exempts job 'gates'" in p for p in stale), stale)
+
+    def test_a_new_workflow_without_timeouts_is_found_and_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / ".github" / "workflows" / "nightly.yml").write_text(
+                "name: nightly\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+            (root / "assets" / "base" / "ci" / "bitbucket-pipelines.yml").write_text("pipelines:\n  default: []\n")
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                self.assertEqual([p.as_posix() for p in parity.workflow_files()], [".github/workflows/nightly.yml"])
+                problems = parity.all_timeout_problems()
+            finally:
+                parity.ROOT = original
+        self.assertTrue(any("job 'build' in .github/workflows/nightly.yml" in p for p in problems), problems)
+
+    def test_the_dist_config_must_allow_the_hand_added_release_timeouts(self):
+        self.assertEqual(parity.dist_problems(), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "dist-workspace.toml"
+            for body in ('[dist]\nci = "github"\n', '[dist]\nallow-dirty = ["msi"]\n'):
+                config.write_text(body)
+                self.assertTrue(any("allow-dirty" in p for p in parity.dist_problems(config)), body)
+            config.write_text('[dist]\nallow-dirty = ["ci"]\n')
+            self.assertEqual(parity.dist_problems(config), [])
+
+
 if __name__ == "__main__":
     unittest.main()
