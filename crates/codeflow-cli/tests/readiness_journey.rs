@@ -741,10 +741,11 @@ fn a_join_awaiting_selection_validates_and_cannot_start() {
 fn archive_branches_are_information_until_policy_names_the_remote() {
     let (dir, root) = planned_project();
     let archive = dir.path().join("archive.git");
-    git(
-        &root,
-        &["clone", "-q", "--bare", ".", archive.to_str().unwrap()],
-    );
+    codeflow_fixture::clone(&root, ".", &archive)
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&archive, &["branch", "task/TSK-001-old", LINE]);
     git(
         &root,
