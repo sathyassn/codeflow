@@ -39,6 +39,9 @@ use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
 /// the same context from any source.
 pub const GITHUB_ACTIONS_APP_ID: u64 = 15368;
 
+/// Rulesets read per page when looking for the one that targets a branch.
+const RULESET_PAGE_SIZE: usize = 100;
+
 /// Outcome status of a protect run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtectStatus {
@@ -482,28 +485,40 @@ impl GithubProvider {
         pattern: &str,
         default_branch: Option<&str>,
     ) -> Result<Option<Value>, String> {
-        let list = self.run_gh(
-            &["api", &format!("repos/{nwo}/rulesets?per_page=100")],
-            None,
-        )?;
-        let list: Value = serde_json::from_str(&list).unwrap_or(Value::Null);
-        for summary in list.as_array().into_iter().flatten() {
-            let ours = summary.get("target").and_then(Value::as_str) == Some("branch")
-                && summary
-                    .get("source_type")
-                    .and_then(Value::as_str)
-                    .is_none_or(|source| source == "Repository");
-            let Some(id) = summary.get("id").and_then(Value::as_u64).filter(|_| ours) else {
-                continue;
-            };
-            let full = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
-            let full: Value =
-                serde_json::from_str(&full).map_err(|e| format!("ruleset {id} parse: {e}"))?;
-            if ruleset_targets(&full, pattern, default_branch) {
-                return Ok(Some(full));
+        // Page until a short page, so a repository with more rulesets than
+        // one page holds is still searched in full.
+        let mut page = 1;
+        loop {
+            let list = self.run_gh(
+                &[
+                    "api",
+                    &format!("repos/{nwo}/rulesets?per_page={RULESET_PAGE_SIZE}&page={page}"),
+                ],
+                None,
+            )?;
+            let list: Value = serde_json::from_str(&list).unwrap_or(Value::Null);
+            let summaries = list.as_array().map_or(&[][..], Vec::as_slice);
+            for summary in summaries {
+                let ours = summary.get("target").and_then(Value::as_str) == Some("branch")
+                    && summary
+                        .get("source_type")
+                        .and_then(Value::as_str)
+                        .is_none_or(|source| source == "Repository");
+                let Some(id) = summary.get("id").and_then(Value::as_u64).filter(|_| ours) else {
+                    continue;
+                };
+                let full = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
+                let full: Value =
+                    serde_json::from_str(&full).map_err(|e| format!("ruleset {id} parse: {e}"))?;
+                if ruleset_targets(&full, pattern, default_branch) {
+                    return Ok(Some(full));
+                }
             }
+            if summaries.len() < RULESET_PAGE_SIZE {
+                return Ok(None);
+            }
+            page += 1;
         }
-        Ok(None)
     }
 
     /// The live classic protection of `branch`, or `None` when the branch
@@ -616,6 +631,13 @@ impl GithubProvider {
                         kept[key] = value.clone();
                     }
                 }
+                // The live object lists people, teams and apps as objects;
+                // the PUT takes their logins and slugs.
+                for key in ["dismissal_restrictions", "bypass_pull_request_allowances"] {
+                    if let Some(list) = reviews.get(key).filter(|v| v.is_object()) {
+                        kept[key] = Self::principals(list);
+                    }
+                }
                 kept
             }
             None if rule.require_pr => json!({ "required_approving_review_count": 0 }),
@@ -627,21 +649,25 @@ impl GithubProvider {
     fn classic_restrictions(live: &Value) -> Value {
         live.get("restrictions")
             .filter(|v| v.is_object())
-            .map_or(Value::Null, |r| {
-                let names = |list: &str, field: &str| -> Vec<Value> {
-                    r.get(list)
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|item| item.get(field).cloned())
-                        .collect()
-                };
-                json!({
-                    "users": names("users", "login"),
-                    "teams": names("teams", "slug"),
-                    "apps": names("apps", "slug"),
-                })
-            })
+            .map_or(Value::Null, Self::principals)
+    }
+
+    /// A live `users`/`teams`/`apps` object in the PUT form: logins for
+    /// users, slugs for teams and apps.
+    fn principals(list: &Value) -> Value {
+        let names = |key: &str, field: &str| -> Vec<Value> {
+            list.get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get(field).cloned())
+                .collect()
+        };
+        json!({
+            "users": names("users", "login"),
+            "teams": names("teams", "slug"),
+            "apps": names("apps", "slug"),
+        })
     }
 
     /// The ruleset rules the plan intends for `rule`.
@@ -1188,7 +1214,7 @@ mod tests {
 
     #[test]
     fn test_branch_protection_body_pins_real_ci_contexts() {
-        // An empty `contexts` array requires no named check — "require status
+        // An empty `contexts` array requires no named check: "require status
         // checks" would be toothless. Pin the shipped codeflow-ci.yml job names,
         // required on an up-to-date branch.
         let rule = main_rule(DEFAULT_REQUIRED_CHECKS);
@@ -1288,7 +1314,12 @@ case "$*" in
   "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
   "repo") exit 0 ;;
   "api -X "*) printf '%s %s\n' "$3" "$4" >> "$d/writes"; cat >> "$d/bodies"; printf '\n' >> "$d/bodies"; printf '{{}}' ;;
-  "api repos/o/r/rulesets?per_page=100") cat "$d/rulesets.json" ;;
+  "api repos/o/r/rulesets?per_page=100"*)
+    page="${{2##*&page=}}"
+    case "$page" in "$2") page=1 ;; esac
+    if [ "$page" = 1 ]; then cat "$d/rulesets.json";
+    elif [ -f "$d/rulesets-$page.json" ]; then cat "$d/rulesets-$page.json";
+    else printf '[]'; fi ;;
   "api repos/o/r/rulesets/"*) cat "$d/ruleset-${{2##*/}}.json" ;;
   "api repos/o/r/branches/"*"/protection")
     if [ -f "$d/protection.json" ]; then cat "$d/protection.json"; else echo 'gh: Branch not protected (HTTP 404)' >&2; exit 1; fi ;;
@@ -1390,6 +1421,67 @@ esac
             body["required_status_checks"]["contexts"],
             serde_json::json!(DEFAULT_REQUIRED_CHECKS)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classic_protection_keeps_dismissal_restrictions_and_bypass_allowances() {
+        let mut live: serde_json::Value = serde_json::from_str(LIVE_PROTECTION).unwrap();
+        live["required_pull_request_reviews"]["dismissal_restrictions"] = serde_json::json!({
+            "url": "https://api.github.com/x",
+            "users": [{ "login": "alice", "id": 1 }],
+            "teams": [{ "slug": "leads", "id": 2 }],
+            "apps": [{ "slug": "triage-bot", "id": 3 }]
+        });
+        live["required_pull_request_reviews"]["bypass_pull_request_allowances"] = serde_json::json!({
+            "users": [{ "login": "bob", "id": 4 }],
+            "teams": [],
+            "apps": [{ "slug": "release-bot", "id": 5 }]
+        });
+        let host = Host::new("[]", &[], Some(&live.to_string()));
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        let reviews = &writes[0].1["required_pull_request_reviews"];
+        assert_eq!(
+            reviews["dismissal_restrictions"],
+            serde_json::json!({ "users": ["alice"], "teams": ["leads"], "apps": ["triage-bot"] }),
+            "{reviews}"
+        );
+        assert_eq!(
+            reviews["bypass_pull_request_allowances"],
+            serde_json::json!({ "users": ["bob"], "teams": [], "apps": ["release-bot"] }),
+            "{reviews}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ruleset_on_a_later_page_is_updated_not_duplicated() {
+        let filler: Vec<serde_json::Value> = (1..=RULESET_PAGE_SIZE as u64)
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "name": format!("tags {id}"), "target": "tag",
+                    "source_type": "Repository"
+                })
+            })
+            .collect();
+        let host = Host::new(
+            &serde_json::to_string(&filler).unwrap(),
+            &[(24_379_074, LIVE_RULESET)],
+            Some(LIVE_PROTECTION),
+        );
+        std::fs::write(
+            host.dir.path().join("rulesets-2.json"),
+            r#"[{"id":24379074,"name":"main required checks","target":"branch","source_type":"Repository"}]"#,
+        )
+        .unwrap();
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/24379074");
     }
 
     #[cfg(unix)]
