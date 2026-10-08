@@ -84,6 +84,29 @@ fn commit(root: &Path, message: &str) {
 
 const LINE: &str = "integration/EPC-001-registry";
 
+/// Land the planning records in the working tree on the line as a planning
+/// pull request does: committed on `plan/<name>`, merged into the line and
+/// pushed. A commit made directly on a pushed epic line is refused at push
+/// (SPC-013 R-52, git-rules.md "Bodies of work").
+fn land_plan(root: &Path, name: &str, message: &str) {
+    let branch = format!("plan/{name}");
+    git(root, &["switch", "-q", "-c", &branch]);
+    commit(root, message);
+    git(root, &["switch", "-q", LINE]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            &format!("chore: land {branch}"),
+            &branch,
+        ],
+    );
+    git(root, &["push", "-q", "origin", LINE]);
+}
+
 /// A fresh full-tier project on an integration line, pushed to a bare
 /// remote. Returns (tempdir, project, bare remote).
 fn project_with_remote() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -168,8 +191,11 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
         "task new",
     );
     assert!(first.contains("TSK-001"), "{first}");
-    commit(&root, "chore: plan the registry journey");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(
+        &root,
+        "registry-journey",
+        "chore: plan the registry journey",
+    );
 
     // A second clone takes the next number, never the same one.
     let other = dir.path().join("other");
@@ -301,8 +327,7 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
 
     // CI: a bound record passes the merge rule; a hand-written one fails
     // until a maintainer admits it.
-    commit(&root, "chore: plan more tasks");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(&root, "more-tasks", "chore: plan more tasks");
     git(&root, &["switch", "-q", "-c", "plan/fork-record"]);
     let hand = root.join("project-management/tasks/TSK-040.md");
     let template =
@@ -427,8 +452,7 @@ fn a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci() {
         ),
         "task new",
     );
-    commit(&root, "chore: plan the first task");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(&root, "first-task", "chore: plan the first task");
 
     // A host without prevention takes a deletion from a clone without hooks.
     git(
