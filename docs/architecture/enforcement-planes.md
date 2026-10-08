@@ -320,29 +320,25 @@ level:
   class file once the line's own literal assignments are filled in
   (`p=src/.envrc; python3 -c "open('$p','a')"`), and such code that carries
   an expansion the guard cannot read on a line that names a class file;
-- a staged run: a line that names a class file and has a command that can
-  run or apply text the call itself produced. A shell or interpreter counts
-  when that text reaches it by a heredoc, a pipe, a process or command
-  substitution, or a file the call writes. A script tool counts when its
-  script comes from such text. Which options name a script file is one table
-  row per tool (`SCRIPT_TOOLS`): `awk -f`, attached as in `-fa.awk`, and
-  gawk's `-i`, `--include` and `-E`; `sed -f`, also in a cluster such as
-  `-nfs.sed`; `make -f` and the `Makefile` the call writes; `vim`, `nvim`
-  and `ex` with `-S`, `-c` or `+cmd`; `sqlite3` with `-init`, `-cmd` or a
-  dot command; `gdb` with `-x` or `-ex`; `emacs` with `-l`, `--load`,
-  `--script` or `--eval`. `ed`, `ex`, `patch`, `sqlite3`, `gdb` and
-  `git apply` also take standard input as their script, and `tclsh`,
-  `expect`, `Rscript`, `julia` and `m4` take a file operand or standard
-  input. `make` counts when the call writes any file other than
-  `/dev/null`, since it may be the `Makefile`. A data pipe into
-  `awk '{print $2}'` or `sed 's/a/b/'`, and sed `-i` and `-E`, do not
-  count. The command is found behind the launchers, `env -S`, `find
-  -exec`, `-execdir`, `-ok` and `-okdir`, and the wrappers the launcher walk
-  does not unwrap (`flock`, `watch`, `unbuffer`, `chronic`, `setsid`,
-  `taskset`, `chrt`, `arch`, `script`, `systemd-run`, `sandbox-exec`, `ssh`,
-  `busybox`, `toybox`, `sudo`, `doas` and a few more, `WRAPPERS`). The line
-  must name the file; a script written in one call and run in another stays
-  a residual;
+- a staged run: a line that names a class file and produces text (a pipe,
+  a heredoc, a process substitution or a file the call writes) refuses
+  unless every program on it is a data reader used as one. The allowlist is
+  `cat`, `grep`, `ls`, `jq`, `find` without `-exec` and the other read-only
+  programs of the module, the filters `sort`, `uniq`, `cut`, `tr`, `paste`,
+  `column`, `fold`, `nl`, `tac`, `rev`, `comm`, `join`, `xxd`, `base64` and
+  `tee`, `git` other than `apply`, `am`, a command-running `-c` and a
+  repository `config` write, `awk` with an inline program, and `sed` with
+  print-only commands. A reader with a write or exec path of its own is
+  refused in that use: `awk` with `-f`, `-i`, `-E`, `-e`, `system`, a pipe,
+  `>>`, a `>` after `print` or an `@`; `sed` with `-f` or an `e`, `w`, `r`
+  command; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
+  Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, an
+  `env -S` string, a variable that picks the program (`PATH`, `GIT_*`,
+  `PAGER`) and any program or option the guard does not know are refused.
+  The refusal names the program: read the class file in its own call. The
+  line must name the file; a script written in one call and run in another
+  stays a residual. This replaces a list of programs that run text, which an
+  unlisted spelling always escaped;
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
@@ -381,8 +377,11 @@ What stays open, by harness and platform:
 - **Claude Code.** The generated denies name the default locations. A
   `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
   Claude's file tools do not run edit-guard, so a native `Write` there is
-  not refused. `.envrc` is an `Edit` deny only: a nested `.envrc` written
-  from Bash is refused by exec-guard, not by the sandbox.
+  not refused. On macOS Claude merges the `Edit` denies into the sandbox
+  write deny, so a nested `.envrc` written from Bash is held there too. On
+  Linux and WSL2 a wildcard `denyWrite` entry is skipped, so `.envrc` in an
+  arbitrary directory is an `Edit` deny only and a nested one written from
+  Bash is refused by exec-guard, not by the sandbox.
 - **Codex.** The profile keeps the home and `/etc` entries and the
   workspace root's `.envrc` read only. A nested `.envrc`, including one in
   a linked worktree or a temporary directory, is writable to the profile
@@ -396,7 +395,10 @@ What stays open, by harness and platform:
   `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
   Grok deny also blocks reads; the guards refuse it.
 - **Windows.** A PowerShell profile under a redirected `Documents` folder,
-  such as one in OneDrive, is outside the class.
+  such as one in OneDrive, is outside the class. On native Windows Claude
+  Code has no Bash sandbox, so the class rests on the `Edit` denies for its
+  file tools and on the guards; the Codex read-only entries and Grok's
+  workspace sandbox were not probed there.
 - **Sourced files.** The guards do not follow what a startup file sources.
 
 `codeflow doctor --check startup-files` reports a project whose settings
