@@ -47,13 +47,14 @@ confidence and gate policy; no second flag. The security reviewer's
 A review brief names the unit, its revision, the criteria, the remedy expected
 on every blocker and major finding, and the provenance the reply must carry.
 It asks for one holistic pass: the whole unit, its full diff against its base
-at one head, and its blast radius, meaning what it touches upstream and
-downstream, adopters, other platforms, CI time, docs and records. Findings
-from earlier rounds enter the brief as checks within that pass, never as its
-whole scope. The reviewer returns the verdict, the findings with their remedy,
-what was verified and what was not verified. Every review and consult brief,
-same-family or cross-family, follows this contract; `cf-herdr` states how a
-review seat runs in Herdr.
+at one head, its blast radius, meaning what it touches upstream and
+downstream, adopters, other platforms, CI time, docs and records, and its fit,
+meaning the neighbour it should match, what it reuses and each departure with
+its reason. Findings from earlier rounds enter the brief as checks within that
+pass, never as its whole scope. The reviewer returns the verdict, the findings
+with their remedy, what was verified and what was not verified. Every review
+and consult brief, same-family or cross-family, follows this contract;
+`cf-herdr` states how a review seat runs in Herdr.
 
 ### Review rounds
 

@@ -228,6 +228,18 @@ fn reviewer_labels_axis_and_disposition() {
     );
 }
 
+/// TSK-255: a finding on an enforcement surface cites the rule's home, not
+/// a precedent commit (PR 112, review round 1).
+#[test]
+fn reviewer_cites_the_rule_for_an_enforcement_surface_finding() {
+    assert_contains(
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            "A finding that asks for a change to policy, hooks, CI, templates, schema or managed instructions cites the repository rule it applies, with file:line. A precedent commit is evidence, not the rule.",
+        ],
+    );
+}
+
 /// TSK-105 (review round 1, T105-6): the reviewer refuses a block reviewed
 /// before a later change; ship states the default completion in the task's
 /// own pull request and the late completion the checker's merge rule takes.

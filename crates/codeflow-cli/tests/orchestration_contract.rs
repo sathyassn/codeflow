@@ -903,6 +903,11 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         "each seat independently returns its findings",
         "Claude drafts the one plan **from its native session**",
         "Codex challenges that plan against its own findings: feasibility, failure modes, security, testing, maintainability",
+        // TSK-255: the challenge asks for fit, a composed failure case and
+        // whether a criterion can pass while the outcome is missed.
+        "fit to the existing code (the mechanism extended, what is reused, each departure with its reason)",
+        "one failure case composing two mechanisms the design names",
+        "whether a criterion can pass while the outcome is missed",
         "There is no second plan and no reconciliation round.",
     ] {
         assert!(
@@ -1754,6 +1759,8 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     // and asks for one holistic pass over the whole unit and its blast radius.
     ("D22 routing scope", "Every review and consult brief, same-family or cross-family, follows this contract", TSK131_FINDINGS),
     ("D22 holistic brief", "Findings from earlier rounds enter the brief as checks within that pass, never as its whole scope.", TSK131_FINDINGS),
+    // TSK-255: the brief names the change's fit to the repository.
+    ("D22 fit brief", "and its fit, meaning the neighbour it should match, what it reuses and each departure with its reason", TSK131_FINDINGS),
     ("D22 consult", "the smallest evidenced remedy and its verification criterion, or the options when the fix is an operator decision", TSK131_CONSULT),
     ("D23 batch", "collects the findings into one dependency-ordered batch with provenance preserved, deduplicates them by mechanism", TSK131_FINDINGS),
     ("D23 evaluation", "evaluates each proposed remedy against the diagnosed mechanism and the impact set", TSK131_FINDINGS),

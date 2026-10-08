@@ -255,6 +255,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codeflow-core",
+ "codeflow-fixture",
  "codeflow-present",
  "libc",
  "portable-pty",
@@ -275,6 +276,7 @@ dependencies = [
 name = "codeflow-core"
 version = "3.1.0"
 dependencies = [
+ "codeflow-fixture",
  "diffy",
  "fs2",
  "git2",
@@ -301,6 +303,14 @@ dependencies = [
  "uuid",
  "which",
  "windows-sys",
+]
+
+[[package]]
+name = "codeflow-fixture"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

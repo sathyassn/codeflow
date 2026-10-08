@@ -84,6 +84,29 @@ fn commit(root: &Path, message: &str) {
 
 const LINE: &str = "integration/EPC-001-registry";
 
+/// Land the planning records in the working tree on the line as a planning
+/// pull request does: committed on `plan/<name>`, merged into the line and
+/// pushed. A commit made directly on a pushed epic line is refused at push
+/// (SPC-013 R-52, git-rules.md "Bodies of work").
+fn land_plan(root: &Path, name: &str, message: &str) {
+    let branch = format!("plan/{name}");
+    git(root, &["switch", "-q", "-c", &branch]);
+    commit(root, message);
+    git(root, &["switch", "-q", LINE]);
+    git(
+        root,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            &format!("chore: land {branch}"),
+            &branch,
+        ],
+    );
+    git(root, &["push", "-q", "origin", LINE]);
+}
+
 /// A fresh full-tier project on an integration line, pushed to a bare
 /// remote. Returns (tempdir, project, bare remote).
 fn project_with_remote() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -168,15 +191,19 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
         "task new",
     );
     assert!(first.contains("TSK-001"), "{first}");
-    commit(&root, "chore: plan the registry journey");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(
+        &root,
+        "registry-journey",
+        "chore: plan the registry journey",
+    );
 
     // A second clone takes the next number, never the same one.
     let other = dir.path().join("other");
-    git(
-        dir.path(),
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), "other"],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "other")
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let second = ok(
         &codeflow(
             &other,
@@ -245,17 +272,11 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
     // hooks. Allocation reads history: issue refuses and names the restore;
     // `ids check` fails with current damage.
     let plain = dir.path().join("plain");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "-b",
-            "codeflow/registry",
-            bare.to_str().unwrap(),
-            "plain",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "plain")
+        .branch("codeflow/registry")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&plain, &["rm", "-q", "ids/TSK/003.toml"]);
     git(&plain, &["commit", "-q", "-m", "remove"]);
     git(&plain, &["push", "-q", "origin", "HEAD:codeflow/registry"]);
@@ -301,8 +322,7 @@ fn a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only
 
     // CI: a bound record passes the merge rule; a hand-written one fails
     // until a maintainer admits it.
-    commit(&root, "chore: plan more tasks");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(&root, "more-tasks", "chore: plan more tasks");
     git(&root, &["switch", "-q", "-c", "plan/fork-record"]);
     let hand = root.join("project-management/tasks/TSK-040.md");
     let template =
@@ -394,10 +414,11 @@ fn guard(root: &Path, command: &str) -> Output {
 /// A fresh checkout of the remote, set up the way the registry workflow
 /// fetches it, and its `codeflow ids check` verdict.
 fn ci_check(dir: &Path, bare: &Path, name: &str) -> Output {
-    git(
-        dir,
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), name],
-    );
+    codeflow_fixture::clone(dir, bare.to_str().unwrap(), name)
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let checkout = dir.join(name);
     git(
         &checkout,
@@ -427,21 +448,14 @@ fn a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci() {
         ),
         "task new",
     );
-    commit(&root, "chore: plan the first task");
-    git(&root, &["push", "-q", "origin", LINE]);
+    land_plan(&root, "first-task", "chore: plan the first task");
 
     // A host without prevention takes a deletion from a clone without hooks.
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "-b",
-            "codeflow/registry",
-            bare.to_str().unwrap(),
-            "plain",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "plain")
+        .branch("codeflow/registry")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let plain = dir.path().join("plain");
     let bound = std::fs::read_to_string(plain.join("ids/TSK/001.toml")).unwrap();
     git(&plain, &["rm", "-q", "ids/TSK/001.toml"]);
@@ -614,10 +628,11 @@ fn adr_new_takes_its_number_from_the_registry() {
     let (dir, root, bare) = project_with_remote();
     // Another clone takes ADR-0002 first; this checkout cannot see it.
     let other = dir.path().join("other");
-    git(
-        dir.path(),
-        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), "other"],
-    );
+    codeflow_fixture::clone(dir.path(), bare.to_str().unwrap(), "other")
+        .branch(LINE)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let first = ok(
         &codeflow(&other, &["adr", "new", "Keep one registry"]),
         "adr new in another clone",
@@ -916,10 +931,11 @@ fn a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing() {
 
     // A depth-one clone would take the edit for the introduction: refused.
     let url = format!("file://{}", bare.display());
-    git(
-        dir.path(),
-        &["clone", "-q", "--depth", "1", &url, "shallow"],
-    );
+    codeflow_fixture::clone(dir.path(), &url, "shallow")
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let shallow = dir.path().join("shallow");
     let seed = codeflow(&shallow, &["ids", "seed"]);
     assert!(!seed.status.success(), "{}", text(&seed));
