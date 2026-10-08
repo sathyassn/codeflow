@@ -510,17 +510,11 @@ fn ids_check_passes_with_feedback_records_as_the_policy_workflow_runs_it() {
     git(&root, &["push", "-q", "origin", "task/feedback"]);
 
     let checkout = dir.path().join("ci");
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "-b",
-            "task/feedback",
-            bare.to_str().unwrap(),
-            "ci",
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), &bare, "ci")
+        .branch("task/feedback")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(
         &checkout,
         &[
