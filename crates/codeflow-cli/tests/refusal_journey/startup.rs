@@ -103,6 +103,9 @@ const REFUSED: &[&str] = &[
     "bash -c $'echo pwned \\x3e\\x3e \\x24HOME/\\x2ezshrc'",
     "git -c core.fsmonitor='echo pwned >> ~/.zshrc' status",
     "GIT_EDITOR='echo pwned >> ~/.zshrc' git commit --allow-empty",
+    // Grok round seven: assignments that use $HOME are substituted.
+    "F=$HOME/.zshrc GIT_EDITOR='echo pwned >> $F' git commit --allow-empty",
+    "F=$HOME/.zshrc git -c core.fsmonitor='echo pwned >> $F' status",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -130,6 +133,8 @@ const ALLOWED: &[&str] = &[
     "find . -name '*.rs' -print",
     "cat ~/.zshrc | sort | uniq -c | head",
     "git -c color.ui=never status",
+    "git -c color.ui=never diff -- .envrc",
+    "EDITOR=vim git log -p -- .envrc | head",
     "EDITOR=vim git log",
     "grep alias ~/.zshrc | sed -E 's/a/b/'",
     "cd ~1; cat policy.json",

@@ -1502,3 +1502,70 @@ fn quoting_is_decoded_and_command_valued_settings_are_read() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Grok round seven. A git global setting or a command-valued variable is
+/// read by value: it refuses when the value names a class file, or when it
+/// cannot be read on a line that names one, or when it is a command other
+/// than a bare viewer on a staged line. An innocent `-c color.ui=never`,
+/// `EDITOR=vim` or `PAGER=less` leaves a read of `.envrc` a read. An
+/// assignment that only uses `$HOME`, `${HOME}`, `$ZDOTDIR`,
+/// `$XDG_CONFIG_HOME` or an earlier assigned name is substituted, so
+/// `F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'` names the file.
+#[test]
+fn settings_and_variables_are_read_by_value() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "F=$HOME/.zshrc GIT_EDITOR='echo pwned >> $F' git commit --allow-empty",
+        "F=$HOME/.zshrc git -c core.fsmonitor='echo pwned >> $F' status",
+        "A=$HOME; F=$A/.zshrc; GIT_EDITOR='echo pwned >> $F' git commit --allow-empty",
+        "export F=$HOME/.zshrc; EDITOR='echo x >> $F' git commit --allow-empty",
+        "export A=${HOME}; export F=${A}/.zshrc; VISUAL='echo >> $F' git commit --allow-empty",
+        "F=$HOME/.zshrc; git -c core.pager='cat >> $F' log",
+        "F=$HOME/.zshrc FSM='echo >> $F' git --config-env=core.fsmonitor=FSM status",
+        "git -c core.fsmonitor='echo pwned >> ~/.zshrc' status",
+        "git -c core.pager='sh -c \"echo >> ~/.zshrc\"' log",
+        "git -c core.pager=\"$P\" log -- .envrc",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; PAGER='sh r.sh' git log",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; EDITOR='sh r.sh' git commit --allow-empty",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; GIT_SSH_COMMAND='sh r.sh' git fetch",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; git -c core.pager='sh r.sh' log",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; git -c core.fsmonitor='sh r.sh' status",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; git -c alias.x='!sh r.sh' x",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; git --exec-path=. status",
+        "printf 'echo x >> src/.envrc\\n' > cat; PATH=. cat README.md",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; GIT_EXEC_PATH=. git status",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; GIT_CONFIG_GLOBAL=r.cfg git status",
+        "EDITOR=vim GIT_EDITOR='echo x >> ~/.zshrc' git commit --allow-empty",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "git -c color.ui=never diff -- .envrc",
+        "git -c user.name=x diff -- .envrc",
+        "git -c core.pager=less log -- .envrc",
+        "git --exec-path=/usr/bin diff -- .envrc",
+        "git -c color.ui=never log -p -- .envrc | head",
+        "git -c core.pager=less log -p -- .envrc | head",
+        "EDITOR=vim git log -p -- .envrc | head",
+        "PAGER=less git log -p -- .envrc | head",
+        "PAGER=less git log -1",
+        "EDITOR=vim git diff -- .envrc",
+        "F=~/.zshrc GIT_EDITOR=vim git diff -- .envrc",
+        "F=$HOME/notes GIT_EDITOR=vim git diff -- .envrc",
+        "git status",
+        "git diff -- .envrc",
+        "cargo test",
+        "git -c color.ui=never status",
+        "echo hello | git -c color.ui=never log",
+        "A=$HOME; ls $A",
+        "grep alias ~/.zshrc | awk '{print $2}'",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

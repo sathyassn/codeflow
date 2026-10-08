@@ -425,6 +425,9 @@ struct Line<'a> {
     dirs: Vec<PathBuf>,
     /// Why that list may miss one.
     unknown: Option<String>,
+    /// The line names a class file and produces text: a command on it may
+    /// run what the call wrote ([`staged_run`]).
+    staged: bool,
 }
 
 impl Line<'_> {
@@ -513,23 +516,35 @@ impl Line<'_> {
     }
 
     /// `word` with each variable the guard can read replaced by its value.
+    /// An assigned value can itself use `$HOME` or another assigned name
+    /// (`A=$HOME; F=$A/.zshrc`), so the pass repeats until nothing changes.
     fn substitute(&self, word: &str) -> String {
         let mut text = word.to_string();
-        // Known variables, the line's own literal assignments first.
-        for (name, value) in self.vars() {
-            for form in [format!("${{{name}}}"), format!("${name}")] {
-                while let Some(at) = text.find(&form) {
-                    let end = at + form.len();
-                    let continues = form.starts_with("${")
-                        || !text[end..]
-                            .chars()
-                            .next()
-                            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-                    if !continues {
-                        break;
+        for _ in 0..6 {
+            let before = text.clone();
+            // Known variables, the line's own literal assignments first.
+            for (name, value) in self.vars() {
+                for form in [format!("${{{name}}}"), format!("${name}")] {
+                    let mut from = 0;
+                    while let Some(found) = text[from..].find(&form) {
+                        let at = from + found;
+                        let end = at + form.len();
+                        let continues = form.starts_with("${")
+                            || !text[end..]
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                        if !continues {
+                            from = end;
+                            continue;
+                        }
+                        text.replace_range(at..end, &value);
+                        from = at + value.len();
                     }
-                    text.replace_range(at..end, &value);
                 }
+            }
+            if text == before {
+                break;
             }
         }
         text
@@ -922,8 +937,10 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         assigned: BTreeMap::new(),
         dirs: run.dirs.clone(),
         unknown: run.unknown.clone(),
+        staged: false,
     };
     line.assigned = literal_assignments(&segments);
+    line.staged = staged_name(&segments, &line).is_some();
     if let Some(v) = direnv_trust(&segments) {
         return vec![v];
     }
@@ -1006,6 +1023,49 @@ fn command_valued_variable(segment: &str, line: &Line<'_>) -> Option<Violation> 
     })
 }
 
+/// Whether an assigned value can be read without running anything: no
+/// command substitution, and every expansion is `$HOME`, `$ZDOTDIR`,
+/// `$XDG_CONFIG_HOME` or a name the line assigned earlier with a readable
+/// value (`A=$HOME; F=$A/.zshrc`). Any other `$` leaves the value unread.
+fn readable_assignment(value: &str, earlier: &BTreeMap<String, Option<String>>) -> bool {
+    if value.contains(['`', '\u{1}', '\u{2}']) {
+        return false;
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] != '$' {
+            at += 1;
+            continue;
+        }
+        let (name, next): (String, usize) = if chars.get(at + 1) == Some(&'{') {
+            let name: String = chars[at + 2..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                .collect();
+            let close = at + 2 + name.chars().count();
+            if chars.get(close) != Some(&'}') {
+                return false;
+            }
+            (name, close + 1)
+        } else {
+            let name: String = chars[at + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                .collect();
+            let next = at + 1 + name.chars().count();
+            (name, next)
+        };
+        let known = matches!(name.as_str(), "HOME" | "ZDOTDIR" | "XDG_CONFIG_HOME")
+            || earlier.get(&name).is_some_and(Option::is_some);
+        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) || !known {
+            return false;
+        }
+        at = next;
+    }
+    true
+}
+
 /// The literal values the line assigns, read only where the shell reads an
 /// assignment: the words before a command, and the operands of `export`,
 /// `declare`, `typeset`, `local` and `readonly`. A name assigned anywhere
@@ -1019,7 +1079,9 @@ fn literal_assignments(segments: &[String]) -> BTreeMap<String, String> {
     };
     let mut values: BTreeMap<String, Option<String>> = BTreeMap::new();
     let note = |values: &mut BTreeMap<String, Option<String>>, name: &str, value: Option<&str>| {
-        let value = value.filter(|v| !unresolved_word(v)).map(str::to_string);
+        let value = value
+            .filter(|v| readable_assignment(v, values))
+            .map(str::to_string);
         values
             .entry(name.to_string())
             .and_modify(|seen| {
@@ -1258,30 +1320,57 @@ const FILTERS: &[&str] = &[
     "xxd", "base64", "tee",
 ];
 
-/// Whether a word assigns a variable that picks or configures the program
-/// that runs (`PATH=.`, `GIT_SSH_COMMAND=sh`, `PAGER=sh`, `LD_PRELOAD`).
+/// Whether a word assigns a variable that picks the program or the code that
+/// runs, whatever its value can be: the search path, preloaded libraries, the
+/// shell and its startup hooks, and the places git reads programs and
+/// configuration from (`GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`,
+/// `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`). Command-valued variables
+/// (`EDITOR`, `PAGER`, `GIT_*` commands) are read by value
+/// ([`command_valued_variable`], [`staged_variable`]).
 fn assigns_program_variable(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
     };
-    name.starts_with("GIT_")
-        || name.starts_with("LD_")
+    name.starts_with("LD_")
         || name.starts_with("DYLD_")
         || matches!(
             name,
             "PATH"
-                | "PAGER"
-                | "MANPAGER"
-                | "EDITOR"
-                | "VISUAL"
-                | "FCEDIT"
-                | "LESSOPEN"
-                | "BROWSER"
                 | "SHELL"
                 | "BASH_ENV"
                 | "ENV"
                 | "PROMPT_COMMAND"
+                | "GIT_EXEC_PATH"
+                | "GIT_TEMPLATE_DIR"
+                | "GIT_CONFIG_GLOBAL"
+                | "GIT_CONFIG_SYSTEM"
         )
+}
+
+/// Viewers and editors an ordinary `EDITOR` or `PAGER` names, as one bare
+/// word. On a line that names a class file and produces text, a command-valued
+/// variable may only be one of these: any other command could run a script
+/// the call wrote.
+const VIEWERS: &[&str] = &[
+    "vim", "vi", "nvim", "view", "vimdiff", "nano", "pico", "micro", "emacs", "less", "more",
+    "most", "cat", "bat", "batcat", "delta", "head", "tail", "true", "false", "open", "code",
+    "subl",
+];
+
+/// Whether `name` is a variable whose value is a command.
+fn command_valued_name(name: &str) -> bool {
+    COMMAND_VARIABLES.contains(&name) || name.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// A command-valued variable on a staged line whose value is not a bare
+/// viewer or editor, or cannot be read.
+fn staged_variable(word: &str, line: &Line<'_>) -> Option<String> {
+    let (name, value) = word.split_once('=')?;
+    if !command_valued_name(name) {
+        return None;
+    }
+    let value = line.substitute(value);
+    (!VIEWERS.contains(&value.as_str())).then(|| word.to_string())
 }
 
 /// Directories a program named by an absolute path may live in and still be
@@ -1402,16 +1491,15 @@ const GIT_PLAIN: &[&str] = &[
 ];
 
 /// git used as a data reader: a built-in subcommand other than `apply` and
-/// `am`, with no `-c` or `--config-env` before it (a `-c alias.x=!cmd` runs a
-/// shell), no `--exec`, pager, external diff or output option, and no path
-/// list read from standard input or a file.
-fn git_reads(args: &[String]) -> bool {
+/// `am`, with no global setting that names a class file or, on a staged line,
+/// runs a command (`-c alias.x=!cmd`), no `--exec`, pager, external diff or
+/// output option, and no path list read from standard input or a file.
+fn git_reads(args: &[String], line: &Line<'_>) -> bool {
     let Some((sub, rest)) = git_subcommand(args) else {
         return false;
     };
-    if git_globals(args, rest)
-        .iter()
-        .any(|a| git_runs_config(a) || a == "-p")
+    if git_globals(args, rest).iter().any(|a| a == "-p")
+        || git_setting_violation(args, line).is_some()
     {
         return false;
     }
@@ -1486,7 +1574,7 @@ fn git_reads(args: &[String]) -> bool {
 /// Whether `program` with `args` only reads the text it is given: a listed
 /// data reader used as one. Everything else, an unknown program or option
 /// included, is not.
-fn data_reader(program: &str, args: &[String]) -> bool {
+fn data_reader(program: &str, args: &[String], line: &Line<'_>) -> bool {
     let name = basename(program);
     if program.starts_with("./") || (program.contains('/') && !program.starts_with('/')) {
         return false;
@@ -1502,7 +1590,7 @@ fn data_reader(program: &str, args: &[String]) -> bool {
         "source" | "." | "eval" | "exec" => false,
         "sed" | "gsed" => sed_filter_reads(args),
         "awk" | "gawk" | "mawk" | "nawk" => awk_reads(args),
-        "git" => git_reads(args),
+        "git" => git_reads(args, line),
         "sort" => !args.iter().any(|a| {
             a.starts_with("--output")
                 || a.starts_with("--compress-program")
@@ -1517,6 +1605,21 @@ fn data_reader(program: &str, args: &[String]) -> bool {
     }
 }
 
+/// The startup file a staged line names, when the line produces text and
+/// names a class file; `None` for any other line.
+fn staged_name(segments: &[String], line: &Line<'_>) -> Option<String> {
+    if !produces_text(segments, line.text) {
+        return None;
+    }
+    // The decoded words too: `$'\\x2ezshrc'` and `'.zs''hrc'` name the file
+    // although the raw text does not spell it.
+    line.names(line.text).or_else(|| {
+        segments
+            .iter()
+            .find_map(|segment| line.names(&command_argv(segment).join(" ")))
+    })
+}
+
 /// The staged-run rule. A line that names a startup file and produces text
 /// (a pipe, heredoc, substitution or written file) refuses unless every
 /// program on it is a data reader used as one ([`data_reader`]): the text may
@@ -1525,20 +1628,16 @@ fn data_reader(program: &str, args: &[String]) -> bool {
 /// wrappers, `find -exec`, `env -S`), which an unlisted spelling always
 /// escaped. A program or option the guard does not know fails closed.
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
-    if !produces_text(segments, line.text) {
-        return None;
-    }
-    // The decoded words too: `$'\\x2ezshrc'` and `'.zs''hrc'` name the file
-    // although the raw text does not spell it.
-    let name = line.names(line.text).or_else(|| {
-        segments
-            .iter()
-            .find_map(|segment| line.names(&command_argv(segment).join(" ")))
-    })?;
+    let name = staged_name(segments, line)?;
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        if let Some(word) = words.iter().find(|w| assigns_program_variable(w)) {
+        if let Some(word) = words
+            .iter()
+            .find(|w| assigns_program_variable(w))
+            .cloned()
+            .or_else(|| words.iter().find_map(|w| staged_variable(w, line)))
+        {
             return Some(finding(format!(
                 "text this call produces names the shell startup file `{name}`, and the line sets `{word}`, which changes the program that runs; read the file in its own call"
             )));
@@ -1555,7 +1654,7 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
                     ))
                 });
         };
-        (!data_reader(program, args)).then(|| {
+        (!data_reader(program, args, line)).then(|| {
             finding(format!(
                 "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which is not a data reader, so it could run or apply that text; read the file in its own call"
             ))
@@ -1608,6 +1707,13 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     }
     let (program, args) = strip_launchers(&tokens)?;
     let name = basename(program);
+    if name == "git" {
+        if let Some(why) = git_setting_violation(args, line) {
+            return Some(finding(format!(
+                "{why}, which a program the line runs would execute"
+            )));
+        }
+    }
     if reads_only(name, args) {
         return None;
     }
@@ -1803,7 +1909,6 @@ fn reads_only(name: &str, args: &[String]) -> bool {
         }
         "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
             GIT_READS.contains(&sub)
-                && !git_globals(args, rest).iter().any(|a| git_runs_config(a))
                 && !rest
                     .iter()
                     .any(|a| a.starts_with("--output") || a == "-o" || a.starts_with("--ext-diff"))
@@ -1831,10 +1936,106 @@ fn git_globals<'a>(args: &'a [String], rest: &[String]) -> &'a [String] {
     &args[..args.len() - rest.len() - 1]
 }
 
-/// Whether a git global option sets configuration for this call, which can
-/// name a program to run (`-c core.fsmonitor=cmd`, `--config-env`).
-fn git_runs_config(arg: &str) -> bool {
-    arg == "-c" || arg.starts_with("--config-env") || arg.starts_with("--exec-path")
+/// Config keys whose value is a command or a path to one.
+const COMMAND_CONFIG: &[&str] = &[
+    "pager",
+    "editor",
+    "fsmonitor",
+    "sshcommand",
+    "askpass",
+    "hookspath",
+    "helper",
+    "external",
+    "textconv",
+    "alias.",
+    "driver",
+    "program",
+    "smudge",
+    "clean",
+    "process",
+    "command",
+    "exec",
+];
+
+/// Directories git's own programs live in, for `--exec-path`.
+const GIT_EXEC_DIRS: &[&str] = &[
+    "/usr/lib/git-core",
+    "/usr/libexec/git-core",
+    "/opt/homebrew/opt/git/libexec/git-core",
+    "/Library/Developer/CommandLineTools/usr/libexec/git-core",
+];
+
+/// What the global settings of a git call do (`-c key=value`,
+/// `--config-env=key=VAR`, `--exec-path=DIR`): why the call is not a reader,
+/// or `None` when every value is harmless. A value that names a class file
+/// refuses on any line. On a line that names a class file, a value the guard
+/// cannot read refuses too, and on a staged line so does a command-valued
+/// setting that is not a bare viewer, since the command could run what the
+/// call wrote.
+fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
+    let (_, rest) = git_subcommand(args)?;
+    let globals = git_globals(args, rest);
+    let near_class = line.names(line.text).is_some();
+    let judge = |label: &str, runs_command: bool, value: &str| -> Option<String> {
+        let value = line.substitute(value);
+        if let Some(class) = line.names(&value) {
+            return Some(format!("{label} names the shell startup file `{class}`"));
+        }
+        if near_class && unresolved_word(&value) {
+            return Some(format!("{label} has a value the guard cannot read"));
+        }
+        (line.staged && runs_command && !VIEWERS.contains(&value.as_str()))
+            .then(|| format!("{label} is a command that could run text this call produced"))
+    };
+    let mut at = 0;
+    while at < globals.len() {
+        let arg = globals[at].as_str();
+        at += 1;
+        let found = if arg == "-c" {
+            let setting = globals.get(at).map(String::as_str).unwrap_or_default();
+            at += 1;
+            let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
+            let key_lower = key.to_lowercase();
+            let runs = COMMAND_CONFIG.iter().any(|k| key_lower.contains(k));
+            judge(&format!("`git -c {key}`"), runs, value)
+        } else if arg == "--config-env" || arg.starts_with("--config-env=") {
+            let setting = arg.strip_prefix("--config-env=").map_or_else(
+                || {
+                    at += 1;
+                    globals.get(at - 1).cloned().unwrap_or_default()
+                },
+                str::to_string,
+            );
+            let (key, var) = setting.split_once('=').unwrap_or((setting.as_str(), ""));
+            match line.assigned.get(var) {
+                Some(value) => judge(&format!("`git --config-env {key}`"), true, value),
+                None => near_class.then(|| {
+                    format!("`git --config-env {key}` takes its value from `{var}`, which the guard cannot read")
+                }),
+            }
+        } else if arg == "--exec-path" || arg.starts_with("--exec-path=") {
+            let value = arg.strip_prefix("--exec-path=").unwrap_or_default();
+            if let Some(class) = line.names(value) {
+                Some(format!(
+                    "`--exec-path` names the shell startup file `{class}`"
+                ))
+            } else if near_class && unresolved_word(value) {
+                Some("`--exec-path` has a value the guard cannot read".to_string())
+            } else {
+                (line.staged
+                    && !value.is_empty()
+                    && !GIT_EXEC_DIRS.contains(&value)
+                    && !SYSTEM_DIRS.contains(&value))
+                .then(|| "`--exec-path` picks where git's programs run from".to_string())
+            }
+        } else {
+            None
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }
 
 /// A git subcommand after git's global options, with its arguments.
