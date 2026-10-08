@@ -235,7 +235,9 @@ pub const SCHEMA: [KeySpec; 66] = [
         purpose: "Additional remotes whose branches count as advisory work claims.",
         notes: "Origin and the target's fetch remote always count. Empty by default; \
                 other remote branches are reported as information. Named remotes \
-                must be configured when work claim lists their branches.",
+                must be configured when work claim lists their branches. The \
+                shipped policy file does not list it, so an older binary never \
+                meets the key.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
