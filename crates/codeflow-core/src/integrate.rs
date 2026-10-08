@@ -672,6 +672,8 @@ mod tests {
     /// Review finding on issue 79: a checked-out branch whose name is not
     /// valid UTF-8 was replaced by the target name, so a failed landing
     /// restored the wrong checkout. Integrate refuses before changing anything.
+    /// Windows cannot hold the name as a ref path, so libgit2 fails to read
+    /// the branch there and integrate refuses on that read instead.
     #[test]
     fn a_checked_out_branch_that_is_not_utf8_is_refused_before_any_change() {
         let dir = repo_with_feature_branch();
@@ -686,8 +688,13 @@ mod tests {
         fs::write(dir.path().join(".git/HEAD"), b"ref: refs/heads/caf\xe9\n").unwrap();
         let before = branch_oid(dir.path(), "feat/x");
         let error = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        let reason = if cfg!(windows) {
+            "cannot read the checked-out branch"
+        } else {
+            "not valid UTF-8"
+        };
         assert!(
-            matches!(error, IntegrateError::Preflight(ref why) if why.contains("not valid UTF-8")),
+            matches!(error, IntegrateError::Preflight(ref why) if why.contains(reason)),
             "{error}"
         );
         assert_eq!(before, branch_oid(dir.path(), "feat/x"));

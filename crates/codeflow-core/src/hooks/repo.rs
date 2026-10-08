@@ -396,6 +396,9 @@ mod tests {
     /// as detached, so a protected pattern never saw it and the refusal was
     /// dropped. The hook plane now reads it as one sentinel that every branch
     /// rule treats as protected, and the exact name is kept for display.
+    /// Unix only: Windows cannot hold the name as a ref path, so libgit2
+    /// cannot read the branch there at all.
+    #[cfg(unix)]
     #[test]
     fn a_branch_that_is_not_utf8_is_not_detached_and_stays_protected() {
         let dir = tempfile::tempdir().unwrap();

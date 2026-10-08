@@ -700,6 +700,8 @@ fn paths_that_differ_only_in_an_invalid_byte_stay_two_paths() {
 /// Whether a branch is a release branch changes ownership and acceptance
 /// rules, and the release pattern is a glob that needs text, so a checked-out
 /// branch whose name is not valid UTF-8 refuses instead of being guessed.
+/// Windows cannot hold the name as a ref path, so libgit2 fails to read the
+/// branch there and the scope refuses on that read instead.
 #[test]
 fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
     let dir = tempfile::tempdir().unwrap();
@@ -710,7 +712,12 @@ fn a_release_scope_refuses_a_checked_out_branch_that_is_not_utf8() {
     )
     .unwrap();
     let error = checkout_scope(dir.path(), None).unwrap_err();
-    assert!(error.contains("not valid UTF-8"), "{error}");
+    let reason = if cfg!(windows) {
+        "cannot read current branch"
+    } else {
+        "not valid UTF-8"
+    };
+    assert!(error.contains(reason), "{error}");
 }
 
 /// Round six on issue 79: a path under `project-management/` whose name is not

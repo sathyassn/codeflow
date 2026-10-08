@@ -1907,7 +1907,9 @@ fn bootstrap_grace_suspends_the_rule() {
 /// Review finding on issue 79: a root branch or a checked-out branch whose
 /// name is not valid UTF-8 was read as absent, and a lossy spelling made it
 /// equal to a different branch. Each name is kept as `GitName` bytes, so each
-/// branch is itself and no other.
+/// branch is itself and no other. Unix only: Windows cannot hold the name as
+/// a ref path, so libgit2 cannot read the branch there at all.
+#[cfg(unix)]
 #[test]
 fn a_branch_that_is_not_utf8_is_neither_absent_nor_another_branch() {
     let dir = tempfile::tempdir().unwrap();
@@ -2168,6 +2170,8 @@ fn r16_finish_preserves_unreadable_gitignore() {
     assert_eq!(std::fs::read(root.join(".gitignore")).unwrap(), original);
 }
 
+/// Unix only: Windows refuses a newline in a file name (os error 123).
+#[cfg(unix)]
 #[test]
 fn r16_nested_inventory_refuses_unrepresentable_ignore_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -2175,6 +2179,21 @@ fn r16_nested_inventory_refuses_unrepresentable_ignore_line() {
     std::fs::create_dir_all(root.join("line\nbreak").join(".git")).unwrap();
     let repo = git2::Repository::open(&root).unwrap();
     assert!(nested_repositories(&repo).is_err());
+}
+
+/// The name Windows can hold that `.gitignore` text cannot: a folder whose
+/// UTF-16 name holds an unpaired surrogate is refused, never written lossily.
+#[cfg(windows)]
+#[test]
+fn nested_inventory_refuses_a_folder_name_that_is_not_unicode() {
+    use std::os::windows::ffi::OsStringExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(dir.path());
+    let name = std::ffi::OsString::from_wide(&[u16::from(b'd'), 0xD800]);
+    std::fs::create_dir_all(root.join(name).join(".git")).unwrap();
+    let repo = git2::Repository::open(&root).unwrap();
+    let error = nested_repositories(&repo).unwrap_err();
+    assert!(error.contains("as UTF-8"), "{error}");
 }
 
 #[test]
