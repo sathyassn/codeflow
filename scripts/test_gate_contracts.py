@@ -78,7 +78,11 @@ class GateContracts(unittest.TestCase):
         for path in ['assets/base/claude/workflows/pipeline.workflow.js', '.claude/workflows/pipeline.workflow.js']:
             source = read(path)
             self.assertIn('affected targeted checks', source)
+            # TSK-263: review keeps the quick gate; verify runs essential
+            # where the config defines it, so the unattended path runs the
+            # suite a crates change owes.
             self.assertIn('codeflow test --mode quick --strict', source)
+            self.assertIn('codeflow test --mode essential --strict', source)
             self.assertIn('primary runs the full gate once on the exact landing candidate', source)
         self.assertEqual(read('assets/base/claude/workflows/pipeline.workflow.js'), read('.claude/workflows/pipeline.workflow.js'))
 
