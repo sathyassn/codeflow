@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use super::actions;
+use super::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::hooks::git_guard::{
     basename, command_argv, expand_commands, has_glob, is_shell, launcher_effects, redirect_writes,
     run_dirs, shell_tokens, startup_glob_paths, strip_launchers, strip_reserved_words,
@@ -1393,10 +1394,15 @@ const RUNNING_WORDS: &[&str] = &["cmd", "command", "exec", "script", "eval", "lo
 /// `ssh -o ProxyCommand=sh` are not.
 fn viewer_command(value: &str, line: &Line<'_>) -> bool {
     let mut words = value.split_whitespace();
-    if !words.next().is_some_and(|w| VIEWERS.contains(&w)) {
+    let Some(viewer) = words.next().filter(|w| VIEWERS.contains(w)) else {
         return false;
-    }
+    };
     let plain_flag = |w: &str| {
+        if let Some(own) = plain_letters(viewer) {
+            if let Some(run) = w.strip_prefix('-').filter(|r| !r.starts_with('-')) {
+                return !run.is_empty() && run.chars().all(|c| own.contains(c));
+            }
+        }
         let letters = w
             .strip_prefix("--")
             .map(|r| r.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
@@ -1426,6 +1432,20 @@ fn viewer_command(value: &str, line: &Line<'_>) -> bool {
             && !RUNNING_WORDS.iter().any(|r| lower.contains(r))
             && line.names(w).is_none()
     })
+}
+
+/// The letters a pager or diff takes without a value, which may run
+/// together in one word (`less -RF`, `diff -u`). Each formats or moves
+/// through output; none loads a file, writes one or runs a command, so
+/// less's `-k`, `-o` and `+command` and diff's `-l` (which runs `pr`) are
+/// not among them. Other viewers take one plain letter per word, and vim's
+/// `-c`, `-S`, `-s`, `-u` and `+command` refuse.
+fn plain_letters(viewer: &str) -> Option<&'static str> {
+    match viewer {
+        "less" => Some("aABcCdeEfFgGiIJKLmMnNqQrRsSuUVwWX"),
+        "diff" | "colordiff" => Some("aBbcdEeiNnPpqrsTtuwyZ"),
+        _ => None,
+    }
 }
 
 /// Whether `name` is a variable whose value is a command.
@@ -2016,70 +2036,9 @@ fn git_globals<'a>(args: &'a [String], rest: &[String]) -> &'a [String] {
     &args[..args.len() - rest.len() - 1]
 }
 
-/// Config keys known not to run a command or pull in other keys. A key ending
-/// in a dot is a prefix.
-const SAFE_CONFIG: &[&str] = &[
-    "color.",
-    "column.",
-    "advice.",
-    "status.",
-    "grep.",
-    "user.name",
-    "user.email",
-    "diff.renames",
-    "diff.algorithm",
-    "diff.context",
-    "diff.colormoved",
-    "merge.ff",
-    "pull.ff",
-    "push.default",
-    "fetch.prune",
-    "init.defaultbranch",
-    "core.commentchar",
-    "core.whitespace",
-    "core.quotepath",
-    "core.autocrlf",
-    "core.safecrlf",
-    "core.filemode",
-    "core.ignorecase",
-    "core.abbrev",
-    "clean.requireforce",
-    "core.fsmonitorhookversion",
-];
-
-/// Config keys known to run a command, or a path to one, or to pull in other
-/// keys that can (`include.path`). A key is matched by what its name contains.
-const COMMAND_CONFIG: &[&str] = &[
-    "pager",
-    "editor",
-    "fsmonitor",
-    "sshcommand",
-    "askpass",
-    "hookspath",
-    "helper",
-    "external",
-    "textconv",
-    "alias.",
-    "driver",
-    "program",
-    "smudge",
-    "clean",
-    "process",
-    "command",
-    "exec",
-    "gitproxy",
-    "uploadpack",
-    "receivepack",
-    "include.",
-    "includeif.",
-    ".cmd",
-    "difftool.",
-    "mergetool.",
-];
-
-/// What the global git setting `key` can do. A key on [`SAFE_CONFIG`] (and a
-/// `pager.<command>` set to a boolean) runs nothing; a key whose name matches
-/// [`COMMAND_CONFIG`] runs a command; any other key is not known.
+/// What the global git setting `key` can do ([`git::config_kind`]): a safe
+/// setting runs nothing; a command setting may only name an ordinary viewer
+/// on a line that produces text; any other setting refuses there.
 fn config_setting_problem(label: &str, key: &str, value: &str, line: &Line<'_>) -> Option<String> {
     let value = line.substitute(value);
     if let Some(class) = line.names(&value) {
@@ -2091,28 +2050,15 @@ fn config_setting_problem(label: &str, key: &str, value: &str, line: &Line<'_>) 
     if !line.staged {
         return None;
     }
-    let key = key.to_lowercase();
-    let boolean = matches!(
-        value.to_lowercase().as_str(),
-        "true" | "false" | "yes" | "no" | "on" | "off" | "0" | "1"
-    );
-    if SAFE_CONFIG.iter().any(|k| {
-        if k.ends_with('.') {
-            key.starts_with(k)
-        } else {
-            key == *k
-        }
-    }) || (key.starts_with("pager.") && boolean)
-    {
-        return None;
+    match git::config_kind(key, &value) {
+        ConfigKind::Safe => None,
+        ConfigKind::Command => (!viewer_command(&value, line))
+            .then(|| format!("{label} is a command that could run text this call produced")),
+        ConfigKind::Unknown => Some(format!(
+            "{label} sets `{}`, a setting the guard does not know, on a line that produces text",
+            key.to_lowercase()
+        )),
     }
-    if COMMAND_CONFIG.iter().any(|k| key.contains(k)) {
-        return (!viewer_command(&value, line))
-            .then(|| format!("{label} is a command that could run text this call produced"));
-    }
-    Some(format!(
-        "{label} sets `{key}`, a setting the guard does not know, on a line that produces text"
-    ))
 }
 
 /// Directories git's own programs live in, for `--exec-path`.
@@ -2124,7 +2070,7 @@ const GIT_EXEC_DIRS: &[&str] = &[
 ];
 
 /// What the global settings of a git call do (`-c key=value`,
-/// `--config-env key=VAR` in either spelling, `--exec-path DIR`): why the
+/// `--config-env key=VAR` in either spelling, `--exec-path=DIR`): why the
 /// call is not a reader, or `None` when every setting is harmless. See
 /// [`config_setting_problem`] for the key and value rules.
 fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
@@ -2157,15 +2103,10 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
                     format!("`git --config-env {key}` takes its value from `{var}`, which the guard cannot read")
                 }),
             }
-        } else if arg == "--exec-path" || arg.starts_with("--exec-path=") {
-            let value = arg.strip_prefix("--exec-path=").map_or_else(
-                || {
-                    at += 1;
-                    globals.get(at - 1).cloned().unwrap_or_default()
-                },
-                str::to_string,
-            );
-            let value = line.substitute(&value);
+        } else if let Some(value) = arg.strip_prefix("--exec-path=") {
+            // Without `=`, `--exec-path` prints git's program directory and
+            // exits; the word after it is read as the subcommand.
+            let value = line.substitute(value);
             if let Some(class) = line.names(&value) {
                 Some(format!(
                     "`--exec-path` names the shell startup file `{class}`"
@@ -2193,15 +2134,7 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
 fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
-        if matches!(
-            arg.as_str(),
-            "-C" | "-c"
-                | "--git-dir"
-                | "--work-tree"
-                | "--namespace"
-                | "--exec-path"
-                | "--config-env"
-        ) {
+        if GLOBAL_VALUE_OPTIONS.contains(&arg.as_str()) {
             at += 2;
         } else if arg.starts_with('-') {
             at += 1;
@@ -2217,15 +2150,7 @@ fn git_dirs(args: &[String]) -> Vec<&str> {
     let mut dirs = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
-        if matches!(
-            arg.as_str(),
-            "-C" | "-c"
-                | "--git-dir"
-                | "--work-tree"
-                | "--namespace"
-                | "--exec-path"
-                | "--config-env"
-        ) {
+        if GLOBAL_VALUE_OPTIONS.contains(&arg.as_str()) {
             if arg == "-C" {
                 if let Some(dir) = args.get(at + 1) {
                     dirs.push(dir.as_str());

@@ -455,14 +455,7 @@ fn family_id(id: &str) -> &'static str {
 // subcommand (for example cargo test --features publish) is never an action.
 fn global_args<'a>(name: &str, rest: &'a [String]) -> &'a [String] {
     let values: &[&str] = match name {
-        "git" => &[
-            "-C",
-            "-c",
-            "--git-dir",
-            "--work-tree",
-            "--namespace",
-            "--config-env",
-        ],
+        "git" => super::git::GLOBAL_VALUE_OPTIONS,
         "gh" => &["-R", "--repo", "--hostname"],
         "cargo" => &[
             "--manifest-path",
@@ -808,6 +801,22 @@ mod tests {
         ] {
             assert!(
                 evaluate(command, &SecuritySection::default()).is_empty(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn git_global_options_with_a_value_word_are_skipped() {
+        // Issue 120: the value word of a git global option is never read as
+        // the subcommand, so a publication behind one is still seen.
+        for command in [
+            "git --attr-source HEAD push --tags",
+            "git --shallow-file x push --tags",
+            "git --config-env color.ui=C push --tags",
+        ] {
+            assert!(
+                !evaluate(command, &SecuritySection::default()).is_empty(),
                 "{command}"
             );
         }

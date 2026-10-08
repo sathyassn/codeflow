@@ -1592,10 +1592,52 @@ fn git_settings_are_judged_by_key_kind_and_commands_by_their_words() {
         "EDITOR=vim git log -p -- .envrc | head",
         "GIT_SSH_COMMAND='ssh -o BatchMode=yes' git log -p -- .envrc | head",
         "GIT_EXTERNAL_DIFF=diff git log -p -- .envrc | head",
-        "git --exec-path /usr/bin diff -- .envrc",
-        "git --exec-path /usr/lib/git-core log -p -- .envrc | head",
+        // Without `=`, `--exec-path` takes no value (git prints its program
+        // directory and exits), so only the `=` form sets the directory.
+        "git --exec-path=/usr/bin diff -- .envrc",
         "git --exec-path=/usr/lib/git-core log -p -- .envrc | head",
         "git --exec-path /tmp/x log -- src/a.rs",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn pagers_and_diffs_take_their_own_letters() {
+    // Review rounds nine and ten: `less` and `diff` take their own letters
+    // that need no value, run together; vim keeps its refused letters.
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "EDITOR='vim -u /tmp/x' git log -p -- .envrc | head",
+        "EDITOR='vim -S /tmp/x' git log -p -- .envrc | head",
+        "EDITOR='vim -c :!id' git log -p -- .envrc | head",
+        "EDITOR='vim -s' git log -p -- .envrc | head",
+        "EDITOR='vim -S' git log -p -- .envrc | head",
+        "EDITOR='less -ofile' git log -p -- .envrc | head",
+        "EDITOR='less -k keys' git log -p -- .envrc | head",
+        "EDITOR='less +!id' git log -p -- .envrc | head",
+        "GIT_EXTERNAL_DIFF='diff -l' git log -p -- .envrc | head",
+        "GIT_EXTERNAL_DIFF='diff -uS x' git log -p -- .envrc | head",
+        "git -c log.follow=true log -p -- .envrc | head",
+        "git -c submodule.x.update='!sh /tmp/r.sh' log -p -- .envrc | head",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "GIT_EXTERNAL_DIFF='diff -u' git log -p -- .envrc | head",
+        "GIT_EXTERNAL_DIFF='colordiff -uw' git log -p -- .envrc | head",
+        "EDITOR='less -RF' git log -p -- .envrc | head",
+        "PAGER='less -RFX' git log -p -- .envrc | head",
+        "git -c core.pager='less -RF' log -p -- .envrc | head",
+        "git -c log.date=iso log -p -- .envrc | head",
+        "git -c submodule.x.update=checkout log -p -- .envrc | head",
+        "C=never git --config-env color.ui=C --attr-source HEAD log -p -- .envrc | head",
     ] {
         if refused(&f.judge(command)) {
             wrong.push(format!("refused: {command}"));

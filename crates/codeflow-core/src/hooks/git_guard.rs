@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
@@ -5386,10 +5387,10 @@ fn check_git(
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(key) = config_writes_code_key(rest, Some(&dirs)) {
+        if let Some(found) = config_writes_code_key(rest, Some(&dirs)) {
             out.push(hook_integrity_violation(
                 ctx.policy.hook_integrity,
-                format!("`git config` would set `{key}` in the user or system configuration, which makes a later git command run a program the guards never see"),
+                config_write_message(&found),
             ));
         }
     }
@@ -5653,7 +5654,7 @@ fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
                 "a global option or the subcommand",
             ));
         }
-        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+        if GLOBAL_VALUE_OPTIONS.contains(&t.as_str()) {
             if args.get(idx + 1).is_some_and(|v| has_substitution(v)) {
                 return Some(Unclassified::Subcommand("a global option"));
             }
@@ -5987,7 +5988,7 @@ fn expand_alias(
         if t == "-c" {
             config.extend(args.get(idx + 1).cloned());
             idx += 2;
-        } else if GIT_GLOBAL_VALUE_FLAGS.contains(&t) {
+        } else if GLOBAL_VALUE_OPTIONS.contains(&t) {
             idx += 2;
         } else {
             idx += 1;
@@ -6222,7 +6223,7 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
                 git_dir = Some(expand_word(value()?, vars)?);
                 idx += 2;
             }
-            "-c" | "--config-env" | "--work-tree" | "--namespace" => idx += 2,
+            t if GLOBAL_VALUE_OPTIONS.contains(&t) => idx += 2,
             _ => {
                 if let Some(v) = t.strip_prefix("--git-dir=") {
                     git_dir = Some(expand_word(v, vars)?);
@@ -6418,15 +6419,10 @@ fn judge_git_sub(
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
             } else if policy.hook_integrity.is_active() {
-                if let Some(key) = config_writes_code_key(rest, None) {
-                    let what = if key == "--edit" {
-                        "`git config --edit` would open the user or system configuration, where a key can make".to_string()
-                    } else {
-                        format!("`git config` would set `{key}` in the user or system configuration, which makes")
-                    };
+                if let Some(found) = config_writes_code_key(rest, None) {
                     out.push(hook_integrity_violation(
                         policy.hook_integrity,
-                        format!("{what} a later git command run a program the guards never see"),
+                        config_write_message(&found),
                     ));
                 }
             }
@@ -6470,7 +6466,7 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
                 }
                 idx += 2;
             }
-            "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
+            t if GLOBAL_VALUE_OPTIONS.contains(&t) => {
                 if (t == "-C" || t == "--git-dir") && retarget.is_none() {
                     retarget = args.get(idx + 1).cloned();
                 }
@@ -6547,72 +6543,6 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
-}
-
-/// The git configuration keys whose value is a program or command a later
-/// git command runs, or a file git reads more configuration from (TSK-242).
-/// `*` stands for one subsection name.
-const CODE_RUNNING_KEYS: &[&str] = &[
-    "alias.*",
-    "core.pager",
-    "core.editor",
-    "core.sshcommand",
-    "core.fsmonitor",
-    "core.askpass",
-    "core.gitproxy",
-    "credential.helper",
-    "credential.*.helper",
-    "diff.external",
-    "diff.*.command",
-    "diff.*.textconv",
-    "difftool.*.cmd",
-    "merge.*.driver",
-    "mergetool.*.cmd",
-    "filter.*.clean",
-    "filter.*.smudge",
-    "filter.*.process",
-    "include.path",
-    "includeif.*.path",
-    "init.templatedir",
-    "sequence.editor",
-    "gpg.program",
-    "gpg.*.program",
-    "pager.*",
-    "interactive.difffilter",
-    "web.browser",
-    "browser.*.cmd",
-    "man.*.cmd",
-    "remote.*.uploadpack",
-    "remote.*.receivepack",
-    "sendemail.smtpserver",
-    "uploadpack.packobjectshook",
-];
-
-/// Whether `key` (as git reads it: section and variable in any case, the
-/// subsection as written) is one of [`CODE_RUNNING_KEYS`].
-fn code_running_key(key: &str) -> bool {
-    let (Some((section, rest)), Some((_, variable))) = (key.split_once('.'), key.rsplit_once('.'))
-    else {
-        return false;
-    };
-    let middle = rest.rsplit_once('.').map(|(sub, _)| sub);
-    CODE_RUNNING_KEYS.iter().any(|pattern| {
-        let parts: Vec<&str> = pattern.split('.').collect();
-        match parts.as_slice() {
-            [s, v] if *v == "*" => section.eq_ignore_ascii_case(s),
-            [s, v] => {
-                middle.is_none()
-                    && section.eq_ignore_ascii_case(s)
-                    && variable.eq_ignore_ascii_case(v)
-            }
-            [s, _, v] => {
-                middle.is_some()
-                    && section.eq_ignore_ascii_case(s)
-                    && variable.eq_ignore_ascii_case(v)
-            }
-            _ => false,
-        }
-    })
 }
 
 /// Whether a `git config --file` path is the user's or the system's
@@ -6713,22 +6643,13 @@ fn user_config_file(file: &str, dirs: Option<&[PathBuf]>) -> bool {
     is_user(&expanded)
 }
 
-/// Whether a section, renamed or written whole, holds a key whose value
-/// git runs: its first part names a section of `CODE_RUNNING_KEYS`.
-fn section_runs_code(section: &str) -> bool {
-    let first = section.split('.').next().unwrap_or(section);
-    CODE_RUNNING_KEYS.iter().any(|pattern| {
-        pattern
-            .split('.')
-            .next()
-            .is_some_and(|s| s.eq_ignore_ascii_case(first))
-    })
-}
-
-/// The code-running key a `git config` invocation sets at user or system
-/// scope (`--global`, `--system`, or `--file` naming the user's
-/// configuration), or an interactive edit of that scope. Repository scope
-/// and every read stay allowed.
+/// The key a `git config` invocation sets at user or system scope
+/// (`--global`, `--system`, or `--file` naming the user's configuration)
+/// that is not known to be safe ([`git::config_kind`]), the section a rename
+/// there makes unsafe, or an interactive edit of that scope. Repository scope,
+/// unsets and every read stay allowed. Every repository reads these scopes,
+/// so a key git runs later, or one the guard does not know, refuses there
+/// (review round ten).
 fn config_writes_code_key(rest: &[String], dirs: Option<&[PathBuf]>) -> Option<String> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
@@ -6754,7 +6675,7 @@ fn config_writes_code_key(rest: &[String], dirs: Option<&[PathBuf]>) -> Option<S
         let names = &parsed.operands[usize::from(subcommand.is_some())..];
         return names
             .get(1)
-            .filter(|new| section_runs_code(new))
+            .filter(|new| !git::config_section_is_safe(new))
             .map(|new| (*new).to_string());
     }
     if any_long(&["--unset", "--unset-all", "--remove-section"])
@@ -6763,10 +6684,23 @@ fn config_writes_code_key(rest: &[String], dirs: Option<&[PathBuf]>) -> Option<S
         return None;
     }
     let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    let value = operands.get(1).copied().unwrap_or_default();
     operands
         .first()
-        .filter(|key| code_running_key(key))
+        .filter(|key| git::config_kind(key, value) != ConfigKind::Safe)
         .map(|key| (*key).to_string())
+}
+
+/// Why a user- or system-scope write that [`config_writes_code_key`] found
+/// refuses: `found` is `--edit`, a key, or the section a rename makes.
+fn config_write_message(found: &str) -> String {
+    if found == "--edit" {
+        return "`git config --edit` would open the user or system configuration, where a key can make a later git command run a program the guards never see".to_string();
+    }
+    match git::config_kind(found, "") {
+        ConfigKind::Command => format!("`git config` would set `{found}` in the user or system configuration, which makes a later git command run a program the guards never see"),
+        _ => format!("`git config` would set `{found}` in the user or system configuration; the guard does not know it to be safe, and such a setting can make a later git command run a program the guards never see. Set it with `--local` for this repository, or ask the operator to set it"),
+    }
 }
 
 /// Does this `git config` invocation only read? A get, list or single-name
@@ -8714,15 +8648,12 @@ fn is_identifier(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Global git flags that consume the following token.
-const GIT_GLOBAL_VALUE_FLAGS: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
-
 /// Find the git subcommand, skipping global flags (`git -C path commit …`).
 pub(super) fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     let mut idx = 0;
     while idx < args.len() {
         let t = &args[idx];
-        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+        if GLOBAL_VALUE_OPTIONS.contains(&t.as_str()) {
             idx += 2;
         } else if t.starts_with('-') {
             idx += 1;
@@ -9350,6 +9281,31 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert_eq!(v.len(), 1, "{cmd}");
             assert_eq!(v[0].rule, "git.force_push_protected", "{cmd}");
+        }
+    }
+
+    #[test]
+    fn global_options_with_a_value_word_are_skipped() {
+        // Issue 120: every git global option that takes the next word as its
+        // value is skipped before the subcommand is read, so the value is
+        // never judged as the subcommand and a push behind one is still seen.
+        let p = default_policy();
+        for cmd in [
+            "git --attr-source HEAD push --force origin main",
+            "git --shallow-file x push --force origin main",
+            "git --config-env color.ui=C push --force origin main",
+            "git --namespace n --attr-source=HEAD push --force origin main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.force_push_protected"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "C=never git --config-env color.ui=C log -1",
+            "git --attr-source HEAD log -1",
+            "git --shallow-file x status",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
         }
     }
 
@@ -9997,6 +9953,46 @@ mod tests {
             "git config core.hooksPath > /tmp/hooks-path",
             "git config core.hooksPath || echo unset",
             "git -C /repo config core.hooksPath",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn keys_not_known_safe_refuse_at_user_and_system_scope() {
+        // Review round ten: a list of code-running keys missed keys git runs
+        // (`difftool.<tool>.path`, `gpg.ssh.defaultKeyCommand` and others),
+        // so a key not known to run nothing refuses at this scope.
+        let p = default_policy();
+        for cmd in [
+            "git config --global difftool.vimdiff.path /tmp/p.sh",
+            "git config --global gpg.ssh.defaultKeyCommand /tmp/p.sh",
+            "git config --global core.alternateRefsCommand /tmp/p.sh",
+            "git config --global mergetool.vimdiff.path /tmp/p.sh",
+            "git config --global imap.tunnel /tmp/p.sh",
+            "git config --global instaweb.httpd /tmp/p.sh",
+            "git config --global browser.chrome.path /tmp/p.sh",
+            "git config --global man.less.path /tmp/p.sh",
+            "git config --global submodule.foo.update '!sh /tmp/p.sh'",
+            "git config --global pager.log less",
+            "git config --global safe.directory '*'",
+            "git config --global --rename-section old.x alias",
+            "git config --system some.new.key x",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --local difftool.vimdiff.path /tmp/p.sh",
+            "git config --global user.name Ada",
+            "git config --global submodule.foo.update checkout",
+            "git config --global pager.log true",
+            "git config --global pull.rebase true",
+            "git config --global push.autoSetupRemote true",
+            "git config --global core.autocrlf input",
+            "git config --global color.ui auto",
+            "git config --global commit.gpgsign true",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
