@@ -646,6 +646,86 @@ fn a_description_edit_of_the_completed_task_skips_the_preflight() {
     );
 }
 
+/// Reword the description of the open task TSK-006 on the current branch
+/// and commit, as an unrelated edit to another task record.
+fn reword_other_task(root: &Path, message: &str) {
+    let path = root.join(record_path("TSK-006"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, current.replacen("\nWork.\n", "\nOther work.\n", 1)).unwrap();
+    commit(root, message);
+}
+
+/// AC-1, AC-2: hosted CI passes the target tip as `--base`. A branch cut
+/// before `main` edited another task record (TSK-006) has a range of its
+/// own diff that holds only the correction, so the skip holds: the edit
+/// `main` made after the branch point is no change of this range.
+#[test]
+fn a_correction_behind_main_that_edited_another_task_keeps_the_skip() {
+    let dir = repo();
+    let root = dir.path();
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    git(root, &["switch", "main"]);
+    reword_other_task(root, "docs(records): reword another task");
+    git(root, &["switch", PLAN]);
+    let result = ci(root, PLAN, "Task: TSK-003");
+    assert_passes(
+        &result,
+        "a correction naming the task, behind a main that edited another task",
+        &[
+            DELTA,
+            "this range of planning records only corrects the records of a completed standalone task that TSK-003 names or follows up, and starts no work",
+        ],
+    );
+    for absent in [FROZEN, "work.stable_planning_anchor"] {
+        assert!(!result.1.contains(absent), "{}", result.1);
+    }
+}
+
+/// AC-2: the same lag, with the Task line naming the blocked follow-up. The
+/// follow-up's own record is unchanged in the range's diff, so the skip
+/// holds although `main` edited another task record after the branch point.
+#[test]
+fn a_blocked_follow_up_behind_main_that_edited_another_task_keeps_the_skip() {
+    let dir = repo();
+    let root = dir.path();
+    stick(root, Stuck::Blocked);
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    git(root, &["switch", "main"]);
+    reword_other_task(root, "docs(records): reword another task");
+    git(root, &["switch", PLAN]);
+    let result = ci(root, PLAN, "Task: TSK-005");
+    assert_passes(
+        &result,
+        "a correction naming the blocked follow-up, behind a main that edited another task",
+        &[
+            DELTA,
+            "this range of planning records only corrects the records of a completed standalone task that TSK-005 names or follows up, and starts no work",
+        ],
+    );
+    for absent in [FROZEN, "work.stable_planning_anchor"] {
+        assert!(!result.1.contains(absent), "{}", result.1);
+    }
+}
+
+/// AC-4: a task record outside the correctable set that the range's own
+/// diff changes keeps the preflight, even when `main` reached the same
+/// bytes for it, so the two tips agree on the file but the range still
+/// changes it.
+#[test]
+fn another_task_the_range_changes_keeps_the_preflight_when_main_has_the_same_bytes() {
+    let dir = repo();
+    let root = dir.path();
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    reword_other_task(root, "docs(records): reword another task");
+    git(root, &["switch", "main"]);
+    reword_other_task(root, "docs(records): reword it the same way");
+    git(root, &["switch", PLAN]);
+    assert_preflight_runs(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "a range that rewords another task, which main reworded the same way",
+    );
+}
+
 /// AC-3: the criteria set and every tag stay frozen. An added, removed,
 /// renumbered or reordered criterion, a changed `(journey)`,
 /// `(after release)` or `(serves ...)` tag, or a list item the parser does

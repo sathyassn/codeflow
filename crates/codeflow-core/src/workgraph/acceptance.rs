@@ -2267,24 +2267,31 @@ fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -
 /// Whether the range from `base` (the target tip) to `head`, which changes
 /// `changed_paths`, only corrects the records of a completed standalone
 /// task that `task_id` names or follows up (ADR-0080), and so starts no
-/// work. The range qualifies when all of these hold: it changes planning
-/// records only; the correctable set (complete and standalone at the target
-/// and at the head, and not reopened by the range) is not empty; every task
-/// record the range adds, removes or changes is in that set; at least one
-/// changed path is the record of a task in that set; and, when `task_id` is
-/// not itself in that set, it is a follow-up the target already holds and
-/// its record at the head is byte-equal to the target's. `task_id` may be
-/// that follow-up in any status, including blocked, cancelled or awaiting
-/// selection, so a range that also changes the follow-up's own record, or
-/// that changes no record of the completed task (a plan note, or another
-/// task's description), is not a correction and keeps the anchored
-/// preflight for tracked work (R-72). The criteria and binding rules still
-/// judge a correction.
+/// work. The range is judged on its own diff: the change from the
+/// merge-base of `base` and `head` through to `head`, the same range
+/// `changed_paths` lists. A task record the target changed after that
+/// merge-base, which the head does not touch, is not a change of this
+/// range, so a branch behind the target keeps the skip, and a task record
+/// that the range's own diff changes is a change of it even when the
+/// target tip holds the same bytes. The range qualifies when all of these
+/// hold: it changes planning records only; the correctable set (complete
+/// and standalone at the target and at the head, and not reopened by the
+/// range) is not empty; every task record the range's own diff adds,
+/// removes or changes is in that set; at least one changed path is the
+/// record of a task in that set; and, when `task_id` is not itself in that
+/// set, it is a follow-up the target already holds and the range's own
+/// diff leaves its record unchanged. `task_id` may be that follow-up in
+/// any status, including blocked, cancelled or awaiting selection, so a
+/// range that also changes the follow-up's own record, or that changes no
+/// record of the completed task (a plan note, or another task's
+/// description), is not a correction and keeps the anchored preflight for
+/// tracked work (R-72). The criteria and binding rules still judge a
+/// correction.
 ///
 /// # Errors
 ///
-/// Returns a message when the repository, a revision or the records
-/// cannot be read.
+/// Returns a message when the repository, a revision, the merge-base or
+/// the records cannot be read.
 pub fn records_correction(
     repo_root: &std::path::Path,
     base: &str,
@@ -2299,6 +2306,7 @@ pub fn records_correction(
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
+    let (base_oid, head_oid) = (oid(base)?, oid(head)?);
     let target = Graph::from_revision(&repo, base)?;
     let at_head = Graph::from_revision(&repo, head)?;
     let reopened = reopened_ids(&repo, base, head, &at_head)?;
@@ -2308,37 +2316,41 @@ pub fn records_correction(
         &at_head,
         changed_paths,
         task_id,
-        (oid(base)?, oid(head)?),
+        (base_oid, head_oid),
         &reopened,
     );
     if correcting.is_empty() {
         return Ok(false);
     }
+    // What the range changes is read against the merge-base, never the
+    // target tip: the target may have moved other records since the branch
+    // point, or reached the same bytes the range did.
+    let anchor = repo
+        .merge_base(base_oid, head_oid)
+        .map_err(|error| error.message().to_string())?;
+    let at_anchor = Graph::from_revision(&repo, &anchor.to_string())?;
+    let touched = |id: &str| match (at_anchor.records.get(id), at_head.records.get(id)) {
+        (None, None) => false,
+        (Some(before), Some(after)) => before.content != after.content || before.path != after.path,
+        _ => true,
+    };
     // A follow-up named only by the range is read from the head, so the
     // range could authorise itself; only a follow-up the target holds, with
-    // its record unchanged, takes the skip.
-    let named_unchanged = target
-        .records
-        .get(task_id)
-        .zip(at_head.records.get(task_id))
-        .is_some_and(|(before, after)| before.content == after.content);
-    if !correcting.contains(task_id) && !named_unchanged {
+    // its record unchanged by the range, takes the skip.
+    if !correcting.contains(task_id) && (!target.records.contains_key(task_id) || touched(task_id))
+    {
         return Ok(false);
     }
-    // Every task record the range touches is a correcting one, so a plan
-    // note, or a change to the follow-up's own record or to another task,
-    // is more than a correction.
-    let task_ids: std::collections::BTreeSet<&String> = target
+    // Every task record the range's diff touches is a correcting one, so a
+    // plan note, or a change to the follow-up's own record or to another
+    // task, is more than a correction.
+    let task_ids: std::collections::BTreeSet<&String> = at_anchor
         .records
         .iter()
         .chain(&at_head.records)
         .filter(|(_, record)| record.kind == RecordKind::Task)
         .map(|(id, _)| id)
         .collect();
-    let touched = |id: &String| match (target.records.get(id), at_head.records.get(id)) {
-        (Some(before), Some(after)) => before.content != after.content || before.path != after.path,
-        _ => true,
-    };
     if task_ids
         .iter()
         .any(|id| touched(id) && !correcting.contains(*id))
@@ -2347,7 +2359,7 @@ pub fn records_correction(
     }
     // At least one changed path is a correcting task's record.
     Ok(correcting.iter().any(|id| {
-        [&target, &at_head]
+        [&at_anchor, &at_head]
             .iter()
             .filter_map(|graph| graph.records.get(id))
             .any(|record| changed_paths.contains(&record.path))

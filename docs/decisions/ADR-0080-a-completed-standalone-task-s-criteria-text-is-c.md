@@ -44,7 +44,11 @@ that changes the record of the completed task, and no task record outside
 the correctable set (the named task and the task it follows), starts no
 work, so the anchored preflight for tracked work (R-72) does not apply to
 it. A follow-up named by the `Task:` line must be held by the target with
-its record unchanged. A range that changes only a plan note, the
+its record unchanged. The range is its own diff, from the merge-base of
+the target and the head through the head, so a task record the target
+changed after the branch point and the head does not touch is no change of
+the range, and a task record the range changes is one even when the target
+holds the same bytes. A range that changes only a plan note, the
 follow-up's own record or another task's record corrects nothing and
 keeps the preflight. On the corrected task's own `task/` branch, a range
 keeps today's behaviour, since that branch is the task's reopen route. An
