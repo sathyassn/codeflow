@@ -297,7 +297,7 @@ impl ProtectionPlan {
             }
         }
         lines.push(
-            "where a repository ruleset already targets a branch, that ruleset is updated in place and no second ruleset or branch protection is added"
+            "where an active repository ruleset already targets a branch, that ruleset is updated in place and no second ruleset or branch protection is added"
                 .to_string(),
         );
         ProtectReport {
