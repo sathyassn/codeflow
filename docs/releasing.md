@@ -377,10 +377,10 @@ refused until the repair lands.
 
 | Typed repair rule | Detail |
 |---|---|
-| Coupled files | `Cargo.toml`, `Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`, `AGENTS.md`, `CLAUDE.md`, and the managed baselines of the last two with their manifest hashes, which `sync` writes together |
+| Coupled files | `Cargo.toml`, `Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`, `AGENTS.md`, `CLAUDE.md`, and the managed baselines of the last two, which `sync` writes together |
 | Configuration | Comes from the base, so a repair that changes `.release/config.json` is refused. The output names the invariant repaired |
 | Pending entries | A repair keeps every existing pending entry byte for byte. An edit waits for its own PR |
-| Baselines and manifest | When a repair touches a managed baseline or the manifest, each baseline carries the one managed stamp of the release version and the manifest records its exact hash |
+| Baselines and manifest | When a repair touches a managed baseline or the manifest, each baseline carries the one managed stamp of the release version. The manifest records no digest of it |
 | Still enforced | Published sections are held to their exact public source. Version non-reuse and the impact floors still apply |
 | Authority for history | The base is always judged by the configuration it carries. A PR never supplies the authority for the history it is judged against |
 | Older shape | One older shape is read: a bootstrap record without its comparison tree, as `main` carries |
@@ -538,7 +538,7 @@ CodeFlow's routes for a critical defect:
 | Marking | The `critical` label at intake, naming the criterion that holds; the bug report template asks the reporter for the same criteria | the primary |
 | Interim guidance | A workaround that is true now, tested before it is posted, in the issue the same day and in the release plan when adopters are affected; it needs no release and changes no guard | the primary |
 | Prioritized fix | The fix moves ahead of planned work in its own epic | the primary; the operator when it moves another epic's planned work or work the operator ordered |
-| Release | Only from the current tip of `main`, so every pending change rides with the fix; the fix lands first and `main` stays green and releasable. Issue 48 (the 3.0.0 managed secret scan covers every branch, so one branch's finding turns an adopter's pull requests red) is fixed in 3.1.0 this way, not in a 3.0.1 patch | the operator dispatches |
+| Release | Only from the current tip of `main`, so every pending change rides with the fix; the fix lands first and `main` stays green and releasable. Issue 48 (the 3.0.0 managed secret scan covers every branch, so one branch's finding turns an adopter's pull requests red) is fixed in 4.0.0 this way, not in a 3.0.1 patch | the operator dispatches |
 | Adopters told | The issue comment, the `CHANGELOG.md` entry with its `Migration` line and the release notes; a security defect goes through [private vulnerability reporting](SECURITY.md), never a public issue | the primary writes, the operator publishes |
 
 #### Why there is no maintenance branch

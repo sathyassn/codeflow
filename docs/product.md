@@ -71,7 +71,7 @@ Planning is checked against each row.
 | Not a process-enforcement engine | The CodeFlow binary does not run or schedule agents. Its gates sit where a mistake is irreversible or invisible, such as work start (approved specs first), task completion and protected branches. The standard and full tiers seed an optional pipeline workflow that runs build, review and verify stages in Claude Code; you own and adapt that copy |
 | Not a graphical or terminal UI product | The one exception is `cf-present` (SPC-004): an explicit command opens a short-lived review page in an isolated browser window, served from a loopback-only, per-session service that stops itself. The opt-in docs portal is a generated static site, not an operated interface |
 | Not memory infrastructure | No embeddings, vector database or database as authority. Markdown and JSONL are the truth, with a full-text search cache over them |
-| Not an OS or harness security boundary | CodeFlow gives deterministic safety feedback and does not claim every harness contains an agent equally. Binaries ship for macOS, Linux (WSL2 uses the Linux binary) and, from 3.1.0, native Windows x86-64. Claude work that needs an OS sandbox on Windows runs in WSL2 or a container |
+| Not an OS or harness security boundary | CodeFlow gives deterministic safety feedback and does not claim every harness contains an agent equally. Binaries ship for macOS, Linux (WSL2 uses the Linux binary) and, from 4.0.0, native Windows x86-64. Claude work that needs an OS sandbox on Windows runs in WSL2 or a container |
 
 ## Architecture
 

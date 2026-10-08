@@ -20,7 +20,7 @@ use crate::remedy::{self, Finding, Remedy};
 use crate::scaffold::manifest::{Ownership, RegionFormat};
 use crate::scaffold::region;
 use crate::scaffold::sha256_hex;
-use crate::scaffold::state::InstalledManifest;
+use crate::scaffold::state::{Baseline, InstalledManifest, BASELINE_DIR, INSTALLED_MANIFEST};
 
 mod ci_pin;
 mod grok_hooks;
@@ -2852,13 +2852,15 @@ fn ci_workflow_dest(root: &Path) -> String {
 /// region has been hand-edited inside its `codeflow:managed` markers.
 /// `codeflow update` regenerates that block from the shipped asset, so an
 /// in-marker edit is silently lost on the next update — surfacing it here is
-/// the honest signal. Reuses the installed-file record: the manifest stores a
-/// sha256 of each managed region (the pristine shipped block); this recomputes
-/// the current block's hash and flags any that no longer match. Content OUTSIDE
-/// the markers is project-owned and never compared, and JSON settings merges
-/// (no text markers; the record holds the shipped preset's hash, not the
-/// on-disk block) are skipped. WARN only; stays quiet where it cannot read the
-/// record or a file — it flags, it never guesses.
+/// the honest signal. The pristine block is the region's baseline,
+/// `.codeflow/.baseline/<dest>`; this compares the current block with it (a
+/// schema 1 record's digest stands in where the baseline is missing) and
+/// flags any that differ. Content OUTSIDE the markers is project-owned and
+/// never compared, and JSON settings merges (no text markers; the baseline
+/// holds the shipped preset, not the on-disk block) are skipped. A region
+/// with no baseline, and a manifest that does not read, WARN too: the check
+/// never passes on what it could not compare. A missing manifest is not
+/// unreadable: nothing is installed, so nothing drifts.
 fn check_managed_drift(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -2869,11 +2871,22 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         duration: start.elapsed(),
     };
 
-    let Ok(installed) = InstalledManifest::load_or_default(&root, "0") else {
-        return pass("no readable installed manifest; drift check skipped".into());
+    let installed = match InstalledManifest::load_or_default(&root, "0") {
+        Ok(installed) => installed,
+        Err(error) => {
+            return CheckResult {
+                name: "managed-drift".into(),
+                status: Status::Warn(remedy::DOCTOR_MANIFEST_UNREADABLE.remedy()),
+                message: format!(
+                    "{INSTALLED_MANIFEST} does not read, so managed-region drift was not checked: {error}"
+                ),
+                duration: start.elapsed(),
+            };
+        }
     };
 
     let mut drifted: Vec<String> = Vec::new();
+    let mut unproven: Vec<String> = Vec::new();
     for (dest, file) in &installed.files {
         if file.ownership != Ownership::ManagedRegion {
             continue;
@@ -2883,28 +2896,43 @@ fn check_managed_drift(opts: &Options) -> CheckResult {
         };
         // Marker-delimited regions only (markdown/hash). A JSON settings merge
         // has no text markers, so extraction returns None and it is skipped —
-        // its recorded hash is the shipped preset, not the on-disk block.
+        // its baseline is the shipped preset, not the on-disk block.
         let Some(block) = region::extract_block(&content, RegionFormat::Markdown)
             .or_else(|| region::extract_block(&content, RegionFormat::Hash))
         else {
             continue;
         };
-        if sha256_hex(block.as_bytes()) != file.sha256 {
+        let base = Baseline::read(&root, dest);
+        if base.is_none() {
+            unproven.push(dest.clone());
+        }
+        if file.matches_pristine(base.as_deref(), &block) == Some(false) {
             drifted.push(dest.clone());
         }
     }
 
-    if drifted.is_empty() {
-        return pass("no managed-region drift (codeflow blocks match the record)".into());
+    if drifted.is_empty() && unproven.is_empty() {
+        return pass("no managed-region drift (codeflow blocks match their baselines)".into());
+    }
+    let mut findings = Vec::new();
+    if !drifted.is_empty() {
+        findings.push(format!(
+            "{} managed region(s) hand-edited inside codeflow markers; `codeflow update` will regenerate and lose these edits: {}",
+            drifted.len(),
+            drifted.join(", ")
+        ));
+    }
+    if !unproven.is_empty() {
+        findings.push(format!(
+            "{} managed region(s) have no baseline in {BASELINE_DIR}, so nothing shows their codeflow blocks unedited: {}",
+            unproven.len(),
+            unproven.join(", ")
+        ));
     }
     CheckResult {
         name: "managed-drift".into(),
         status: Status::Warn(remedy::DOCTOR_MANAGED_DRIFT.remedy()),
-        message: format!(
-            "{} managed region(s) hand-edited inside codeflow markers; `codeflow update` will regenerate and lose these edits: {}",
-            drifted.len(),
-            drifted.join(", ")
-        ),
+        message: findings.join("; "),
         duration: start.elapsed(),
     }
 }
@@ -6030,21 +6058,22 @@ mod tests {
 
     // --- managed-drift ------------------------------------------------------
 
-    /// A single managed-region record whose sha256 is the hash of `block`,
-    /// exactly as `codeflow update` records it.
-    fn record_region(root: &Path, dest: &str, src: &str, sha_of: &str) {
-        use crate::scaffold::state::InstalledFile;
+    /// A single managed-region record whose baseline is `block`, exactly
+    /// as `codeflow update` records it.
+    fn record_region(root: &Path, dest: &str, src: &str, block: &str) {
         let mut m = InstalledManifest::new("2.0.0");
-        m.files.insert(
-            dest.to_string(),
-            InstalledFile {
-                src: src.to_string(),
-                ownership: Ownership::ManagedRegion,
-                sha256: sha256_hex(sha_of.as_bytes()),
-                exec: false,
-            },
-        );
+        m.files.insert(dest.to_string(), region_file(src, None));
+        Baseline::write(root, dest, block).unwrap();
         m.store(root).unwrap();
+    }
+
+    fn region_file(src: &str, sha256: Option<String>) -> crate::scaffold::state::InstalledFile {
+        crate::scaffold::state::InstalledFile {
+            src: src.to_string(),
+            ownership: Ownership::ManagedRegion,
+            sha256,
+            exec: false,
+        }
     }
 
     const REGION_BLOCK: &str =
@@ -6075,7 +6104,7 @@ mod tests {
         let edited =
             "<!-- codeflow:managed:begin scaffold=2.0.0 -->\nrules HAND EDITED\n<!-- codeflow:managed:end -->";
         std::fs::write(root.join("AGENTS.md"), format!("# Mine\n\n{edited}\n")).unwrap();
-        // The record still holds the pristine block's hash.
+        // The baseline still holds the pristine block.
         record_region(root, "AGENTS.md", "AGENTS.md.tmpl", REGION_BLOCK);
 
         let mut opts = test_opts();
@@ -6096,7 +6125,6 @@ mod tests {
 
     #[test]
     fn test_managed_drift_ignores_outside_marker_edits_and_json_regions() {
-        use crate::scaffold::state::InstalledFile;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         // Edits OUTSIDE the markers are project-owned and must NOT flag.
@@ -6105,31 +6133,21 @@ mod tests {
             format!("# Heavily customized intro\n\n{REGION_BLOCK}\n\nlots of my own notes\n"),
         )
         .unwrap();
-        // A JSON managed-region (settings): no text markers, and its recorded
-        // hash is the shipped preset, never the on-disk block — must be skipped
-        // even though the sha deliberately does not match.
+        // A JSON managed-region (settings): no text markers, and its baseline
+        // is the shipped preset, never the on-disk block — must be skipped
+        // even though neither the baseline nor a legacy digest matches.
         std::fs::create_dir_all(root.join(".claude")).unwrap();
         std::fs::write(root.join(".claude/settings.json"), "{\"hooks\": {}}\n").unwrap();
 
         let mut m = InstalledManifest::new("2.0.0");
-        m.files.insert(
-            "AGENTS.md".into(),
-            InstalledFile {
-                src: "AGENTS.md.tmpl".into(),
-                ownership: Ownership::ManagedRegion,
-                sha256: sha256_hex(REGION_BLOCK.as_bytes()),
-                exec: false,
-            },
-        );
+        m.files
+            .insert("AGENTS.md".into(), region_file("AGENTS.md.tmpl", None));
         m.files.insert(
             ".claude/settings.json".into(),
-            InstalledFile {
-                src: "settings/default.json".into(),
-                ownership: Ownership::ManagedRegion,
-                sha256: "deadbeef".into(),
-                exec: false,
-            },
+            region_file("settings/default.json", Some("deadbeef".into())),
         );
+        Baseline::write(root, "AGENTS.md", REGION_BLOCK).unwrap();
+        Baseline::write(root, ".claude/settings.json", "{\"shipped\": 1}\n").unwrap();
         m.store(root).unwrap();
 
         let mut opts = test_opts();
@@ -6151,6 +6169,122 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let r = check_managed_drift(&opts);
         assert_eq!(r.status, Status::Pass);
+    }
+
+    #[test]
+    fn test_managed_drift_warns_on_an_unreadable_manifest() {
+        // Issue 119: a manifest that does not read (broken JSON, or a schema
+        // newer than this binary) used to pass without checking anything.
+        for text in [
+            "{broken",
+            "{\"schema_version\": 3, \"scaffold_version\": \"9.0.0\", \"files\": {}}",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            std::fs::write(dir.path().join(".codeflow/manifest.json"), text).unwrap();
+            let mut opts = test_opts();
+            opts.project_dir = dir.path().to_string_lossy().into_owned();
+            let r = check_managed_drift(&opts);
+            assert!(r.status.is_warn(), "{text}: {}", r.message);
+            assert!(
+                r.message.contains(".codeflow/manifest.json") && r.message.contains("not checked"),
+                "names the file and that nothing was checked: {}",
+                r.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_managed_drift_warns_on_a_region_without_a_baseline() {
+        // No baseline and no legacy digest: nothing shows the block is
+        // unedited, so the check warns instead of passing.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("# Mine\n\n{REGION_BLOCK}\n"),
+        )
+        .unwrap();
+        let mut m = InstalledManifest::new("4.0.0");
+        m.files
+            .insert("AGENTS.md".into(), region_file("AGENTS.md.tmpl", None));
+        m.store(root).unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(
+            r.message.contains("no baseline") && r.message.contains("AGENTS.md"),
+            "names the entry: {}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_managed_drift_reads_a_legacy_digest_when_the_baseline_is_missing() {
+        // A schema 1 record's digest still finds an in-marker edit where the
+        // baseline is missing; the missing baseline is reported as well.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let edited =
+            "<!-- codeflow:managed:begin scaffold=2.0.0 -->\nrules HAND EDITED\n<!-- codeflow:managed:end -->";
+        std::fs::write(root.join("AGENTS.md"), format!("# Mine\n\n{edited}\n")).unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "scaffold_version": "3.0.0",
+            "files": {"AGENTS.md": {
+                "src": "AGENTS.md.tmpl",
+                "ownership": "managed-region",
+                "sha256": sha256_hex(REGION_BLOCK.as_bytes()),
+            }},
+        });
+        std::fs::write(root.join(".codeflow/manifest.json"), legacy.to_string()).unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(
+            r.message.contains("hand-edited") && r.message.contains("no baseline"),
+            "{}",
+            r.message
+        );
+    }
+
+    #[test]
+    fn test_managed_drift_warns_on_a_matching_legacy_digest_without_a_baseline() {
+        // The digest proves the block unedited, but the baseline is still
+        // missing, so the check warns about that and not about a hand edit.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("AGENTS.md"),
+            format!("# Mine\n\n{REGION_BLOCK}\n"),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "scaffold_version": "3.0.0",
+            "files": {"AGENTS.md": {
+                "src": "AGENTS.md.tmpl",
+                "ownership": "managed-region",
+                "sha256": sha256_hex(REGION_BLOCK.as_bytes()),
+            }},
+        });
+        std::fs::write(root.join(".codeflow/manifest.json"), legacy.to_string()).unwrap();
+
+        let mut opts = test_opts();
+        opts.project_dir = root.to_string_lossy().into_owned();
+        let r = check_managed_drift(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(
+            r.message.contains("no baseline") && !r.message.contains("hand-edited"),
+            "{}",
+            r.message
+        );
     }
 
     // --- test-config --------------------------------------------------------

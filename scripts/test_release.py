@@ -2117,42 +2117,46 @@ class TypedRepairTests(unittest.TestCase):
         self.assertEqual(result["repair"], "legacy marker is not the bounded bootstrap group")
         self.assertEqual((result["added"], result["edited"]), ([], []))
 
-    def test_manifest_hashes_must_be_the_managed_baselines(self) -> None:
+    def test_a_manifest_records_no_digest_of_its_baselines(self) -> None:
+        # Issue 119: the record is src, ownership and exec; a repair that
+        # moves the baseline stamps needs no digest, and one that adds a
+        # digest changes more than a stamp.
         for version, commit in [("2.0.0", True), ("2.0.1", False)]:
             marker = f"<!-- codeflow:managed:begin scaffold={version} -->\nrules\n"
             self.repo.write(".codeflow/.baseline/AGENTS.md", marker)
-            digest = release.hashlib.sha256(marker.encode()).hexdigest()
             self.repo.write(
                 ".codeflow/manifest.json",
-                json.dumps({"scaffold_version": version, "files": {"AGENTS.md": {"sha256": digest}}}) + "\n",
+                json.dumps({"scaffold_version": version, "files": {"AGENTS.md": {"src": "AGENTS.md.tmpl"}}}) + "\n",
             )
             if commit:
                 self.base = self.repo.commit("chore: record the baseline")
         self.repo.write_stamps("2.0.1")
         self.repo.write(
             ".codeflow/manifest.json",
-            json.dumps({"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"sha256": digest}}}) + "\n",
+            json.dumps({"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"src": "AGENTS.md.tmpl"}}}) + "\n",
         )
         good = self.repo.commit("chore(release): sync stamps")
         self.assertIn("repair", self.check(good))
         self.repo.write(
             ".codeflow/manifest.json",
-            json.dumps({"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"sha256": "0" * 64}}}) + "\n",
+            json.dumps(
+                {"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"src": "AGENTS.md.tmpl", "sha256": "0" * 64}}}
+            )
+            + "\n",
         )
-        bad = self.repo.commit("chore(release): forge a hash")
-        with self.assertRaisesRegex(release.ReleaseError, "managed baseline"):
+        bad = self.repo.commit("chore(release): add a digest")
+        with self.assertRaisesRegex(release.ReleaseError, "version stamp of .codeflow/manifest.json"):
             self.check(bad)
 
 
-    def record_baselines(self, version: str, *, hashed: str | None = None) -> None:
-        """Write both managed baselines at `version` and record their hashes
-        in the manifest, as `sync` does; `hashed` records another version's."""
+    def record_baselines(self, version: str) -> None:
+        """Write both managed baselines at `version` and record them in the
+        manifest without a digest, as `sync` does."""
         files = {}
         for name in ["AGENTS.md", "CLAUDE.md"]:
             text = f"<!-- codeflow:managed:begin scaffold={version} -->\nrules\n"
             self.repo.write(f".codeflow/.baseline/{name}", text)
-            recorded = f"<!-- codeflow:managed:begin scaffold={hashed or version} -->\nrules\n"
-            files[name] = {"sha256": release.hashlib.sha256(recorded.encode()).hexdigest()}
+            files[name] = {"src": f"{name}.tmpl", "ownership": "managed-region"}
         manifest = json.loads((self.repo.root / ".codeflow/manifest.json").read_text())
         manifest["files"] = files
         self.repo.write(".codeflow/manifest.json", json.dumps(manifest) + "\n")
@@ -2170,17 +2174,8 @@ class TypedRepairTests(unittest.TestCase):
         head = self.repo.commit("chore(release): sync stamps")
         self.assertIn("disagree", self.check(head)["repair"])
 
-    def test_a_baseline_with_a_stale_manifest_hash_is_refused(self) -> None:
-        # F2: the baseline changes and the manifest keeps the old hash.
-        self.broken_base_with_baselines()
-        self.repo.write_stamps("2.0.1")
-        self.record_baselines("2.0.1", hashed="2.0.0")
-        head = self.repo.commit("chore(release): sync stamps without hashes")
-        with self.assertRaisesRegex(release.ReleaseError, "manifest hash of AGENTS.md"):
-            self.check(head)
-
     def test_a_baseline_stamp_off_the_release_version_is_refused(self) -> None:
-        # F2: the hash matches the baseline, but its stamp is not the release's.
+        # F2: the baseline carries a stamp that is not the release's.
         self.broken_base_with_baselines()
         self.repo.write_stamps("2.0.1")
         self.record_baselines("99.0.0")
@@ -2199,7 +2194,7 @@ class TypedRepairTests(unittest.TestCase):
     def test_a_baseline_changed_without_the_manifest_is_refused(self) -> None:
         # F2: the live stamps are right and the base breaks on an unmarked
         # entry; the repair fixes the changelog and also rewrites a baseline
-        # stamp while the manifest, and its recorded hash, stay as they were.
+        # stamp while the manifest stays as it was.
         self.repo.pending("2.0.1", [("patch", "Fix a crash")])
         self.repo.write_stamps("2.0.1")
         self.record_baselines("2.0.1")

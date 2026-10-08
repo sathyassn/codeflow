@@ -717,17 +717,6 @@ fn update_brings_the_codex_profiles_and_keeps_the_adopters_keys() {
     );
     assert_ne!(adopted, staging);
     write(&root, ".codex/config.toml", &adopted);
-    // The recorded hash is the old baseline's, as after a real 3.0 staging
-    // install.
-    let manifest_path = root.join(".codeflow/manifest.json");
-    let mut manifest = json(&text(&manifest_path));
-    manifest["files"][".codex/config.toml"]["sha256"] =
-        Value::from(scaffold::sha256_hex(staging.as_bytes()));
-    write(
-        &root,
-        ".codeflow/manifest.json",
-        &serde_json::to_string_pretty(&manifest).unwrap(),
-    );
 
     let report = scaffold::update(&assets(), &root, &update_opts()).unwrap();
     assert!(!report.has_conflicts(), "{report}");

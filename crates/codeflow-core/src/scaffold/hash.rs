@@ -1,4 +1,5 @@
-//! Content hashing for the installed-file record (`.codeflow/manifest.json`).
+//! Content hashing. The installed-file record (`.codeflow/manifest.json`)
+//! uses it only to read a schema 1 digest; schema 2 records none.
 
 use sha2::{Digest, Sha256};
 

@@ -25,7 +25,7 @@ use super::state::{
     ProjectState, SyncBatch, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
-use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
+use super::{gitutil, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Answers to init's at-most-three questions (charter §4.1: product
 /// one-liner, areas, permission preset). `None` = use the default / the
@@ -452,13 +452,15 @@ fn with_stack_product_paths(policy: &str, stack: &str) -> String {
     )
 }
 
-fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
+/// Records `entry` as installed. Every caller writes or keeps its baseline
+/// in the same step, so the record carries no digest.
+fn record(installed: &mut InstalledManifest, entry: &ManifestEntry) {
     installed.files.insert(
         entry.dest.clone(),
         InstalledFile {
             src: entry.src.clone(),
             ownership: entry.ownership,
-            sha256,
+            sha256: None,
             exec: entry.exec,
         },
     );
@@ -505,7 +507,7 @@ fn install_entry(
         Ownership::Managed | Ownership::UserOwned => {
             if !exists || force {
                 write_dest(root, entry, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &rendered)?;
                 written.push(entry.dest.clone());
                 report.file(
@@ -528,19 +530,26 @@ fn install_entry(
                         Baseline::write(root, &entry.dest, &rendered)?;
                     }
                     if recorded.is_none() {
-                        record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                        record(installed, entry);
                     }
                     "user-owned: existing file left untouched".to_string()
                 }
-                (_, Some(rec)) if rec.sha256 == hash::sha256_hex(current.as_bytes()) => {
-                    if current == rendered {
-                        report.file(&entry.dest, Action::Unchanged);
-                        return Ok(());
+                (_, Some(rec)) => {
+                    // Unmodified means equal to the baseline, or with no
+                    // baseline to the legacy digest; with neither, only a
+                    // file equal to the shipped one is known to be current.
+                    match rec
+                        .matches_pristine(Baseline::read(root, &entry.dest).as_deref(), &current)
+                    {
+                        Some(true) | None if current == rendered => {
+                            report.file(&entry.dest, Action::Unchanged);
+                            return Ok(());
+                        }
+                        Some(true) => {
+                            "newer shipped version available — run `codeflow update`".to_string()
+                        }
+                        _ => "locally modified — run `codeflow update` to 3-way merge".to_string(),
                     }
-                    "newer shipped version available — run `codeflow update`".to_string()
-                }
-                (_, Some(_)) => {
-                    "locally modified — run `codeflow update` to 3-way merge".to_string()
                 }
                 (_, None) => {
                     if current == rendered {
@@ -554,7 +563,7 @@ fn install_entry(
                         // pre-existing user file: adopt it as managed.
                         let written_by_codeflow =
                             Baseline::read(root, &entry.dest).is_some_and(|b| b == rendered);
-                        record(installed, entry, hash::sha256_hex(current.as_bytes()));
+                        record(installed, entry);
                         Baseline::write(root, &entry.dest, &rendered)?;
                         if written_by_codeflow {
                             written.push(entry.dest.clone());
@@ -583,7 +592,7 @@ fn install_entry(
             RegionFormat::Json => {
                 if !exists || force {
                     write_dest(root, entry, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     written.push(entry.dest.clone());
                     report.file(
@@ -600,7 +609,7 @@ fn install_entry(
                     .map_err(|e| ScaffoldError::io(&dest_path, e))?;
                 let mut lines = vec![];
                 let merged = merge_settings(&current, &rendered, &mut lines)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
                     report.file(&entry.dest, Action::Unchanged);
@@ -613,7 +622,7 @@ fn install_entry(
             format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
                 let block = region::extract_block(&rendered, format)
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
-                record(installed, entry, hash::sha256_hex(block.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &block)?;
                 if !exists || force {
                     // Fresh file: ship the full rendered asset when it carries

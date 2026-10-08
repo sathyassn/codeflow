@@ -212,6 +212,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
+    ("DOCTOR_MANIFEST_UNREADABLE", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
@@ -2913,6 +2914,26 @@ fn clears_doctor_managed_drift() {
         |printed| {
             let step = printed_command(printed, "DOCTOR_MANAGED_DRIFT", None);
             run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_manifest_unreadable() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let manifest = read(&root, ".codeflow/manifest.json");
+    write(&root, ".codeflow/manifest.json", "{broken");
+    prove(
+        "DOCTOR_MANIFEST_UNREADABLE",
+        "does not read, so managed-region drift was not checked",
+        || doctor(&root, "managed-drift"),
+        |printed| {
+            assert!(
+                printed.contains("restore .codeflow/manifest.json"),
+                "{printed}"
+            );
+            write(&root, ".codeflow/manifest.json", &manifest);
         },
     );
 }

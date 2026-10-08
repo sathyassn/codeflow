@@ -1928,7 +1928,13 @@ def remove_grader_material(fixture_root: Path) -> None:
             }
             baseline_agents = fixture_root / ".codeflow/.baseline/AGENTS.md"
             agents_record = manifest["files"].get("AGENTS.md")
-            if isinstance(agents_record, dict) and baseline_agents.is_file():
+            # Only a schema 1 record carries a digest; a schema 2 record
+            # never gains one (issue 119).
+            if (
+                isinstance(agents_record, dict)
+                and "sha256" in agents_record
+                and baseline_agents.is_file()
+            ):
                 agents_record["sha256"] = hashlib.sha256(
                     baseline_agents.read_bytes()
                 ).hexdigest()

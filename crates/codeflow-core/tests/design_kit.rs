@@ -6,11 +6,9 @@
 //! reference pages must stand alone in the kit folder.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
-use sha2::{Digest, Sha256};
 
 const KIT_FILES: [&str; 8] = [
     "README.md",
@@ -642,9 +640,9 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Every kit file ships to both harnesses from its own skill source, and the
-/// repository manifest records the hash of the bytes it installed.
+/// repository's baseline holds the bytes it installed.
 #[test]
-fn kit_is_manifested_for_both_harnesses_with_matching_hashes() {
+fn kit_is_manifested_for_both_harnesses_with_matching_baselines() {
     let root = repo_root();
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(root.join(".codeflow/manifest.json")).expect("manifest is readable"),
@@ -663,14 +661,11 @@ fn kit_is_manifested_for_both_harnesses_with_matching_hashes() {
                 );
                 let entry = &manifest["files"][&dest];
                 assert_eq!(entry["src"], src.as_str(), "{dest} manifest source");
-                let digest = Sha256::digest(
-                    std::fs::read(root.join("assets/base").join(&src)).expect("kit source"),
-                );
-                let hex = digest.iter().fold(String::new(), |mut out, byte| {
-                    write!(out, "{byte:02x}").expect("writing to a String cannot fail");
-                    out
-                });
-                assert_eq!(entry["sha256"], hex.as_str(), "{dest} manifest hash");
+                let source =
+                    std::fs::read(root.join("assets/base").join(&src)).expect("kit source");
+                let baseline = std::fs::read(root.join(".codeflow/.baseline").join(&dest))
+                    .expect("kit baseline");
+                assert_eq!(baseline, source, "{dest} baseline");
             }
         }
     }

@@ -5,13 +5,13 @@
 //! everywhere in this module:
 //!
 //! 1. **Never clobber.** An existing file is only overwritten when codeflow
-//!    can prove it is unmodified (hash matches the installed record) or the
-//!    user passed `--force`. Conflicting updates land next to the file as
-//!    `<path>.new`, never on top of it.
+//!    can prove it is unmodified (it equals its `.codeflow/.baseline/`
+//!    copy) or the user passed `--force`. Conflicting updates land next to
+//!    the file as `<path>.new`, never on top of it.
 //! 2. **Never silent.** Every file the engine touched, skipped, merged, or
 //!    refused to touch appears in the printed report.
 //! 3. **Ownership classes drive behavior** (charter §4.3):
-//!    fully-managed (hash + baseline + 3-way merge), managed-region (marked
+//!    fully-managed (baseline + 3-way merge), managed-region (marked
 //!    block / known JSON keys only), user-owned (write once; additive new-key
 //!    sync for schema-versioned JSON).
 //!

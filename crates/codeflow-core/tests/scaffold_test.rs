@@ -921,10 +921,7 @@ fn update_keeps_existing_user_owned_baseline_stable_after_root_rename() {
     let baseline_before = read(&root, ".codeflow/.baseline/docs/product.md");
     let manifest_before: serde_json::Value =
         serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
-    let hash_before = manifest_before["files"]["docs/product.md"]["sha256"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let record_before = manifest_before["files"]["docs/product.md"].clone();
 
     let renamed_root = project.path().join("linked-worktree-name");
     std::fs::rename(&root, &renamed_root).unwrap();
@@ -941,9 +938,8 @@ fn update_keeps_existing_user_owned_baseline_stable_after_root_rename() {
     let manifest_after: serde_json::Value =
         serde_json::from_str(&read(&renamed_root, ".codeflow/manifest.json")).unwrap();
     assert_eq!(
-        manifest_after["files"]["docs/product.md"]["sha256"].as_str(),
-        Some(hash_before.as_str()),
-        "a linked worktree name must not rewrite the installed snapshot hash"
+        manifest_after["files"]["docs/product.md"], record_before,
+        "a linked worktree name must not rewrite the installed record"
     );
 }
 
@@ -2126,4 +2122,329 @@ fn the_shipped_feedback_template_installs_at_the_full_tier_only() {
     let shipped = include_str!("../../../assets/base/pm/feedback.md.tmpl");
     assert!(manifest.installs_verbatim(&assets, &entry.dest, shipped.as_bytes()));
     codeflow_core::feedback::check_template(shipped).unwrap();
+}
+
+// --- the installed manifest without digests (issue 119) ----------------------
+
+const DEVELOP: &str = ".claude/workflows/develop.md";
+
+/// Reads, edits and rewrites `.codeflow/manifest.json` as raw JSON, the way
+/// an older binary or a hand edit leaves it.
+fn edit_manifest(root: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let mut manifest = manifest_json(root);
+    edit(&mut manifest);
+    std::fs::write(
+        root.join(".codeflow/manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn manifest_json(root: &Path) -> serde_json::Value {
+    serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap()
+}
+
+/// Turns the install into a schema 1 manifest whose `dest` record carries
+/// the digest of `pristine`, as 3.0.0 wrote it, and removes its baseline.
+fn legacy_digest_without_baseline(root: &Path, dest: &str, pristine: &str) {
+    edit_manifest(root, |m| {
+        m["schema_version"] = 1.into();
+        m["files"][dest]["sha256"] = scaffold::sha256_hex(pristine.as_bytes()).into();
+    });
+    std::fs::remove_file(root.join(".codeflow/.baseline").join(dest)).unwrap();
+}
+
+/// Leaves `dest` with neither a baseline nor a legacy digest.
+fn no_baseline_no_digest(root: &Path, dest: &str) {
+    edit_manifest(root, |m| {
+        if let Some(files) = m["files"].as_object_mut() {
+            for record in files.values_mut() {
+                record.as_object_mut().unwrap().remove("sha256");
+            }
+        }
+    });
+    std::fs::remove_file(root.join(".codeflow/.baseline").join(dest)).unwrap();
+}
+
+fn notes_of(report: &Report, dest: &str) -> Vec<String> {
+    report
+        .files
+        .iter()
+        .find(|f| f.dest == dest)
+        .map(|f| f.notes.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn init_and_update_write_schema_2_without_any_digest() {
+    // A3e: the record is src, ownership and exec; no digest, never `null`.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let after_init = read(&root, ".codeflow/manifest.json");
+    assert!(after_init.contains("\"schema_version\": 2"), "{after_init}");
+    assert!(!after_init.contains("sha256"), "{after_init}");
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    let after_update = read(&root, ".codeflow/manifest.json");
+    assert!(
+        after_update.contains("\"schema_version\": 2"),
+        "{after_update}"
+    );
+    assert!(!after_update.contains("sha256"), "{after_update}");
+    assert!(!after_update.contains("null"), "{after_update}");
+}
+
+#[test]
+fn update_honours_a_legacy_digest_when_the_baseline_is_missing() {
+    // A3a: a schema 1 digest stands in for the missing baseline; once the
+    // baseline is written the digest is dropped and the file is schema 2.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    legacy_digest_without_baseline(&root, DEVELOP, DEVELOP_V1);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, DEVELOP), Action::Changed);
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V2);
+    assert_eq!(
+        read(&root, &format!(".codeflow/.baseline/{DEVELOP}")),
+        DEVELOP_V2
+    );
+    let manifest = manifest_json(&root);
+    assert_eq!(manifest["schema_version"], 2);
+    assert!(
+        manifest["files"][DEVELOP].get("sha256").is_none(),
+        "{manifest:#}"
+    );
+}
+
+#[test]
+fn update_keeps_a_legacy_digest_while_its_entry_is_ignored_and_drops_it_after() {
+    // A3b and A3c: an ignored entry is never touched, so its baseline stays
+    // missing and its digest is the one input left; it survives the rewrite.
+    // With the ignore removed, the digest still proves the file unmodified.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    legacy_digest_without_baseline(&root, DEVELOP, DEVELOP_V1);
+    let state = read(&root, ".codeflow/project.toml");
+    add_scaffold_ignore(&root, &[".claude/workflows/**"]);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Skipped);
+    let manifest = manifest_json(&root);
+    assert_eq!(manifest["schema_version"], 2);
+    assert_eq!(
+        manifest["files"][DEVELOP]["sha256"].as_str(),
+        Some(scaffold::sha256_hex(DEVELOP_V1.as_bytes()).as_str()),
+        "the digest stays while it is the only input: {manifest:#}"
+    );
+
+    std::fs::write(root.join(".codeflow/project.toml"), state).unwrap();
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Changed);
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V2);
+    assert!(
+        manifest_json(&root)["files"][DEVELOP]
+            .get("sha256")
+            .is_none(),
+        "dropped once the baseline is written"
+    );
+}
+
+#[test]
+fn update_trusts_the_baseline_over_a_legacy_digest_that_matches_the_live_file() {
+    // The baseline is the one record: when it reads, a legacy digest is not
+    // consulted even if it equals the hash of the live bytes. Consulting the
+    // digest first would Replace this edited file with the shipped version.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let mine = read(&root, DEVELOP).replace("step eight", "step eight (mine)");
+    std::fs::write(root.join(DEVELOP), &mine).unwrap();
+    edit_manifest(&root, |m| {
+        m["schema_version"] = 1.into();
+        m["files"][DEVELOP]["sha256"] = scaffold::sha256_hex(mine.as_bytes()).into();
+    });
+    assert_eq!(
+        read(&root, &format!(".codeflow/.baseline/{DEVELOP}")),
+        DEVELOP_V1,
+        "the baseline differs from the live file"
+    );
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_ne!(action_of(&report, DEVELOP), Action::Changed);
+    let live = read(&root, DEVELOP);
+    assert_ne!(live, DEVELOP_V2, "the edited file was replaced");
+    assert!(live.contains("step eight (mine)"), "the edit is kept");
+}
+
+#[test]
+fn update_refuses_a_manifest_schema_newer_than_it_reads() {
+    // A3d.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    edit_manifest(&root, |m| m["schema_version"] = 3.into());
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let error = scaffold::update(&assets_v2, &root, &update_opts("2.1.0"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(".codeflow/manifest.json") && error.contains("schema_version 3"),
+        "{error}"
+    );
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V1, "nothing written");
+}
+
+#[test]
+fn update_proposes_new_for_a_file_nothing_proves_unmodified() {
+    // A4b: with neither a baseline nor a digest, an unmodified file is
+    // never replaced; the shipped version is proposed beside it.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    no_baseline_no_digest(&root, DEVELOP);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, DEVELOP), Action::Conflicted);
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V1, "live file untouched");
+    assert_eq!(read(&root, &format!("{DEVELOP}.new")), DEVELOP_V2);
+}
+
+#[test]
+fn update_still_adopts_and_forces_without_baseline_or_digest() {
+    // A4b: Adopt (the live file already is the shipped one) and Force run
+    // before any baseline or digest is consulted.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    no_baseline_no_digest(&root, DEVELOP);
+    std::fs::write(root.join(DEVELOP), DEVELOP_V2).unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Unchanged, "adopted");
+    assert_eq!(
+        read(&root, &format!(".codeflow/.baseline/{DEVELOP}")),
+        DEVELOP_V2
+    );
+
+    no_baseline_no_digest(&root, DEVELOP);
+    std::fs::write(root.join(DEVELOP), "my own workflow\n").unwrap();
+    let mut forced = update_opts("2.1.0");
+    forced.force = true;
+    let report = scaffold::update(&assets_v2, &root, &forced).unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Forced);
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V2);
+}
+
+#[test]
+fn update_keeps_an_orphan_nothing_proves_unmodified() {
+    // A4b: an unmodified managed orphan with neither input is kept and
+    // unmanaged, and the report says why.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    no_baseline_no_digest(&root, DEVELOP);
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), DEVELOP);
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, DEVELOP), Action::KeptUserModified);
+    assert_eq!(read(&root, DEVELOP), DEVELOP_V1, "file kept");
+    let notes = notes_of(&report, DEVELOP);
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.contains("no baseline proves it unmodified")),
+        "{notes:?}"
+    );
+    assert!(manifest_json(&root)["files"].get(DEVELOP).is_none());
+}
+
+#[test]
+fn update_prunes_an_orphan_its_legacy_digest_proves_unmodified() {
+    // A schema 1 digest still proves an orphan unmodified where its
+    // baseline is missing, so it is removed as before.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    legacy_digest_without_baseline(&root, DEVELOP, DEVELOP_V1);
+
+    let (a2, _) = fixture_assets(true);
+    drop_manifest_entry(a2.path(), DEVELOP);
+    let report =
+        scaffold::update(&DirSource::new(a2.path()), &root, &update_opts("2.1.0")).unwrap();
+
+    assert_eq!(action_of(&report, DEVELOP), Action::Removed);
+    assert!(!root.join(DEVELOP).exists());
+}
+
+#[test]
+fn init_rerun_without_baseline_or_digest_reports_unchanged_or_locally_modified() {
+    // A4b: init on an existing install: `Unchanged` when the live file is the
+    // shipped one, "locally modified" otherwise, since nothing proves it
+    // unmodified.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let assets_v1 = init_v1(&root);
+    no_baseline_no_digest(&root, DEVELOP);
+
+    let report = scaffold::init(
+        &DirSource::new(assets_v1.path()),
+        &root,
+        &opts(None, "2.0.0"),
+    )
+    .unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Unchanged);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::init(&assets_v2, &root, &opts(None, "2.1.0")).unwrap();
+    assert_eq!(action_of(&report, DEVELOP), Action::Skipped);
+    let notes = notes_of(&report, DEVELOP);
+    assert!(
+        notes.iter().any(|note| note.contains("locally modified")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn init_rerun_compares_with_the_baseline() {
+    // A4a: with the baseline present, an unmodified file behind a newer
+    // shipped version is reported as such, and an edited one as locally
+    // modified, as the digest decided before.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::init(&assets_v2, &root, &opts(None, "2.1.0")).unwrap();
+    let notes = notes_of(&report, DEVELOP);
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.contains("newer shipped version")),
+        "{notes:?}"
+    );
+
+    std::fs::write(root.join(DEVELOP), "my own workflow\n").unwrap();
+    let report = scaffold::init(&assets_v2, &root, &opts(None, "2.1.0")).unwrap();
+    let notes = notes_of(&report, DEVELOP);
+    assert!(
+        notes.iter().any(|note| note.contains("locally modified")),
+        "{notes:?}"
+    );
 }

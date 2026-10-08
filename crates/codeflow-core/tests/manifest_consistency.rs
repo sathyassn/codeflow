@@ -522,14 +522,14 @@ fn every_manifest_catalog_artifact_matches_live_and_baseline_copies() {
 }
 
 /// The repository's own installed record must stay loadable and honest: a
-/// merge that leaves conflict markers, or a stale hash for a changed managed
-/// source, breaks `codeflow update` here without failing any shipped-asset
-/// check. Managed hashes are the pristine shipped copy, so each must equal
-/// both its source asset and its baseline copy.
+/// merge that leaves conflict markers, or a stale baseline for a changed
+/// managed source, breaks `codeflow update` here without failing any
+/// shipped-asset check. The record carries no digest (schema 2, issue 119);
+/// each managed entry's baseline is the pristine shipped copy, so it must
+/// exist and, for a source that is not a template, equal it byte for byte.
 #[test]
 fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
-    use codeflow_core::scaffold::sha256_hex;
-    use codeflow_core::scaffold::state::InstalledManifest;
+    use codeflow_core::scaffold::state::{InstalledManifest, INSTALLED_MANIFEST_SCHEMA};
 
     let root = repo_root();
     assert!(
@@ -538,9 +538,10 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
     );
     let installed = InstalledManifest::load_or_default(&root, "unused")
         .expect("installed .codeflow/manifest.json parses");
+    assert_eq!(installed.schema_version, INSTALLED_MANIFEST_SCHEMA);
     let base = root.join("assets/base");
-    // A templated source renders with project values, so only its baseline
-    // (the rendered pristine copy) can match the recorded hash.
+    // A templated source renders with project values, so only the update
+    // replay (`repository_update_noop`) can check its baseline's content.
     let shipped = ScaffoldManifest::load(&DirSource::new(root.join("assets")))
         .expect("shipped manifest loads");
     let templated: std::collections::BTreeSet<&str> = shipped
@@ -552,22 +553,33 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
     let mut compared = 0usize;
     let mut problems = Vec::new();
     for (dest, file) in &installed.files {
+        if file.sha256.is_some() {
+            problems.push(format!("{dest}: the record still carries a digest"));
+        }
         if file.ownership != Ownership::Managed {
             continue;
         }
         compared += 1;
         let baseline = root.join(".codeflow/.baseline").join(dest);
-        let copies = if templated.contains(file.src.as_str()) {
-            vec![baseline]
-        } else {
-            vec![base.join(&file.src), baseline]
-        };
-        for copy in copies {
-            match std::fs::read(&copy) {
-                Ok(bytes) if sha256_hex(&bytes) == file.sha256 => {}
-                Ok(_) => problems.push(format!("{dest}: {} differs", rel(&root, &copy))),
-                Err(error) => problems.push(format!("{dest}: {}: {error}", rel(&root, &copy))),
+        let pristine = match std::fs::read(&baseline) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                problems.push(format!("{dest}: {}: {error}", rel(&root, &baseline)));
+                continue;
             }
+        };
+        if templated.contains(file.src.as_str()) {
+            continue;
+        }
+        let source = base.join(&file.src);
+        match std::fs::read(&source) {
+            Ok(bytes) if bytes == pristine => {}
+            Ok(_) => problems.push(format!(
+                "{dest}: {} differs from {}",
+                rel(&root, &baseline),
+                rel(&root, &source)
+            )),
+            Err(error) => problems.push(format!("{dest}: {}: {error}", rel(&root, &source))),
         }
     }
     assert!(
@@ -577,7 +589,7 @@ fn installed_manifest_loads_and_matches_managed_sources_and_baselines() {
     problems.sort();
     assert!(
         problems.is_empty(),
-        "installed manifest hashes drifted from source or baseline:\n  {}",
+        "installed baselines drifted from their sources:\n  {}",
         problems.join("\n  ")
     );
 }

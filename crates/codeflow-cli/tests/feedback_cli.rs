@@ -67,9 +67,12 @@ fn refused(out: &Output, what: &str) -> String {
     text(out)
 }
 
+/// The fixture is scaffolded at the binary's own version, so no "scaffold is
+/// behind binary" notice reaches the merged stdout and stderr the helpers read.
 fn state(tier: &str) -> String {
     format!(
-        "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"3.1.0\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n"
+        "schema_version = 1\ntier = \"{tier}\"\nscaffold_version = \"{}\"\nstack = \"generic\"\nareas = []\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\n",
+        env!("CARGO_PKG_VERSION")
     )
 }
 

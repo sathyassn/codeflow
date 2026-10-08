@@ -1253,15 +1253,12 @@ def repair_baselines(
     base: str, proposed: str, paths: list[str], version: str, invariant: str, *, cwd: Path
 ) -> None:
     """A repair that touches a managed baseline or the manifest leaves the
-    three consistent, as `sync` writes them: each baseline carries the one
-    managed stamp of the release version, and the manifest records its exact
-    hash. Neither may drift from the other or from the live stamps."""
+    baselines as `sync` writes them: each carries the one managed stamp of
+    the release version, so none drifts from the live stamps. The manifest
+    records no digest of them (schema 2, issue 119)."""
     if not any(path in paths for path in [*REPAIR_BASELINES, ".codeflow/manifest.json"]):
         return
-    manifest = json.loads(file_at_ref(proposed, ".codeflow/manifest.json", cwd=cwd))
-    files = manifest.get("files") if isinstance(manifest, dict) else None
     for baseline in REPAIR_BASELINES:
-        name = baseline.removeprefix(".codeflow/.baseline/")
         actual = file_at_optional(proposed, baseline, cwd=cwd)
         if actual is None:
             if file_at_optional(base, baseline, cwd=cwd) is not None:
@@ -1272,13 +1269,6 @@ def repair_baselines(
             fail(
                 f"base release state is invalid ({invariant}); {baseline} must carry one "
                 f"managed stamp of the release version {version}, not {stamps}"
-            )
-        entry = files.get(name) if isinstance(files, dict) else None
-        recorded = entry.get("sha256") if isinstance(entry, dict) else None
-        if recorded != hashlib.sha256(actual).hexdigest():
-            fail(
-                f"base release state is invalid ({invariant}); the manifest hash of "
-                f"{name} must be its managed baseline's"
             )
 
 
@@ -1323,12 +1313,6 @@ def stamp_neutral(path: str, data: bytes | None) -> Any:
         if not isinstance(value, dict):
             return text
         value["scaffold_version"] = STAMP
-        files = value.get("files")
-        for name in ["AGENTS.md", "CLAUDE.md"]:
-            entry = files.get(name) if isinstance(files, dict) else None
-            if isinstance(entry, dict) and "sha256" in entry:
-                # Derived from the managed baseline, compared stamp-free there.
-                entry["sha256"] = STAMP
         return value
     return re.sub(
         r"<!-- codeflow:managed:begin scaffold=\d+\.\d+\.\d+ -->",

@@ -26,7 +26,7 @@ fn distribution_config_keeps_supported_targets_and_installers() {
         .iter()
         .map(|value| value.as_str().expect("target must be a string"))
         .collect::<Vec<_>>();
-    // 3.1.0 restores native Windows (TSK-197).
+    // 4.0.0 restores native Windows (TSK-197).
     assert_eq!(
         targets,
         [

@@ -74,7 +74,7 @@ quote or HTML block in the Summary fails. It judges shape, never a word or
 sentence count. It runs at warn while a kept PR template is diagnosed, a
 trusted automation profile skips it, and a project lowers it in its policy
 file. The shipped policy file does not list the key, so an older binary never
-meets it; a project that sets it runs codeflow 3.1.0 or later locally and in
+meets it; a project that sets it runs codeflow 4.0.0 or later locally and in
 CI.
 
 `git.pr_release_impact` defaults to warn independently. It checks Impact
@@ -111,7 +111,7 @@ beside the version, in a `[scaffold_sha256]` table that
 ```toml
 [scaffold_sha256]
 aarch64-apple-darwin = "<sha256>"
-version = "3.1.0"
+version = "4.0.0"
 x86_64-apple-darwin = "<sha256>"
 x86_64-unknown-linux-gnu = "<sha256>"
 ```
@@ -177,13 +177,13 @@ installed separately and only tested (`--version`, `validate --docs`). When
 the head lowers it, the target's binary still judges the change and the job
 then fails; a head that kept the pin it branched from lowers nothing. An upgrade takes two pull requests, in order: raise only
 `scaffold_version` and its digests (`codeflow update --pin <version>`, with
-any 3.1.0 or later binary), land it, then run `codeflow update` with the new
+any 4.0.0 or later binary), land it, then run `codeflow update` with the new
 binary; a head that carries new policy keys before the raise lands fails
 with a message naming that order. A hand-raised `scaffold_version` that
 leaves an older table behind fails closed in the candidate job, which
 names the `codeflow update --pin` that fixes it.
 
-The 3.1.0 secret scan reads only a pull request's own commits, so a
+The 4.0.0 secret scan reads only a pull request's own commits, so a
 finding already on another branch no longer fails it; the weekly
 full-history scan reports it instead, and GitHub runs that schedule only
 from the default branch. To adopt it, run `codeflow update`, review the
@@ -256,10 +256,10 @@ or by an administrator merging the suppression's pull request over the
 failing check, which branch protection records; review alone does not turn
 a required check green.
 
-Since 3.1.0 a policy without both keys fails this job. Because the job reads
+Since 4.0.0 a policy without both keys fails this job. Because the job reads
 the keys from the base, land them first under your current workflow
 (`codeflow update` adds them with their defaults, or add them by hand),
-then land the 3.1.0 workflow; keys added alongside it are not on the base
+then land the 4.0.0 workflow; keys added alongside it are not on the base
 yet. A first CodeFlow adoption has no policy on its base, so its security
 review fails until the policy lands; merge that pull request over the
 failing check, or land the policy alone first.

@@ -17,7 +17,7 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
-## [3.1.0]
+## [4.0.0]
 
 ### Added
 
@@ -80,7 +80,7 @@ erratum below, never an edit of the section.
   criteria, and the frozen message now names the planning amendment as the
   route for another task's criteria. There is no policy key.
   Migration: CodeFlow 3.0.0 reads `Task: EPC-001, EPC-002` as a malformed
-  `Task:` line and refuses the pull request, so run 3.1.0 locally and in
+  `Task:` line and refuses the pull request, so run 4.0.0 locally and in
   the CI that judges a multi-epic amendment; a single `Task: EPC-NNN` works
   on both. A planning pull request that names one epic but changes another
   epic's records, such as a breakdown that creates two epics, now fails
@@ -100,7 +100,7 @@ erratum below, never an edit of the section.
   `off`. The PR template, `writing.md` "Summaries" and cf-ship's PR
   evidence reference teach the shape. The shipped policy file does not list
   the key, so neither `init` nor `update` writes it and an older binary
-  never meets it; a project that sets it runs 3.1.0 or later locally and in
+  never meets it; a project that sets it runs 4.0.0 or later locally and in
   CI.
   cf-ship also says that a pull request already reported ready goes back
   to draft before any further change to its branch, and its release
@@ -270,6 +270,24 @@ erratum below, never an edit of the section.
 
 ### Changed
 
+<!-- codeflow:release-impact major -->
+- **The installed manifest no longer records file digests.**
+  `.codeflow/manifest.json` (schema 2) lists each installed file's source,
+  ownership and exec bit; the pristine copy under `.codeflow/.baseline/` is
+  the one record of what CodeFlow installed, and `update`, `init` and
+  `doctor` compare bytes with it. Two pull requests that change the same
+  managed file no longer conflict in the manifest (issue 119). A file whose
+  baseline is missing is replaced or removed on the next update only while a
+  schema 1 digest proves it unmodified, and that digest is dropped once the
+  baseline is written. A file with neither input is proposed as
+  `<path>.new`, or kept and unmanaged, and `doctor` warns.
+  Migration: upgrade to 4.0.0, run `codeflow update` once, and commit
+  `.codeflow/manifest.json` with the rest of the update; if your repository
+  does not track `.codeflow/.baseline/`, commit it in the same change. Move
+  every checkout and CI pin to 4.0.0 with it: a 3.0.0 `codeflow update`
+  fails on the new file with a missing `sha256` field, and a 3.0.0
+  `doctor --check managed-drift` passes without checking.
+
 <!-- codeflow:release-impact minor -->
 - **The managed model roster adds Claude Sonnet 5.5 and adopts GPT-6.1 Sol.**
   The primary seats do not change: the Claude primary seat is Opus 5.5, then
@@ -381,7 +399,7 @@ erratum below, never an edit of the section.
   still count; projects can opt in other remotes with `git.claim_remotes`.
   The shipped policy file does not list the key, so neither `init` nor
   `update` writes it and an older binary never meets it; a project that sets
-  it runs 3.1.0 or later locally and in CI.
+  it runs 4.0.0 or later locally and in CI.
 
 <!-- codeflow:release-impact patch -->
 - **CodeFlow's own fixture clones no longer race with automatic Git
@@ -420,7 +438,7 @@ erratum below, never an edit of the section.
   authority, like the CI file a change can edit, so `codeflow ci` names a
   change that adds, edits or removes it for its reviewer. To adopt: if your
   policy lacks either key, land the keys first under your current workflow
-  (`codeflow update` adds them), then the 3.1.0 workflow, since the job
+  (`codeflow update` adds them), then the 4.0.0 workflow, since the job
   reads the keys from the base. A first CodeFlow adoption has no policy on
   its base, so its security review fails until the policy lands. In
   `block` mode, a new suppression takes effect once it lands, so an

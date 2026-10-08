@@ -2,8 +2,9 @@
 //! (charter §3.1, §4.3, §10, AC #8).
 //!
 //! Per installed manifest entry:
-//! - **managed, unmodified** (current hash == recorded hash): replaced with
-//!   the new shipped version; record and baseline refreshed.
+//! - **managed, unmodified** (the file equals its `.codeflow/.baseline/`
+//!   copy): replaced with the new shipped version; record and baseline
+//!   refreshed.
 //! - **managed, user-modified**: 3-way merge with base = `.codeflow/.baseline/`
 //!   copy, ours = the user's file, theirs = the new shipped version. Clean
 //!   merge is applied and reported; a conflict writes `<path>.new` holding
@@ -18,20 +19,24 @@
 //!   equals the old shipped default moves to a changed new default, reported
 //!   (ADR-0075); a value that differs from the old default is kept.
 //!
-//! Manifest invariant: a managed file's recorded `sha256` is the hash of the
-//! pristine shipped version (== the `.baseline/` copy), NEVER the hash of a
-//! merged file. That is what makes "current hash == recorded hash" mean
-//! "unmodified"; recording a merged hash would misclassify a customized file as
-//! pristine and overwrite it on the next update.
+//! Baseline invariant: a managed file's `.baseline/` copy is the pristine
+//! shipped version, NEVER a merged file. That is what makes "current ==
+//! baseline" mean "unmodified"; writing a merge there would misclassify a
+//! customized file as pristine and overwrite it on the next update. The
+//! installed manifest records no digest (schema 2, issue 119); a schema 1
+//! record's `sha256` stands in only for an entry whose baseline is missing,
+//! and an entry with neither is never treated as unmodified: update proposes
+//! `<path>.new` and an orphan is kept.
 //!
 //! After applying the new manifest, update **reconciles orphans**: files
 //! managed under the OLD installed manifest but absent from the NEW manifest
 //! entirely (an artifact removed or renamed upstream, e.g. the
 //! `.claude/commands/*` -> `.claude/skills/*/SKILL.md` migration). An unmodified
 //! whole-file `managed` orphan is deleted (file + baseline + record); anything
-//! that might hold user content (user-modified `managed`, `managed-region`,
-//! `user-owned`) is kept and merely unmanaged. Without this, a stale orphan
-//! lingers and can collide with its renamed replacement.
+//! that might hold user content (user-modified `managed`, a `managed` file
+//! nothing proves unmodified, `managed-region`, `user-owned`) is kept and
+//! merely unmanaged. Without this, a stale orphan lingers and can collide
+//! with its renamed replacement.
 //!
 //! A project may opt individual managed files out of all of the above via a
 //! `[scaffold] ignore = ["glob", ...]` list in `.codeflow/project.toml`: any
@@ -59,7 +64,7 @@ use super::state::{
     write_record, Baseline, InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
     SyncBatch, PROJECT_TOML,
 };
-use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
+use super::{pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
 /// Options for [`update`].
@@ -171,7 +176,7 @@ pub fn decide(
         None
     };
     if entry.ownership == Ownership::Managed {
-        let recorded = installed.files.get(dest).map(|f| f.sha256.as_str());
+        let recorded = installed.files.get(dest);
         let base = Baseline::read(root, dest);
         let step = managed_step(
             current.as_deref(),
@@ -540,13 +545,15 @@ fn migrate_policy_values(dest: &str, user: &mut serde_json::Value) -> Vec<String
     }
 }
 
-fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
+/// Records `entry` as installed. Every caller writes its baseline in the
+/// same step, so the record carries no digest.
+fn record(installed: &mut InstalledManifest, entry: &ManifestEntry) {
     installed.files.insert(
         entry.dest.clone(),
         InstalledFile {
             src: entry.src.clone(),
             ownership: entry.ownership,
-            sha256,
+            sha256: None,
             exec: entry.exec,
         },
     );
@@ -588,19 +595,20 @@ fn push_diff(diffs: &mut String, dest: &str, old: &str, new: &str) {
 }
 
 /// Update's step for a whole managed file, from the file on disk (`None`
-/// when absent), the shipped rendering, the installed record's hash, the
-/// baseline and `--force`. [`update_entry`] applies it; [`decide`] reports
-/// it.
+/// when absent), the shipped rendering, the installed record, the baseline
+/// and `--force`. [`update_entry`] applies it; [`decide`] reports it.
 enum ManagedStep {
     /// Absent: install it.
     Add,
     /// Already the shipped version: adopt it.
     Adopt,
-    /// Unmodified since it was installed: replace it.
+    /// Unmodified since it was installed (equal to the baseline, or with no
+    /// baseline to its legacy digest): replace it.
     Replace,
     /// Modified, replaced under `--force`.
     Force,
-    /// Modified, with no baseline to merge against: propose the shipped
+    /// Modified, or with neither a baseline nor a legacy digest to prove it
+    /// unmodified, and no baseline to merge against: propose the shipped
     /// version in `.new`.
     NoBaseline,
     /// Modified, and the shipped version equals the baseline: keep it.
@@ -614,7 +622,7 @@ enum ManagedStep {
 fn managed_step(
     current: Option<&str>,
     rendered: &str,
-    recorded: Option<&str>,
+    recorded: Option<&InstalledFile>,
     base: Option<&str>,
     force: bool,
 ) -> ManagedStep {
@@ -624,7 +632,8 @@ fn managed_step(
     if current == rendered {
         return ManagedStep::Adopt;
     }
-    if recorded == Some(hash::sha256_hex(current.as_bytes()).as_str()) {
+    // Only a recorded file can be unmodified since it was installed.
+    if recorded.and_then(|file| file.matches_pristine(base, current)) == Some(true) {
         return ManagedStep::Replace;
     }
     if force {
@@ -701,38 +710,38 @@ fn update_entry(
                 None
             };
             let old = current.as_deref().unwrap_or_default();
-            let recorded = installed.files.get(&entry.dest).map(|f| f.sha256.clone());
+            let recorded = installed.files.get(&entry.dest).cloned();
             let base = Baseline::read(root, &entry.dest);
             match managed_step(
                 current.as_deref(),
                 &rendered,
-                recorded.as_deref(),
+                recorded.as_ref(),
                 base.as_deref(),
                 opts.force,
             ) {
                 ManagedStep::Add => {
                     // New manifest entry (or deleted file): install it.
                     write_dest(root, entry, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     report.file(&entry.dest, Action::Added);
                 }
                 ManagedStep::Adopt => {
                     // Already at the new version (however it got there): adopt.
-                    record(installed, entry, hash::sha256_hex(old.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     report.file(&entry.dest, Action::Unchanged);
                 }
                 ManagedStep::Replace => {
                     write_dest(root, entry, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     push_diff(diffs, &entry.dest, old, &rendered);
                     report.file(&entry.dest, Action::Changed);
                 }
                 ManagedStep::Force => {
                     write_dest(root, entry, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     push_diff(diffs, &entry.dest, old, &rendered);
                     report.file_with_notes(
@@ -761,13 +770,12 @@ fn update_entry(
                 }
                 ManagedStep::Merge(merged) => {
                     write_dest(root, entry, &merged)?;
-                    // Record the pristine shipped hash (not the merged file's), so the
-                    // manifest invariant `recorded == hash(baseline)` holds: the merged
-                    // file carries user edits, so the next update must classify it
-                    // "user-modified" and re-merge, never treat it as pristine and
-                    // overwrite. Recording hash(merged) here silently wiped the merge
-                    // on the following update.
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    // The baseline takes the pristine shipped version (not the
+                    // merge): the merged file carries user edits, so the next update
+                    // must classify it "user-modified" and re-merge, never treat it as
+                    // pristine and overwrite. Recording the merge here silently wiped
+                    // it on the following update.
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     push_diff(diffs, &entry.dest, old, &merged);
                     report.file_with_notes(
@@ -804,7 +812,7 @@ fn update_entry(
             RegionFormat::Json => {
                 if !dest_path.exists() {
                     write_dest(root, entry, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     Baseline::write(root, &entry.dest, &rendered)?;
                     report.file(&entry.dest, Action::Added);
                     return Ok(());
@@ -815,7 +823,7 @@ fn update_entry(
                 let mut lines = vec![];
                 let merged =
                     merge_json_region(entry, &current, previous.as_deref(), &rendered, &mut lines)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &rendered)?;
                 if merged == current {
                     // A standing condition is reported on every run: a kept
@@ -832,7 +840,7 @@ fn update_entry(
             format @ (RegionFormat::Markdown | RegionFormat::Hash) => {
                 let block = region::extract_block(&rendered, format)
                     .unwrap_or_else(|| region::wrap_block(&rendered, format, version));
-                record(installed, entry, hash::sha256_hex(block.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &block)?;
                 if !dest_path.exists() {
                     let content = if region::extract_block(&rendered, format).is_some() {
@@ -876,7 +884,7 @@ fn update_entry(
         Ownership::UserOwned => {
             if !dest_path.exists() {
                 write_dest(root, entry, &rendered)?;
-                record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                record(installed, entry);
                 Baseline::write(root, &entry.dest, &rendered)?;
                 report.file(&entry.dest, Action::Added);
                 return Ok(());
@@ -892,7 +900,7 @@ fn update_entry(
                 let baseline_missing = Baseline::read(root, &entry.dest).is_none();
                 if is_new_entry || baseline_missing {
                     Baseline::write(root, &entry.dest, &rendered)?;
-                    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+                    record(installed, entry);
                     notes.push(if is_new_entry {
                         "existing file adopted into the installed manifest".to_string()
                     } else {
@@ -961,7 +969,7 @@ fn sync_user_owned_json(
 
     // Refresh the shipped-default baseline and record either way.
     Baseline::write(root, &entry.dest, rendered)?;
-    record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
+    record(installed, entry);
 
     if added.is_empty() && migrated.is_empty() && moved.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
@@ -1295,11 +1303,27 @@ fn prune_orphans(
 
         if file.ownership == Ownership::Managed {
             let unmodified = match std::fs::read_to_string(&dest_path) {
-                Ok(current) => hash::sha256_hex(current.as_bytes()) == file.sha256,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+                Ok(current) => {
+                    file.matches_pristine(Baseline::read(root, &dest).as_deref(), &current)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(true),
                 Err(e) => return Err(ScaffoldError::io(&dest_path, e)),
             };
-            if unmodified {
+            if unmodified.is_none() {
+                // Neither a baseline nor a legacy digest proves the file
+                // unmodified: keep it rather than delete what may be edited.
+                installed.files.remove(&dest);
+                report.file_with_notes(
+                    &dest,
+                    Action::KeptUserModified,
+                    vec![
+                        "no longer shipped; kept and no longer managed, since no baseline proves it unmodified"
+                            .to_string(),
+                    ],
+                );
+                continue;
+            }
+            if unmodified == Some(true) {
                 if dest_path.exists() {
                     remove_beneath_root(root, &dest)?;
                     remove_empty_ancestors(root, &dest_path);
