@@ -233,9 +233,9 @@ impl Fixture {
         command
     }
 
-    /// `platform`'s shipped script, run from the fixture repository with a
-    /// clean environment and the local release.
-    fn script_command(&self, platform: Platform) -> Command {
+    /// Shell command in the fixture repository with a scrubbed CI environment
+    /// and the local release, ready for a script or an environment probe.
+    fn script_environment(&self) -> Command {
         // Scratch space inside the fixture, so the scripts' temporary
         // directories go away with it.
         let scratch = self.dir.path().join("tmp");
@@ -244,6 +244,31 @@ impl Fixture {
         command
             .current_dir(self.repo())
             .env_clear()
+            // Restore Cargo's maintenance-off contract after scrubbing CI state.
+            .env(
+                "GIT_CONFIG_COUNT",
+                std::env::var("GIT_CONFIG_COUNT").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_KEY_0",
+                std::env::var("GIT_CONFIG_KEY_0").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_VALUE_0",
+                std::env::var("GIT_CONFIG_VALUE_0").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_KEY_1",
+                std::env::var("GIT_CONFIG_KEY_1").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_VALUE_1",
+                std::env::var("GIT_CONFIG_VALUE_1").unwrap(),
+            )
+            .env(
+                "GIT_CONFIG_PARAMETERS",
+                std::env::var("GIT_CONFIG_PARAMETERS").unwrap(),
+            )
             .env("PATH", std::env::var("PATH").unwrap())
             .env("HOME", self.home())
             .env("TMPDIR", &scratch)
@@ -255,6 +280,11 @@ impl Fixture {
                 "CODEFLOW_RELEASE_URL",
                 format!("file://{}", self.releases().display()),
             );
+        command
+    }
+
+    fn script_command(&self, platform: Platform) -> Command {
+        let mut command = self.script_environment();
         command.arg("-c").arg(script(platform));
         if let Platform::Generic = platform {
             command.arg("ci-generic.sh");
@@ -376,16 +406,15 @@ fn diverged(fx: &Fixture, message: &str) -> Diverged {
 
 /// A bare copy of the fixture repository at `path` whose `main` is `main`.
 fn bare_copy(fx: &Fixture, path: &Path, main: &str) {
-    git(
+    codeflow_fixture::clone(
         fx.dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            &fx.repo().display().to_string(),
-            &path.display().to_string(),
-        ],
-    );
+        fx.repo().display().to_string(),
+        path.display().to_string(),
+    )
+    .bare()
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     git(path, &["update-ref", "refs/heads/main", main]);
 }
 
@@ -1345,6 +1374,40 @@ fn a_criss_cross_head_cannot_keep_a_lowered_pin() {
             );
             let calls = fx.calls();
             assert!(calls.iter().all(|c| c.starts_with("1.2.4 ")), "{calls:?}");
+        }
+    }
+}
+
+#[test]
+fn the_scrubbed_script_environment_prevents_automatic_maintenance() {
+    let fx = Fixture::new();
+    fx.project(env!("CARGO_PKG_VERSION"));
+    let trace = fx.dir.path().join("maintenance-trace.jsonl");
+    let out = fx.script_environment()
+        .args(["-c", "git -c user.name=Fixture -c user.email=fixture@example.test commit --allow-empty -m fixture"])
+        .env("GIT_TRACE2_EVENT", &trace)
+        .output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(trace)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| event["event"] == "start"));
+    for event in events {
+        if event["event"] == "child_start" {
+            assert!(
+                !event["argv"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == "maintenance" || arg == "gc"),
+                "{event}"
+            );
         }
     }
 }
