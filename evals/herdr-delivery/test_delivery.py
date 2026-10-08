@@ -25,6 +25,7 @@ SKILL_DIR = Path(
     os.environ.get("CF_HERDR_SKILL_DIR") or ROOT / "assets/base/agents/skills/cf-herdr"
 )
 HERDR_SKILL = SKILL_DIR / "SKILL.md"
+REVIEW_AND_HARVEST = SKILL_DIR / "references/review-and-harvest.md"
 DELIVER = SKILL_DIR / "scripts/deliver.py"
 PANE = "w1:p7"
 
@@ -476,6 +477,111 @@ class StubDeliveryTests(unittest.TestCase):
         self.assertIn("256 KiB", done.stderr)
         self.assertIn("outside the repository", done.stderr)
         self.assertNotIn("tmux", done.stderr)
+
+    def test_review_brief_step_names_the_review_flag(self) -> None:
+        text = words(REVIEW_AND_HARVEST.read_text(encoding="utf-8"))
+        step = text.split("4. ", 1)[1].split("5. ", 1)[0]
+        self.assertIn("deliver.py --review <base>...<head>", step)
+
+    def review(self, brief: str, *extra: str) -> tuple[StubSeat, subprocess.CompletedProcess[str]]:
+        seat = self.seat()
+        seat.prompt.write_text(brief, encoding="utf-8")
+        return seat, seat.deliver(*extra)
+
+    def test_review_refuses_a_brief_narrower_than_the_unit(self) -> None:
+        # Issue 121: the 2026-10-08 round briefs, each sent for a unit review.
+        unit = "97ede7aa1...c5f54046f"
+        for name, brief in (
+            ("TSK-254 round 2", "Head is now f74718e25 (pushed, PR 114 draft). "
+             "Review `git diff f6f402804 f74718e25`.\n"),
+            ("TSK-254 round 3", "# TSK-254 round 3: review the merge of main\n"
+             "Use `git diff f74718e25 c5f54046f` and "
+             "`git diff 97ede7aa1 c5f54046f`.\n"),
+            ("TSK-242 round 8", "Head is now ba0a31b94 (pushed, PR 113 draft). "
+             "Review `git diff 3f464596a ba0a31b94` and the whole unit where it "
+             "changes meaning.\n"),
+            ("TSK-242 round 9", "Head is now cba2d2672 (pushed, PR 113 draft). "
+             "Review `git diff ba0a31b94 cba2d2672` and the whole unit where it "
+             "changes meaning.\n"),
+            ("the pair beside a delta", "Review `git diff 97ede7aa1...c5f54046f`; "
+             "the fixes are `f74718e25..c5f54046f`.\n"),
+            ("no range at all", "Review the unit and reply ok.\n"),
+            ("a path after the pair", "Review `git diff 97ede7aa1...c5f54046f "
+             "crates/codeflow-cli/src/cmd/ci.rs`.\n"),
+            ("a pathspec after the pair", "Review `git diff "
+             "97ede7aa1...c5f54046f -- assets`.\n"),
+            ("an unquoted path after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f ci.rs and reply.\n"),
+            # Grok round 3: a pathspec anywhere in one diff or log command.
+            ("a path before the pair", "Review `git diff -- src/foo.rs "
+             "97ede7aa1...c5f54046f`.\n"),
+            ("a pathspec on the next line", "Run git diff 97ede7aa1...c5f54046f\n"
+             "-- src/foo.rs\n"),
+            ("a relative diff", "Review `git diff --relative=crates "
+             "97ede7aa1...c5f54046f`.\n"),
+            ("another diff beside the pair", "The unit is 97ede7aa1...c5f54046f. "
+             "Review `git diff HEAD -- crates/codeflow-cli/src/cmd/ci.rs`.\n"),
+            ("a log of another range", "Review `git diff 97ede7aa1...c5f54046f` "
+             "and `git log f74718e25 c5f54046f`.\n"),
+        ):
+            seat, done = self.review(brief, "--review", unit)
+            self.assertEqual(done.returncode, 6, f"{name}: {done.stdout}{done.stderr}")
+            self.assertEqual(seat.state()["calls"], [], name)
+            self.assertIn("nothing was sent", done.stderr, name)
+            self.assertIn("whole", done.stderr, name)
+
+    def test_review_names_the_missing_range_and_the_rule(self) -> None:
+        _, done = self.review("Review `git diff f6f402804 f74718e25`.\n",
+                              "--review", "97ede7aa1...f74718e25")
+        self.assertEqual(done.returncode, 6, done.stderr)
+        self.assertIn("does not name its full range 97ede7aa1...f74718e25", done.stderr)
+        self.assertIn(".codeflow/rules/workflow-discipline.md", done.stderr)
+        _, done = self.review("Review `git diff 97ede7aa1...f74718e25` and "
+                              "`git diff f6f402804 f74718e25`.\n",
+                              "--review", "97ede7aa1...f74718e25")
+        self.assertEqual(done.returncode, 6, done.stderr)
+        self.assertIn("asks for f6f402804..f74718e25 in a git diff, narrower than the unit",
+                      done.stderr)
+        self.assertIn("re-brief for 97ede7aa1...f74718e25", done.stderr)
+
+    def test_review_sends_a_brief_for_the_whole_unit(self) -> None:
+        unit = "97ede7aa1...c5f54046f"
+        for name, brief in (
+            ("the pair", "Review `git diff 97ede7aa1...c5f54046f`.\n"),
+            ("longer ends", "Review `git diff "
+             "97ede7aa10ccd74b26d70a1bca6a643f296c9caa...c5f54046f0`.\n"),
+            ("the pair repeated", "Review `git diff 97ede7aa1...c5f54046f`, and "
+             "`git log 97ede7aa1..c5f54046f` for history; again "
+             "97ede7aa1...c5f54046f.\n"),
+            ("a path-free option", "Review `git diff --stat "
+             "97ede7aa1...c5f54046f` then `git diff -w -U5 "
+             "97ede7aa1...c5f54046f --name-only`.\n"),
+            ("more than the range", "Review `git diff 97ede7aa1...c5f54046f`. "
+             "Also read docs/delivery.md and ADR-0076, check Windows, and say "
+             "whether a simpler shape exists.\n"),
+            ("two shas in prose", "Review `git diff 97ede7aa1...c5f54046f`. "
+             "Round 1 approved f6f402804; the head is now c5f54046f.\n"),
+            ("prose after the command", "Run git diff 97ede7aa1...c5f54046f and "
+             "read crates/codeflow-cli/src/cmd/ci.rs.\n"),
+        ):
+            seat, done = self.review(brief, "--review", unit)
+            self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
+            [text] = seat.sent("send-text")
+            self.assertEqual(text[3], brief, name)
+
+    def test_review_flag_takes_a_full_range(self) -> None:
+        for bad in ("97ede7aa1..c5f54046f", "main...HEAD", "97ede7a"):
+            seat, done = self.review("Review `git diff 97ede7aa1...c5f54046f`.\n",
+                                     "--review", bad)
+            self.assertEqual(done.returncode, 2, f"{bad}: {done.stderr}")
+            self.assertEqual(seat.state()["calls"], [], bad)
+
+    def test_without_the_review_flag_any_brief_sends(self) -> None:
+        for brief in ("Review `git diff f6f402804 f74718e25`.\n",
+                      "Hand off: apply `git diff a1b2c3d e4f5a6b -- src` here.\n"):
+            seat, done = self.review(brief)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(seat.sent("send-text")[0][3], brief)
 
     def test_resume_and_cleanup_name_the_seat_folder(self) -> None:
         skill = words(HERDR_SKILL.read_text(encoding="utf-8"))
