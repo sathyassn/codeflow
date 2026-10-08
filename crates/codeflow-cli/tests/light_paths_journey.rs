@@ -103,7 +103,10 @@ fn pull_request(root: &Path, branch: &str, target: &str, task_line: &str) -> (i3
             "--branch",
             branch,
             "--pr-body",
-            &body(task_line),
+            &body(task_line).replace(
+                "| journey | this range | approve |",
+                &review_rows(root, "HEAD", "| journey | this range | approve |"),
+            ),
         ],
     );
     (
@@ -433,4 +436,33 @@ fn a_follow_up_of_a_standalone_task_lands_with_its_work() {
         !root.join("project-management/tasks/TSK-003.md").exists(),
         "a refused follow-up writes no record"
     );
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
 }

@@ -184,8 +184,12 @@ fn ci_on(root: &Path, base: &str, branch: &str, task_line: &str) -> (i32, String
             "--branch",
             branch,
             "--pr-body",
-            &format!(
-                "## Summary\nA change.\n\n- one change\n\n{task_line}\n\n## Changes\n- one\n\n## Testing\n- test\n"
+            &with_reviews(
+                root,
+                "HEAD",
+                &format!(
+                    "## Summary\nA change.\n\n- one change\n\n{task_line}\n\n## Changes\n- one\n\n## Testing\n- test\n"
+                ),
             ),
         ])
         .current_dir(root)
@@ -5197,5 +5201,45 @@ fn a_net_change_name_in_other_bytes_refuses_with_two_merge_bases() {
             "a net change name with two merge bases",
             &[needle],
         );
+    }
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
+}
+
+/// `body` with a Reviews section approving each bound commit at `rev`,
+/// unless it already has one or nothing is bound.
+fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
+    let rows = review_rows(root, rev, "");
+    if rows.is_empty() || body.contains("## Reviews") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
     }
 }

@@ -256,6 +256,10 @@ catalog! {
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
         "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+    /// A PR body whose Reviews section does not approve the commit the
+    /// task's acceptance block binds (issue 121).
+    REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
+        "name the reviewed commit in the Reviews row as `whole unit at {sha}` with the verdict of the review that covered the whole unit at that commit, and review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),
