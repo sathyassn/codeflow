@@ -575,6 +575,9 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f and reply.\n"),
             ("a bare file name after the pair", "Run git diff "
              "97ede7aa1...c5f54046f Makefile and reply.\n"),
+            # Review of PR 126: a continuation between git and the verb.
+            ("a backslash between git and diff", "Run git \\\ndiff "
+             "97ede7aa1...c5f54046f -- crates/foo.rs\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 6, f"{name}: {done.stdout}{done.stderr}")
@@ -637,11 +640,21 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f\n[the rule](docs) says why.\n"),
             ("prose words after the pair", "Run git diff 97ede7aa1...c5f54046f "
              "from the worktree to see the unit, then reply.\n"),
+            ("a backslash continuation with the whole pair", "Run git \\\ndiff "
+             "--stat 97ede7aa1...c5f54046f\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
             [text] = seat.sent("send-text")
             self.assertEqual(text[3], brief, name)
+
+    def test_review_sends_a_count_in_parentheses_after_the_pair(self) -> None:
+        # Review of PR 126: the TSK-238 brief line, a file count after the span.
+        brief = ("Review `git diff 4f8cdd3aa...390a50bb8` (189 files) and "
+                 "say whether it holds.\n")
+        seat, done = self.review(brief, "--review", "4f8cdd3aa...390a50bb8")
+        self.assertEqual(done.returncode, 0, f"{done.stdout}{done.stderr}")
+        self.assertEqual(seat.sent("send-text")[0][3], brief)
 
     def test_review_flag_takes_a_full_range(self) -> None:
         for bad in ("97ede7aa1..c5f54046f", "main...HEAD", "97ede7a"):

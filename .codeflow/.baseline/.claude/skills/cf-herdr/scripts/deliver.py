@@ -29,13 +29,16 @@ diff` or `git log` with two commits, or a dotted pair) must be that pair.
 A `git diff` or `git log` narrowed in any other way is refused too: a path,
 a glob (`*.rs`), a magic pathspec (`:!docs`, `:(exclude)docs`), `--` or a
 bare name before or after the pair (after the closing backtick, in a fenced
-block, on a later line, or past a blank line or backslash), git global
+block, on the next line, or after a backslash continuation), git global
 options before the verb, and any dash option outside the display set
-(`--stat`, `--name-only`, `-U`, `-w` and the like). Outside a code span or
-fence, any word after the pair is read as a path unless sentence
-punctuation or a plain prose word (`and`, `then`, `read`, `reply`) ends the
-command first, so "and read <file>" still sends. A review is one holistic
-pass over the whole unit at one head.
+(`--stat`, `--name-only`, `-U`, `-w` and the like). A blank line ends the
+command, except that a `--` after a blank line is still refused. A trailing
+backslash joins the next line, including one between `git` and the verb.
+Outside a code span or fence, any word after the pair is read as a path
+unless sentence punctuation, a bare number (a count such as "(189 files)")
+or a plain prose word (`and`, `then`, `read`, `reply`) ends the command
+first, so "and read <file>" still sends. A review is one holistic pass over
+the whole unit at one head.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
 3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown;
@@ -203,6 +206,8 @@ def invocation(tokens: list[str], in_span: bool,
             revisions.append(token)
         elif in_span or is_pathspec(token) or is_bare_path(token):
             narrowed = True
+        elif re.fullmatch(r"\(*\d+\)*", token):
+            return revisions, narrowed, False
         elif (seen or revisions) and token.lower().lstrip("(\"'") not in PROSE:
             narrowed = True
         else:
@@ -210,6 +215,25 @@ def invocation(tokens: list[str], in_span: bool,
         if not in_span and raw != token:
             return revisions, narrowed, False
     return revisions, narrowed, True
+
+
+def joined(lines: list[str]) -> list[str]:
+    """The lines with a trailing backslash joined onto the next line when the
+    join completes a `git diff` or `git log` that the line alone does not
+    (`git \\` then `diff A...B -- path`)."""
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        while line.rstrip().endswith("\\") and index < len(lines):
+            merged = line.rstrip()[:-1] + " " + lines[index]
+            if len(list(COMMAND.finditer(merged))) <= len(list(COMMAND.finditer(line))):
+                break
+            line = merged
+            index += 1
+        out.append(line)
+    return out
 
 
 def commands(brief: str) -> list[tuple[str, list[str], bool]]:
@@ -220,7 +244,7 @@ def commands(brief: str) -> list[tuple[str, list[str], bool]]:
     belong to the command; so does a path, glob or magic pathspec at the
     start of the next line."""
     found = []
-    lines = brief.splitlines()
+    lines = joined(brief.splitlines())
     fenced = False
     for number, line in enumerate(lines):
         if line.lstrip().startswith("```") and line.count("```") == 1:
