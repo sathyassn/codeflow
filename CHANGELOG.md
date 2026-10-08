@@ -335,6 +335,24 @@ erratum below, never an edit of the section.
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **A stalled CI job no longer holds a runner for six hours, and a body
+  edit no longer runs the policy check twice.** The managed `secret scan`
+  and `security review` jobs now stop after 30 minutes and the enforcing
+  `commit standards` job after 20, where GitHub's default is six hours;
+  the `gates` job runs the project's own suite and keeps no cap. The
+  policy workflow now cancels a superseded pull request run (a push
+  followed by a body edit sends two events seconds apart), and the run that
+  judges reads the pull request's body from the API when it runs, so the
+  newest body is judged whichever run survives; the job's token gains
+  `pull-requests: read` and stays read-only. Push, schedule and dispatch
+  runs are never grouped or cancelled. CodeFlow's own CI also bounds every
+  job, installs the Playwright browsers and their system libraries only
+  where a browser runs, from cached apt archives with a bounded, retried
+  install, and stops a hung read benchmark after 15 minutes instead of 40.
+  To adopt: run `codeflow update`; it merges the change into an edited
+  copy.
+
+<!-- codeflow:release-impact patch -->
 - **A pull request can no longer lower its own security review.** The
   managed `security review` job read `git.security_review` and
   `git.dep_audit` from the pull request's own checkout and fell back to
