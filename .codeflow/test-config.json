@@ -277,6 +277,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
         }
@@ -394,6 +397,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "essential": {
+          "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"(cd docs-portal && node scripts/workflow.mjs verify)\""
+        },
         "full": {
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"node --test docs-portal/tests/adapter.test.mjs scripts/test_portal_workflow.mjs scripts/test_gate_schema.mjs && (cd docs-portal && node scripts/workflow.mjs verify) && $CODEFLOW_BIN validate --portal docs-portal\""
         }

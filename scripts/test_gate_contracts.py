@@ -132,6 +132,12 @@ class GateContracts(unittest.TestCase):
         self.assertIn('--fail-under-lines 90', targets['rust-coverage']['modes']['full']['command'])
         self.assertIn('nextest', targets['rust-coverage']['modes']['full']['command'])
         self.assertNotIn('full', targets['rust-workspace']['modes'])
+        # TSK-263: an essential run checks figure fidelity, so a capability
+        # wording change fails before review; every prerequisite defines the
+        # mode, or the config is refused at load.
+        self.assertIn('workflow.mjs verify', targets['docs-portal']['modes']['essential']['command'])
+        for name in closure('docs-portal'):
+            self.assertIn('essential', targets[name]['modes'], name)
         self.assertEqual(targets['rust-doctest']['modes']['full']['command'], 'cargo test --workspace --doc')
         self.assertIn('npm run supply-chain', targets['present-supply-chain']['modes']['full']['command'])
         self.assertIn('check-present-binary-delta', targets['present-binary-delta']['modes']['full']['command'])
