@@ -33,7 +33,8 @@ is there, is that task. The task must be complete and standalone at the
 target and at the head, and the range must not reopen it. The criteria set
 stays frozen: an added, removed, renumbered or reordered criterion, or a
 changed `(journey)`, `(after release)` or `(serves ...)` tag or checkbox
-form, is refused as `work.criteria_frozen` with the reason. `codeflow ci`
+form, or an added list item that is no criterion, is refused as
+`work.criteria_frozen` with the reason. `codeflow ci`
 prints the criteria delta as a `work.criteria_frozen` note, and a human
 reviewer confirms that the substance of each changed criterion is
 unchanged; the machine guarantees structure only. The task stays

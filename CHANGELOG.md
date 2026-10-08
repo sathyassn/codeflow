@@ -258,8 +258,9 @@ erratum below, never an edit of the section.
   meaning is unchanged; the task stays `complete`, its acceptance block
   stays bound, and the anchored work-start preflight does not apply to
   such a range. An added, removed, renumbered or reordered criterion, a
-  changed `(journey)`, `(after release)` or `(serves ...)` tag, or a
-  changed checkbox form is still refused, and so is the same change on the
+  changed `(journey)`, `(after release)` or `(serves ...)` tag, a
+  changed checkbox form, or an added list item that is no criterion is
+  still refused, and so is the same change on the
   task's own `task/` branch, in a range that reopens it, in a range that
   also changes a path outside the planning records, or for an epic task,
   whose route stays its epic's amendment. CodeFlow 3.0.0 still

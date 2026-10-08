@@ -387,7 +387,8 @@ pull request of planning records only whose `Task:` line names a completed
 standalone task, or a follow-up of it, may correct the wording of that
 task's criteria; `codeflow ci` prints the delta as a `work.criteria_frozen`
 note and still refuses an added, removed, renumbered or reordered
-criterion or a changed tag (ADR-0080).
+criterion, a changed tag or checkbox form, or an added list item that is
+no criterion (ADR-0080).
 `codeflow remote protect` has an adapter only for GitHub, through `gh api`;
 another provider prints the manual checklist.
 
