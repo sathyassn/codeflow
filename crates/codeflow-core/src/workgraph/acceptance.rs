@@ -2267,9 +2267,9 @@ fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -
 /// Whether the range from `base` (the target tip) to `head`, which changes
 /// `changed_paths`, only corrects the records of a completed standalone
 /// task that `task_id` names or follows up (ADR-0080): the range changes
-/// planning records only ([`correctable`]), and the task is complete and
-/// standalone at the target and at the head and is not reopened by the
-/// range. `task_id` may be that task or a follow-up of it in any status,
+/// planning records only, and the task is in the correctable set (complete
+/// and standalone at the target and at the head, and not reopened by the
+/// range). `task_id` may be that task or a follow-up of it in any status,
 /// including one that is blocked, cancelled or awaiting selection, when the
 /// target already holds the follow-up. Such a range starts no work, so the
 /// anchored preflight for tracked work (R-72) has nothing to admit; the
