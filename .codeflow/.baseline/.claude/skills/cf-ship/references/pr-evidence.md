@@ -116,8 +116,9 @@ commit. Inspect the actual diff as well: filenames and commit subjects
 alone cannot establish behavior, risk, or completeness. For a code change,
 **Testing is evidence you already ran**: identify the tested revision and
 commands, paste their real summaries, and state their scope. A builder
-pastes its targeted tests and its `codeflow test --mode quick` run, each
-with revision and command; the pre-push hook's quick run counts when it
+pastes its targeted tests and its `codeflow test --mode quick` run,
+targeted meaning the checks that read what changed, each with revision and
+command; the pre-push hook's quick run counts when it
 covered the same tree. The full gate runs once on the landing candidate:
 the primary links it in each member's PR when the batch lands, and a
 standalone PR runs it as its own candidate. Cite a gate run by its run id
@@ -130,12 +131,15 @@ number. Do not relabel subset coverage as workspace coverage. Unsupported
 coverage is `N/A` with a technical reason; unavailable or stale evidence is
 a gap, never zero, an invented percentage, or an inferred pass. Missing
 required evidence keeps the PR draft. Name new tests and what was
-NOT tested.
+NOT tested. On a code range, `Not tested:` names the consumer checks left
+unrun and a reachable scenario class left untested, with the reason; review
+reads the line, `codeflow ci` only checks that it exists.
 Whole-flow evidence includes changed operator/CLI journeys, even without
 product UI. Docs-only means no executable behavior changed: scripts, hook
 settings, generated runtime assets, and executable examples do not qualify
 merely because they live under docs. Instruction-only changes name the doc
-checks and relevant behavioral evaluations; distinguish added cases from
+checks, the derived-artifact checks that read the changed text, and relevant
+behavioral evaluations; distinguish added cases from
 live trials actually run. Delete unused template lines, and omit a
 conditional section whose condition does not hold. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence

@@ -46,7 +46,8 @@ missing automation for adoption rather than silently enabling publication.
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/
   test/ chore/ ci/ hotfix/ plan/ task/ spike/ experiment/ integration/`.
   Durable implementation uses `task/TSK-NNN-<slug>`; pick the others by work
-  intent.
+  intent. `hotfix/` lands a marked shortcut under the discipline rules'
+  shortcut rule, never an unmarked one.
 - **Commits:** conventional format `type(scope): description` (scope
   optional), imperative mood, lower-case type from the policy whitelist, no
   trailing period; the description at most 50 chars and the whole subject
