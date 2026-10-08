@@ -96,9 +96,15 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ## Rules with no key
 
-| Rule | Guard | What it refuses | Relief |
-|---|---|---|---|
-| `security.shell_startup` | exec-guard, edit-guard | A write to a shell startup file, or a write that can place one, in an agent session (issue 86, TSK-242). The class and the forms are in [enforcement planes](architecture/enforcement-planes.md#shell-startup-files) | None. No key relaxes it at any integrity level; the operator edits their own startup files outside the agent session |
+`security.shell_startup` is enforced by exec-guard and edit-guard. It
+refuses a write to a shell startup file, or a write that can place one, in an
+agent session (issue 86, TSK-242). The class and the forms are in
+[enforcement planes](architecture/enforcement-planes.md#shell-startup-files).
+No key relaxes it at any integrity level; the operator edits their own
+startup files outside the agent session.
+
+<!-- No table here: the portal's row count for this page expects every table
+to be generated from the schema or checked against the hook dispatcher. -->
 
 ## Prose the exec-guard certifies
 
