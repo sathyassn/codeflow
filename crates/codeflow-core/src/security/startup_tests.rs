@@ -1423,3 +1423,82 @@ fn ordinary_lines_with_a_non_reader_refuse_by_design() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Grok round six. Quoting reaches every check decoded (`$'\\x2ezshrc'`,
+/// `'.zs''hrc'`, `$"..."`), and a command-valued setting that names a class
+/// file refuses on every line: a global `git -c` or `--config-env`, and
+/// `EDITOR`, `GIT_EDITOR`, `PAGER`, `GIT_SSH_COMMAND`, `LESSOPEN` and the
+/// like, whether or not the line produces text.
+#[test]
+fn quoting_is_decoded_and_command_valued_settings_are_read() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "grep alias ~/.zshrc | awk $'BEGIN{printf \"awk-rc\\n\" \\x3e (ENVIRON[\"HOME\"] \"/\\x2ezshrc\")}'",
+        "bash -c $'echo pwned \\x3e\\x3e \\x24HOME/\\x2ezshrc'",
+        "zsh -c $'echo pwned \\x3e\\x3e \\x24HOME/\\x2ezshrc'",
+        "python3 -c $'import os; open(os.environ[\"HOME\"]+\"/\\x2ezshrc\",\"a\").write(\"py-pwned\\n\")'",
+        "echo x >> $HOME/$'\\x2ezshrc'",
+        "echo x >> \"$HOME\"/$'\\x2ezshrc'",
+        "echo x >> $HOME/$'\\056zshrc'",
+        "echo x >> $HOME/$'\\u002ezshrc'",
+        "echo x | tee $HOME/$'\\x2ezshrc'",
+        "echo x >> ~/'.zs''hrc'",
+        "echo x >> ~/.z\"s\"hrc",
+        "echo x >> ~/.zshr$\"c\"",
+        "echo x >> ~/.zs\\\nhrc",
+        "echo $'\\'' ; echo x >> ~/.zshrc; echo '",
+        "printf '%s' $'\\x78' | tee ~/.zshrc",
+        "git -c core.fsmonitor='echo pwned >> ~/.zshrc' status",
+        "git -c core.pager='sh -c \"echo >> ~/.zshrc\"' log",
+        "FSM='echo >> ~/.zshrc' git --config-env=core.fsmonitor=FSM status",
+        "GIT_EDITOR='echo pwned >> ~/.zshrc' git commit --allow-empty",
+        "GIT_EDITOR='echo pwned >> $HOME/.zshrc' git commit --allow-empty",
+        "EDITOR='echo pwned >> ~/.zshrc' git commit --allow-empty",
+        "VISUAL='echo pwned >> ~/.zshrc' git commit --allow-empty",
+        "export VISUAL='echo >> ~/.zshrc'; git commit --allow-empty",
+        "PAGER='cat >> ~/.zshrc' git log",
+        "GIT_PAGER='cat >> ~/.zshrc' git log",
+        "GIT_SSH_COMMAND='echo >> ~/.zshrc' git fetch",
+        "GIT_EXTERNAL_DIFF='echo >> ~/.zshrc' git diff",
+        "LESSOPEN='|echo >> ~/.zshrc %s' less README.md",
+        "MANPAGER='cat >> ~/.zshrc' man ls",
+        "BROWSER='echo >> ~/.zshrc' open x",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='echo >> ~/.zshrc' git status",
+        "env GIT_EDITOR='echo >> ~/.zshrc' git commit --allow-empty",
+        "export FSM='echo >> ~/.zshrc'; git --config-env core.fsmonitor=FSM status",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "git status",
+        "git log -p -- .envrc | head",
+        "git diff -- .envrc",
+        "echo hello | make",
+        "cargo test",
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "git -c color.ui=never status",
+        "git -c user.name=x commit -m wip",
+        "git -c core.editor=true rebase main",
+        "EDITOR=vim git commit",
+        "PAGER=less git log",
+        "export EDITOR=vim",
+        "GIT_SSH_COMMAND='ssh -i key' git fetch",
+        "echo $'a\\tb'",
+        "printf $'%s\\n' x",
+        "echo $'it\\'s'; ls",
+        "awk $'{print $1}' README.md",
+        "echo $'\\x68\\x69' > notes.txt",
+        "echo x >> $'notes.txt'",
+        "echo x > ~/'notes.txt'",
+        "cat ~/$'\\x2ezshrc'",
+        "grep alias ~/.zshrc | sed $'s/a/b/'",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

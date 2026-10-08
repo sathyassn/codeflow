@@ -98,6 +98,11 @@ const REFUSED: &[&str] = &[
     "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env -C /tmp -S 'awk -f a.awk'",
     "printf 'sub/.envrc\\n' | git checkout --pathspec-from-file=-",
     "printf 'sub/.envrc\\n' | git rm -q --pathspec-from-file=-",
+    // Grok round six: ANSI-C quoting and command-valued settings.
+    "grep alias ~/.zshrc | awk $'BEGIN{printf \"x\" \\x3e (ENVIRON[\"HOME\"] \"/\\x2ezshrc\")}'",
+    "bash -c $'echo pwned \\x3e\\x3e \\x24HOME/\\x2ezshrc'",
+    "git -c core.fsmonitor='echo pwned >> ~/.zshrc' status",
+    "GIT_EDITOR='echo pwned >> ~/.zshrc' git commit --allow-empty",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -124,6 +129,8 @@ const ALLOWED: &[&str] = &[
     "grep -c alias ~/.zshrc > b.txt; sed -E 's/a/b/' README.md",
     "find . -name '*.rs' -print",
     "cat ~/.zshrc | sort | uniq -c | head",
+    "git -c color.ui=never status",
+    "EDITOR=vim git log",
     "grep alias ~/.zshrc | sed -E 's/a/b/'",
     "cd ~1; cat policy.json",
 ];

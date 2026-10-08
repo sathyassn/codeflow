@@ -941,11 +941,69 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         return vec![v];
     }
     for segment in &segments {
+        if let Some(v) = command_valued_variable(segment, &line) {
+            return vec![v];
+        }
         if let Some(v) = segment_violation(segment, &line) {
             return vec![v];
         }
     }
     Vec::new()
+}
+
+/// Variables whose value is a command that a reader or git runs: an editor,
+/// a pager, an ssh or askpass program, an external diff, a preview filter, or
+/// configuration passed in the environment.
+const COMMAND_VARIABLES: &[&str] = &[
+    "EDITOR",
+    "VISUAL",
+    "FCEDIT",
+    "PAGER",
+    "MANPAGER",
+    "BROWSER",
+    "LESSOPEN",
+    "LESSCLOSE",
+    "GIT_EDITOR",
+    "GIT_SEQUENCE_EDITOR",
+    "GIT_PAGER",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_PROXY_COMMAND",
+    "GIT_CONFIG_PARAMETERS",
+];
+
+/// A command-valued variable set on a segment (`GIT_EDITOR='cmd' git commit`,
+/// `export PAGER=cmd`) whose command names a startup file. This reads every
+/// segment, not only staged lines: the command runs without any produced text.
+fn command_valued_variable(segment: &str, line: &Line<'_>) -> Option<Violation> {
+    let words = command_argv(segment);
+    // `git --config-env=core.fsmonitor=VAR` takes the setting from `VAR`.
+    let mut config_env = words.iter().enumerate().filter_map(|(at, word)| {
+        word.strip_prefix("--config-env=")
+            .or_else(|| (word == "--config-env").then(|| words.get(at + 1).map(String::as_str))?)
+            .and_then(|setting| setting.split_once('=').map(|(_, var)| var))
+    });
+    if let Some((var, class)) = config_env.find_map(|var| {
+        let value = line.assigned.get(var)?;
+        Some((var, line.names(value)?))
+    }) {
+        return Some(finding(format!(
+            "`--config-env` takes a git setting from `{var}`, a command that names the shell startup file `{class}`"
+        )));
+    }
+    words.iter().find_map(|word| {
+        let (name, value) = word.split_once('=')?;
+        if !(COMMAND_VARIABLES.contains(&name) || name.starts_with("GIT_CONFIG_VALUE_")) {
+            return None;
+        }
+        let class = line.names(value)?;
+        Some(finding(format!(
+            "`{name}` is set to a command that names the shell startup file `{class}`, which a program the line runs would execute"
+        )))
+    })
 }
 
 /// The literal values the line assigns, read only where the shell reads an
@@ -1351,10 +1409,10 @@ fn git_reads(args: &[String]) -> bool {
     let Some((sub, rest)) = git_subcommand(args) else {
         return false;
     };
-    let globals = &args[..args.len() - rest.len() - 1];
-    if globals.iter().any(|a| {
-        a == "-c" || a.starts_with("--config-env") || a.starts_with("--exec-path") || a == "-p"
-    }) {
+    if git_globals(args, rest)
+        .iter()
+        .any(|a| git_runs_config(a) || a == "-p")
+    {
         return false;
     }
     if !(GIT_READS.contains(&sub) || GIT_KEEPS_WORKTREE.contains(&sub) || GIT_PLAIN.contains(&sub))
@@ -1470,7 +1528,13 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     if !produces_text(segments, line.text) {
         return None;
     }
-    let name = line.names(line.text)?;
+    // The decoded words too: `$'\\x2ezshrc'` and `'.zs''hrc'` name the file
+    // although the raw text does not spell it.
+    let name = line.names(line.text).or_else(|| {
+        segments
+            .iter()
+            .find_map(|segment| line.names(&command_argv(segment).join(" ")))
+    })?;
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
@@ -1739,6 +1803,7 @@ fn reads_only(name: &str, args: &[String]) -> bool {
         }
         "git" => git_subcommand(args).is_some_and(|(sub, rest)| {
             GIT_READS.contains(&sub)
+                && !git_globals(args, rest).iter().any(|a| git_runs_config(a))
                 && !rest
                     .iter()
                     .any(|a| a.starts_with("--output") || a == "-o" || a.starts_with("--ext-diff"))
@@ -1759,6 +1824,17 @@ fn reads_only(name: &str, args: &[String]) -> bool {
         }),
         _ => READERS.contains(&name),
     }
+}
+
+/// The global options in front of a git subcommand.
+fn git_globals<'a>(args: &'a [String], rest: &[String]) -> &'a [String] {
+    &args[..args.len() - rest.len() - 1]
+}
+
+/// Whether a git global option sets configuration for this call, which can
+/// name a program to run (`-c core.fsmonitor=cmd`, `--config-env`).
+fn git_runs_config(arg: &str) -> bool {
+    arg == "-c" || arg.starts_with("--config-env") || arg.starts_with("--exec-path")
 }
 
 /// A git subcommand after git's global options, with its arguments.

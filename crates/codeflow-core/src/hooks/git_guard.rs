@@ -2553,7 +2553,7 @@ fn arg_integrity_path(args: &[String], cwd: &Path, payload_cwd: &Path) -> Option
 /// `$"..."`): on a command that holds either and a `>`, every word is kept
 /// in [`Redirects::unread`] and judged by name.
 pub(crate) fn redirect_writes(segment: &str) -> Redirects {
-    let joined = join_continuations(segment);
+    let joined = join_continuations(&decode_dollar_quotes(segment));
     if (joined.contains("$'") || joined.contains("$\"")) && joined.contains('>') {
         let unread = line_words(&joined.replace(['\'', '"', '$', '\\'], " "))
             .map(str::to_string)
@@ -2577,6 +2577,51 @@ pub(crate) struct Redirects {
     /// Every word of a command whose quoting the reader does not read:
     /// any of them may be a write target, so each is judged by name.
     pub(crate) unread: Vec<String>,
+}
+
+/// `text` with each unquoted ANSI-C string `$'...'` replaced by its decoded
+/// text in single quotes, and each locale string `$"..."` by the plain double
+/// quoted one, so a redirect target such as `$HOME/$'\\x2ezshrc'` is read
+/// as the path the shell passes.
+fn decode_dollar_quotes(text: &str) -> String {
+    if !text.contains("$'") && !text.contains("$\"") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let (mut single, mut double) = (false, false);
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !single => {
+                out.push(c);
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '\'' if !double => {
+                single = !single;
+                out.push(c);
+            }
+            '"' if !single => {
+                double = !double;
+                out.push(c);
+            }
+            '$' if !single && !double => match chars.clone().next() {
+                Some('\'') => {
+                    chars.next();
+                    let body = ansi_c_text(&mut chars);
+                    out.push('\'');
+                    out.push_str(&body.replace('\'', "'\\''"));
+                    out.push('\'');
+                }
+                // A locale string is an ordinary double-quoted one.
+                Some('"') => {}
+                _ => out.push(c),
+            },
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// `text` with each backslash-newline outside single quotes removed, as the
@@ -4227,6 +4272,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     let chars: Vec<char> = command.chars().collect();
     let mut cur = String::new();
     let mut in_single = false;
+    let mut ansi_c = false;
     let mut in_double = false;
     // Open `((` arithmetic commands and `$[` arithmetic expansions.
     let mut arithmetic = 0usize;
@@ -4250,8 +4296,16 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         let c = chars[i];
         if in_single {
             cur.push(c);
+            // In ANSI-C quoting `$'...'` a backslash escapes the next character,
+            // a quote included.
+            if ansi_c && c == '\\' && i + 1 < chars.len() {
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
             if c == '\'' {
                 in_single = false;
+                ansi_c = false;
             }
             i += 1;
             continue;
@@ -4284,6 +4338,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         match c {
             '\'' => {
                 in_single = true;
+                ansi_c = cur.ends_with('$') && !cur.ends_with("\\$");
                 cur.push(c);
                 i += 1;
             }
@@ -8144,6 +8199,84 @@ struct ShellWord {
     unquoted_prefix: usize,
 }
 
+/// Up to `max` digits of `radix` read from the front of `chars` without
+/// consuming a non-digit: the value, or `None` when no digit follows.
+fn take_digits(chars: &mut std::str::Chars<'_>, radix: u32, max: usize) -> Option<u32> {
+    let mut value = None;
+    for _ in 0..max {
+        let Some(digit) = chars.clone().next().and_then(|c| c.to_digit(radix)) else {
+            break;
+        };
+        chars.next();
+        value = Some(value.unwrap_or(0) * radix + digit);
+    }
+    value
+}
+
+/// The text of an ANSI-C quoted string `$'...'`, read from after the opening
+/// quote to the closing one, with the escapes bash and zsh decode: `\a \b \e
+/// \E \f \n \r \t \v \\ \' \" \?`, octal `\NNN`, hex `\xHH`, `\uHHHH`,
+/// `\UHHHHHHHH` and `\cX`. A byte above 0x7f reads as the character of that
+/// number; a NUL is dropped. An unknown escape keeps its backslash.
+fn ansi_c_text(chars: &mut std::str::Chars<'_>) -> String {
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            break;
+        }
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let Some(e) = chars.next() else {
+            break;
+        };
+        let decoded = match e {
+            'a' => Some('\u{7}'),
+            'b' => Some('\u{8}'),
+            'e' | 'E' => Some('\u{1b}'),
+            'f' => Some('\u{c}'),
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            'v' => Some('\u{b}'),
+            '\\' | '\'' | '"' | '?' => Some(e),
+            'x' => take_digits(chars, 16, 2).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            'u' => take_digits(chars, 16, 4).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            'U' => take_digits(chars, 16, 8).map(|v| char::from_u32(v).unwrap_or('\u{fffd}')),
+            '0'..='7' => {
+                let mut v = e.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    let Some(d) = chars.clone().next().and_then(|c| c.to_digit(8)) else {
+                        break;
+                    };
+                    chars.next();
+                    v = v * 8 + d;
+                }
+                char::from_u32(v & 0xff)
+            }
+            'c' => chars
+                .next()
+                .map(|x| char::from_u32(u32::from(x) & 0x1f).unwrap_or('\0')),
+            other => {
+                out.push('\\');
+                out.push(other);
+                continue;
+            }
+        };
+        match decoded {
+            Some('\0') => {}
+            Some(d) => out.push(d),
+            // `\x` with no digit stays as written.
+            None => {
+                out.push('\\');
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -8151,11 +8284,33 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut in_double = false;
     let mut started = false;
     let mut prefix_open = true;
-    let mut unquoted_prefix = 0;
+    let mut unquoted_prefix: usize = 0;
+    let mut dollar_pending = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
+        // A `$` just before this character, outside quotes: `$'...'` is
+        // ANSI-C quoting and `$"..."` locale quoting, so the `$` is not text.
+        let dollar = std::mem::take(&mut dollar_pending);
         match c {
+            '\'' if dollar && !in_single && !in_double => {
+                cur.pop();
+                if prefix_open {
+                    unquoted_prefix = unquoted_prefix.saturating_sub(1);
+                }
+                cur.push_str(&ansi_c_text(&mut chars));
+                started = true;
+                prefix_open = false;
+            }
+            '"' if dollar && !in_single && !in_double => {
+                cur.pop();
+                if prefix_open {
+                    unquoted_prefix = unquoted_prefix.saturating_sub(1);
+                }
+                in_double = true;
+                started = true;
+                prefix_open = false;
+            }
             '\'' if !in_double => {
                 in_single = !in_single;
                 started = true;
@@ -8201,6 +8356,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 if prefix_open && !in_single && !in_double {
                     unquoted_prefix += c.len_utf8();
                 }
+                dollar_pending = c == '$' && !in_single && !in_double;
             }
         }
     }
@@ -8336,8 +8492,8 @@ fn is_duration(word: &str) -> bool {
 /// guard cannot read with certainty: an `env` option it does not know, an
 /// `env -C` without a directory, or a `timeout` without a duration. `env
 /// -S`, which packs the command into one word, is a stated limit of this
-/// walk; the startup rule unpacks it itself for staged runs
-/// (`security/startup.rs`, `unpack_env_split`).
+/// walk; the startup rule's data-reader check refuses the packed word because
+/// it is not a reader (`security/startup.rs`, `staged_run`).
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
     let assignment = |t: &str| {
         t.split_once('=')
@@ -10274,20 +10430,29 @@ mod tests {
             assert_eq!(read.targets, writes, "{segment}");
             assert!(read.unread.is_empty(), "{segment}");
         }
-        // ANSI-C or locale quoting with a `>`: every word is judged by name.
-        for segment in [
-            "printf '%s\\n' $'it\\'s' > .codeflow/policy.json",
-            "printf x > $'policy.json'",
-            "printf x >$\"policy.json\"",
+        // ANSI-C and locale quoting are decoded first, so the target is the
+        // path the shell passes (round six of TSK-242).
+        for (segment, target) in [
+            (
+                "printf '%s\\n' $'it\\'s' > .codeflow/policy.json",
+                ".codeflow/policy.json",
+            ),
+            ("printf x > $'policy.json'", "policy.json"),
+            ("printf x >$\"policy.json\"", "policy.json"),
+            (
+                "printf x > $'.codeflow/\\x70olicy.json'",
+                ".codeflow/policy.json",
+            ),
+            ("printf x > $HOME/$'\\x2ezshrc'", "$HOME/.zshrc"),
+            ("printf x > $'a'$'\\056b'", "a.b"),
         ] {
             let read = redirect_writes(segment);
-            assert!(read.targets.is_empty(), "{segment}");
-            assert!(
-                read.unread.iter().any(|w| word_could_name(w).is_some()),
-                "{segment}: {:?}",
-                read.unread
-            );
+            assert_eq!(read.targets, vec![target.to_string()], "{segment}");
+            assert!(read.unread.is_empty(), "{segment}: {:?}", read.unread);
         }
+        // `\x3e` in ANSI-C quotes is a quoted `>`, never a redirection.
+        let quoted = redirect_writes("printf %s $'\\x3e' policy.json");
+        assert!(quoted.targets.is_empty() && quoted.unread.is_empty());
         let quoted_read = redirect_writes("printf '%s' $'a\\tb'");
         assert!(quoted_read.unread.is_empty() && quoted_read.targets.is_empty());
         for segment in [
@@ -10321,6 +10486,46 @@ mod tests {
     /// From a directory the guard cannot determine, a word is read by its
     /// names alone: one that ends an enforcement path, or leads into a
     /// whole enforcement directory, could name it; build output cannot.
+    /// ANSI-C `$'...'` and locale `$"..."` quoting are decoded in the words
+    /// every guard reads (TSK-242 round six): `\x2e`, octal, `\u` and the
+    /// letter escapes, with the quote and backslash escapes inside, and the
+    /// splitter keeps `\'` inside `$'...'` from ending the quote early.
+    #[test]
+    fn ansi_c_and_locale_quotes_are_decoded_in_words() {
+        for (segment, words) in [
+            ("echo $'\\x2ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\056zshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\u002ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'\\U0000002ezshrc'", vec!["echo", ".zshrc"]),
+            ("echo $'a\\tb\\nc'", vec!["echo", "a\tb\nc"]),
+            ("echo $'it\\'s'", vec!["echo", "it's"]),
+            ("echo $'a\\\\b'", vec!["echo", "a\\b"]),
+            ("echo $'\\x3e'", vec!["echo", ">"]),
+            ("echo $'\\cA'", vec!["echo", "\u{1}"]),
+            ("echo $'\\q'", vec!["echo", "\\q"]),
+            ("echo $'\\x'", vec!["echo", "\\x"]),
+            ("echo ~/$'.zs'$'hrc'", vec!["echo", "~/.zshrc"]),
+            ("echo ~/'.zs''hrc'", vec!["echo", "~/.zshrc"]),
+            ("echo ~/.z\"s\"hrc", vec!["echo", "~/.zshrc"]),
+            ("echo ~/.zshr$\"c\"", vec!["echo", "~/.zshrc"]),
+            ("echo \"$'x'\"", vec!["echo", "$'x'"]),
+            ("echo \\$'x'", vec!["echo", "$x"]),
+        ] {
+            assert_eq!(shell_tokens(segment), words, "{segment}");
+        }
+        // An escaped quote inside `$'...'` does not hide the next command.
+        let segments = expand_commands("echo $'\\'' ; touch ~/.zshrc; echo '");
+        assert!(
+            segments.iter().any(|s| s.trim() == "touch ~/.zshrc"),
+            "{segments:?}"
+        );
+        // A decoded `>` is a quoted word, never a redirection.
+        assert_eq!(
+            command_argv("printf %s $'\\x3e' out"),
+            vec!["printf", "%s", ">", "out"]
+        );
+    }
+
     #[test]
     fn test_word_could_name_reads_names_alone() {
         for word in [
@@ -12952,7 +13157,6 @@ mod tests {
             "R=/scratch; git -C \"\\$R\" commit -m x",
             "R=/scratch; git -C \\$R commit -m x",
             "R=\\$X; git -C \"$R\" commit -m x",
-            "git -C $'/scratch' commit -m x",
         ] {
             let r = report(cmd, "feat/s");
             assert!(
@@ -12961,6 +13165,16 @@ mod tests {
                 r.violations
             );
         }
+        // ANSI-C quoting is decoded (TSK-242 round six): `$'/scratch'` is
+        // the path `/scratch`, judged as that path.
+        assert_eq!(
+            report("git -C $'/scratch' commit -m x", "feat/s")
+                .violations
+                .len(),
+            report("git -C /scratch commit -m x", "feat/s")
+                .violations
+                .len()
+        );
     }
 
     // T112-2: launcher environment (`env`, `command env`) is modeled; an
