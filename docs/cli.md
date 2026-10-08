@@ -141,6 +141,14 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | `codeflow estimate check <FORECAST_PATH>` | | Check explicit allocations and pinned evidence without scheduling or writes |
 | | `<FORECAST_PATH>` | Forecast JSON file (relative to the current directory or absolute). |
 | | `--json` | Emit the versioned JSON report. |
+| `codeflow estimate outcomes` | | Derive completed tasks' timings from git and compare them with frozen forecasts |
+| | `--since <DATE>` | Only tasks completed or cancelled on this UTC date or later (`YYYY-MM-DD`). |
+| | `--epic <EPC-NNN>` | Only tasks of this epic. |
+| | `--forecast <PATH>` | Join this forecast instead of the adopted home's frozen forecasts. |
+| | `--minimum <N>` | Ratios a group needs before its median is a verdict. Default `3`. |
+| | `--low <RATIO>` | A median ratio below this contradicts the forecast. Default `0.5`. |
+| | `--high <RATIO>` | A median ratio above this contradicts the forecast. Default `2`. |
+| | `--json` | Emit the versioned JSON report. |
 
 ### Enforce
 
@@ -317,6 +325,21 @@ left `.new` sidecars behind.
 specification SPC-007. The checker is read-only: it checks allocations and
 pinned evidence, and it makes no calibrated delivery prediction. Profiles,
 forecasts and outcomes stay project-owned.
+
+`codeflow estimate outcomes` derives each complete task's planned, started,
+blocked, completed and landed points from git author times and joins them by
+task id to the planning scenario of the adopted home's frozen forecasts, or
+of one `--forecast`. It exits 1 when `.codeflow/estimate.json` is adopted and
+its home is missing or unusable, the record is unreadable, or a given
+forecast cannot be read or is not a valid forecast; it exits 2 for an
+unusable threshold or minimum; otherwise 0, including when no forecast is
+joined. Landed is the first target commit that holds the reviewed commit,
+and elapsed active ends there when a later records change wrote the
+completion.
+Started is the task branch's first commit by ancestry and is unknown after a
+squash, rebase or fast-forward landing, or when author times run backwards.
+The minimum and thresholds are printed defaults, not policy. It writes
+nothing (ADR-0079).
 
 ### Enforce notes
 

@@ -189,17 +189,18 @@ id: CAP-017
 name: optional-agentic-estimation
 area: engine
 status: shipped
-verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
+verified_by: [estimate, estimate_cli, estimate_adoption_e2e, estimate_outcomes_cli, manifest_consistency]
 epics: [EPC-006]
-adrs: [ADR-0057]
+adrs: [ADR-0057, ADR-0079]
 ```
 
-Spec SPC-007 defines the optional `cf-estimate` method. A project confirms
-adoption, or its decline is respected. Estimates carry evidence-anchored
-grades, full-delivery scenarios and resource-feasible allocations. The
-standard and full tiers manage the skill. Profiles, forecasts and outcomes
-stay project-owned. EPC-006 supplies the read-only allocation checker. This
-registry does not establish calibrated delivery predictions.
+SPC-007 defines the optional `cf-estimate` method; adoption is opt-in.
+Estimates carry evidence-anchored grades, full-delivery scenarios and
+resource-feasible allocations. Standard and full tiers manage the skill.
+Profiles, forecasts and outcomes stay project-owned. EPC-006 supplies the
+read-only allocation checker; `estimate outcomes` compares git-derived task
+timings with frozen forecasts (ADR-0079). This registry does not
+establish calibrated delivery predictions.
 Detail: [commands](cli.md).
 
 ### Enforce
