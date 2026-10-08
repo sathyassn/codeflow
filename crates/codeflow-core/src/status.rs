@@ -125,6 +125,9 @@ pub struct StatusView {
     /// Per-capability delivery rollup. `None` when either the registry or the
     /// project-management tier is absent (the view needs both links).
     pub delivery: Option<Vec<CapabilityDelivery>>,
+    /// Open operator feedback items, in total and by topic; `None` when the
+    /// project keeps no `project-management/feedback/` directory.
+    pub feedback: Option<(usize, Vec<(String, usize)>)>,
     /// The estimates line, only where `.codeflow/estimate.json` exists.
     pub estimates: Option<String>,
     /// Tier/degradation notes (absent layers, parse problems).
@@ -185,6 +188,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         derived,
         capabilities,
         delivery,
+        feedback: crate::feedback::open_summary(repo_root),
         estimates,
         notes,
     }
@@ -610,6 +614,18 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     if let Some(backlog) = &view.derived {
         render_derived(&mut out, backlog);
     }
+    if let Some((open, by_topic)) = &view.feedback {
+        let topics = by_topic
+            .iter()
+            .map(|(topic, count)| format!("{topic} {count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if topics.is_empty() {
+            let _ = writeln!(out, "feedback: {open} open");
+        } else {
+            let _ = writeln!(out, "feedback: {open} open ({topics})");
+        }
+    }
 
     match &view.capabilities {
         Some(entries) => {
@@ -902,6 +918,43 @@ mod tests {
         assert!(rendered.contains("branch: main"));
         assert!(rendered.contains("(no project-management tier)"));
         assert!(rendered.contains("(no registry)"));
+    }
+
+    #[test]
+    fn feedback_and_estimates_lines_show_together_and_each_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+
+        // Neither feature in use: neither line appears.
+        let rendered = render_status(&collect_status(dir.path()), false);
+        assert!(!rendered.contains("feedback:"), "{rendered}");
+        assert!(!rendered.contains("estimates:"), "{rendered}");
+
+        // Estimates alone.
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/estimate.json"),
+            "{\"schema_version\": 1, \"status\": \"declined\"}\n",
+        )
+        .unwrap();
+        let rendered = render_status(&collect_status(dir.path()), false);
+        assert!(rendered.contains("estimates: declined"), "{rendered}");
+        assert!(!rendered.contains("feedback:"), "{rendered}");
+
+        // Both: each keeps its own line.
+        std::fs::create_dir_all(dir.path().join("project-management/feedback")).unwrap();
+        let view = collect_status(dir.path());
+        assert_eq!(view.feedback, Some((0, Vec::new())));
+        assert_eq!(view.estimates.as_deref(), Some("estimates: declined"));
+        let rendered = render_status(&view, false);
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
+        assert!(rendered.contains("estimates: declined\n"), "{rendered}");
+
+        // Feedback alone.
+        std::fs::remove_file(dir.path().join(".codeflow/estimate.json")).unwrap();
+        let rendered = render_status(&collect_status(dir.path()), false);
+        assert!(rendered.contains("feedback: 0 open\n"), "{rendered}");
+        assert!(!rendered.contains("estimates:"), "{rendered}");
     }
 
     #[test]

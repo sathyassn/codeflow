@@ -262,10 +262,35 @@ impl Tree {
     ///
     /// When a component is a link, the leaf exists, or I/O fails.
     pub(crate) fn create_new(&self, relative: &str, bytes: &[u8]) -> io::Result<()> {
+        self.create_new_keeping(relative, bytes, None)
+    }
+
+    /// [`Tree::create_new`], where the new file takes `permissions` (on
+    /// Unix) before any byte is written, as a renamed record keeps the mode
+    /// of the file it was renamed from.
+    ///
+    /// # Errors
+    ///
+    /// As [`Tree::create_new`].
+    pub(crate) fn create_new_keeping(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        permissions: Option<std::fs::Permissions>,
+    ) -> io::Result<()> {
         self.explained(relative, || {
             let (parent, name) = self.parent(relative, true)?;
             let mut file = platform::create_file(&parent, &name, true)?;
-            let written = file.write_all(bytes).and_then(|()| file.sync_all());
+            #[cfg(unix)]
+            let kept = permissions.map_or(Ok(()), |permissions| file.set_permissions(permissions));
+            #[cfg(not(unix))]
+            let kept = {
+                let _ = permissions;
+                Ok(())
+            };
+            let written = kept
+                .and_then(|()| file.write_all(bytes))
+                .and_then(|()| file.sync_all());
             #[cfg(test)]
             let written = written.and_then(|()| fault::check(fault::Point::AfterCreate, relative));
             drop(file);

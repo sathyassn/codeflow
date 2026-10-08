@@ -15,10 +15,12 @@ use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::amendment;
 use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
+use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
-    check_epic_line, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch, task_id_from_branch_at,
+    check_epic_line, check_epic_line_with_adoptions, declared_work_target,
+    declared_work_target_at_revision, durable_work_tracking_enabled,
+    durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
+    task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -526,14 +528,15 @@ pub(super) fn dispatch(
     let amendment_problem =
         |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
     let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
+    let epic_line = branch.starts_with("integration/").then(|| {
+        check_epic_line_with_adoptions(root, branch, range.target, range.base, range.head)
+    });
     let input = Input {
         body,
         branch,
         files: &files,
         branch_task: task_id_from_branch(root, branch),
-        epic_line: branch
-            .starts_with("integration/")
-            .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
+        epic_line: epic_line.as_ref().map(epic_line_id),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
         amendment_problem: &amendment_problem,
         epic_problem: &epic_problem,
@@ -570,20 +573,56 @@ pub(super) fn dispatch(
             );
             range_journey(root, git, task_id, range, tagged);
         }
-        untracked => announce(untracked),
+        untracked => announce(untracked, epic_line.as_ref()),
     }
     Some(class)
 }
 
-/// Print the class of a pull request that names no task.
-fn announce(class: &Class) {
+type EpicLineResult = Result<(String, AdoptionReport), String>;
+
+fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
+    result
+        .as_ref()
+        .map(|(epic, _)| epic.clone())
+        .map_err(Clone::clone)
+}
+
+/// Print the class and the direct commits its reviewer is accepting.
+fn announce(class: &Class, line: Option<&EpicLineResult>) {
+    let adoptions = line
+        .and_then(|result| result.as_ref().ok())
+        .map(|(_, report)| report);
     match class {
         Class::PlanningOnly { epics } => println!(
             "codeflow ci: pull request class: planning-only amendment of {}",
             epics.join(", ")
         ),
         Class::EpicLine(epic) => {
-            println!("codeflow ci: pull request class: epic integration line of {epic}");
+            print!("codeflow ci: pull request class: epic integration line of {epic}");
+            if let Some(report) = adoptions {
+                for entry in &report.adopted {
+                    print!(
+                        " (adopts {}: {}, reviewed at {})",
+                        &entry.commit[..9],
+                        entry.reason.escape_debug(),
+                        entry.review.escape_debug()
+                    );
+                }
+            }
+            println!();
+            if let Some(report) = adoptions {
+                for entry in &report.outside_range {
+                    let note = codeflow_core::remedy::Finding::new(
+                        format!(
+                            "the {epic} line_adoptions entry for {} names a commit outside the range, so it adopts nothing here",
+                            entry.commit
+                        ),
+                        codeflow_core::remedy::LINE_ADOPTION_OUTSIDE_RANGE
+                            .with(&[("epic", epic.as_str())]),
+                    );
+                    println!("{}", note.line("codeflow ci", "note"));
+                }
+            }
         }
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
@@ -695,13 +734,7 @@ fn tracked(
         .iter()
         .filter(|(status, _)| status == "A")
         .map(|(_, path)| path.as_str())
-        .filter(|path| {
-            path.starts_with("project-management/")
-                && Path::new(path)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                && !path.starts_with("project-management/templates/")
-        })
+        .filter(|path| is_added_work_record(path))
         .collect();
     if added_records
         .iter()
@@ -799,6 +832,20 @@ fn journey(
             ),
         });
     }
+}
+
+/// Whether an added path is a work record a task pull request may not add
+/// beyond its own: Markdown under `project-management/`, except the record
+/// templates and operator feedback items (`FB-NNN.md` and the index
+/// directly in the feedback directory), which are not work records and
+/// whose ids the registry merge rule binds (TSK-241).
+fn is_added_work_record(path: &str) -> bool {
+    path.starts_with("project-management/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        && !path.starts_with("project-management/templates/")
+        && !codeflow_core::feedback::is_feedback_path(path)
 }
 
 fn is_record_of(path: &str, task_id: &str) -> bool {
@@ -913,6 +960,38 @@ mod tests {
 
     fn paths(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()
+    }
+
+    /// TSK-241: a task pull request may add operator feedback items beside
+    /// its own record; any other added record is still refused.
+    #[test]
+    fn a_task_pr_may_add_feedback_items_but_no_other_record() {
+        assert!(is_added_work_record("project-management/tasks/TSK-002.md"));
+        assert!(is_added_work_record("project-management/epics/EPC-001.md"));
+        assert!(is_added_work_record("project-management/specs/SPC-001.md"));
+        assert!(!is_added_work_record(
+            "project-management/feedback/FB-001.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/feedback/INDEX.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/templates/feedback.md"
+        ));
+        assert!(is_added_work_record(
+            "project-management/feedbackx/TSK-001.md"
+        ));
+        // Only canonical items and the index directly in the directory.
+        for smuggled in [
+            "project-management/feedback/archive/TSK-002.md",
+            "project-management/feedback/TSK-002.md",
+            "project-management/feedback/FB-1.md",
+            "project-management/feedback/FB-001.MD",
+            "project-management/feedback/notes.md",
+            "project-management/feedback/archive/INDEX.md",
+        ] {
+            assert!(is_added_work_record(smuggled), "{smuggled}");
+        }
     }
 
     #[test]

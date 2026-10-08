@@ -2879,6 +2879,7 @@ fn shipped_record_and_pr_templates_carry_no_dash() {
         "assets/base/pm/epic.md.tmpl",
         "assets/base/pm/spec.md.tmpl",
         "assets/base/pm/task.md.tmpl",
+        "assets/base/pm/feedback.md.tmpl",
         "assets/base/ci/pull_request_template.md",
     ] {
         let text = std::fs::read_to_string(root.join(rel)).expect("template is readable");
