@@ -12,7 +12,8 @@
 //! refused, never read as some other program. It enforces a supported
 //! subset, in which every spawn is written `…Command::new(ARG)` or
 //! `<…Command>::new(ARG)`, and judges each argument. A literal that names
-//! git (`git`, `git.exe`, `/usr/bin/git` and the like) is refused. Any other
+//! git (`git`, `git.exe`, `/usr/bin/git` and the like) or a `git-*` program
+//! (`git-clone`, `git-upload-pack`) is refused. Any other
 //! argument that is not one literal must be listed in [`DYNAMIC`] with the
 //! reason it never holds git, so a new spawn built from a value has to be
 //! looked at. Every other form that would hide a spawn from that reading
@@ -464,11 +465,26 @@ fn names_git(program: &str) -> bool {
     names_program(program, "git")
 }
 
+/// Whether a program name starts a git process: `git` itself, or a `git-*`
+/// program, which is git's own command (`git-clone` in git's exec path) or
+/// a helper git dispatches (`git-upload-pack`).
+fn names_git_process(program: &str) -> bool {
+    let stem = program_stem(program);
+    names_git(stem)
+        || stem
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("git-"))
+}
+
 /// Whether `program`'s last path part, without an extension, is `name`.
 fn names_program(program: &str, name: &str) -> bool {
+    program_stem(program).eq_ignore_ascii_case(name)
+}
+
+/// A program's last path part, without an extension.
+fn program_stem(program: &str) -> &str {
     let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = file.split('.').next().unwrap_or(file);
-    stem.eq_ignore_ascii_case(name)
+    file.split('.').next().unwrap_or(file)
 }
 
 /// Why `text`, read as the file `file`, breaks the contract.
@@ -478,7 +494,7 @@ fn violations(file: &str, text: &str) -> Vec<String> {
     let mut dynamic: Vec<(String, usize)> = Vec::new();
     for (argument, value) in spawns(&toks) {
         match value {
-            Some(program) if names_git(&program) => out.push(format!(
+            Some(program) if names_git_process(&program) => out.push(format!(
                 "{file}: Command::new({argument}) starts git; use codeflow_core::git"
             )),
             Some(_) => {}
@@ -1037,6 +1053,11 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
         "let c = std::process::Command\n    ::new(\n        \"git\"\n    );",
         r#"let c = Command::new("/usr/bin/git");"#,
         r#"let c = Command::new("git.exe");"#,
+        // A git-* program is git's own command (`git-clone` in git's exec
+        // path) or a helper git dispatches, so it is a git process too.
+        r#"let c = Command::new("git-clone");"#,
+        r#"let c = Command::new("/usr/libexec/git-core/git-upload-pack");"#,
+        r#"let c = Command::new("GIT-RECEIVE-PACK.EXE");"#,
         r#"let c = Command::new(r"C:\Program Files\Git\cmd\git.exe");"#,
         "let c = Command::new(r#\"GIT\"#);",
         "const GIT: &str = \"git\"; let c = Command::new(GIT);",
@@ -1083,6 +1104,8 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     let passed = [
         r#"let c = Command::new("gh");"#,
         r#"let c = Command::new("gitleaks");"#,
+        r#"let c = Command::new("github");"#,
+        r#"let c = Command::new("my-git-tool");"#,
         r#"// Command::new("git")"#,
         r#"/* Command::new("git") */"#,
         r#"let s = "Command::new(\"git\")";"#,

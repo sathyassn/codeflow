@@ -17,6 +17,7 @@ crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args([\"sh\", \"-c\", \"se
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args(\"-C dir clone --depth 2 a b\".split(' '));"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"cmd.args(\"clone --bare a b\".split(' '));"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	"git(dir, &[\"clone\",\"--no-local\",\"-ql\",src,dst]);"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
+crates/codeflow-core/tests/git_spawn_contract.rs	"let c = Command::new(\"git-clone\");"	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	any(|(at,word)|{names_program(word,"git-clone")||(*word=="clone"&&(at==0||words[..at].iter().any(|before|option(before)||names_git(before))))})	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	clone_spans("// git clone x y")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
 crates/codeflow-core/tests/git_spawn_contract.rs	contains(&"clone")	1	Scanner vocabulary, diagnostics and inert source examples; not an invocation.
