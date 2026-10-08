@@ -11,10 +11,11 @@
 //! with `git.required_checks`. Bypass lists belong to one rule each, so a
 //! policy check, or the up-to-date requirement, counts only when a rule that
 //! binds everyone requires it. It warns, never blocks; when `gh`, the
-//! network or a GitHub `origin` is missing, or the rules, the classic
-//! protection or a bypass list that decides the answer cannot be read (the
-//! host omits a bypass list without write access), it says so in a note
-//! rather than passing or warning. Only a 404 means no classic protection.
+//! network or a GitHub `origin` is missing, the policy fails the schema (an
+//! empty `git.required_checks` would otherwise name nothing to find
+//! missing), or the rules, the classic protection or a bypass list that
+//! decides the answer cannot be read (the host omits a bypass list without
+//! write access), it says so in a note rather than passing or warning. Only a 404 means no classic protection.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -76,6 +77,9 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         return note(format!(
             "`gh` not found, so doctor cannot read the host rules of {nwo}"
         ));
+    }
+    if let Some(message) = invalid_policy(root, &nwo) {
+        return note(message);
     }
     let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
     let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
@@ -160,6 +164,20 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             format!("{nwo}: {}{unread}", problems.join("; ")),
         )
     }
+}
+
+/// The note for a policy that fails the schema, naming each key, or `None`
+/// when it is valid. The comparison needs a list `codeflow remote protect`
+/// would accept: an empty list names no check to find missing and would
+/// pass whenever some other strict rule binds everyone. The same validation
+/// `remote protect` runs decides, so the two never disagree.
+fn invalid_policy(root: &Path, nwo: &str) -> Option<String> {
+    let errors = crate::hooks::policy_schema::validate_policy(root).err()?;
+    let found: Vec<String> = errors.iter().map(ToString::to_string).collect();
+    Some(format!(
+        "the policy is invalid, so doctor cannot compare {nwo}'s host rules with git.required_checks: {} (see `codeflow policy explain`)",
+        found.join("; ")
+    ))
 }
 
 /// The rules the host applies to `branch`, all pages: `rules/branches`
@@ -581,6 +599,38 @@ mod tests {
             text.contains("does not require linux named in git.required_checks"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn an_invalid_required_checks_list_is_a_note_never_a_pass() {
+        // The host strictly requires one other check for everyone. An empty
+        // list would leave no policy name to find missing, so the invalid
+        // list must stop the check instead of passing it.
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            let lint = r#"[{"context":"lint","integration_id":15368}]"#;
+            host(args, &format!("[{}]", rule(7, true, lint)), None, "[]")
+        }
+        for list in ["[]", r#"[" "]"#] {
+            let dir = project();
+            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            std::fs::write(
+                dir.path().join(".codeflow/policy.json"),
+                format!(r#"{{"git":{{"required_checks":{list}}}}}"#),
+            )
+            .unwrap();
+            let result = check(&opts(dir.path(), exec));
+            assert!(
+                matches!(result.status, Status::Note(_)),
+                "{list}: {:?}: {}",
+                result.status,
+                result.message
+            );
+            assert!(
+                result.message.contains("git.required_checks"),
+                "{list}: {}",
+                result.message
+            );
+        }
     }
 
     #[test]
