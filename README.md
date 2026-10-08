@@ -145,7 +145,7 @@ required tools before the first non-trivial task goes to
 | `delegate` | Track one delegate turn handed to a peer model: `init`, `arm`, `wait`; the host launches the harness |
 | `present` | Open, review, export and close a review of this session in a local browser window |
 | `portal setup`, `portal transfer` | Adopt the offline docs-portal starter, or take ownership of the adopted runtime |
-| `estimate check <forecast.json>` | Read-only check of a project-owned forecast; it makes no estimate (ADR-0057) |
+| `estimate check <forecast.json>`, `estimate outcomes` | Read-only check of a project-owned forecast, and completed tasks' timings derived from git and compared with it; neither makes an estimate (ADR-0057, ADR-0079) |
 | `models` | Resolve catalog duties without launching models |
 | `ids`, `adr`, `report` | The shared ID registry, ADR allocation, and read-only process reports |
 
