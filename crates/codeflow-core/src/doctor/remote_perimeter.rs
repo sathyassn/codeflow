@@ -9,7 +9,9 @@
 //! rules GitHub applies to the default branch (`rules/branches/<branch>`,
 //! readable with read access) and its classic protection, and compares them
 //! with `git.required_checks`. It warns, never blocks; when `gh`, the
-//! network or a GitHub `origin` is missing it says so in a note.
+//! network or a GitHub `origin` is missing, or a strict ruleset's bypass
+//! list cannot be read (the host omits it without write access), it says so
+//! in a note rather than passing.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -23,6 +25,9 @@ const NAME: &str = "remote-perimeter";
 
 /// Each `gh` call is bounded, so an unreachable host cannot hang doctor.
 const GH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Rules read per page of `rules/branches/<branch>`.
+const RULES_PAGE_SIZE: usize = 100;
 
 /// One rule that requires status checks: a ruleset or classic protection.
 struct Source {
@@ -77,8 +82,8 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     else {
         return note(format!("{nwo} reported no default branch"));
     };
-    let rules = match gh(&["api", &format!("repos/{nwo}/rules/branches/{branch}")]) {
-        Ok(text) => parse(&text),
+    let rules = match branch_rules(&gh, &nwo, &branch) {
+        Ok(rules) => rules,
         Err(error) => {
             return note(format!(
                 "could not read the rules of {nwo} {branch} through `gh` ({})",
@@ -87,6 +92,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         }
     };
     let mut unread = Vec::new();
+    let mut bypass_unread = Vec::new();
     let classic = match gh(&["api", &format!("repos/{nwo}/branches/{branch}/protection")]) {
         Ok(text) => Some(parse(&text)),
         Err(error) if error.contains("404") || error.contains("not protected") => None,
@@ -101,14 +107,22 @@ pub(super) fn check(opts: &Options) -> CheckResult {
 
     let sources = sources(&rules, classic.as_ref());
     let required: Vec<String> = crate::hooks::policy::Policy::load(root).git.required_checks;
-    let problems = problems(opts, &nwo, &branch, &sources, &required, &mut unread);
+    let problems = problems(opts, &nwo, &branch, &sources, &required, &mut bypass_unread);
+    unread.extend(bypass_unread.iter().cloned());
 
     let unread = if unread.is_empty() {
         String::new()
     } else {
         format!("; {}", unread.join("; "))
     };
-    if problems.is_empty() {
+    if problems.is_empty() && !bypass_unread.is_empty() {
+        // The rules look right, but a bypass list that cannot be read could
+        // hold an actor who skips them, so this is not a pass.
+        note(format!(
+            "{nwo} {branch} requires up-to-date checks, but doctor cannot confirm nobody can bypass them: {}",
+            bypass_unread.join("; ")
+        ))
+    } else if problems.is_empty() {
         let checks: Vec<String> = sources
             .iter()
             .flat_map(|s| s.contexts.iter().cloned())
@@ -130,16 +144,39 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     }
 }
 
+/// The rules the host applies to `branch`, all pages: `rules/branches`
+/// pages (30 by default), and a check-requiring rule past the first page
+/// must still be seen.
+fn branch_rules(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+) -> Result<Value, String> {
+    let mut rules = Vec::new();
+    for page in 1.. {
+        let url =
+            format!("repos/{nwo}/rules/branches/{branch}?per_page={RULES_PAGE_SIZE}&page={page}");
+        let text = gh(&["api", &url])?;
+        let rows = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+        let rows = rows.as_array().map_or(&[][..], Vec::as_slice);
+        rules.extend_from_slice(rows);
+        if rows.len() < RULES_PAGE_SIZE {
+            break;
+        }
+    }
+    Ok(Value::Array(rules))
+}
+
 /// What lets a pull request merge on checks that did not run on the
-/// branch's tip, one line each; a ruleset whose bypass list cannot be read
-/// is added to `unread`.
+/// branch's tip, one line each; a strict ruleset whose bypass list cannot
+/// be read is added to `bypass_unread`.
 fn problems(
     opts: &Options,
     nwo: &str,
     branch: &str,
     sources: &[Source],
     required: &[String],
-    unread: &mut Vec<String>,
+    bypass_unread: &mut Vec<String>,
 ) -> Vec<String> {
     if sources.is_empty() {
         return vec![format!(
@@ -193,10 +230,12 @@ fn problems(
                         actors.len()
                     )),
                     Some(_) => {}
-                    None => unread.push(format!("{} bypass list not readable", source.label)),
+                    None => {
+                        bypass_unread.push(format!("{} bypass list not readable", source.label));
+                    }
                 }
             }
-            Err(error) => unread.push(format!(
+            Err(error) => bypass_unread.push(format!(
                 "{} not readable ({})",
                 source.label,
                 super::first_line(&error)
@@ -338,13 +377,24 @@ mod tests {
     ) -> Result<String, String> {
         match args {
             ["api", "repos/o/r"] => Ok(r#"{"default_branch":"main"}"#.into()),
-            ["api", "repos/o/r/rules/branches/main"] => Ok(rules.into()),
+            // The first page; a later page is empty unless a test serves one.
+            ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
+                Ok(if url.ends_with("&page=1") || !url.contains("page=") {
+                    rules.into()
+                } else {
+                    "[]".into()
+                })
+            }
             ["api", "repos/o/r/branches/main/protection"] => classic
                 .map(str::to_string)
                 .ok_or_else(|| "gh: Branch not protected (HTTP 404)".into()),
-            ["api", "repos/o/r/rulesets/7"] => {
-                Ok(format!(r#"{{"id":7,"bypass_actors":{bypass}}}"#))
-            }
+            // `bypass` is the actors array, `absent` for a body without one (a
+            // token without write access), or `error` for a failed read.
+            ["api", "repos/o/r/rulesets/7"] => match bypass {
+                "absent" => Ok(r#"{"id":7}"#.into()),
+                "error" => Err("gh: Resource not accessible (HTTP 403)".into()),
+                actors => Ok(format!(r#"{{"id":7,"bypass_actors":{actors}}}"#)),
+            },
             other => Err(format!("unexpected gh call {other:?}")),
         }
     }
@@ -465,6 +515,86 @@ mod tests {
             "{}",
             result.message
         );
+    }
+
+    #[test]
+    fn a_bypass_list_that_cannot_be_read_is_a_note_not_a_pass() {
+        fn absent(_: &str, args: &[&str]) -> Result<String, String> {
+            host(args, &ruleset(true), None, "absent")
+        }
+        fn failed(_: &str, args: &[&str]) -> Result<String, String> {
+            host(args, &ruleset(true), None, "error")
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), absent));
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result
+                .message
+                .contains("ruleset 7 bypass list not readable"),
+            "{}",
+            result.message
+        );
+        let result = check(&opts(dir.path(), failed));
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result.message.contains("ruleset 7 not readable"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn an_unreadable_bypass_list_does_not_hide_a_warning() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            host(
+                args,
+                &ruleset(true),
+                Some(
+                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates"]},"enforce_admins":{"enabled":false}}"#,
+                ),
+                "absent",
+            )
+        }
+        let dir = project();
+        let text = warn_text(&check(&opts(dir.path(), exec)));
+        assert!(text.contains("does not bind administrators"), "{text}");
+        assert!(
+            text.contains("ruleset 7 bypass list not readable"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_strict_rule_on_a_later_page_of_rules_still_passes() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
+                    if url.contains("page=2") {
+                        Ok(ruleset(true))
+                    } else {
+                        let filler: Vec<Value> = (0..100)
+                            .map(|_| serde_json::json!({"type": "deletion", "ruleset_id": 9}))
+                            .collect();
+                        Ok(serde_json::to_string(&filler).unwrap())
+                    }
+                }
+                _ => host(args, "[]", None, "[]"),
+            }
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), exec));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
     }
 
     #[test]

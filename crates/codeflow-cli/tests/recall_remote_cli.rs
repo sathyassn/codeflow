@@ -282,7 +282,7 @@ fn doctor_warns_when_the_default_branch_does_not_require_up_to_date_checks() {
         r#"#!/bin/sh
 case "$*" in
   "api repos/o/r") printf '%s' '{"default_branch":"main"}' ;;
-  "api repos/o/r/rules/branches/main") printf '%s' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]},"ruleset_id":7}]' ;;
+  "api repos/o/r/rules/branches/main?per_page=100&page=1") printf '%s' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]},"ruleset_id":7}]' ;;
   "api repos/o/r/rulesets/7") printf '%s' '{"id":7,"bypass_actors":[]}' ;;
   *) echo 'gh: Branch not protected (HTTP 404)' >&2; exit 1 ;;
 esac
