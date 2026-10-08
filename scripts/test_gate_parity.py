@@ -550,6 +550,25 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         within = WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("10m", "600s"))
         self.assertEqual(self.problems(within), [], "600 seconds is 10 minutes")
 
+    BROWSERS = 'if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit'
+
+    def test_the_browser_install_is_bounded_like_install_deps(self):
+        """AC-2: each attempt is bounded at 10 minutes, the browser download
+        included, so a hang there reaches the retry and not the step timeout."""
+        self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
+        unwrapped = self.BROWSERS.replace("timeout --kill-after=30s 10m ", "")
+        self.assert_problem(WORKFLOW.replace(self.BROWSERS, unwrapped), "browser `install`", "10 minutes")
+        for limit in ("11m", "3h", "601s", "600", "1h", "0m"):
+            with self.subTest(limit=limit):
+                self.assert_problem(WORKFLOW.replace(self.BROWSERS, self.BROWSERS.replace("10m", limit)),
+                                    "browser `install`", "10 minutes")
+        within = WORKFLOW.replace(self.BROWSERS, self.BROWSERS.replace("10m", "600s"))
+        self.assertEqual(self.problems(within), [], "600 seconds is 10 minutes")
+        # A browser install with no install-deps still has to be bounded.
+        only_browsers = WORKFLOW.replace(self.BROWSERS, unwrapped).replace(self.BOUNDED, "true")
+        self.assertNotIn("install-deps chromium", only_browsers)
+        self.assert_problem(only_browsers, "browser `install`")
+
     def test_a_playwright_step_on_every_part_is_refused(self):
         cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
         self.assertEqual(WORKFLOW.count(cache), 1)
@@ -719,6 +738,138 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
             self.assertEqual(parity.dist_problems(config), [])
             config.write_text('[dist]\nallow-dirty = ["msi", "ci"]\n')
             self.assertEqual(parity.dist_problems(config), [])
+
+
+class JobHeaderControls(unittest.TestCase):
+    """TSK-254 review: a job GitHub runs must never be skipped by the line
+    reader. A header with a trailing comment or a quoted id is a job, and a
+    line at the job indent that is not a header is refused, not read past."""
+
+    PAGES = ".github/workflows/portal-pages.yml"
+    RELEASE = ".github/workflows/release.yml"
+    CI = ".github/workflows/codeflow-ci.yml"
+
+    def files(self) -> dict[str, str]:
+        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+
+    def problems(self, path: str, text: str) -> list[str]:
+        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+
+    def drop_timeout(self, text: str, job: str, header: str | None = None) -> str:
+        """`text` with the job's header rewritten as `header` and its timeout removed."""
+        body = parity.jobs_section(text)[job]
+        line = next(l for l in body.splitlines() if parity.TIMEOUT_KEY.match(l))
+        mutated = text.replace(f"  {job}:\n" + body, (header or f"  {job}:") + "\n" + body.replace(line + "\n", "", 1), 1)
+        self.assertNotEqual(mutated, text)
+        return mutated
+
+    def test_the_reviewers_three_mutations_name_the_unbounded_job(self):
+        files = self.files()
+        nightly = (files[self.PAGES].rstrip("\n")
+                   + "\n\n  nightly: # weekly\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+        cases = {
+            "nightly appended with a trailing comment": (self.PAGES, nightly, "nightly"),
+            "plan header with a comment, timeout deleted": (
+                self.RELEASE, self.drop_timeout(files[self.RELEASE], "plan", "  plan: # first job"), "plan"),
+            "secret-scan header with a comment, timeout deleted": (
+                self.CI, self.drop_timeout(files[self.CI], "secret-scan", "  secret-scan: # scan"), "secret-scan"),
+        }
+        for name, (path, text, job) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.problems(path, files[path]), [])
+                found = self.problems(path, text)
+                self.assertTrue(any(f"job '{job}'" in p and "timeout-minutes" in p for p in found), found)
+
+    def test_a_quoted_job_id_is_a_job(self):
+        files = self.files()
+        for header in ('  "plan":', "  'plan':", '  "plan": # quoted'):
+            with self.subTest(header=header):
+                kept = files[self.RELEASE].replace("  plan:\n", header + "\n", 1)
+                self.assertIn("plan", parity.jobs_section(kept))
+                self.assertEqual(self.problems(self.RELEASE, kept), [], "a bounded quoted job passes")
+                found = self.problems(self.RELEASE, self.drop_timeout(files[self.RELEASE], "plan", header))
+                self.assertTrue(any("job 'plan'" in p and "timeout-minutes" in p for p in found), found)
+
+    def test_a_commented_out_header_cannot_hide_its_job(self):
+        """The body of `# plan:` folds into the job above, or under no job,
+        and repeats keys the job above already has."""
+        files = self.files()
+        for path, job in ((self.RELEASE, "plan"), (self.CI, "secret-scan")):
+            with self.subTest(job=job):
+                found = self.problems(path, self.drop_timeout(files[path], job, f"  # {job}:"))
+                self.assertTrue(any("repeats the key" in p or "under no job" in p for p in found), found)
+
+    def test_a_line_at_the_job_indent_that_is_not_a_header_is_refused(self):
+        base = "jobs:\n  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        for line in ("  nightly: {runs-on: ubuntu-latest}", "  nightly:#weekly", "  nightly: &anchor",
+                     "  - nightly:", "  ? nightly", "  night.ly:", '  "night ly":', "  nightly"):
+            with self.subTest(line=line):
+                found = parity.timeout_problems(base + line + "\n    runs-on: x\n")
+                self.assertTrue(any("is not a job id" in p for p in found), found)
+        found = parity.timeout_problems(base + " stray:\n")
+        self.assertTrue(any("job ids are indented two spaces" in p for p in found), found)
+        found = parity.timeout_problems(base + "\t  nightly:\n")
+        self.assertTrue(any("tab" in p for p in found), found)
+        found = parity.timeout_problems("jobs:\n    ok:\n      timeout-minutes: 5\n")
+        self.assertTrue(any("under no job id" in p for p in found), found)
+        self.assertEqual(parity.timeout_problems(base + "\n  # a comment\n\n"), [])
+
+    def test_a_repeated_job_or_top_level_jobs_key_is_refused(self):
+        job = "  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        found = parity.timeout_problems("jobs:\n" + job + job)
+        self.assertTrue(any("declared twice" in p for p in found), found)
+        found = parity.timeout_problems("jobs:\n" + job + "jobs:\n" + job)
+        self.assertTrue(any("more than one top-level `jobs:`" in p for p in found), found)
+        self.assertEqual(parity.timeout_problems("jobs: # all\n" + job), [])
+        self.assertEqual(parity.timeout_problems("jobs:\n" + job + "env:\n  a: b\n"), [])
+
+    def test_keys_under_a_job_are_read_or_refused(self):
+        job = "jobs:\n  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        cases = {
+            "a repeated key": job + "    runs-on: y\n",
+            "a sequence at the key indent": job + "    - run: true\n",
+            "a flow mapping line": job + "    {a: b}\n",
+            "a key indented three spaces": job + "   steps:\n",
+            "inline steps": job + "    steps: [{run: true}]\n",
+            "a quoted step key": job + '    steps:\n      - "run": true\n',
+            "a quoted second step key": job + "    steps:\n      - name: x\n        'uses': ./a\n",
+            "a second timeout": job + "    timeout-minutes: 6\n",
+            "a quoted timeout key": job.replace("    timeout-minutes: 5\n", '    "timeout-minutes": 5\n'),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.assertTrue(parity.timeout_problems(text), name)
+        self.assertEqual(parity.timeout_problems(job + "    steps: # block\n      - run: true\n"), [])
+        self.assertEqual(parity.timeout_problems(job.replace("5\n", "5 # sized from the runs\n", 1)), [])
+
+    def test_a_column_zero_comment_does_not_end_a_job(self):
+        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        self.assertEqual(WORKFLOW.count(windows), 1)
+        step = "      - name: Install Playwright\n        run: npx playwright-core install\n"
+        for comment in ("# note", "#"):
+            with self.subTest(comment=comment):
+                found = parity.playwright_problems(WORKFLOW.replace(windows, f"{comment}\n" + step + windows))
+                self.assertTrue(any("job 'windows-tests'" in p and "Playwright step" in p for p in found), found)
+
+    def test_a_quoted_setup_node_value_is_still_a_setup_node_step(self):
+        job = '      - uses: "actions/setup-node@v4"\n        with:\n          node-version: 24.18.0\n'
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + job), [("24.18.0", [])])
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + job.replace('"', "'")), [("24.18.0", [])])
+        named = job.replace("- uses", "- name: n\n        uses")
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + named), [("24.18.0", [])])
+
+    def test_a_template_with_a_quoted_jobs_key_is_still_a_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / "assets" / "base" / "ci" / "quoted.yml").write_text('"jobs":\n  a:\n    runs-on: x\n')
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                self.assertEqual([p.as_posix() for p in parity.workflow_files()], ["assets/base/ci/quoted.yml"])
+            finally:
+                parity.ROOT = original
 
 
 if __name__ == "__main__":

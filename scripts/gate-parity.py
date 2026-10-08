@@ -339,20 +339,118 @@ def cmd_segments(command: str) -> list[str]:
     return segments
 
 
-def workflow_jobs(workflow: str) -> dict[str, str]:
-    """Each top-level job's text, keyed by job id."""
+# A job header is a mapping key at the job indent (two spaces): a plain or
+# quoted job id, then a colon, then at most a comment. TSK-254 review: a
+# header with a trailing comment (`  nightly: # weekly`) or a quoted id is
+# still a job GitHub runs, and a reader that skipped it never checked it, so
+# every non-blank, non-comment line at the job indent must parse as a header
+# or be reported.
+JOB_ID = r"[A-Za-z0-9_-]+"
+JOB_HEADER = re.compile(rf"^ {{2}}(?:\"({JOB_ID})\"|'({JOB_ID})'|({JOB_ID})):(?:[ \t]+#.*|[ \t]*)$")
+JOB_KEY = re.compile(r"^ {4}(?:\"([A-Za-z0-9_.-]+)\"|'([A-Za-z0-9_.-]+)'|([A-Za-z0-9_.-]+)):(?:[ \t]+(.*))?$")
+JOBS_KEY = re.compile(r"^jobs:[ \t]*(?:#.*)?$")
+QUOTED_STEP_KEY = re.compile(r"^(?: {6}- | {8})[\"'][A-Za-z0-9_-]+[\"']\s*:")
+
+
+def blank_or_comment(line: str) -> bool:
+    return not line.strip() or line.lstrip().startswith("#")
+
+
+def parse_jobs(workflow: str, legacy: bool = False) -> tuple[dict[str, str], list[str]]:
+    """(jobs keyed by id, problems) for the top-level `jobs:` section. A line
+    the parser cannot place is reported, never skipped. With `legacy`, a text
+    with no `jobs:` key is read from its first line (a fragment)."""
+    lines = workflow.splitlines()
+    starts = [i for i, line in enumerate(lines) if JOBS_KEY.match(line)]
+    problems = ["more than one top-level `jobs:` key"] if len(starts) > 1 else []
+    if starts:
+        offset = starts[0] + 1
+    elif legacy:
+        offset = 0
+    else:
+        return {}, problems
     jobs: dict[str, list[str]] = {}
     current = None
-    for line in workflow.splitlines():
-        job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
-        if job:
-            current = job.group(1)
-            jobs[current] = []
-        elif re.match(r"^\S", line):
+    unplaced = False
+    for number, line in enumerate(lines[offset:], offset + 1):
+        if blank_or_comment(line):
+            if current is not None:
+                jobs[current].append(line)
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if line[indent] == "\t":
+            problems.append(f"line {number} is indented with a tab ({line.strip()!r}); YAML allows spaces only")
+            current, unplaced = None, True
+        elif indent == 0:
+            if starts:
+                break
             current = None
-        elif current:
+        elif indent < 2:
+            problems.append(f"line {number} ({line.strip()!r}) sits between the top level and the job ids; "
+                            "job ids are indented two spaces")
+            current, unplaced = None, True
+        elif indent == 2:
+            header = JOB_HEADER.match(line)
+            if header is None:
+                problems.append(f"line {number} ({line.strip()!r}) is at the job indent but is not a job id "
+                                "(a plain or quoted id, a colon and at most a comment); the checks cannot read "
+                                "that job, so it is refused rather than skipped")
+                current, unplaced = None, True
+                continue
+            current, unplaced = next(g for g in header.groups() if g is not None), False
+            if current in jobs:
+                problems.append(f"job '{current}' is declared twice (line {number})")
+            jobs[current] = []
+        elif current is not None:
             jobs[current].append(line)
-    return {name: "\n".join(lines) for name, lines in jobs.items()}
+        elif not unplaced:
+            problems.append(f"line {number} ({line.strip()!r}) sits under no job id")
+            unplaced = True
+    return {name: "\n".join(body) for name, body in jobs.items()}, problems
+
+
+def workflow_jobs(workflow: str) -> dict[str, str]:
+    """Each top-level job's text, keyed by job id."""
+    return parse_jobs(workflow, legacy=True)[0]
+
+
+def job_structure_problems(name: str, text: str, where: str) -> list[str]:
+    """The job's own key lines (four spaces) and step keys, read as the
+    other checks read them. A key line they cannot parse, a repeated key (a
+    commented-out job header folds its body into the job above and repeats
+    that job's keys), a flow-style `steps:` or a quoted step key would be
+    read past, so each is reported."""
+    problems: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        if blank_or_comment(line):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 4:
+            key = JOB_KEY.match(line)
+            if key is None:
+                problems.append(f"job '{name}'{where} has a line at the job-key indent that is not a plain "
+                                f"`key: value` ({line.strip()!r}); the checks cannot read it")
+                continue
+            word = next(g for g in key.groups()[:3] if g is not None)
+            if word in seen:
+                problems.append(f"job '{name}'{where} repeats the key `{word}` at the job-key indent; a "
+                                "commented-out job header folds that job's keys into the job above it")
+            seen.add(word)
+            rest = (key.group(4) or "").strip()
+            if word == "steps" and rest and not rest.startswith("#"):
+                problems.append(f"job '{name}'{where} writes `steps:` inline ({rest!r}); write the steps as a "
+                                "block sequence so every step is checked")
+        elif indent < 4:
+            problems.append(f"job '{name}'{where} has a line indented {indent} spaces ({line.strip()!r}); "
+                            "job keys are indented four")
+        elif QUOTED_STEP_KEY.match(line):
+            problems.append(f"job '{name}'{where} has a quoted step key ({line.strip()!r}); write step keys "
+                            "plain so the checks that read `uses:` and `run:` see them")
+    return problems
+
+
+SETUP_NODE = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*[\"']?actions/setup-node@", re.M)
 
 
 def setup_node_steps(job: str) -> list[tuple[str, list[str]]]:
@@ -360,7 +458,7 @@ def setup_node_steps(job: str) -> list[tuple[str, list[str]]]:
     steps = re.split(r"\n(?= {6}- )", job)
     found = []
     for step in steps:
-        if "uses: actions/setup-node@" not in step:
+        if not SETUP_NODE.search(step):
             continue
         version = re.search(r"node-version:\s*['\"]?([^\s'\"]+)", step)
         locks = re.findall(r"[\w./-]*package-lock\.json", step)
@@ -472,14 +570,14 @@ def gate_binary_problems(cfg: dict) -> list[str]:
 # rejects it), so the called workflow's own jobs must carry it and are checked
 # here. Only a local workflow under `.github/workflows/` can be opened and
 # checked; a remote or out-of-tree callee cannot, so its caller is refused.
-TIMEOUT_KEY = re.compile(r"^ {4}timeout-minutes:")
-TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: ([1-9][0-9]*)$")
+TIMEOUT_KEY = re.compile(r"^ {4}[\"']?timeout-minutes[\"']?:")
+TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: ([1-9][0-9]*)(?:[ \t]+#.*)?$")
 # TSK-254 AC-1: a hung job frees its runner inside 45 minutes. GitHub's own
 # default is 360, the six-hour hold this task exists to stop, so a value
 # above this bound is refused even though it is a plain whole number.
 MAX_TIMEOUT_MINUTES = 45
-CALLER_LINE = re.compile(r"^ {4}uses:", re.M)
-CALLER_TARGET = re.compile(r"^ {4}uses:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
+CALLER_LINE = re.compile(r"^ {4}[\"']?uses[\"']?:", re.M)
+CALLER_TARGET = re.compile(r"^ {4}[\"']?uses[\"']?:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
 WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
 # A shipped template cannot size a job that runs the adopter's own commands.
 # Each exemption names its reason; a stale one (the job is gone) is drift.
@@ -493,8 +591,7 @@ UNBOUNDED_BY_DESIGN = {
 
 def jobs_section(workflow: str) -> dict[str, str]:
     """Each job under the top-level `jobs:` key, keyed by job id."""
-    parts = re.split(r"^jobs:[ \t]*$", workflow, maxsplit=1, flags=re.M)
-    return workflow_jobs("jobs:" + parts[1]) if len(parts) == 2 else {}
+    return parse_jobs(workflow)[0]
 
 
 def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> list[str]:
@@ -520,15 +617,17 @@ def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> l
 
 def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None,
                      seen: frozenset[str] = frozenset()) -> list[str]:
-    jobs = jobs_section(workflow)
+    jobs, unparsed = parse_jobs(workflow)
     where = f" in {label}" if label else ""
     exempt = exempt or {}
     problems = [] if jobs else [f"the workflow{where} has no `jobs:` section to check for timeouts"]
+    problems += [f"the workflow{where}: {p}" for p in unparsed]
     for name in exempt:
         if name not in jobs:
             problems.append(f"{label or 'the workflow'} exempts job '{name}' from a timeout but has no such job; "
                             "drop the stale exemption")
     for name, text in jobs.items():
+        problems += job_structure_problems(name, text, where)
         if name in exempt:
             continue
         if CALLER_LINE.search(text):
@@ -554,7 +653,7 @@ def workflow_files() -> list[Path]:
             text = path.read_text()
             # assets/base/ci also holds other CI systems' files; a workflow
             # names its triggers and jobs at the top level.
-            if directory.parts[0] == ".github" or re.search(r"^(on|\"on\"|'on'|jobs):", text, re.M):
+            if directory.parts[0] == ".github" or re.search(r"^(on|\"on\"|'on'|jobs|\"jobs\"|'jobs'):", text, re.M):
                 found.append(path.relative_to(ROOT))
     return found
 
@@ -595,20 +694,29 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
 PRESENT_ONLY = "        if: matrix.part == 'present'"
 STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: ([1-9][0-9]*)$", re.M)
 BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ (\S+) .*install-deps")
+BROWSER_INSTALL = re.compile(r'"\$cli" install\s')
+BOUNDED_BROWSERS = re.compile(r'timeout --kill-after=\S+ (\S+) .*"\$cli" install\s')
 # TSK-254 AC-2: each install attempt is bounded at 10 minutes.
 ATTEMPT_LIMIT = re.compile(r"^([1-9][0-9]*)([sm])$")
 MAX_ATTEMPT_SECONDS = 600
 
 
+def attempt_bounded(limit: str) -> bool:
+    found = ATTEMPT_LIMIT.match(limit)
+    return bool(found) and int(found.group(1)) * (60 if found.group(2) == "m" else 1) <= MAX_ATTEMPT_SECONDS
+
+
 def deps_bounded(step: str, body: str) -> bool:
-    """The install step carries its own timeout inside the job bound and runs
-    `install-deps` under a `timeout` of at most 10 minutes."""
+    """The install step carries its own timeout inside the job bound, and
+    both the browser `install` and `install-deps` run under a `timeout` of
+    at most 10 minutes."""
     step_limit = STEP_TIMEOUT.search(step)
     deps = BOUNDED_DEPS.search(body)
     if not step_limit or not deps or int(step_limit.group(1)) > MAX_TIMEOUT_MINUTES:
         return False
-    limit = ATTEMPT_LIMIT.match(deps.group(1))
-    return bool(limit) and int(limit.group(1)) * (60 if limit.group(2) == "m" else 1) <= MAX_ATTEMPT_SECONDS
+    installs = [BOUNDED_BROWSERS.search(line) for line in body.splitlines() if BROWSER_INSTALL.search(line)]
+    return (attempt_bounded(deps.group(1)) and bool(installs)
+            and all(m is not None and attempt_bounded(m.group(1)) for m in installs))
 
 
 def playwright_problems(workflow: str) -> list[str]:
@@ -629,11 +737,12 @@ def playwright_problems(workflow: str) -> list[str]:
             if "--with-deps" in body:
                 problems.append(f"the gates step `{first}` installs with --with-deps; install the "
                                 "browsers and run `install-deps` as root under its own timeout")
-            if "install-deps" in body and not (deps_bounded(step, body) and "for attempt in 1 2; do" in body):
+            if (("install-deps" in body or BROWSER_INSTALL.search(body))
+                    and not (deps_bounded(step, body) and "for attempt in 1 2; do" in body)):
                 problems.append(f"the gates step `{first}` must carry its own `timeout-minutes` (at most "
-                                f"{MAX_TIMEOUT_MINUTES}), run `install-deps` under `sudo timeout "
-                                "--kill-after=<s> <limit>` with a limit of at most 10 minutes (`10m` or `600s`) "
-                                "and try it twice (`for attempt in 1 2; do`)")
+                                f"{MAX_TIMEOUT_MINUTES}), run the browser `install` and `install-deps` (as root, "
+                                "`sudo timeout --kill-after=<s> <limit>`) each under a `timeout` of at most 10 "
+                                "minutes (`10m` or `600s`) and try them twice (`for attempt in 1 2; do`)")
     return problems
 
 
