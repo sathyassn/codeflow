@@ -760,10 +760,12 @@ fn names_or_hides_its_parts(element: ElementRef<'_>) -> bool {
             && (labelled(element, "data-cf-label") || labelled(element, "aria-label")))
 }
 
-/// Whether an element's first role is `img`.
+/// Whether an element's first role is `img`. A role attribute is a list of
+/// tokens split on ASCII whitespace, as browsers read it, so a no-break
+/// space never separates two roles.
 fn has_picture_role(element: ElementRef<'_>) -> bool {
     element.value().attr("role").is_some_and(|role| {
-        role.split_whitespace()
+        role.split_ascii_whitespace()
             .next()
             .is_some_and(|first| first.eq_ignore_ascii_case("img"))
     })
@@ -1291,6 +1293,19 @@ mod tests {
         assert!(
             !stage_naming("<svg><rect data-cf-target='a' role='img'/></svg>")
                 .picture_role_hides_entities
+        );
+        // Role tokens split on ASCII whitespace only.
+        assert!(
+            stage_naming(
+                "<figure role='\timg presentation'><svg><rect data-cf-target='a'/></svg></figure>"
+            )
+            .picture_role_hides_entities
+        );
+        assert!(
+            !stage_naming(
+                "<figure role='img\u{a0}x'><svg><rect data-cf-target='a'/></svg></figure>"
+            )
+            .picture_role_hides_entities
         );
     }
 
