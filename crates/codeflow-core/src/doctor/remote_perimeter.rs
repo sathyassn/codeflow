@@ -8,10 +8,12 @@
 //! can both merge and leave the default branch red. This check reads the
 //! rules GitHub applies to the default branch (`rules/branches/<branch>`,
 //! readable with read access) and its classic protection, and compares them
-//! with `git.required_checks`. It warns, never blocks; when `gh`, the
-//! network or a GitHub `origin` is missing, or a strict ruleset's bypass
-//! list cannot be read (the host omits it without write access), it says so
-//! in a note rather than passing.
+//! with `git.required_checks`. Bypass lists belong to one rule each, so a
+//! policy check, or the up-to-date requirement, counts only when a rule that
+//! binds everyone requires it. It warns, never blocks; when `gh`, the
+//! network or a GitHub `origin` is missing, or a bypass list that decides
+//! the answer cannot be read (the host omits it without write access), it
+//! says so in a note rather than passing.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -38,6 +40,17 @@ struct Source {
     ruleset_id: Option<u64>,
     /// Classic protection only: whether it binds administrators.
     enforce_admins: Option<bool>,
+    classic: bool,
+}
+
+/// Whether everyone is held to a source.
+enum Bypass {
+    /// Nobody can bypass it.
+    Bound,
+    /// Someone can, and how.
+    Bypassable(String),
+    /// Its bypass list cannot be read, and why.
+    Unknown(String),
 }
 
 pub(super) fn check(opts: &Options) -> CheckResult {
@@ -168,8 +181,10 @@ fn branch_rules(
 }
 
 /// What lets a pull request merge on checks that did not run on the
-/// branch's tip, one line each; a strict ruleset whose bypass list cannot
-/// be read is added to `bypass_unread`.
+/// branch's tip, one line each. A policy check, or the up-to-date
+/// requirement, is unbound when every rule that requires it can be
+/// bypassed; a bypass list that decides this and cannot be read is added
+/// to `bypass_unread`.
 fn problems(
     opts: &Options,
     nwo: &str,
@@ -184,7 +199,7 @@ fn problems(
         )];
     }
     let mut problems = Vec::new();
-    let strict: Vec<&Source> = sources.iter().filter(|s| s.strict).collect();
+    let strict: Vec<usize> = (0..sources.len()).filter(|&i| sources[i].strict).collect();
     if strict.is_empty() {
         problems.push(format!(
             "{branch} requires status checks but not that a branch be up to date ({}), so a pull request can merge on checks that ran against an older {branch}",
@@ -206,43 +221,116 @@ fn problems(
             missing.join(", ")
         ));
     }
-    for source in strict {
-        if source.enforce_admins == Some(false) {
-            problems.push(format!(
-                "{} does not bind administrators (enforce_admins is off), so they can merge past it",
-                source.label
-            ));
+
+    // What each requirement rests on: the sources that list a policy name,
+    // and the strict sources for the up-to-date rule.
+    let mut needs: Vec<(Vec<usize>, String)> = required
+        .iter()
+        .map(|name| {
+            let carriers = (0..sources.len())
+                .filter(|&i| sources[i].contexts.contains(name))
+                .collect();
+            (carriers, name.clone())
+        })
+        .collect();
+    needs.push((strict, "a branch to be up to date".to_string()));
+    let mut bypass: Vec<Option<Bypass>> = (0..sources.len()).map(|_| None).collect();
+    for (carriers, _) in &needs {
+        for &i in carriers {
+            if bypass[i].is_none() {
+                bypass[i] = Some(bypass_of(opts, nwo, &sources[i]));
+            }
         }
-        let Some(id) = source.ruleset_id else {
+    }
+    let state = |i: usize| bypass[i].as_ref().unwrap_or(&Bypass::Bound);
+
+    // Unbound requirements, grouped by the bypassable rules they rest on.
+    let mut unbound: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    let mut unknown: Vec<usize> = Vec::new();
+    for (carriers, need) in needs {
+        if carriers.is_empty() || carriers.iter().any(|&i| matches!(state(i), Bypass::Bound)) {
             continue;
-        };
-        match opts.do_exec_bounded(
-            "gh",
-            &["api", &format!("repos/{nwo}/rulesets/{id}")],
-            GH_TIMEOUT,
-        ) {
-            Ok(text) => {
-                let ruleset = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-                match ruleset.get("bypass_actors").and_then(Value::as_array) {
-                    Some(actors) if !actors.is_empty() => problems.push(format!(
-                        "{} lets {} actor(s) bypass it",
-                        source.label,
-                        actors.len()
-                    )),
-                    Some(_) => {}
-                    None => {
-                        bypass_unread.push(format!("{} bypass list not readable", source.label));
-                    }
+        }
+        let open: Vec<usize> = carriers
+            .iter()
+            .copied()
+            .filter(|&i| matches!(state(i), Bypass::Unknown(_)))
+            .collect();
+        if !open.is_empty() {
+            for i in open {
+                if !unknown.contains(&i) {
+                    unknown.push(i);
                 }
             }
-            Err(error) => bypass_unread.push(format!(
-                "{} not readable ({})",
-                source.label,
-                super::first_line(&error)
-            )),
+            continue;
+        }
+        match unbound.iter_mut().find(|(rules, _)| *rules == carriers) {
+            Some((_, items)) => items.push(need),
+            None => unbound.push((carriers, vec![need])),
+        }
+    }
+    for (rules, items) in unbound {
+        let how: Vec<&str> = rules
+            .iter()
+            .filter_map(|&i| match state(i) {
+                Bypass::Bypassable(how) => Some(how.as_str()),
+                _ => None,
+            })
+            .collect();
+        problems.push(format!(
+            "{}, and no rule that binds everyone requires {}",
+            how.join(" and "),
+            items.join(", ")
+        ));
+    }
+    unknown.sort_unstable();
+    for i in unknown {
+        if let Bypass::Unknown(why) = state(i) {
+            bypass_unread.push(why.clone());
         }
     }
     problems
+}
+
+/// Whether everyone is held to `source`: classic protection binds
+/// administrators, and a ruleset has an empty bypass list.
+fn bypass_of(opts: &Options, nwo: &str, source: &Source) -> Bypass {
+    if source.classic {
+        return match source.enforce_admins {
+            Some(true) => Bypass::Bound,
+            Some(false) => Bypass::Bypassable(format!(
+                "{} does not bind administrators (enforce_admins is off)",
+                source.label
+            )),
+            None => Bypass::Unknown(format!("{} enforce_admins not readable", source.label)),
+        };
+    }
+    let Some(id) = source.ruleset_id else {
+        return Bypass::Unknown(format!("{} bypass list not readable", source.label));
+    };
+    match opts.do_exec_bounded(
+        "gh",
+        &["api", &format!("repos/{nwo}/rulesets/{id}")],
+        GH_TIMEOUT,
+    ) {
+        Ok(text) => {
+            let ruleset = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+            match ruleset.get("bypass_actors").and_then(Value::as_array) {
+                Some(actors) if !actors.is_empty() => Bypass::Bypassable(format!(
+                    "{} lets {} actor(s) bypass it",
+                    source.label,
+                    actors.len()
+                )),
+                Some(_) => Bypass::Bound,
+                None => Bypass::Unknown(format!("{} bypass list not readable", source.label)),
+            }
+        }
+        Err(error) => Bypass::Unknown(format!(
+            "{} not readable ({})",
+            source.label,
+            super::first_line(&error)
+        )),
+    }
 }
 
 /// Every rule that requires checks: each `required_status_checks` rule the
@@ -268,6 +356,7 @@ fn sources(rules: &Value, classic: Option<&Value>) -> Vec<Source> {
             contexts,
             ruleset_id: id,
             enforce_admins: None,
+            classic: false,
         });
     }
     if let Some(checks) = classic
@@ -299,6 +388,7 @@ fn sources(rules: &Value, classic: Option<&Value>) -> Vec<Source> {
                 enforce_admins: classic
                     .and_then(|c| c.pointer("/enforce_admins/enabled"))
                     .and_then(Value::as_bool),
+                classic: true,
             });
         }
     }
@@ -556,23 +646,122 @@ mod tests {
 
     #[test]
     fn an_unreadable_bypass_list_does_not_hide_a_warning() {
+        // `linux` rests on classic protection alone, which administrators
+        // can bypass; the other names rest on ruleset 7, whose bypass list
+        // cannot be read.
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
             host(
                 args,
                 &ruleset(true),
                 Some(
-                    r#"{"required_status_checks":{"strict":true,"contexts":["codeflow gates"]},"enforce_admins":{"enabled":false}}"#,
+                    r#"{"required_status_checks":{"strict":true,"contexts":["linux"]},"enforce_admins":{"enabled":false}}"#,
                 ),
                 "absent",
             )
         }
         let dir = project();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            r#"{"git":{"required_checks":["codeflow gates","secret scan","security review","commit standards","linux"]}}"#,
+        )
+        .unwrap();
         let text = warn_text(&check(&opts(dir.path(), exec)));
-        assert!(text.contains("does not bind administrators"), "{text}");
+        assert!(
+            text.contains("does not bind administrators (enforce_admins is off), and no rule that binds everyone requires linux"),
+            "{text}"
+        );
         assert!(
             text.contains("ruleset 7 bypass list not readable"),
             "{text}"
         );
+    }
+
+    /// The four policy names as ruleset check objects.
+    const FOUR: &str = r#"[{"context":"codeflow gates","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"commit standards","integration_id":15368}]"#;
+
+    const ONE_ACTOR: &str =
+        r#"[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]"#;
+
+    /// One `required_status_checks` rule of ruleset `id`.
+    fn rule(id: u64, strict: bool, checks: &str) -> String {
+        format!(
+            r#"{{"type":"required_status_checks","parameters":{{"strict_required_status_checks_policy":{strict},"do_not_enforce_on_create":false,"required_status_checks":{checks}}},"ruleset_source_type":"Repository","ruleset_source":"o/r","ruleset_id":{id}}}"#
+        )
+    }
+
+    /// A host with ruleset 1 strict on `lint` alone and no bypass, beside
+    /// `other`: ruleset 2 non-strict on the four policy names with the
+    /// bypass actors `bypass`, or classic protection when `classic` is set.
+    fn split(args: &[&str], bypass: &str, classic: Option<&str>) -> Result<String, String> {
+        let lint = r#"[{"context":"lint","integration_id":15368}]"#;
+        let rules = if classic.is_some() {
+            format!("[{}]", rule(1, true, lint))
+        } else {
+            format!("[{},{}]", rule(1, true, lint), rule(2, false, FOUR))
+        };
+        match args {
+            ["api", "repos/o/r/rulesets/1"] => Ok(r#"{"id":1,"bypass_actors":[]}"#.into()),
+            ["api", "repos/o/r/rulesets/2"] => {
+                Ok(format!(r#"{{"id":2,"bypass_actors":{bypass}}}"#))
+            }
+            _ => host(args, &rules, classic, "[]"),
+        }
+    }
+
+    /// Round 3 of the PR 127 review: the strict ruleset binds everyone but
+    /// lists only `lint`; the policy names sit on a rule that one actor
+    /// can bypass, so that actor merges past them.
+    #[test]
+    fn policy_checks_only_a_bypassable_rule_requires_warn() {
+        fn ruleset_exec(_: &str, args: &[&str]) -> Result<String, String> {
+            split(args, ONE_ACTOR, None)
+        }
+        fn classic_exec(_: &str, args: &[&str]) -> Result<String, String> {
+            split(
+                args,
+                "[]",
+                Some(
+                    r#"{"required_status_checks":{"strict":false,"contexts":["codeflow gates","secret scan","security review","commit standards"]},"enforce_admins":{"enabled":false}}"#,
+                ),
+            )
+        }
+        let dir = project();
+        let text = warn_text(&check(&opts(dir.path(), ruleset_exec)));
+        assert!(
+            text.contains("ruleset 2 lets 1 actor(s) bypass it, and no rule that binds everyone requires codeflow gates, secret scan, security review, commit standards"),
+            "{text}"
+        );
+        let text = warn_text(&check(&opts(dir.path(), classic_exec)));
+        assert!(
+            text.contains("classic branch protection does not bind administrators (enforce_admins is off), and no rule that binds everyone requires codeflow gates"),
+            "{text}"
+        );
+    }
+
+    /// The same split with no bypass passes, and a bypassable non-strict
+    /// rule does not warn while a rule that binds everyone lists the same
+    /// names.
+    #[test]
+    fn a_split_that_binds_everyone_passes() {
+        fn unbypassable(_: &str, args: &[&str]) -> Result<String, String> {
+            split(args, "[]", None)
+        }
+        fn covered(_: &str, args: &[&str]) -> Result<String, String> {
+            let rules = format!("[{},{}]", rule(1, true, FOUR), rule(2, false, FOUR));
+            match args {
+                ["api", "repos/o/r/rulesets/1"] => Ok(r#"{"id":1,"bypass_actors":[]}"#.into()),
+                ["api", "repos/o/r/rulesets/2"] => {
+                    Ok(format!(r#"{{"id":2,"bypass_actors":{ONE_ACTOR}}}"#))
+                }
+                _ => host(args, &rules, None, "[]"),
+            }
+        }
+        let dir = project();
+        for exec in [unbypassable as fn(&str, &[&str]) -> _, covered] {
+            let result = check(&opts(dir.path(), exec));
+            assert_eq!(result.status, Status::Pass, "{}", result.message);
+        }
     }
 
     #[test]

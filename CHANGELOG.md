@@ -280,14 +280,17 @@ erratum below, never an edit of the section.
   with `strict`. It reads the live rules first, updates every active ruleset
   that already targets the branch in place instead of adding another, and
   keeps the classic settings it does not own, such as conversation
-  resolution. The check names come from a new optional
+  resolution. It matches ruleset ref patterns as GitHub does; a ruleset
+  whose pattern it cannot read is reported, and no ruleset or classic
+  protection is added beside it. The check names come from a new optional
   `git.required_checks` key whose default is the four shipped CI job names;
   the shipped policy file does not list it, so an older binary never meets
   the key. `codeflow doctor --check remote-perimeter` reads the default
   branch's live rules through `gh` and warns when they require no checks,
-  do not require an up-to-date branch, miss a listed check or can be
-  bypassed; without `gh`, the network or a GitHub `origin`, or when it
-  cannot read a bypass list, it is a note.
+  do not require an up-to-date branch, or miss a listed check, and when
+  only rules that someone can bypass require a listed check or the
+  up-to-date setting; without `gh`, the network or a GitHub `origin`, or
+  when it cannot read a bypass list that decides the answer, it is a note.
   Nothing changes on a host until you run `codeflow remote protect` or turn
   the setting on yourself (ADR-0081). The git rules say a pull request is
   ready when its checks ran on the current target tip; `codeflow update`
