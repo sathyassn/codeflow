@@ -5154,6 +5154,8 @@ struct Mentions {
     config_env: bool,
     /// Transport cannot trust config supplied by the command being judged.
     transport_env: bool,
+    /// `GIT_CONFIG` itself, not one of the `GIT_CONFIG_*` variables.
+    git_config_var: bool,
     /// A `git config` write whose order the guard does not model: anywhere
     /// on a line that is not flat, or nested in a substitution. Top-level
     /// writes on a flat line are followed in order.
@@ -5169,6 +5171,10 @@ impl LineFacts {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 config_env: mentions_config_env(command),
                 transport_env: transport_config_environment(command),
+                git_config_var: command.match_indices("GIT_CONFIG").any(|(at, word)| {
+                    !command[at + word.len()..]
+                        .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                }),
                 config_write: false,
             },
         };
@@ -5225,6 +5231,7 @@ impl LineFacts {
             location_unknown: self.mentions.location_var && !tracked,
             config_unknown: self.mentions.config_env || self.mentions.config_write,
             transport_env: self.mentions.transport_env,
+            git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
         }
@@ -5243,6 +5250,9 @@ struct Moves<'r> {
     /// The line may change where git reads its configuration from.
     config_unknown: bool,
     transport_env: bool,
+    /// The line mentions `GIT_CONFIG`, the file `git config` writes when
+    /// no scope option names one.
+    git_config_var: bool,
     /// The op is a modeled top-level command, so a branch move it makes
     /// holds for the rest of its `&&` list.
     narrows: bool,
@@ -5373,11 +5383,12 @@ fn check_git(
 
     // A relative `--file` read from the directories git runs in: `git -C
     // ~/.config/git config --file config alias.x y` writes the user's
-    // configuration (review round three). The plain reading is judged per
-    // case below.
+    // configuration (review round three); so does a call with no scope
+    // option when `GIT_CONFIG` names the file (review round eleven). The
+    // plain reading is judged per case below.
     if sub == "config"
         && ctx.policy.hook_integrity.is_active()
-        && config_writes_code_key(rest, None).is_none()
+        && config_writes_code_key(rest, None, None).is_none()
     {
         let dirs: Vec<PathBuf> = compose_targets(args, moved)
             .map(|specs| {
@@ -5387,7 +5398,8 @@ fn check_git(
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(found) = config_writes_code_key(rest, Some(&dirs)) {
+        let variable = git_config_variable(moved, std::env::var("GIT_CONFIG").ok());
+        if let Some(found) = config_writes_code_key(rest, Some(&dirs), variable.as_deref()) {
             out.push(hook_integrity_violation(
                 ctx.policy.hook_integrity,
                 config_write_message(&found),
@@ -6419,7 +6431,7 @@ fn judge_git_sub(
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
             } else if policy.hook_integrity.is_active() {
-                if let Some(found) = config_writes_code_key(rest, None) {
+                if let Some(found) = config_writes_code_key(rest, None, None) {
                     out.push(hook_integrity_violation(
                         policy.hook_integrity,
                         config_write_message(&found),
@@ -6545,19 +6557,40 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     key_write && names_hooks_path
 }
 
-/// Whether a `git config --file` path is the user's or the system's
-/// configuration: `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` (by
-/// default `~/.config/git/config`) or `/etc/gitconfig`, spelled with `~`,
-/// `$HOME` or an absolute path. A relative path is one of them only when it
-/// is exactly `.gitconfig` or `.config/git/config`, which the home would
-/// make it; one that climbs with `..` or is filled in at run time is
-/// treated as one. A project file such as `fixtures/.gitconfig` is not
-/// (review round two). With the directories git runs in, `dirs`, a
-/// relative path is also read from each of them, and every path through
-/// its symbolic links, so `--file config` run in `~/.config/git` counts; an
-/// empty `dirs` means the directory is unknown and a relative path counts
-/// (review round three).
-fn user_config_file(file: &str, dirs: Option<&[PathBuf]>) -> bool {
+/// Where a `git config --file` path sits, as [`config_file_scope`] judges it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileScope {
+    /// A file git reads at user or system scope by its known name.
+    User,
+    /// A repository's own configuration: the `config` or `config.worktree`
+    /// of a git directory, or a `.gitmodules` or `.lfsconfig`.
+    Repository,
+    /// Any other file. git may read it for every repository: the system
+    /// file of another install prefix (`/opt/homebrew/etc/gitconfig`), a
+    /// file the user's configuration includes, or one `GIT_CONFIG_GLOBAL` or
+    /// `GIT_CONFIG_SYSTEM` names (review round eleven).
+    Other,
+    /// A relative path judged without the directory git runs in; the pass
+    /// that knows the directory decides it.
+    Undecided,
+}
+
+/// Where a `git config --file` path sits. The user's and the system's files
+/// by name, `~/.gitconfig`, `$XDG_CONFIG_HOME/git/config` (by default
+/// `~/.config/git/config`), `/etc/gitconfig` and the files
+/// `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` name, spelled with `~`,
+/// `$HOME` or an absolute path, are [`FileScope::User`]; so is a relative
+/// path that is exactly `.gitconfig` or `.config/git/config`, and one that
+/// climbs with `..`. A path filled in at run time is [`FileScope::Other`].
+/// Only a repository's own
+/// configuration, judged through its symbolic links, is
+/// [`FileScope::Repository`]: git reads the system file under whatever
+/// prefix it was built with, and the files a configuration includes, so a
+/// list of user and system files always misses one (review round eleven,
+/// the same shape as the key list of round ten). With the directories git
+/// runs in, `dirs`, a relative path is read from each of them (review round
+/// three); an empty `dirs` means the directory is unknown.
+fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
     let file = file.replace('\\', "/");
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -6580,21 +6613,8 @@ fn user_config_file(file: &str, dirs: Option<&[PathBuf]>) -> bool {
         None => file.clone(),
     };
     if expanded.contains(['$', '`']) || expanded.starts_with('~') {
-        return true;
+        return FileScope::Other;
     }
-    let lexical = |text: &str| {
-        let mut parts: Vec<&str> = Vec::new();
-        for part in text.split('/') {
-            match part {
-                "" | "." => {}
-                ".." => {
-                    parts.pop();
-                }
-                _ => parts.push(part),
-            }
-        }
-        parts.join("/").to_lowercase()
-    };
     let mut user_paths = vec![PathBuf::from("/etc/gitconfig")];
     if let Some(home) = &home {
         user_paths.push(home.join(".gitconfig"));
@@ -6603,104 +6623,299 @@ fn user_config_file(file: &str, dirs: Option<&[PathBuf]>) -> bool {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         user_paths.push(PathBuf::from(xdg).join("git/config"));
     }
-    // A path through its symbolic links: the file itself, else its
-    // directory with the name added.
-    let real = |path: &Path| {
-        std::fs::canonicalize(path)
-            .ok()
-            .or_else(|| {
-                let parent = std::fs::canonicalize(path.parent()?).ok()?;
-                Some(parent.join(path.file_name()?))
-            })
-            .map(|p| lexical(&p.to_string_lossy()))
-    };
+    for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        if let Some(path) = std::env::var_os(name).filter(|p| !p.is_empty()) {
+            user_paths.push(PathBuf::from(path));
+        }
+    }
     let mut user: Vec<String> = user_paths
         .iter()
-        .map(|p| lexical(&p.to_string_lossy()))
+        .map(|p| lexical(&p.to_string_lossy()).to_lowercase())
         .collect();
-    user.extend(user_paths.iter().filter_map(|p| real(p)));
-    let is_user = |path: &str| {
-        user.contains(&lexical(path)) || real(Path::new(path)).is_some_and(|r| user.contains(&r))
+    user.extend(
+        user_paths
+            .iter()
+            .filter_map(|p| real(p))
+            .map(|p| p.to_string_lossy().to_lowercase()),
+    );
+    let scope_of = |path: &str| {
+        let real = real(Path::new(path));
+        let is_user = user.contains(&lexical(path).to_lowercase())
+            || real
+                .as_ref()
+                .is_some_and(|r| user.contains(&r.to_string_lossy().to_lowercase()));
+        if is_user {
+            FileScope::User
+        } else if repository_config_file(
+            &real.unwrap_or_else(|| PathBuf::from(lexical(path))),
+            true,
+        ) {
+            FileScope::Repository
+        } else {
+            FileScope::Other
+        }
     };
-    if !expanded.starts_with('/') {
-        let trimmed = expanded.trim_start_matches("./");
-        if trimmed.split('/').any(|part| part == "..")
-            || matches!(
-                lexical(trimmed).as_str(),
-                ".gitconfig" | ".config/git/config"
-            )
+    if expanded.starts_with('/') {
+        return scope_of(&expanded);
+    }
+    let trimmed = expanded.trim_start_matches("./");
+    if trimmed.split('/').any(|part| part == "..")
+        || matches!(
+            lexical(trimmed).to_lowercase().as_str(),
+            ".gitconfig" | ".config/git/config"
+        )
+    {
+        return FileScope::User;
+    }
+    // Without the directory, only the name can show a repository's file.
+    let named_repository = repository_config_file(Path::new(&lexical(trimmed)), false);
+    match dirs {
+        Some(dirs) if !dirs.is_empty() => dirs
+            .iter()
+            .map(|dir| scope_of(&dir.join(trimmed).to_string_lossy()))
+            .max_by_key(|scope| match scope {
+                FileScope::User => 3,
+                FileScope::Other | FileScope::Undecided => 2,
+                FileScope::Repository => 1,
+            })
+            .unwrap_or(FileScope::Other),
+        _ if named_repository => FileScope::Repository,
+        None => FileScope::Undecided,
+        Some(_) => FileScope::Other,
+    }
+}
+
+/// A path with `.` and `..` resolved by its text.
+fn lexical(text: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in text.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    let joined = parts.join("/");
+    if text.starts_with('/') {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// A path through its symbolic links: the file itself, else its directory
+/// with the name added.
+fn real(path: &Path) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok().or_else(|| {
+        let parent = std::fs::canonicalize(path.parent()?).ok()?;
+        Some(parent.join(path.file_name()?))
+    })
+}
+
+/// Whether `path` is a repository's own configuration, which git reads only
+/// for that repository: a `.gitmodules`, a `.lfsconfig` (which only Git LFS
+/// reads, for the repository it sits in), or a `config` or `config.worktree`
+/// in a git directory. A git directory is one named `.git` (with its
+/// `worktrees/<name>` and `modules/...` directories), or one holding `HEAD`
+/// beside `objects` or `commondir`, as a bare repository does; that one is
+/// read from the disk only with `on_disk`. Names compare without case, as
+/// on the case-insensitive file systems git runs on.
+fn repository_config_file(path: &Path, on_disk: bool) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if matches!(name.as_str(), ".gitmodules" | ".lfsconfig") {
+        return true;
+    }
+    if !matches!(name.as_str(), "config" | "config.worktree") {
+        return false;
+    }
+    let dir = match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    let parts: Vec<String> = dir
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect();
+    if let Some(at) = parts.iter().rposition(|part| part == ".git") {
+        let inner = &parts[at + 1..];
+        if inner.is_empty()
+            || (inner.len() == 2 && inner[0] == "worktrees")
+            || inner.first().is_some_and(|part| part == "modules")
         {
             return true;
         }
-        return match dirs {
-            None => false,
-            Some([]) => true,
-            Some(dirs) => dirs
-                .iter()
-                .any(|dir| is_user(&dir.join(trimmed).to_string_lossy())),
-        };
     }
-    is_user(&expanded)
+    on_disk
+        && dir.join("HEAD").is_file()
+        && (dir.join("objects").is_dir() || dir.join("commondir").is_file())
 }
 
-/// The key a `git config` invocation sets at user or system scope
-/// (`--global`, `--system`, or `--file` naming the user's configuration)
-/// that is not known to be safe ([`git::config_kind`]), the section a rename
-/// there makes unsafe, or an interactive edit of that scope. Repository scope,
-/// unsets and every read stay allowed. Every repository reads these scopes,
-/// so a key git runs later, or one the guard does not know, refuses there
-/// (review round ten).
-fn config_writes_code_key(rest: &[String], dirs: Option<&[PathBuf]>) -> Option<String> {
+/// Where a `git config` write that [`config_writes_code_key`] judged lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigPlace {
+    /// `--global`, `--system`, or a file git reads at that scope by name.
+    UserOrSystem,
+    /// A file outside a repository's own configuration, by its spelling.
+    File(String),
+}
+
+/// What [`config_writes_code_key`] found: the key, the section a rename
+/// makes, or `--edit`; the value it is set to; what that setting can do
+/// (`None` for an edit or a rename); and where it lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfigWrite {
+    found: String,
+    value: String,
+    kind: Option<ConfigKind>,
+    place: ConfigPlace,
+}
+
+/// The file a `git config` call with no scope option writes when
+/// `GIT_CONFIG` names one: set on the call, earlier on the line, or in the
+/// session's environment (`inherited`). A line that mentions the variable
+/// without a value the guard can read gives `$GIT_CONFIG`, which is judged
+/// as a file filled in at run time.
+fn git_config_variable(moved: &Moves<'_>, inherited: Option<String>) -> Option<String> {
+    if let Some((_, value)) = leading_env_assignments(moved.tokens)
+        .into_iter()
+        .rev()
+        .find(|(name, _)| *name == "GIT_CONFIG")
+    {
+        return Some(value.to_string());
+    }
+    if let Some(Val::Known(value)) = moved.vars.and_then(|vars| vars.get("GIT_CONFIG")) {
+        return Some(value.clone());
+    }
+    if moved.git_config_var {
+        return Some("$GIT_CONFIG".to_string());
+    }
+    inherited.filter(|value| !value.is_empty())
+}
+
+/// The key a `git config` invocation sets that is not known to be safe
+/// ([`git::config_kind`]), the section a rename makes unsafe, or an
+/// interactive edit, when the write lands outside a repository's own
+/// configuration: `--global`, `--system`, or a `--file`, `--blob` or
+/// `GIT_CONFIG` file that [`config_file_scope`] does not show to be a
+/// repository's. Repository scope, unsets and every read stay allowed.
+/// Every repository reads the user and system scopes, so a key git runs
+/// later, or one the guard does not know, refuses there (review round ten);
+/// git reads its system file under any install prefix and the files a
+/// configuration includes, so only a repository's own file is known to be
+/// read for that repository alone (review round eleven). `variable` is the
+/// file `GIT_CONFIG` names ([`git_config_variable`]).
+fn config_writes_code_key(
+    rest: &[String],
+    dirs: Option<&[PathBuf]>,
+    variable: Option<&str>,
+) -> Option<ConfigWrite> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
-    let file_is_user = parsed
-        .values_of('f', "--file")
-        .into_iter()
-        .any(|file| user_config_file(file, dirs));
-    if !(any_long(&["--global", "--system"]) || file_is_user) || config_only_reads(rest) {
+    if config_only_reads(rest) {
         return None;
     }
+    let files = parsed.values_of('f', "--file");
+    let blobs = parsed.values_of('\0', "--blob");
+    let named_scope = any_long(&["--global", "--system", "--local", "--worktree"]);
+    let mut place = None;
+    if any_long(&["--global", "--system"]) {
+        place = Some(ConfigPlace::UserOrSystem);
+    }
+    let unscoped = files.is_empty() && blobs.is_empty() && !named_scope;
+    let judged = files
+        .iter()
+        .copied()
+        .chain(variable.filter(|_| unscoped))
+        .map(|file| (file, config_file_scope(file, dirs)));
+    for (file, scope) in judged {
+        match scope {
+            FileScope::User => place = Some(ConfigPlace::UserOrSystem),
+            FileScope::Other if place.is_none() => {
+                place = Some(ConfigPlace::File(file.to_string()));
+            }
+            _ => {}
+        }
+    }
+    // git cannot write a blob; one named on a write is judged as the
+    // file it is not shown to be.
+    if let Some(blob) = blobs.first().filter(|_| place.is_none()) {
+        place = Some(ConfigPlace::File((*blob).to_string()));
+    }
+    let place = place?;
     let subcommand = parsed.operands.first().copied().filter(|word| {
         matches!(
             *word,
             "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
         )
     });
+    let write = |found: &str, value: &str, kind: Option<ConfigKind>| ConfigWrite {
+        found: found.to_string(),
+        value: value.to_string(),
+        kind,
+        place: place.clone(),
+    };
     if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
-        return Some("--edit".to_string());
+        return Some(write("--edit", "", None));
     }
+    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
     // A section renamed into one whose keys run code (`harmless` to
     // `alias`) makes every key it holds one of them.
     if any_long(&["--rename-section"]) || subcommand == Some("rename-section") {
-        let names = &parsed.operands[usize::from(subcommand.is_some())..];
-        return names
+        return operands
             .get(1)
             .filter(|new| !git::config_section_is_safe(new))
-            .map(|new| (*new).to_string());
+            .map(|new| write(new, "", None));
     }
     if any_long(&["--unset", "--unset-all", "--remove-section"])
         || matches!(subcommand, Some("unset" | "remove-section"))
     {
         return None;
     }
-    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    let key = operands.first()?;
     let value = operands.get(1).copied().unwrap_or_default();
-    operands
-        .first()
-        .filter(|key| git::config_kind(key, value) != ConfigKind::Safe)
-        .map(|key| (*key).to_string())
+    let kind = git::config_kind(key, value);
+    (kind != ConfigKind::Safe).then(|| write(key, value, Some(kind)))
 }
 
-/// Why a user- or system-scope write that [`config_writes_code_key`] found
-/// refuses: `found` is `--edit`, a key, or the section a rename makes.
-fn config_write_message(found: &str) -> String {
-    if found == "--edit" {
-        return "`git config --edit` would open the user or system configuration, where a key can make a later git command run a program the guards never see".to_string();
-    }
-    match git::config_kind(found, "") {
-        ConfigKind::Command => format!("`git config` would set `{found}` in the user or system configuration, which makes a later git command run a program the guards never see"),
-        _ => format!("`git config` would set `{found}` in the user or system configuration; the guard does not know it to be safe, and such a setting can make a later git command run a program the guards never see. Set it with `--local` for this repository, or ask the operator to set it"),
-    }
+/// Why a write that [`config_writes_code_key`] found refuses, built from
+/// what it judged: the setting, its value, what that value does, and where
+/// it lands.
+fn config_write_message(write: &ConfigWrite) -> String {
+    let place = match &write.place {
+        ConfigPlace::UserOrSystem => "the user or system configuration".to_string(),
+        ConfigPlace::File(file) => format!(
+            "`{file}`, which is not a repository's own configuration and may be one git reads for every repository (another install's system file, an included file, or one `GIT_CONFIG_GLOBAL` names)"
+        ),
+    };
+    let ConfigWrite {
+        found, value, kind, ..
+    } = write;
+    let why = match kind {
+        None if found == "--edit" => format!(
+            "`git config --edit` would open {place}, where a setting can make a later git command run a program the guards never see"
+        ),
+        None => format!(
+            "`git config` would rename a section to `{found}` in {place}, and settings in that section can make a later git command run a program the guards never see"
+        ),
+        Some(ConfigKind::Command) if found.to_lowercase().starts_with("include") => format!(
+            "`git config` would set `{found}` in {place}, which pulls the settings of `{value}` into later git commands, out of the guards' sight"
+        ),
+        Some(ConfigKind::Command) if found.to_lowercase().starts_with("alias.") => format!(
+            "`git config` would set `{found}` in {place}, which defines a git command for later sessions; a `!` value makes it run a program the guards never see"
+        ),
+        Some(ConfigKind::Command) => format!(
+            "`git config` would set `{found}` to `{value}` in {place}; a later git command runs that value as a program the guards never see"
+        ),
+        Some(_) => format!(
+            "`git config` would set `{found}` to `{value}` in {place}; the guard does not know that setting to run nothing, and such a setting can make a later git command run a program the guards never see"
+        ),
+    };
+    format!("{why}. Set it with `--local` for this repository, or ask the operator to set it")
 }
 
 /// Does this `git config` invocation only read? A get, list or single-name
@@ -10036,6 +10251,13 @@ mod tests {
             "git config --file .gitconfig alias.x y",
             "git config --file ../.gitconfig alias.x y",
             "git config --file $HOME/.gitconfig alias.x y",
+            // Review round eleven: a file that is not a repository's own
+            // configuration may be one git reads for every repository, so a
+            // project fixture refuses with it.
+            "git config --file fixture.gitconfig alias.x y",
+            "git config --file fixtures/.gitconfig alias.x y",
+            "git config --file fixtures/git/config alias.x y",
+            "git config --file fixtures/gitconfig alias.x y",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
@@ -10051,10 +10273,7 @@ mod tests {
             "git config --local core.pager cat",
             "git config --file .git/config alias.co checkout",
             "git config get --global core.editor",
-            "git config --file fixture.gitconfig alias.x y",
-            "git config --file fixtures/.gitconfig alias.x y",
-            "git config --file fixtures/git/config alias.x y",
-            "git config --file fixtures/gitconfig alias.x y",
+            "git config --file fixtures/.gitconfig user.name x",
             "git config --global --rename-section old.x user.x",
             "git config --global --remove-section alias",
         ] {
@@ -10095,13 +10314,203 @@ mod tests {
                 "{cmd} in {cwd:?}: {v:?}"
             );
         }
+        // Review round eleven: outside a repository's own configuration,
+        // only a key known to run nothing passes.
         for cmd in [
             "git config --file config alias.x y",
             "git config --file fixtures/.gitconfig alias.x y",
         ] {
             let v = at(cmd, elsewhere.path());
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        let v = at("git config --file config user.name x", elsewhere.path());
+        assert!(!has_rule(&v, "git.hook_integrity"), "{v:?}");
+    }
+
+    #[test]
+    fn config_files_outside_a_repository_refuse_keys_not_known_safe() {
+        // Review round eleven: git reads its system file under the prefix it
+        // was built with (`/opt/homebrew/etc/gitconfig`), and the files a
+        // configuration includes, so only a repository's own configuration
+        // takes a key not known to run nothing. Nothing is written; only the
+        // verdict is read.
+        let p = default_policy();
+        let temp = tempfile::tempdir().unwrap();
+        let git_dir = |dir: &Path| {
+            std::fs::create_dir_all(dir.join("objects")).unwrap();
+            std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        };
+        let repo = temp.path().join("repo");
+        git_dir(&repo.join(".git"));
+        let bare = temp.path().join("bare.git");
+        git_dir(&bare);
+        let elsewhere = temp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let system = elsewhere.join("gitconfig");
+        std::fs::write(&system, "").unwrap();
+        // A repository whose configuration is a link to another file.
+        let linked = temp.path().join("linked");
+        git_dir(&linked.join(".git"));
+        std::os::unix::fs::symlink(&system, linked.join(".git").join("config")).unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        let repo_config = [".git", "config"].join("/");
+        for cmd in [
+            "git config --file /opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file=/opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config -f /opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config -f/opt/homebrew/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file /usr/local/etc/gitconfig core.pager cat".to_string(),
+            "git config --file /opt/local/etc/gitconfig core.editor vim".to_string(),
+            "git config --file /Library/Developer/CommandLineTools/usr/share/git-core/gitconfig alias.x y".to_string(),
+            "git config --file 'C:/Program Files/Git/etc/gitconfig' alias.x y".to_string(),
+            "git config --file ~/etc/gitconfig alias.x '!id'".to_string(),
+            "git config --file ~/.gitconfig.local alias.x '!id'".to_string(),
+            "git config --file /tmp/scratch.cfg alias.x '!id'".to_string(),
+            "git config --file /tmp/scratch.cfg mystery.key 1".to_string(),
+            "git config --file /tmp/scratch.cfg --edit".to_string(),
+            "git config --blob HEAD:x alias.x y".to_string(),
+            format!("git config --file {} alias.x '!id'", system.display()),
+            format!(
+                "git -C {} config --file {repo_config} alias.x '!id'",
+                linked.display()
+            ),
+            "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'".to_string(),
+            "env GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'".to_string(),
+            "export GIT_CONFIG=/opt/homebrew/etc/gitconfig; git config alias.x '!id'"
+                .to_string(),
+            "GIT_CONFIG=\"$X\" git config set alias.x '!id'".to_string(),
+        ] {
+            let v = at(&cmd, &repo);
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            format!("git config --file {repo_config} alias.co checkout"),
+            format!("git config -f ./{repo_config} core.pager cat"),
+            "git config --file .git/config.worktree alias.co checkout".to_string(),
+            "git config --file .git/worktrees/w/config.worktree alias.co checkout".to_string(),
+            "git config --file .git/modules/sub/config alias.co checkout".to_string(),
+            "git config -f .gitmodules submodule.a.branch main".to_string(),
+            "git config -f .lfsconfig lfs.url https://example.invalid/lfs".to_string(),
+            "git config --file /tmp/scratch.cfg user.name Ada".to_string(),
+            "git config --file /opt/homebrew/etc/gitconfig --get alias.x".to_string(),
+            "git config --file /opt/homebrew/etc/gitconfig --unset alias.x".to_string(),
+            format!(
+                "git config --file {}/config alias.co checkout",
+                bare.display()
+            ),
+            format!(
+                "git config --file {}/{repo_config} alias.co checkout",
+                repo.display()
+            ),
+            "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config --local alias.co checkout"
+                .to_string(),
+            format!("GIT_CONFIG={repo_config} git config alias.co checkout"),
+            "GIT_CONFIG_GLOBAL=/dev/null git config alias.co checkout".to_string(),
+        ] {
+            let v = at(&cmd, &repo);
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+        // The refusal names the file and what the value does.
+        let v = at(
+            "git config --file /opt/homebrew/etc/gitconfig core.pager 'sh x'",
+            &repo,
+        );
+        let text = &v
+            .iter()
+            .find(|v| v.rule == "git.hook_integrity")
+            .unwrap()
+            .message;
+        assert!(
+            text.contains("`/opt/homebrew/etc/gitconfig`")
+                && text.contains("runs that value as a program"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn git_config_variable_names_the_file_a_scopeless_write_lands_in() {
+        // Review round eleven: with no scope option, `git config` writes the
+        // file `GIT_CONFIG` names, set on the call, on the line, or in the
+        // session's environment.
+        let words =
+            |list: &[&str]| -> Vec<String> { list.iter().map(ToString::to_string).collect() };
+        let assigned = words(&["GIT_CONFIG=/x/gitconfig", "git", "config", "a.b", "c"]);
+        let plain = words(&["git", "config", "a.b", "c"]);
+        let moved = |tokens: &'_ [String], mentions: bool| -> String {
+            let moves = Moves {
+                cwd: Cwd::Paths(vec![String::new()]),
+                vars: None,
+                location_unknown: false,
+                config_unknown: mentions,
+                transport_env: false,
+                git_config_var: mentions,
+                narrows: false,
+                tokens,
+            };
+            format!(
+                "{:?}|{:?}|{:?}",
+                git_config_variable(&moves, None),
+                git_config_variable(&moves, Some("/y/gitconfig".to_string())),
+                git_config_variable(&moves, Some(String::new())),
+            )
+        };
+        assert_eq!(
+            moved(&assigned, true),
+            r#"Some("/x/gitconfig")|Some("/x/gitconfig")|Some("/x/gitconfig")"#
+        );
+        assert_eq!(
+            moved(&plain, true),
+            r#"Some("$GIT_CONFIG")|Some("$GIT_CONFIG")|Some("$GIT_CONFIG")"#
+        );
+        assert_eq!(moved(&plain, false), r#"None|Some("/y/gitconfig")|None"#);
+    }
+
+    #[test]
+    fn known_booleans_take_a_boolean_and_the_message_follows_the_value() {
+        // Review round eleven: a match on part of a name read the switches
+        // beside the tool programs as programs, with a false reason.
+        let p = default_policy();
+        for cmd in [
+            "git config --global difftool.prompt false",
+            "git config --global mergetool.keepBackup true",
+            "git config --global uploadpack.allowFilter true",
+            "git config --global rebase.rescheduleFailedExec false",
+            "git config --global pager.log 2",
+            "git config --global mergetool.vimdiff.trustExitCode yes",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global difftool.vimdiff.path /tmp/p.sh",
+            "git config --global difftool.vimdiff.cmd 'sh /tmp/p.sh'",
+            "git config --global mergetool.vimdiff.cmd 'sh /tmp/p.sh'",
+            "git config --global gpg.ssh.defaultKeyCommand /tmp/p.sh",
+            "git config --global pager.log 'sh /tmp/p.sh'",
+            "git config --global difftool.prompt 'sh /tmp/p.sh'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        let message = |cmd: &str| {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .find(|v| v.rule == "git.hook_integrity")
+                .map(|v| v.message)
+                .unwrap()
+        };
+        let program = message("git config --global difftool.vimdiff.path /tmp/p.sh");
+        assert!(
+            program.contains("runs that value as a program"),
+            "{program}"
+        );
+        let unknown = message("git config --global difftool.prompt 'sh /tmp/p.sh'");
+        assert!(
+            unknown.contains("does not know that setting to run nothing")
+                && !unknown.contains("runs that value"),
+            "{unknown}"
+        );
     }
 
     #[test]

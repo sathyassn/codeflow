@@ -197,6 +197,60 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
 }
 
 #[test]
+fn installed_hooks_judge_git_config_files_and_switches() {
+    // Review round eleven: git reads its system file under any install
+    // prefix, so a key not known to run nothing refuses in every file that
+    // is not a repository's own configuration; the switches beside the tool
+    // programs take a boolean and pass.
+    let (project, _home) = startup_project();
+    let refused = [
+        "git config --file /opt/homebrew/etc/gitconfig alias.x '!id'",
+        "git config --file=/opt/homebrew/etc/gitconfig alias.x '!id'",
+        "git config -f /opt/homebrew/etc/gitconfig alias.x '!id'",
+        "git config --file /usr/local/etc/gitconfig core.pager 'sh x'",
+        "GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'",
+        "git config --global difftool.vimdiff.path /tmp/p.sh",
+        "git config --global mergetool.vimdiff.cmd 'sh /tmp/p.sh'",
+        "git config --global gpg.ssh.defaultKeyCommand /tmp/p.sh",
+        "echo '[alias]' >> /opt/homebrew/etc/gitconfig",
+    ];
+    let allowed = [
+        "git config --global difftool.prompt false",
+        "git config --global mergetool.keepBackup true",
+        "git config --global uploadpack.allowFilter true",
+        "git config --global rebase.rescheduleFailedExec false",
+        "git config --global pager.log 2",
+        "git config --file .git/config alias.co checkout",
+        "git config --file /tmp/scratch.cfg user.name Test",
+    ];
+    let mut wrong = Vec::new();
+    for harness in ["claude", "codex", "grok"] {
+        for command in refused {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, "git.hook_integrity") {
+                wrong.push(format!("{harness}: allowed {command}"));
+            }
+        }
+        for command in allowed {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if outputs.iter().any(|o| !o.status.success()) {
+                wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
+            }
+        }
+    }
+    // A native edit of another install's system file.
+    let outputs = project.replay(
+        "codex",
+        "Write",
+        json!({"file_path": "/opt/homebrew/etc/gitconfig", "content": "[alias]"}),
+    );
+    if !refused_with(&outputs, "git.hook_integrity") {
+        wrong.push("codex:Write: allowed /opt/homebrew/etc/gitconfig".to_string());
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
 fn installed_edit_hooks_refuse_shell_startup_files() {
     let (project, home) = startup_project();
     let zshrc = home.join(".zshrc");

@@ -497,16 +497,31 @@ fn global_git_config_target(target: &Path, root: &Path) -> bool {
         paths.push(xdg.join("git/config"));
     }
     // /dev/null deliberately disables global config; writes cannot change its contents.
-    if let Some(path) = std::env::var_os("GIT_CONFIG_GLOBAL")
-        .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
-    {
-        paths.push(root.join(path));
+    for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {
+        if let Some(path) = std::env::var_os(name)
+            .filter(|s| !s.is_empty() && s != std::ffi::OsStr::new("/dev/null"))
+        {
+            paths.push(root.join(path));
+        }
     }
+    // git reads its system file under the prefix it was built with
+    // (`/etc/gitconfig`, `/opt/homebrew/etc/gitconfig`, a source build's
+    // `~/etc/gitconfig`), so a `gitconfig` in any `etc` directory counts
+    // (TSK-242 review round eleven).
+    let system_file = |path: &Path| {
+        path.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("gitconfig"))
+            && path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir.eq_ignore_ascii_case("etc"))
+    };
     [false, true].into_iter().any(|resolve| {
         normalized(target, resolve).is_ok_and(|target| {
-            paths
-                .iter()
-                .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
+            system_file(&target)
+                || paths
+                    .iter()
+                    .any(|path| normalized(path, resolve).is_ok_and(|path| path == target))
         })
     })
 }
@@ -908,6 +923,27 @@ mod tests {
             !evaluate(&synthetic("write", json!({"path": path})), &self.ctx())
                 .unwrap()
                 .is_empty()
+        }
+    }
+
+    #[test]
+    fn system_git_config_files_are_refused_under_any_prefix() {
+        // TSK-242 review round eleven: git reads its system file under the
+        // prefix it was built with, so a `gitconfig` in any `etc` directory
+        // is refused with `/etc/gitconfig`. Nothing is written.
+        let fixture = Fixture::new();
+        let prefix = fixture.temp.path().join("homebrew/etc");
+        std::fs::create_dir_all(&prefix).unwrap();
+        for path in [
+            "/etc/gitconfig".to_string(),
+            "/opt/homebrew/etc/gitconfig".to_string(),
+            "/usr/local/etc/gitconfig".to_string(),
+            prefix.join("gitconfig").display().to_string(),
+        ] {
+            assert!(fixture.refused(&path), "{path}");
+        }
+        for path in ["etc/gitconfig.example", "docs/gitconfig", "notes.md"] {
+            assert!(!fixture.refused(path), "{path}");
         }
     }
 

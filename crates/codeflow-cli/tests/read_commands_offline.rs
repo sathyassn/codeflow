@@ -12,6 +12,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
+
 const LINE: &str = "integration/EPC-001-offline";
 
 fn isolated_home() -> &'static Path {
@@ -271,12 +273,14 @@ const NETWORK_SUBCOMMANDS: [&str; 8] = [
     "remote-https",
 ];
 
-/// The subcommand of a git argv, past global options and their values.
+/// The subcommand of a git argv, past global options and their values. The
+/// options that take the next word are the guards' own list, so a fetch
+/// behind `--attr-source` or `--shallow-file` still counts (issue 120).
 fn git_subcommand(argv: &[String]) -> Option<&str> {
     let mut rest = argv.iter().skip(1);
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+            option if GLOBAL_VALUE_OPTIONS.contains(&option) => {
                 rest.next();
             }
             option if option.starts_with('-') => {}

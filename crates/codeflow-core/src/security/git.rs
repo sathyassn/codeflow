@@ -12,8 +12,8 @@ use regex::Regex;
 /// which is one word. `--exec-path` is not here: without `=` it prints git's
 /// program directory and takes no value. Every parser that finds the git
 /// subcommand skips these, so a value is never read as the subcommand
-/// (issue 120).
-pub(crate) const GLOBAL_VALUE_OPTIONS: &[&str] = &[
+/// (issue 120), and the offline-read test that classifies git processes.
+pub const GLOBAL_VALUE_OPTIONS: &[&str] = &[
     "-C",
     "-c",
     "--git-dir",
@@ -36,8 +36,9 @@ pub(crate) enum ConfigKind {
     Unknown,
 }
 
-/// Settings known not to run a command or pull in other settings. An entry
-/// ending in a dot is a whole section. `gpg.format` picks among git's own
+/// Settings known not to run a command or pull in other settings, by exact
+/// name ([`config_name_matches`]); an entry ending in a dot is a whole
+/// section. `gpg.format` picks among git's own
 /// signing programs; the program keys stay command settings. Deliberately
 /// absent: `safe.directory` and `protocol.*.allow`, which widen what git
 /// trusts, and `diff.tool` and `merge.tool`, which pick the program a tool
@@ -100,59 +101,131 @@ const SAFE_CONFIG: &[&str] = &[
 ];
 
 /// Settings known to run a command, or a path to one, or to pull in other
-/// settings (`include.path`), matched by what the name contains. A setting
-/// that is neither here nor in [`SAFE_CONFIG`] is [`ConfigKind::Unknown`].
+/// settings (`include.path`), by exact name ([`config_name_matches`]). A
+/// setting that is neither here nor in [`SAFE_CONFIG`] or [`BOOLEAN_CONFIG`]
+/// is [`ConfigKind::Unknown`], so a program setting this list misses still
+/// refuses where an unknown one does. A match on part of a name read the
+/// switches beside these settings (`difftool.prompt`) as programs (review
+/// round eleven).
 const COMMAND_CONFIG: &[&str] = &[
-    "pager",
-    "editor",
-    "fsmonitor",
-    "sshcommand",
-    "askpass",
-    "hookspath",
-    "helper",
-    "external",
-    "textconv",
     "alias.",
-    "driver",
-    "program",
-    "smudge",
-    "clean",
-    "process",
-    "command",
-    "exec",
-    "gitproxy",
-    "uploadpack",
-    "receivepack",
     "include.",
     "includeif.",
-    ".cmd",
-    "difftool.",
-    "mergetool.",
+    "pager.",
+    "core.pager",
+    "core.editor",
+    "sequence.editor",
+    "core.fsmonitor",
+    "core.sshcommand",
+    "core.askpass",
+    "core.hookspath",
+    "core.gitproxy",
+    "core.alternaterefscommand",
+    "credential.helper",
+    "credential.*.helper",
+    "diff.external",
+    "diff.*.command",
+    "diff.*.textconv",
+    "difftool.*.path",
+    "difftool.*.cmd",
+    "mergetool.*.path",
+    "mergetool.*.cmd",
+    "merge.*.driver",
+    "filter.*.clean",
+    "filter.*.smudge",
+    "filter.*.process",
+    "gpg.program",
+    "gpg.*.program",
+    "gpg.ssh.defaultkeycommand",
+    "remote.*.uploadpack",
+    "remote.*.receivepack",
+    "uploadpack.packobjectshook",
+    "hook.*.command",
+    "trailer.*.command",
+    "trailer.*.cmd",
+    "sendemail.sendmailcmd",
+    "sendemail.tocmd",
+    "sendemail.cccmd",
+    "sendemail.headercmd",
+    "browser.*.path",
+    "browser.*.cmd",
+    "man.*.path",
+    "man.*.cmd",
+    "imap.tunnel",
+    "instaweb.httpd",
+    "submodule.*.update",
 ];
 
+/// Settings a boolean value leaves harmless: the switches beside the program
+/// settings of the tool sections, and `pager.<command>`, which takes a
+/// boolean or a program. Set to anything else, a switch is
+/// [`ConfigKind::Unknown`] and a pager is a program.
+const BOOLEAN_CONFIG: &[&str] = &[
+    "pager.",
+    "difftool.prompt",
+    "difftool.trustexitcode",
+    "mergetool.prompt",
+    "mergetool.keepbackup",
+    "mergetool.keeptemporaries",
+    "mergetool.writetotemp",
+    "mergetool.hideresolved",
+    "mergetool.*.trustexitcode",
+    "mergetool.*.hideresolved",
+    "uploadpack.allowfilter",
+    "uploadpack.allowanysha1inwant",
+    "uploadpack.allowtipsha1inwant",
+    "uploadpack.allowreachablesha1inwant",
+    "uploadpack.allowrefinwant",
+    "uploadpack.allowsidebandall",
+    "rebase.reschedulefailedexec",
+];
+
+/// Whether the lower-case setting name `key` matches `pattern`: an entry
+/// ending in a dot is a whole section, `section.*.name` is that name under
+/// any subsection (`difftool.vimdiff.path`), and anything else is the exact
+/// name.
+fn config_name_matches(key: &str, pattern: &str) -> bool {
+    if pattern.ends_with('.') {
+        return key.starts_with(pattern);
+    }
+    match pattern.split_once(".*.") {
+        Some((section, name)) => key
+            .strip_prefix(section)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .and_then(|rest| rest.strip_suffix(name))
+            .and_then(|rest| rest.strip_suffix('.'))
+            .is_some_and(|subsection| !subsection.is_empty()),
+        None => key == pattern,
+    }
+}
+
+/// Whether git reads the lower-case `value` as a boolean: `true`, `false`,
+/// `yes`, `no`, `on`, `off`, the empty value, or an integer with an
+/// optional `k`, `m` or `g` unit (`pager.log=2` turns the pager on).
+fn git_boolean(value: &str) -> bool {
+    if matches!(value, "" | "true" | "false" | "yes" | "no" | "on" | "off") {
+        return true;
+    }
+    let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
+    let digits = digits.strip_suffix(['k', 'm', 'g']).unwrap_or(digits);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// What the git setting `key` set to `value` can do. A key on
-/// [`SAFE_CONFIG`] runs nothing, and so does a `pager.<command>` set to a
-/// boolean and a `submodule.<name>.update` set to one of git's own modes; a
-/// `submodule.<name>.update` set to `!command` runs it.
+/// [`SAFE_CONFIG`] runs nothing, and so does a key on [`BOOLEAN_CONFIG`]
+/// set to a boolean and a `submodule.<name>.update` set to one of git's own
+/// modes; a `submodule.<name>.update` set to `!command` runs it.
 pub(crate) fn config_kind(key: &str, value: &str) -> ConfigKind {
     let key = key.to_lowercase();
     let value = value.to_lowercase();
-    let boolean = matches!(
-        value.as_str(),
-        "true" | "false" | "yes" | "no" | "on" | "off" | "0" | "1"
-    );
-    let submodule_update = key.starts_with("submodule.") && key.ends_with(".update");
-    if SAFE_CONFIG.iter().any(|k| {
-        if k.ends_with('.') {
-            key.starts_with(k)
-        } else {
-            key == *k
-        }
-    }) || (key.starts_with("pager.") && boolean)
-        || (submodule_update && matches!(value.as_str(), "checkout" | "rebase" | "merge" | "none"))
+    let named = |list: &[&str]| list.iter().any(|p| config_name_matches(&key, p));
+    if named(SAFE_CONFIG)
+        || (named(BOOLEAN_CONFIG) && git_boolean(&value))
+        || (config_name_matches(&key, "submodule.*.update")
+            && matches!(value.as_str(), "checkout" | "rebase" | "merge" | "none"))
     {
         ConfigKind::Safe
-    } else if submodule_update || COMMAND_CONFIG.iter().any(|k| key.contains(k)) {
+    } else if named(COMMAND_CONFIG) {
         ConfigKind::Command
     } else {
         ConfigKind::Unknown
@@ -198,6 +271,65 @@ pub fn is_on_protected_branch(branch: &str, policy: &crate::security::SecurityPo
 mod tests {
     use super::*;
     use crate::security::SecurityPolicy;
+
+    #[test]
+    fn config_kind_matches_names_exactly_and_booleans_by_value() {
+        // Review round eleven: a match on part of a name made these
+        // switches programs.
+        for (key, value) in [
+            ("difftool.prompt", "false"),
+            ("mergetool.keepBackup", "true"),
+            ("mergetool.vimdiff.trustExitCode", "yes"),
+            ("uploadpack.allowFilter", "true"),
+            ("rebase.rescheduleFailedExec", "false"),
+            ("pager.log", "2"),
+            ("pager.log", "off"),
+            ("pager.log", ""),
+            ("submodule.a.b.update", "checkout"),
+            ("color.ui", "auto"),
+            ("clean.requireForce", "yes"),
+        ] {
+            assert_eq!(config_kind(key, value), ConfigKind::Safe, "{key}={value}");
+        }
+        for (key, value) in [
+            ("difftool.vimdiff.path", "/x"),
+            ("difftool.vimdiff.cmd", "x"),
+            ("mergetool.vimdiff.cmd", "x"),
+            ("mergetool.vimdiff.path", "/x"),
+            ("gpg.ssh.defaultKeyCommand", "x"),
+            ("pager.log", "less"),
+            ("submodule.a.update", "!x"),
+            ("credential.https://example.invalid.helper", "store"),
+            ("diff.tool.command", "x"),
+            ("filter.lfs.clean", "x"),
+            ("alias.co", "checkout"),
+            ("include.path", "x"),
+            ("includeIf.gitdir:~/w/.path", "x"),
+            ("hook.pre-commit.command", "x"),
+        ] {
+            assert_eq!(
+                config_kind(key, value),
+                ConfigKind::Command,
+                "{key}={value}"
+            );
+        }
+        for (key, value) in [
+            ("difftool.prompt", "sh x"),
+            ("uploadpack.allowFilter", "x"),
+            ("rebase.exec", "x"),
+            ("difftool.path", "/x"),
+            ("credential.helpers", "x"),
+            ("safe.directory", "*"),
+            ("diff.tool", "vimdiff"),
+            ("mystery.key", "1"),
+        ] {
+            assert_eq!(
+                config_kind(key, value),
+                ConfigKind::Unknown,
+                "{key}={value}"
+            );
+        }
+    }
 
     #[test]
     fn test_is_on_protected_branch_defaults() {
