@@ -726,6 +726,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     // The git rules file the method skill points at for the enforcement
     // planes (TSK-184 reduction).
     ".codeflow/rules/git-rules.md",
+    // The rule file that defines a review pass, which the review brief
+    // contract names so a seat of any family opens it (issue 121).
+    ".codeflow/rules/workflow-discipline.md",
     ".codeflow/schemas/present/document-v1.schema.json",
     ".codeflow/schemas/present/utility-tokens-v1.schema.json",
     "DIR/settings.json",

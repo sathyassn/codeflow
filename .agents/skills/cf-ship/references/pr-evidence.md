@@ -26,7 +26,7 @@ malformed, repeated or mismatched `Task:` line is refused.
 | Summary | always | a few lines that anchor the reader (rule below) |
 | Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
 | Testing | unless the range is docs-only or light; evidence required when the range is code | tested revision and command, fenced summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` (rules below) |
-| Reviews | unless the range is light | one row per current review: reviewer, scope, verdict; `None: reason` when unreviewed |
+| Reviews | unless the range is light | one row per current review: reviewer, `whole unit at <reviewed>`, verdict; `None: reason` when unreviewed |
 | Release impact | on a PR into a protected branch or whose range carries a breaking commit; checked whenever present | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields (rules below) |
 | Screenshots | after Changes, when a rendered surface changed | the changed surface |
 | Tests | after Testing, when an added or renamed test's name does not state what it pins | test and what it pins, about six rows; otherwise one `New tests:` line |
@@ -52,7 +52,8 @@ malformed, repeated or mismatched `Task:` line is refused.
   copying them, keep one results block at the head and one review row per
   reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
-  the scope and the verdict, nothing more; the verdict and its native
+  the scope as `whole unit at <reviewed>` (the acceptance block's commit, in
+  full) and the verdict, nothing more; the verdict and its native
   provenance live on the PR and findings live in the linked record. A review
   row is the provenance the quality contract requires, not the AI
   attribution the commit and PR checks block.
@@ -139,8 +140,9 @@ checks and relevant behavioral evaluations; distinguish added cases from
 live trials actually run. Delete unused template lines, and omit a
 conditional section whose condition does not hold. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence
-before marking ready; preserve a prior review only with a reasoned
-unchanged-scope link. Lint with
+before marking ready; a prior review carries only across a clean re-merge
+of the target, as `codeflow ci` binds it; any other change gets a new
+whole-unit review at the new head. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 
@@ -169,10 +171,8 @@ stands. It gives the PR URL exactly as `gh pr create` or
 guessed. It lists each required check with its state, any missing evidence
 with its reason, every review finding in the record the quality contract's
 completion gate defines, and the next action. Who merges a green PR depends on its
-target, as `cf-ship` step 8 says: the primary merges into an `integration/`
-branch no protected-branch policy covers and says so in the report; for
-every protected target, including a protected `integration/` glob, the next
-action is a human merge.
+target, as `cf-ship` step 8 says: for every protected target, including a
+protected `integration/` glob, the next action is a human merge.
 
 Say "ready for your merge on local evidence" only when every owed required
 check has a completed green result of the same check at the PR head, locally

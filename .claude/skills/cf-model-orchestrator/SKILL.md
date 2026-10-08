@@ -221,13 +221,14 @@ binding, permission or selector changed since it ran.
 1. Before choosing a landing route, read `PLAN.md` and the landing policy
    in the project README when present, alongside the project operating
    contract. An existing approved plan controls the target until amended.
-   Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals. Discover facts yourself and apply the clarity checklist in
-   `cf-method`; ask the operator only what `cf-method/references/autonomy.md`
-   reserves to them. A task inside an approved epic starts from the epic plan:
-   reuse it after a compact currency, acceptance, dependency and
-   planning-anchor check. When the brief concerns agentic estimates, capacity
-   or deadlines, read [estimates](references/estimates.md).
+   Pin the brief: objective, starting scope, constraints, acceptance
+   criteria, and known non-goals. Discover facts yourself and apply the
+   clarity checklist in `cf-method`; ask the operator only what
+   `cf-method/references/autonomy.md` reserves to them. A task inside an
+   approved epic starts from the epic plan: reuse it after a compact
+   currency, acceptance, dependency and planning-anchor check. When the
+   brief concerns agentic estimates, capacity or deadlines, read
+   [estimates](references/estimates.md).
 2. Identify the active host and required lane from the seat table. Set the
    current session role to `host`; every cross-family entry uses `ROLE: peer`
    and the receiving primary's default effort. Only that primary dispatches
@@ -308,12 +309,12 @@ A solo `/cf-develop` run follows [solo fallback](references/solo-fallback.md).
 
 ### 1. Independent discovery, once per brief or epic
 
-Give both seats the same immutable brief and repository scope. Before
-exchanging conclusions, each seat independently returns its findings: source
-and documentation evidence; assumptions verified or still unresolved; edge,
+Give both seats the same immutable brief; its scope is where each starts.
+Before exchanging conclusions, each seat independently returns its findings:
+source and documentation evidence; assumptions verified or still unresolved; edge,
 error and security cases; risks to compatibility, data, UX and operations.
 The host records both outputs without collapsing disagreements. A task inside
-an approved epic does not repeat discovery; it starts from the epic plan.
+an approved epic does not repeat it.
 
 ### 2. One plan, challenged once
 

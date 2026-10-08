@@ -159,16 +159,19 @@ waive the clarity, safety, review or protected-branch conditions.
    completes its producer verification and cross-lineage review before it
    joins a batch.
 3. **Land in batches.** The primary assembles reviewed heads into a small
-   batch candidate in dependency order, inspects the resolved hunks and
-   integration seams on product paths (asking the other lineage only when it
-   hand-resolved a product hunk or two tasks touched one hotspot), and runs
-   one full gate on that exact candidate. It lands through one of two
+   batch candidate in dependency order, inspects each landing merge (a clean
+   merge, its tree equal to the re-merge of its parents, does not reopen
+   unit review and carries it as `codeflow ci` binds it; a hand-resolved
+   product hunk is that task's own work and returns it to a whole-unit
+   review at its new head; a path two tasks both changed is looked at on the
+   candidate, and that look is not a unit review), and runs one full gate on
+   that exact candidate. It lands through one of two
    sanctioned modes: **Local**, `codeflow integrate <candidate> --into
    integration/<…>` on a candidate cut from the current line tip (serialized,
    runs the full gate, keeps the tested tip); or **PR** into the integration
    branch, merged by the primary once the candidate's full gate is green and
    the PR's required checks pass. The PR cites the gate run by its id and
-   revision from its durable home. Unit reviews are not repeated.
+   revision from its durable home.
 4. **A red batch is diagnosed first.** Drop a member only when evidence
    attributes the failure to it; it and its dependents leave the batch, the
    fix goes in that task's PR, and the rest is regated. A shared runner or

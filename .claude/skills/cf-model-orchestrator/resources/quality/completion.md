@@ -11,15 +11,14 @@ its PR body show:
   is missed are a finding that returns to `cf-plan`, not a pass;
 - required deterministic gates are green, with redness classified as in
   [blocker navigation and gate redness](blockers-and-gates.md);
-- the PR's required evidence exists and is cited; nothing polls by default,
-  and only where the adopted policy requires hosted checks green before
-  landing are they awaited with the bounded wait `cf-ship` step 7 names, never
-  an open-ended poll. The operator received the readiness report with the PR URL the tool
-  printed; no agent merged a protected branch;
+- the PR's required evidence exists and is cited, hosted checks awaited only
+  as `cf-ship` step 7 says, never an open-ended poll; the operator received
+  the readiness report with the PR URL the tool printed; no agent merged a
+  protected branch;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
-- every unit has approved cross-lineage review and the selected Claude judgment
-  primary has approved the integrated design/code judgment;
+- every unit has approved cross-lineage review of the whole unit at its
+  `reviewed` commit and the selected Claude judgment primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
 - every finding from every review, material and minor, is recorded in the PR
   body as finding, severity, disposition and evidence, with a disposition that

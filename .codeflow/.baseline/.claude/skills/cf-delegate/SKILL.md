@@ -125,15 +125,15 @@ a delegate edits only inside a worktree on a feature branch, never on the root
 checkout or a protected branch, and its commits pass CodeFlow's gates
 unchanged.
 
-`agy` is not a delegate tier (headless only, so the transport rule rules it
-out); when `agy` is someone's harness, read [agy notes](resources/agy.md) for
-the experimental guard binding.
+`agy` is no delegate tier (headless only); when `agy` is someone's harness,
+read [agy notes](resources/agy.md).
 
 ## Guardrails
 
-- **Every delegate prompt narrows authority and data.** Name purpose, permitted
-  actions/files/resources/data/processors/destinations/effects and step budget;
-  ambiguity blocks; never guess. Send only necessary minimized data to an
+- **Every delegate prompt narrows authority and data, not reading.** Name
+  purpose, permitted edits, data, processors, destinations, effects and a
+  step budget on edits and run time; a seat that outruns it says so and
+  keeps going; ambiguity blocks; never guess. Send only necessary minimized data to an
   approved processor; route qualification is not data authority. An
   already-authorized scoped handoff needs no new approval; the lead verifies
   effects and claims.

@@ -52,9 +52,9 @@ records the required interactive seat unavailable and the reduced assurance.
       material dependency or decision change in the task.
    b. **Review**: first merge the current integration line into the task
       branch and resolve conflicts there. Then get an *independent* review
-      against the criteria: in Claude Code, spawn the `cf-reviewer` subagent;
-      in another harness, run a separate read-only review pass (self-review
-      is not review). For lifecycle-tracked Claude runs, invoke `cf-reviewer`
+      of the whole unit at this head: in Claude Code, spawn the
+      `cf-reviewer` subagent; in another harness, run a separate read-only
+      review pass. For lifecycle-tracked Claude runs, invoke `cf-reviewer`
       in the foreground (`run_in_background: false` when offered) and collect
       its actual verdict before the primary turn ends; never defer it to a
       later callback or bypass review. Claude Code

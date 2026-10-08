@@ -35,9 +35,13 @@ A cross-family review or consult in Herdr runs this way, and only this way:
    seat is waiting in this tab, with the hook-file match check as
    information only.
 4. The brief follows the review brief contract in the orchestrator's
-   `resources/quality/findings.md`: one holistic pass over the whole unit at
-   one head, its blast radius included. It is delivered with `deliver.py`.
-5. The reply is harvested as above, once the status leaves `working`.
+   `resources/quality/findings.md` and is delivered with
+   `deliver.py --review <base>...<head>`, which refuses a brief that asks for
+   a narrower range.
+5. The reply is harvested as above, once the status leaves `working`; a
+   verdict that names another head, a narrower range, or carries an earlier
+   approval forward is not the unit's verdict: re-brief the same seat for
+   the whole unit at the head.
 6. If the seat's client withholds a security verdict through a content
    filter, ask the same seat to restate it as a defensive review.
 7. Later rounds of the same unit resume this tab; the tab is closed after

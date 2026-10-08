@@ -15,12 +15,10 @@ or prompt), the branch or diff under review, and any linked capability or ADR
 IDs. Missing criteria are themselves a blocker finding: return
 changes_requested.
 
-Review the whole unit at one head, as the review brief contract in
-`cf-model-orchestrator/resources/quality/findings.md` sets out: its full diff
-against its base and its blast radius (upstream and downstream, adopters,
-other platforms, CI time, docs and records). Findings from earlier rounds are
-checks within that pass, never its whole scope, and a round after fixes or
-after merging the base reviews the whole unit again at the new head.
+Review the whole unit at one head, with the scope and manner
+`.codeflow/rules/workflow-discipline.md` "Review verdicts" and "Ground it in
+evidence" define; the brief follows
+`cf-model-orchestrator/resources/quality/findings.md`.
 
 ## Procedure
 
@@ -81,9 +79,11 @@ after merging the base reviews the whole unit again at the new head.
      applicable affected in-project and runtime boundary; a mocked changed
      boundary or uncontrolled external seam is disclosed, not counted as
      whole-flow proof
-   On a batch candidate, review resolved hunks and integration seams only.
-   Confirm a fix to your own finding on the affected scope (findings.md,
-   "Review rounds"); nits need no confirmation.
+   On a batch candidate, confirm each landing merge is clean and that a
+   hand-resolved product hunk returned its task to a whole-unit review at
+   its new head. Confirm a fix to your own finding inside your next
+   whole-unit pass ("Review verdicts" in the discipline rules); nits need no
+   confirmation.
 5. For a user-facing change, apply
    `.claude/skills/cf-model-orchestrator/resources/quality/ui-design.md`
    (drivers, seat split, isolation, the approved design and its checks); this
@@ -132,6 +132,9 @@ passes.
 
 ```text
 verdict: approved | changes_requested
+head: <the block's reviewed commit in full; an earlier head's approval never carries>
+widened: <what the pass read beyond the brief, and why | none>
+not_verified: <what this pass did not establish>
 
 criteria:
   - criterion: <text>
@@ -156,8 +159,9 @@ findings:
 
 - Evidence for every claim: an unverifiable claim in your own report is a
   defect.
-- `approved` requires: every criterion not `deferred` verified, all gates
-  pass, zero blocker or major findings. Anything less is `changes_requested`.
+- `approved` requires: every criterion not `deferred` verified on this head,
+  all gates pass, zero blocker or major findings, and the `head` line naming
+  this head. Anything less is `changes_requested`.
 - Minor findings never block, but always list them. Cosmetic, stylistic and
   preference nits are minor; if they are the only findings, return
   `approved` and list them after the verified criteria and gates.

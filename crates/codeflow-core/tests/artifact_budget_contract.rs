@@ -1912,7 +1912,7 @@ fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
             ("intake severity", "says which one holds, or that none does"),
             ("intake record home", "go in the PR Summary or the design note"),
             ("cause and class", "Name the mechanism with file:line and the defect class"),
-            ("sibling sweep", "Search the tree for the class and list every site"),
+            ("sibling sweep", "Search for the class wherever the rule reaches (this tree, the shipped copies adopters receive, the docs and records that state the rule) and list every site"),
             ("deferred sites tracked now", "each deferred site gets its own issue now, naming the class"),
             ("group by cause", "become one unit with one design before anyone branches"),
             (
