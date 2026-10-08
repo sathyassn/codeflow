@@ -372,6 +372,29 @@ erratum below, never an edit of the section.
   PR Summary or the design note instead of an issue comment.
   `codeflow update` replaces the unmodified files.
 
+<!-- codeflow:release-impact minor -->
+- **Review and research briefs ask for the whole unit at one head.** Several
+  review briefs asked the other-lineage seat for a fix delta or a merge
+  only, and verdicts carried an earlier approval forward to a head they did
+  not cover (sathyassn/codeflow#121). The workflow discipline rules now state
+  once what a review reads (the full diff, criteria, acceptance evidence,
+  blast radius and fit), how review and research look (a five-item manner),
+  that a named scope is where the work starts, never a fence, and that a
+  material fix is confirmed inside the finder's next whole-unit pass. The
+  review brief contract names that file and the `<base>...<head>` range; the
+  `cf-reviewer` verdict names its `head:`, what it `widened:` and what it did
+  not verify; a hand-resolved product hunk at a batch landing returns its task
+  to a whole-unit review. Two checks back the words:
+  `deliver.py --review <base>...<head>` sends nothing and exits 6 when a Herdr
+  brief names a narrower range or a path-restricted diff, and `codeflow ci`
+  refuses a completed task's PR body whose Reviews section has no approving
+  row for the acceptance block's `reviewed` commit (a light range may leave
+  the section out or write `None: <reason>`). The pipeline workflow seed gains
+  a `base` argument; existing copies of that user-owned file are not changed.
+  Migration: write each Reviews row as `whole unit at <reviewed>`, with the
+  acceptance block's commit in full, before completing a task;
+  `codeflow update` replaces the unmodified instruction files.
+
 ### Fixed
 
 <!-- codeflow:release-impact minor -->
