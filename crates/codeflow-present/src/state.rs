@@ -2940,9 +2940,9 @@ impl BlockNames {
     }
 }
 
-/// B1 step 2 for an element note whose block changed, as amended for
-/// TSK-259: only the quote is searched, never the element label, so a part
-/// labelled "Unnamed part of <title>" cannot match its title. A drawn shape
+/// B1 step 2 for an element note whose block changed, as TSK-259 changed
+/// it: only the quote is searched, never the element label, so a part
+/// labelled `Unnamed part of <title>` cannot match its title. A drawn shape
 /// whose quote is the stage's name had no name of its own (B3 step 4 before
 /// TSK-259 stored the block label); drawn text, a frame title and prose keep
 /// their quote.
@@ -2974,7 +2974,7 @@ fn reanchor_element_quote(
 }
 
 /// Tags whose element note, when its quote is the stage's name, was a part
-/// with no name of its own (SPC-014 B1 step 2, amended 2026-10-08).
+/// with no name of its own (TSK-259; `docs/architecture/present.md`).
 const UNNAMED_PART_TAGS: &[&str] = &[
     "path", "line", "rect", "circle", "ellipse", "polyline", "polygon", "svg", "g",
 ];

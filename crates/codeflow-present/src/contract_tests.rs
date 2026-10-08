@@ -517,9 +517,9 @@ fn unnamed_part_note(source: &PresentationDocument, fixture: &Value) -> Feedback
     built
 }
 
-/// SPC-014 B1 step 2 as amended for TSK-259: an unnamed part is never
-/// re-anchored onto its stage title, while drawn text, a frame title and a
-/// text note that quote the title still are.
+/// SPC-014 B1 step 2 as TSK-259 changed it (`docs/architecture/present.md`):
+/// an unnamed part is never re-anchored onto its stage title, while drawn
+/// text, a frame title and a text note that quote the title still are.
 #[test]
 fn an_unnamed_part_falls_back_to_the_block_and_never_onto_the_title() {
     let cases = fixture_json("reanchor/unnamed-parts.json");

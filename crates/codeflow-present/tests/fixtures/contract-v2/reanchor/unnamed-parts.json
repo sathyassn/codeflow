@@ -1,5 +1,5 @@
 {
-  "clause": "B1 step 2 (amended 2026-10-08), B3 step 4",
+  "clause": "B1 step 2 and B3 step 4, as TSK-259 changed them in docs/architecture/present.md",
   "note": "Each case stores one note on the block of its source revision, updates the session to the target revision and reads the anchor. `before` is what the runtime reported before TSK-259.",
   "cases": [
     {

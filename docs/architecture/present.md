@@ -137,6 +137,37 @@ A note on an older revision is placed on the current one in this order
 | Input bounds | review controls show the Rust-owned note, text, selection and payload bounds before submission |
 | Full history | remains available explicitly, without being injected into unrelated work |
 
+SPC-014 is implemented and frozen. TSK-259 (2026-10-08) changed these of
+its rules, and this section is their current home:
+
+- **B1 step 2.** An element note is searched by its excerpt text only,
+  never its label; with no excerpt text it falls back to the block ("the
+  element changed and the note has no quote to search"). An element note on
+  a drawn shape (`path`, `line`, `rect`, `circle`, `ellipse`, `polyline`,
+  `polygon`, `svg`, `g`) whose quote equals the block's review label in its
+  own or the current revision falls back too ("the part had no name and its
+  stage changed"), as does an entity note whose entity is gone and whose
+  quote is that label. Drawn text, a v1 frame title and text notes keep the
+  quote rule.
+- **B3 step 4.** The label of a `figure` or `svg` ancestor names the
+  picture, never a part of it. A part that no entity, labelled `g`, other
+  labelled ancestor or label of its own names is `Unnamed part of <block
+  label>`; its note stores that label with no excerpt text and keeps its
+  crop. Each stage entity without an `aria-label` gets its label as
+  `aria-label`, and a `g` entity without a role gets `role="group"`.
+- **B11 and the I5 `present check` row.** Every line carries `severity`,
+  and the summary is `{ "faults", "valid", "warnings" }`: `faults` counts
+  faults only and `valid` is true when there are none, so exit 9 still means
+  a fault. Warnings never refuse a document: `framing` for a schema 1 `html`
+  block without a title or caption; `entities` for shapes a gesture reaches
+  that nothing names (content of `defs`, `marker`, `title`, `desc`,
+  `clipPath`, `mask`, `pattern`, `symbol`, `style` and `script`, and a
+  `none` subtree, are not counted), and again for an element with
+  `role="img"` that contains an entity; one `version` line when a schema 1
+  document drew either. A missing `description` is never warned about.
+  `present open` and `present update` print the warnings on stderr and
+  proceed.
+
 ### Conversation and revision projections
 
 - Replies, reopens and tombstones extend `responses.jsonl` additively and
