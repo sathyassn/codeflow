@@ -12,9 +12,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        // Resolve the temporary directory's own links (`/var` on macOS),
-        // so a spelled path and its resolution agree.
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        // Resolve the temporary directory's own links (`/var` on macOS)
+        // and Windows short names, so a spelled path and its resolution
+        // agree.
+        let root = crate::portable_path::canonicalize(dir.path()).unwrap();
         let home = root.join("home");
         let project = home.join("work/project");
         std::fs::create_dir_all(&project).unwrap();
@@ -36,9 +37,10 @@ impl Fixture {
         }
     }
 
-    /// The command with `H` replaced by the fixture home.
+    /// The command with `H` replaced by the fixture home, spelled with
+    /// `/` as a shell command spells a path on every platform.
     fn spell(&self, command: &str) -> String {
-        command.replace("H/", &format!("{}/", self.home.display()))
+        command.replace("H/", &format!("{}/", slashed(&self.home)))
     }
 
     fn judge_in(&self, command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
@@ -48,6 +50,11 @@ impl Fixture {
     fn judge(&self, command: &str) -> Vec<Violation> {
         self.judge_in(command, &self.project, &self.env())
     }
+}
+
+/// A path as a shell command spells it: `/` separators on every platform.
+fn slashed(path: &Path) -> String {
+    crate::portable_path::slashed(path)
 }
 
 fn refused(found: &[Violation]) -> bool {
@@ -206,6 +213,88 @@ fn reads_and_ordinary_writes_pass() {
 
 /// A target the guard cannot resolve refuses near the class and keeps
 /// its verdict elsewhere.
+/// Pattern characters in the run directory or the home are part of a
+/// path, never a glob: the shell expands only what the word spells. A
+/// project in `proj (1)` once let `echo x > .envrc` pass, and so did the
+/// `?` of a Windows `\\?\` path (the Windows run of PR 113).
+#[test]
+fn pattern_characters_outside_the_word_are_literal() {
+    let f = Fixture::new();
+    for name in ["proj (1)", "p[1]", "a#b", "x^y"] {
+        let cwd = f.home.join("work").join(name);
+        std::fs::create_dir_all(&cwd).unwrap();
+        for command in [
+            "echo x > .envrc",
+            "echo x > sub/.envrc",
+            "cp evil .envrc",
+            "echo x > ~/.zl?gin",
+        ] {
+            let found = f.judge_in(command, &cwd, &f.env());
+            assert!(refused(&found), "{command} in {name}");
+        }
+        let found = f.judge_in("echo x > notes.txt", &cwd, &f.env());
+        assert!(!refused(&found), "notes.txt in {name}: {found:?}");
+    }
+    let home = f.home.join("work").join("home (1)");
+    std::fs::create_dir_all(home.join(".config/fish")).unwrap();
+    let env = StartupEnv {
+        home: Some(home.clone()),
+        ..f.env()
+    };
+    for command in [
+        "echo x > ~/.config/fish/conf.d/x.fish",
+        "echo x > $HOME/.config/fish/conf.d/x.fish",
+        "mkdir -p ~/.config/fish/functions",
+        "echo x > ~/.zl?gin",
+        "echo x > $HOME/.config/fish/conf.d/*.fish",
+        "echo x > ~/.config/fish/*.fish",
+    ] {
+        let found = evaluate(command, &f.project, &env);
+        assert!(refused(&found), "{command} with the home in `home (1)`");
+    }
+}
+
+/// On Windows the class compares paths without a drive, so `/etc/zshenv`
+/// joined from `C:\work` and the Git Bash spelling `/c/Users/u/.zshrc`
+/// reach the class entries spelled from the root and the home.
+#[test]
+fn drives_are_dropped_from_compared_windows_paths() {
+    for (text, want) in [
+        ("c:/etc/zshenv", "/etc/zshenv"),
+        ("c:/users/u/.zshrc", "/users/u/.zshrc"),
+        ("/c/users/u/.zshrc", "/users/u/.zshrc"),
+        ("c:/c/users/u/.zshrc", "/users/u/.zshrc"),
+        ("c:", ""),
+        ("/c", "/"),
+        ("c:/", "/"),
+        ("/etc/zshenv", "/etc/zshenv"),
+        ("/cd/x", "/cd/x"),
+        ("work/.envrc", "work/.envrc"),
+    ] {
+        assert_eq!(drive_free(text), want, "{text}");
+    }
+}
+
+/// The same, end to end where the paths are real Windows paths.
+#[cfg(windows)]
+#[test]
+fn windows_drive_spellings_reach_the_class() {
+    let f = Fixture::new();
+    assert!(class_target(Path::new(r"C:\etc\profile.d\x.sh"), &f.env()).is_some());
+    assert!(class_target(Path::new(r"\\?\C:\etc\zshenv"), &f.env()).is_some());
+    let home = slashed(&f.home);
+    let (drive, rest) = home.split_once(':').unwrap();
+    let msys = format!("/{}{rest}", drive.to_lowercase());
+    for command in [
+        format!("echo x > {msys}/.zshrc"),
+        format!("echo x > {home}/.config/fish/conf.d/x.fish"),
+        "echo x > /etc/profile.d/x.sh".to_string(),
+        "R=/etc; tar -xf a.tar -C \"$R\"".to_string(),
+    ] {
+        assert!(refused(&f.judge(&command)), "{command}");
+    }
+}
+
 #[test]
 fn unresolved_targets_fail_closed_near_the_class() {
     let f = Fixture::new();
@@ -262,7 +351,7 @@ fn placing_into_the_home_refuses() {
     assert!(!refused(&found), "a git read in the home");
     // Git judged where it runs: its `-C` directory, and only for a
     // subcommand that can write the working tree.
-    let project = f.project.display().to_string();
+    let project = slashed(&f.project);
     for command in [
         "git push origin --tags",
         "git fetch origin",
@@ -284,7 +373,7 @@ fn placing_into_the_home_refuses() {
         let found = f.judge_in(command, &f.home, &f.env());
         assert!(refused(&found), "{command} from the home");
     }
-    let found = f.judge(&format!("git -C {} merge main", f.home.display()));
+    let found = f.judge(&format!("git -C {} merge main", slashed(&f.home)));
     assert!(refused(&found), "git -C to the home from a project");
     for command in [
         "tar -xf bundle.tar",
@@ -381,7 +470,7 @@ fn effective_locations_follow_the_environment() {
     assert!(class_target(&xdg.join("fish/config.fish"), &env).is_some());
     assert!(class_target(&f.home.join(".zshrc"), &env).is_some());
     assert!(class_target(&zdot.join("notes"), &env).is_none());
-    let cmd = format!("echo x >> {}/.zshrc", zdot.display());
+    let cmd = format!("echo x >> {}/.zshrc", slashed(&zdot));
     assert!(refused(&evaluate(&cmd, &f.project, &env)));
 }
 

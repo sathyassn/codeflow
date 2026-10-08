@@ -323,9 +323,36 @@ fn mentions(text: &str, needle: &str) -> bool {
     })
 }
 
-/// A path as the class compares it: slashes, lower case.
-fn key(path: &Path) -> String {
-    crate::portable_path::slashed(path).to_lowercase()
+/// A path as the class compares it: slashes, lower case, and on Windows
+/// without the verbatim prefix or a drive.
+pub(crate) fn key(path: &Path) -> String {
+    let path = crate::portable_path::without_verbatim(path.to_path_buf());
+    let text = crate::portable_path::slashed(&path).to_lowercase();
+    if cfg!(windows) {
+        drive_free(&text).to_string()
+    } else {
+        text
+    }
+}
+
+/// `text`, a slashed lower-case Windows path, without its drive: `c:/x`,
+/// the Git Bash spelling `/c/x` and that spelling joined to a working
+/// directory's drive (`c:/c/x`) all read as `/x`. The class's system
+/// entries are spelled from the root (`/etc/zshenv`, which Git Bash reads
+/// below its own install), and a drive joined from the working directory
+/// must not hide them. A path on another drive, or below a one-letter
+/// folder at a drive's root, can then match a class entry too, which only
+/// refuses more.
+fn drive_free(text: &str) -> &str {
+    let text = match text.as_bytes() {
+        [letter, b':', ..] if letter.is_ascii_alphabetic() => &text[2..],
+        _ => text,
+    };
+    match text.as_bytes() {
+        [b'/', letter] if letter.is_ascii_alphabetic() => "/",
+        [b'/', letter, b'/', ..] if letter.is_ascii_alphabetic() => &text[2..],
+        _ => text,
+    }
 }
 
 fn shown(path: &Path) -> String {
@@ -398,6 +425,52 @@ fn resolve(path: &Path) -> Option<PathBuf> {
         }
     }
     Some(out)
+}
+
+/// A glob a word spells: a literal directory the shell does not expand,
+/// and the pattern below it.
+struct Pattern {
+    base: PathBuf,
+    rest: String,
+}
+
+impl Pattern {
+    fn shown(&self) -> String {
+        format!("{}/{}", shown(&self.base).trim_end_matches('/'), self.rest)
+    }
+}
+
+/// `word` with each of `vars` replaced by its value, repeated until
+/// nothing changes (at most six passes).
+fn substitute_with(word: &str, vars: &[(String, String)]) -> String {
+    let mut text = word.to_string();
+    for _ in 0..6 {
+        let before = text.clone();
+        for (name, value) in vars {
+            for form in [format!("${{{name}}}"), format!("${name}")] {
+                let mut from = 0;
+                while let Some(found) = text[from..].find(&form) {
+                    let at = from + found;
+                    let end = at + form.len();
+                    let continues = form.starts_with("${")
+                        || !text[end..]
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+                    if !continues {
+                        from = end;
+                        continue;
+                    }
+                    text.replace_range(at..end, value);
+                    from = at + value.len();
+                }
+            }
+        }
+        if text == before {
+            break;
+        }
+    }
+    text
 }
 
 /// What a word names as a write target.
@@ -516,39 +589,56 @@ impl Line<'_> {
         Some(path)
     }
 
+    /// The glob `word` spells from `dir`: `None` unless a part the line
+    /// spells holds pattern syntax. The run directory, the home a `~` names
+    /// and the values of `$HOME`, `$ZDOTDIR` and `$XDG_CONFIG_HOME` are
+    /// read as the paths they are, whatever characters they hold, so a
+    /// project in `proj (1)` or a Windows `\\?\` path is never a pattern
+    /// (the Windows run of PR 113).
+    fn pattern(&self, word: &str, dir: &Path) -> Option<Pattern> {
+        let assigned: Vec<(String, String)> = self
+            .vars()
+            .into_iter()
+            .filter(|(name, _)| self.assigned.contains_key(name))
+            .collect();
+        let mut spelled = substitute_with(word, &assigned);
+        if cfg!(windows) {
+            // A backslash the shell kept (in double quotes) separates there.
+            spelled = spelled.replace('\\', "/");
+        }
+        let (anchor, rest) = match spelled.as_str() {
+            "~" | "~+" => (spelled.as_str(), ""),
+            text => text
+                .strip_prefix("~/")
+                .map(|rest| ("~", rest))
+                .or_else(|| text.strip_prefix("~+/").map(|rest| ("~+", rest)))
+                .unwrap_or(("", text)),
+        };
+        let parts: Vec<&str> = rest.split('/').collect();
+        let at = parts.iter().position(|part| has_glob(part))?;
+        let base = if anchor.is_empty() && at == 0 {
+            dir.to_path_buf()
+        } else {
+            let literal = parts[..at].join("/");
+            let base_word = match (anchor, literal.as_str()) {
+                ("", "") => "/".to_string(),
+                ("", literal) => literal.to_string(),
+                (anchor, "") => anchor.to_string(),
+                (anchor, literal) => format!("{anchor}/{literal}"),
+            };
+            self.expand(&base_word, dir)?
+        };
+        Some(Pattern {
+            base,
+            rest: self.substitute(&parts[at..].join("/")),
+        })
+    }
+
     /// `word` with each variable the guard can read replaced by its value.
     /// An assigned value can itself use `$HOME` or another assigned name
     /// (`A=$HOME; F=$A/.zshrc`), so the pass repeats until nothing changes.
     fn substitute(&self, word: &str) -> String {
-        let mut text = word.to_string();
-        for _ in 0..6 {
-            let before = text.clone();
-            // Known variables, the line's own literal assignments first.
-            for (name, value) in self.vars() {
-                for form in [format!("${{{name}}}"), format!("${name}")] {
-                    let mut from = 0;
-                    while let Some(found) = text[from..].find(&form) {
-                        let at = from + found;
-                        let end = at + form.len();
-                        let continues = form.starts_with("${")
-                            || !text[end..]
-                                .chars()
-                                .next()
-                                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-                        if !continues {
-                            from = end;
-                            continue;
-                        }
-                        text.replace_range(at..end, &value);
-                        from = at + value.len();
-                    }
-                }
-            }
-            if text == before {
-                break;
-            }
-        }
-        text
+        substitute_with(word, &self.vars())
     }
 
     /// The variables the guard can read: the line's literal assignments,
@@ -620,9 +710,8 @@ impl Line<'_> {
                 let Some(path) = self.expand(reading, dir) else {
                     return Judged::Unresolved(reading.clone());
                 };
-                let text = shown(&path);
-                if has_glob(&text) {
-                    match self.glob(&text) {
+                if let Some(pattern) = self.pattern(reading, dir) {
+                    match self.glob(&pattern) {
                         Judged::Ordinary => {}
                         Judged::Placement(p) => placement = Some(p),
                         other => return other,
@@ -646,7 +735,7 @@ impl Line<'_> {
     /// be spelled, as in Bash and zsh by default, unless the line turns on
     /// an option that lets a pattern match it (`dotglob`, `GLOBIGNORE`,
     /// `globdots`).
-    fn glob(&self, pattern: &str) -> Judged {
+    fn glob(&self, pattern: &Pattern) -> Judged {
         let folded = self.text.to_lowercase().replace('_', "");
         let dots = ["dotglob", "globignore", "globdots"]
             .iter()
@@ -656,9 +745,22 @@ impl Line<'_> {
             require_literal_separator: true,
             require_literal_leading_dot: !dots,
         };
-        let Ok(compiled) = glob::Pattern::new(&pattern.to_lowercase()) else {
-            return Judged::Unresolved(pattern.to_string());
+        // The literal directory is escaped and keyed as the class paths
+        // are, so only the spelled part matches as a pattern.
+        let text = format!(
+            "{}/{}",
+            glob::Pattern::escape(key(&lexical(&pattern.base)).trim_end_matches('/')),
+            pattern.rest.to_lowercase()
+        );
+        let Ok(compiled) = glob::Pattern::new(&text) else {
+            return Judged::Unresolved(pattern.shown());
         };
+        // A glob in a class directory writes there whatever it matches, and
+        // the shell keeps a word that matches nothing as its own name
+        // (`conf.d/*.fish`, which fish then reads).
+        if let Some(label) = self.class.target(&pattern.base) {
+            return Judged::Class(label);
+        }
         for entry in &self.class.entries {
             if let Entry::At {
                 label, readings, ..
@@ -669,8 +771,8 @@ impl Line<'_> {
                 }
             }
         }
-        let Some(paths) = startup_glob_paths(Path::new(pattern), dots) else {
-            return Judged::Unresolved(pattern.to_string());
+        let Some(paths) = startup_glob_paths(&pattern.base, Path::new(&pattern.rest), dots) else {
+            return Judged::Unresolved(pattern.shown());
         };
         let mut placement = None;
         for path in paths {
@@ -716,11 +818,10 @@ impl Line<'_> {
         }
         if dirs
             .iter()
-            .filter_map(|dir| self.expand(word, dir))
-            .any(|path| {
-                has_glob(&shown(&path))
-                    && startup_glob_paths(&path, false).is_none()
-                    && !self.glob_ends_plain(&shown(&path))
+            .filter_map(|dir| self.expand(word, dir).and_then(|_| self.pattern(word, dir)))
+            .any(|pattern| {
+                startup_glob_paths(&pattern.base, Path::new(&pattern.rest), false).is_none()
+                    && !self.glob_ends_plain(&pattern.rest)
             })
         {
             return Some("its glob exceeds the shell reader's bounded expansion".to_string());

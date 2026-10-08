@@ -1946,14 +1946,18 @@ fn every_path_below(dir: &Path, read: &mut usize) -> Result<Vec<PathBuf>, GlobSt
     Ok(found)
 }
 
-/// Expand a startup target's glob using the shell reader's bounded listing.
-/// This only expands named targets; it never inspects a copier's source tree.
-pub(crate) fn startup_glob_paths(pattern: &Path, match_hidden: bool) -> Option<Vec<PathBuf>> {
-    let literal = pattern
-        .components()
-        .take_while(|c| !has_glob(&c.as_os_str().to_string_lossy()))
-        .count();
-    expand_components(pattern, literal, false, match_hidden, &mut 0).ok()
+/// Expand a startup target's glob `pattern` below the directory `base`
+/// using the shell reader's bounded listing. Every component of `base` is
+/// literal whatever characters it holds: it is the run directory, the home
+/// or a known location, which the shell does not expand. This only expands
+/// named targets; it never inspects a copier's source tree.
+pub(crate) fn startup_glob_paths(
+    base: &Path,
+    pattern: &Path,
+    match_hidden: bool,
+) -> Option<Vec<PathBuf>> {
+    let literal = base.components().count();
+    expand_components(&base.join(pattern), literal, false, match_hidden, &mut 0).ok()
 }
 
 /// [`WordGlob::expand`] one component at a time; the first `literal`
@@ -10477,8 +10481,12 @@ mod tests {
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
         // Review round three: a relative `--file` is read from the directory
-        // git runs in. Nothing is written; only the verdict is read.
-        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        // git runs in. Nothing is written; only the verdict is read. The
+        // home is the one the guard reads: `HOME`, else `USERPROFILE`.
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap();
         let user_dir = home.join(".config/git");
         let elsewhere = tempfile::tempdir().unwrap();
         let at =
@@ -10495,7 +10503,7 @@ mod tests {
             (
                 format!(
                     "git -C {} config --file config alias.x y",
-                    user_dir.display()
+                    crate::portable_path::slashed(&user_dir)
                 ),
                 elsewhere.path(),
             ),

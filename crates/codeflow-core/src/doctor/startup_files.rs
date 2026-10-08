@@ -104,19 +104,25 @@ fn source_operands(line: &str) -> Vec<String> {
 }
 
 /// The path a literal operand names: absolute, `~/`, `$HOME/` or
-/// `${HOME}/`. `None` for anything the shell fills in otherwise.
+/// `${HOME}/`. `None` for anything the shell fills in otherwise. Only the
+/// part the file spells is read for expansions: the home is a path,
+/// whatever characters it holds (a Windows `\\?\` home included).
 fn literal(word: &str, home: &Path) -> Option<PathBuf> {
     let rest = word
         .strip_prefix("~/")
         .or_else(|| word.strip_prefix("$HOME/"))
         .or_else(|| word.strip_prefix("${HOME}/"));
-    let path = match rest {
-        Some(rest) => home.join(rest),
-        None if word.starts_with('/') => PathBuf::from(word),
-        None => return None,
-    };
-    let text = path.to_string_lossy();
-    (!text.contains(['$', '`', '*', '?', '[', '{'])).then_some(path)
+    if rest
+        .unwrap_or(word)
+        .contains(['$', '`', '*', '?', '[', '{'])
+    {
+        return None;
+    }
+    match rest {
+        Some(rest) => Some(home.join(rest)),
+        None if word.starts_with('/') => Some(PathBuf::from(word)),
+        None => None,
+    }
 }
 
 /// The class rules missing from the project's Claude settings and Codex
@@ -272,7 +278,7 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
     // A write grant on, above or below a class path, in any spelling, can
     // reopen it: Codex applies narrower grants, and a write wins over a
     // read at the same path (review rounds two and three).
-    let home = std::env::var("HOME").ok();
+    let home = StartupEnv::from_process().home;
     let normal = |path: &str| normal_path(path, home.as_deref());
     let class: Vec<String> = paths.iter().filter_map(|p| normal(p)).collect();
     for profile in &chain {
@@ -314,35 +320,36 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
 
 /// A Codex filesystem path as doctor compares it: `~` expanded with
 /// `home`, `.` and `..` components folded, the longest existing ancestor
-/// read through its symbolic links, no trailing slash, lower case, so
-/// equivalent spellings compare equal (review round five); `None` for a
-/// path it cannot place (relative, or `~user`).
-fn normal_path(path: &str, home: Option<&str>) -> Option<String> {
+/// read through its symbolic links, and the result keyed as the guard's
+/// class compares paths (slashes, lower case, on Windows no drive), with no
+/// trailing slash, so equivalent spellings compare equal (review round
+/// five); `None` for a path it cannot place (relative, or `~user`). A path
+/// spelled from the root (`/etc/profile`) is placed on Windows too.
+fn normal_path(path: &str, home: Option<&Path>) -> Option<String> {
     let expanded = match (path.strip_prefix('~'), home) {
         (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-            format!("{}{rest}", home.trim_end_matches('/'))
+            home.join(rest.trim_start_matches('/'))
         }
         (Some(_), _) => return None,
-        (None, _) => path.to_string(),
+        (None, _) => PathBuf::from(path),
     };
-    if !expanded.starts_with('/') {
+    if !expanded.has_root() {
         return None;
     }
-    let mut parts: Vec<&str> = Vec::new();
-    for part in expanded.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
+    let mut lexical = PathBuf::new();
+    for component in expanded.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                lexical.pop();
             }
-            _ => parts.push(part),
+            other => lexical.push(other),
         }
     }
-    let lexical = PathBuf::from(format!("/{}", parts.join("/")));
     let mut base = lexical.clone();
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
     let real = loop {
-        if let Ok(real) = std::fs::canonicalize(&base) {
+        if let Ok(real) = crate::portable_path::canonicalize(&base) {
             break rest.iter().rev().fold(real, |acc, part| acc.join(part));
         }
         match (base.file_name(), base.parent()) {
@@ -353,7 +360,11 @@ fn normal_path(path: &str, home: Option<&str>) -> Option<String> {
             _ => break lexical,
         }
     };
-    Some(real.to_string_lossy().trim_end_matches('/').to_lowercase())
+    Some(
+        crate::security::startup::key(&real)
+            .trim_end_matches('/')
+            .to_string(),
+    )
 }
 
 /// One profile's filesystem entries, direct and scoped
@@ -563,7 +574,9 @@ mod tests {
         // seats select cf-builder at launch (review round two).
         let anchor = "[permissions.cf-builder.filesystem.\":workspace_roots\"]";
         assert!(shipped_text.contains(anchor));
-        let home = std::env::var("HOME").unwrap();
+        // The home doctor reads (`HOME`, else `USERPROFILE`), spelled with
+        // `/` as a TOML string can hold it on every platform.
+        let home = crate::portable_path::slashed(&StartupEnv::from_process().home.unwrap());
         let absolute = format!("\"{home}/.zshrc\" = \"write\"");
         let absolute_expect = format!("grants write on `{home}/.zshrc`");
         for (grant, expect) in [
