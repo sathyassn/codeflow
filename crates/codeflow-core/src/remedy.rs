@@ -435,6 +435,12 @@ catalog! {
     /// A pull request whose body the platform did not supply.
     CI_BODY_UNSUPPLIED = Step::Codeflow("codeflow ci"),
         "give the body to the check: `codeflow ci --pr-body-file <body.md>`, or set CODEFLOW_PR_BODY in the pipeline";
+    /// A change that lowers or removes a target security level.
+    CI_SECURITY_LEVEL_LOWERED = Step::Edit(".codeflow/policy.json"),
+        "restore git.{key} to {was} in .codeflow/policy.json; a change kept on purpose prints this note until it lands, so the operator reviews it as the target's own";
+    /// A project setup hook change that runs with the gate's authority.
+    CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
+        "restore .codeflow/ci-setup.sh to its target state; a change kept on purpose prints this note until it lands, so the operator reviews it as they would the CI file";
     /// A codeflow build whose embedded scaffold manifest does not load.
     SCAFFOLD_MANIFEST_BROKEN = Step::Codeflow("codeflow doctor"),
         "this codeflow build is damaged: install a release build, then `codeflow doctor` reports its managed files again";
@@ -593,7 +599,13 @@ catalog! {
         "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
     /// An upgrade that carries `codeflow update` before its raised pin lands.
     DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
-        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml and land it; then run `codeflow update` on a new branch";
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (`codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch";
+    /// A pinned release digest table the CI installers refuse.
+    DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
+        "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
+    /// A project state line the CI installers refuse to read.
+    DOCTOR_CI_DIGEST_LINE = Step::Edit(".codeflow/project.toml"),
+        "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than `codeflow update --pin` writes it)";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";

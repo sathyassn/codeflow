@@ -239,7 +239,7 @@
     ".agents/skills/cf-estimate/SKILL.md": {
       "src": "agents/skills/cf-estimate/SKILL.md",
       "ownership": "managed",
-      "sha256": "a660f4effb8fc793c7eaaf1c168fffe06b8f687446a9acb5eb336f98a22ca902",
+      "sha256": "bb226598f20b0f6ca0ac7c3c12efa8c092914c0cbf19f0b50e03f62c5ebe566b",
       "exec": false
     },
     ".agents/skills/cf-estimate/examples/brief.md": {
@@ -263,13 +263,13 @@
     ".agents/skills/cf-estimate/references/operating-model.md": {
       "src": "agents/skills/cf-estimate/references/operating-model.md",
       "ownership": "managed",
-      "sha256": "f24493708fe1961a5c921b1dec57817378b832161827bda85340aeef0192c24c",
+      "sha256": "bc5c46183695a70d43eb7af18e28be57805a32753be0a052fdaf3895acc51cb3",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "238fdda7bd92d866b82f1be83c946bebd725a71de65a4bbd9bf73e0d123d54d1",
+      "sha256": "45e4417313d715426e608a31fb287bc837c87f48c91f8bbf09c1d93bf1239aa0",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/rubric.md": {
@@ -1079,7 +1079,7 @@
     ".claude/skills/cf-estimate/SKILL.md": {
       "src": "agents/skills/cf-estimate/SKILL.md",
       "ownership": "managed",
-      "sha256": "a660f4effb8fc793c7eaaf1c168fffe06b8f687446a9acb5eb336f98a22ca902",
+      "sha256": "bb226598f20b0f6ca0ac7c3c12efa8c092914c0cbf19f0b50e03f62c5ebe566b",
       "exec": false
     },
     ".claude/skills/cf-estimate/examples/brief.md": {
@@ -1103,13 +1103,13 @@
     ".claude/skills/cf-estimate/references/operating-model.md": {
       "src": "agents/skills/cf-estimate/references/operating-model.md",
       "ownership": "managed",
-      "sha256": "f24493708fe1961a5c921b1dec57817378b832161827bda85340aeef0192c24c",
+      "sha256": "bc5c46183695a70d43eb7af18e28be57805a32753be0a052fdaf3895acc51cb3",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/records.md": {
       "src": "agents/skills/cf-estimate/references/records.md",
       "ownership": "managed",
-      "sha256": "238fdda7bd92d866b82f1be83c946bebd725a71de65a4bbd9bf73e0d123d54d1",
+      "sha256": "45e4417313d715426e608a31fb287bc837c87f48c91f8bbf09c1d93bf1239aa0",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/rubric.md": {
@@ -1799,13 +1799,13 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "0707031d6d6328d82e6db5db3abe92e4a3e443aaac5730ccfdf779c305d2d222",
+      "sha256": "0ebb6b5e2398204c3f40b5d0bb0ef2abe2de89f4653660582af5028ce06390eb",
       "exec": false
     },
     ".github/workflows/codeflow-policy.yml": {
       "src": "ci/codeflow-policy.yml",
       "ownership": "managed",
-      "sha256": "bd60adff869b5563916e4e9ad21dfd1674cf78c70d11839e5b35bcbe6739655d",
+      "sha256": "1e3339410d28c9a5a1e5a64d2084832bb1ec6a3f3a6aa86d436ed5bbc2e77819",
       "exec": false
     },
     ".gitignore": {
