@@ -843,13 +843,13 @@ impl Sites {
                 }
                 if let proc_macro2::TokenTree::Ident(ident) = token {
                     let punct = |index: usize, ch: char| matches!(tokens.get(index), Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == ch);
-                    if ident == "NotFound"
+                    if ABSENCE_KINDS.contains(&ident.to_string().as_str())
                         && at >= 3
                         && punct(at - 1, ':')
                         && punct(at - 2, ':')
                         && matches!(&tokens[at - 3], proc_macro2::TokenTree::Ident(kind) if kind == "ErrorKind")
                     {
-                        self.note(ident.span(), "ErrorKind::NotFound");
+                        self.note(ident.span(), &format!("ErrorKind::{ident}"));
                     }
                     if ABSENCE_METHODS.contains(&ident.to_string().as_str())
                         && at > 0
@@ -1094,11 +1094,11 @@ impl<'ast> Visit<'ast> for Sites {
                 {
                     self.note(last.ident.span(), &last.ident.to_string());
                 }
-                if last.ident == "NotFound"
+                if ABSENCE_KINDS.contains(&last.ident.to_string().as_str())
                     && path.segments.len() > 1
                     && path.segments[path.segments.len() - 2].ident == "ErrorKind"
                 {
-                    self.note(last.ident.span(), "ErrorKind::NotFound");
+                    self.note(last.ident.span(), &format!("ErrorKind::{}", last.ident));
                 }
             }
             syn::visit::visit_path(self, path);
@@ -5803,6 +5803,11 @@ fn absence_sites(source: &str) -> BTreeMap<(String, String), Vec<usize>> {
 // (file, item, operation, count, proof). Obtained type checks and diagnostic probes.
 const ABSENCE_METHODS: &[&str] = &["try_exists", "exists", "is_file", "is_dir"];
 
+/// Error kinds that can be read as "nothing is there". `InvalidFilename` and
+/// `NotADirectory` are listed because Windows also reports a path past
+/// `MAX_PATH` as `InvalidFilename`, which proves nothing.
+const ABSENCE_KINDS: &[&str] = &["NotFound", "InvalidFilename", "NotADirectory"];
+
 const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/ids.rs", "run_admit", "exists", 1, "False only sends a rev:path spec to git show, which refuses on error; a literal path whose metadata fails also fails the read that follows, so no unread input becomes a default."),
     ("crates/codeflow-cli/src/cmd/new.rs", "run_adr", "ErrorKind::NotFound", 1, "NotFound only picks the shipped template text for a new ADR, which check_adr then validates; any other read error refuses, and a dangling ancestor fails create_dir_all."),
@@ -5816,10 +5821,12 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "is_file", 1, "Type check on metadata whose errors other than NotFound fail the check; a directory goes to collect_record_files, which propagates its errors."),
     ("crates/codeflow-cli/src/embedded.rs", "EmbeddedAssets::read", "ErrorKind::NotFound", 1, "Debug builds only (cfg(debug_assertions)) read the source tree's assets directory, mirroring the release Raw::get Option contract; release binaries never take this path."),
-    ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing only when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name); a dangling or unreadable ancestor propagates its error, so the guard fails closed."),
+    ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name), or when the path is relative and every ancestor, including the empty one, is not found; an absolute path in that state, a dangling ancestor or an unreadable ancestor is an error, so the guard fails closed."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "ErrorKind::NotFound", 2, "The ancestor walk behind proven absence: an ancestor that is not found only continues the walk to the first existing one, and a dangling ancestor link becomes an error."),
     ("crates/codeflow-core/src/absence.rs", "missing_leaf", "is_dir", 1, "Type check on ancestor metadata obtained with errors propagated; a non-directory ancestor is reported as such, which proven_absent turns into an error, never absence."),
-    ("crates/codeflow-core/src/absence.rs", "proven_absent", "ErrorKind::NotFound", 1, "The helper defines proven absence: a leaf that is not found is absent only when missing_leaf finds a resolving directory above it; a non-directory ancestor or a refused name becomes an error."),
+    ("crates/codeflow-core/src/absence.rs", "proven_absent", "ErrorKind::NotFound", 1, "The helper defines proven absence: a leaf that is not found is absent when missing_leaf finds a resolving directory above it, or when the path is relative and every ancestor, including the empty one, is not found; an absolute path in that state, a non-directory ancestor or a refused name becomes an error."),
+    ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::InvalidFilename", 2, "A refused name proves no entry only where the kind is the platform's refusal of the name: on Windows only raw codes 123 and 161 (windows_error_refuses_name), never 206, the legacy MAX_PATH limit a long-path-aware process can pass; on Unix ENAMETOOLONG, the kernel's refusal."),
+    ("crates/codeflow-core/src/absence.rs", "refuses_name", "ErrorKind::NotADirectory", 1, "A component that is not a directory holds no entry; the caller reads every other error as a failure."),
     ("crates/codeflow-core/src/absence.rs", "symlink_metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; other errors propagate."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hook", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_opened_regular", "is_file", 2, "Both check metadata of the opened file obtained with errors propagated; false refuses with InvalidData."),
@@ -5873,6 +5880,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/orient.rs", "pointer_paths", "exists", 1, "Filters optional documentation navigation pointers only."),
     ("crates/codeflow-core/src/hooks/orient.rs", "work_line", "is_dir", 2, "Selects optional printed work counts in orientation, not a task-operation gate or work-state mutation."),
     ("crates/codeflow-core/src/hooks/repo.rs", "open", "is_dir", 1, "Marker symlink metadata was obtained after proven absence handling; obtaining errors refuse discovery."),
+    ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "ErrorKind::NotADirectory", 1, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "exists", 2, "Selects repair wording after a ledger write has already failed; the original LedgerUnwritten error remains."),
     ("crates/codeflow-core/src/hooks/session_summary.rs", "unwritten", "is_dir", 2, "Selects a repair path description after a failed ledger write, never converts it to successful writing."),
     ("crates/codeflow-core/src/hooks/source_identity.rs", "input_files::visit", "is_dir", 1, "Symlink metadata and entry errors propagate before source input type classification."),
@@ -6061,7 +6069,11 @@ fn hook_and_guard_absence_is_proven() {
     let mut allowed = BTreeMap::new();
     for (file, item, call, count, reason) in ABSENCE_EXCEPTIONS {
         assert!(absence_scope(file));
-        assert!(*call == "ErrorKind::NotFound" || ABSENCE_METHODS.contains(call));
+        assert!(
+            call.strip_prefix("ErrorKind::")
+                .is_some_and(|kind| ABSENCE_KINDS.contains(&kind))
+                || ABSENCE_METHODS.contains(call)
+        );
         assert!(*count > 0 && !reason.trim().is_empty());
         assert!(allowed
             .insert(
@@ -6087,6 +6099,8 @@ fn absence_scan_is_scoped_and_counts_paths_methods_and_macros() {
         "Path::try_exists(p)",
         "iter.map(Path::try_exists)",
         "opaque!(p.try_exists(); ErrorKind::NotFound)",
+        "matches!(e.kind(), io::ErrorKind::InvalidFilename)",
+        "if e.kind() == ErrorKind::NotADirectory {}",
     ] {
         let source = format!("fn f() {{ {expression}; }}");
         assert_eq!(
