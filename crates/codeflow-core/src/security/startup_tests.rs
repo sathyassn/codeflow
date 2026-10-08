@@ -1146,14 +1146,22 @@ fn nested_and_wrapped_commands_are_judged_like_the_command() {
         "find . -name '*.rs' -print",
         "grep -c alias ~/.zshrc > b.txt; find . -name '*.rs' -print",
         "grep -c alias ~/.zshrc > b.txt; timeout 5 ls",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    // Wrappers are not data readers: they refuse on a line that names a class
+    // file and produces text, whatever they wrap (round five).
+    for command in [
         "grep -c alias ~/.zshrc > b.txt; flock lockfile ls",
         "grep alias ~/.zshrc | env -S 'echo hi'",
         "grep alias ~/.zshrc | watch -n1 echo hi",
         "grep alias ~/.zshrc | flock lockfile awk '{print $2}'",
         "grep alias ~/.zshrc | busybox awk '{print $2}'",
     ] {
-        if refused(&f.judge(command)) {
-            wrong.push(format!("refused: {command}"));
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -1196,11 +1204,126 @@ fn editor_and_debugger_script_files_refuse() {
             wrong.push(format!("allowed: {command}"));
         }
     }
+    // Not data readers: on a line that names a class file and produces text
+    // they refuse even when they run no script (round five).
     for command in [
         "grep -c alias ~/.zshrc > b.txt; vim -Nu NONE README.md",
         "grep -c alias ~/.zshrc > b.txt; emacs --version",
         "grep alias ~/.zshrc | vim -",
-        "vim README.md",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in ["vim README.md", "emacs --version"] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round five and the design pass. The staged-run rule is an allowlist:
+/// a line that names a class file and produces text refuses unless every
+/// program on it is a data reader used as one. A reader with a write or exec
+/// path of its own (`awk` with `system`, a pipe or a program file, `sed` with
+/// `e` or `w`, `sort -o`, `uniq in out`, `git -c`, `git config`) is not one
+/// there; an unknown program or option fails closed.
+#[test]
+fn only_data_readers_may_run_on_a_line_that_names_a_class_file_and_produces_text() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "printf 'BEGIN{print \"x\" > \"src/.envrc\"}\\n' | gawk -f README.md -f -",
+        "printf 'BEGIN{print \"x\" > \"src/.envrc\"}\\n' | gawk --file=README.md --file=-",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > lib.awk; gawk '@include \"lib.awk\"'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > lib.awk; gawk -e '@include \"lib.awk\"'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > lib.awk; gawk --source '@include \"lib.awk\"'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > lib.awk; gawk 'BEGIN {} @include \"lib.awk\"'",
+        "printf 'w src/.envrc\\n' > s.vim; vim -s s.vim",
+        "printf 'w src/.envrc\\n' > s.vim; nvim -s s.vim",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env -C /tmp -S 'awk -f a.awk'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env --chdir /tmp -S 'awk -f a.awk'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env -u FOO -S 'awk -f a.awk'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env env -S 'awk -f a.awk'",
+        "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env --split-string='awk -f a.awk'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{system($0)}'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{system ($0)}'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{print | \"sh\"}'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{\"sh\" | getline}'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{print > \"src/.envrc\"}'",
+        "printf 'echo x >> src/.envrc\\n' | awk '{print >> \"out\"}'",
+        "printf 'echo x >> src/.envrc\\n' | awk -f -",
+        "printf 'echo x >> src/.envrc\\n' | awk -e '{system($0)}'",
+        "printf 'echo x >> src/.envrc\\n' | sed e",
+        "printf 'echo x >> src/.envrc\\n' | sed 's/x/y/e'",
+        "printf 'echo x >> src/.envrc\\n' | sed -n 'w out'",
+        "printf 'echo x >> src/.envrc\\n' | sed 'r out'",
+        "printf 'echo x >> src/.envrc\\n' | sed -f -",
+        "printf 'echo x >> src/.envrc\\n' | sort -o out",
+        "printf 'echo x >> src/.envrc\\n' | sort -rno out",
+        "printf 'echo x >> src/.envrc\\n' | sort --output=out",
+        "printf 'echo x >> src/.envrc\\n' | sort --compress-program=sh",
+        "printf 'echo x >> src/.envrc\\n' | uniq - out",
+        "printf 'echo x >> src/.envrc\\n' | xxd -r -p - out",
+        "printf 'echo x >> src/.envrc\\n' | base64 -o out",
+        "printf 'echo x >> src/.envrc\\n' | git -c alias.x='!sh' x",
+        "printf 'echo x >> src/.envrc\\n' | git apply",
+        "printf 'echo x >> src/.envrc\\n' | git am",
+        "printf 'echo x >> src/.envrc\\n' | git x",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; git config core.fsmonitor 'sh r.sh'; git status",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; GIT_SSH_COMMAND='sh r.sh' git fetch",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; PAGER='sh r.sh' git log",
+        "printf 'echo x >> src/.envrc\\n' > cat; PATH=. cat README.md",
+        "printf 'echo x >> src/.envrc\\n' > cat; chmod +x cat; ./cat README.md",
+        "printf 'echo x >> src/.envrc\\n' > cat; export PATH=.:$PATH; cat README.md",
+        "printf 'echo x >> src/.envrc\\n' | xargs sh -c",
+        "printf 'echo x >> src/.envrc\\n' | sh",
+        "printf 'echo x >> src/.envrc\\n' | rg --pre sh x",
+        "printf 'echo x >> src/.envrc\\n' | find . -exec sh {} \\;",
+        "printf 'echo x >> src/.envrc\\n' | less",
+        "printf 'echo x >> src/.envrc\\n' | dd of=out",
+        "printf 'echo x >> src/.envrc\\n' | python3 -",
+        "printf 'echo x >> src/.envrc\\n' | cat | sh",
+        "source <(printf 'echo x >> src/.envrc\\n')",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; . ./r.sh",
+        "printf 'echo x >> src/.envrc\\n' > r.sh; /tmp/evil/cat r.sh",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "grep alias ~/.zshrc | awk -F: '{print $1}'",
+        "grep alias ~/.zshrc | awk -v f=1 '$1 > 5 {print $2}'",
+        "grep alias ~/.zshrc | gawk -F, '{print $2}'",
+        "grep alias ~/.zshrc | sed 's/a/b/'",
+        "grep alias ~/.zshrc | sed -n '1p'",
+        "grep alias ~/.zshrc | sed -E 's/a/b/'",
+        "grep alias ~/.zshrc | sed -i.bak 's/a/b/'",
+        "cat ~/.zshrc | sort | uniq -c | sort -rn | head",
+        "cat ~/.zshrc | cut -d: -f1 | tr a-z A-Z | wc -l",
+        "cat ~/.zshrc | column -t | nl | tail -3",
+        "cat ~/.zshrc | xxd | head",
+        "cat ~/.zshrc | base64",
+        "cat ~/.zshrc | jq -R .",
+        "cat ~/.zshrc | tee out.txt",
+        "cat ~/.zshrc | git hash-object --stdin",
+        "git log --oneline | head; git status",
+        "git commit -F - <<'EOF'\nfix: handle .envrc\nEOF",
+        "git diff -- .envrc | head",
+        "cd crates && cat ~/.zshrc | wc -l",
+        "grep -c alias ~/.zshrc > b.txt; sed -i 's/a/b/' README.md",
+        "grep -c alias ~/.zshrc > b.txt; awk -F: '{print $1}' b.txt",
+        "grep -c alias ~/.zshrc > b.txt; timeout 5 ls",
+        "grep -c alias ~/.zshrc > b.txt; find . -name '*.rs' -print",
+        "grep -c alias ~/.zshrc > b.txt; /bin/cat b.txt",
+        "grep -c alias ~/.zshrc > b.txt; git config --get user.name",
+        "cat <(echo hello)",
+        "diff <(echo a) <(echo b)",
+        "make test",
+        "sed -i 's/a/b/' README.md",
     ] {
         if refused(&f.judge(command)) {
             wrong.push(format!("refused: {command}"));

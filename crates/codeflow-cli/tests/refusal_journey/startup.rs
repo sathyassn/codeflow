@@ -89,6 +89,13 @@ const REFUSED: &[&str] = &[
     "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; flock /tmp/l awk -f a.awk",
     "echo 'echo x >> src/.envrc' > r.sh; env -S 'sh r.sh'",
     "printf 'w src/.envrc\\n' > s.vim; vim -S s.vim",
+    // Grok round five and the design pass: only data readers run.
+    "printf 'BEGIN{print \"x\" > \"src/.envrc\"}\\n' | gawk -f README.md -f -",
+    "printf 'echo x >> src/.envrc\\n' | awk '{system($0)}'",
+    "printf 'echo x >> src/.envrc\\n' | awk '{print | \"sh\"}'",
+    "printf 'echo x >> src/.envrc\\n' | sed e",
+    "printf 'w src/.envrc\\n' > s.vim; vim -s s.vim",
+    "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env -C /tmp -S 'awk -f a.awk'",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -114,6 +121,8 @@ const ALLOWED: &[&str] = &[
     "make test",
     "grep -c alias ~/.zshrc > b.txt; sed -E 's/a/b/' README.md",
     "find . -name '*.rs' -print",
+    "cat ~/.zshrc | sort | uniq -c | head",
+    "grep alias ~/.zshrc | sed -E 's/a/b/'",
     "cd ~1; cat policy.json",
 ];
 

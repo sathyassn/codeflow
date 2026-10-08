@@ -895,39 +895,6 @@ const PLACING: &[&str] = &[
 /// Programs that copy or link named sources to a destination.
 const COPIERS: &[&str] = &["cp", "ln", "install", "mv", "rsync", "scp", "ditto"];
 
-/// Programs that run code they are given or a file they are pointed at.
-const RUNNERS: &[&str] = &[
-    "sh",
-    "bash",
-    "zsh",
-    "dash",
-    "ksh",
-    "ash",
-    "mksh",
-    "fish",
-    "pwsh",
-    "powershell",
-    "source",
-    ".",
-    "eval",
-    "exec",
-    "python",
-    "python3",
-    "node",
-    "nodejs",
-    "deno",
-    "bun",
-    "perl",
-    "ruby",
-    "php",
-    "lua",
-    "osascript",
-    "xargs",
-    "parallel",
-    "at",
-    "batch",
-];
-
 /// The startup variables, and the shells each one changes.
 const STARTUP_VARS: &[&str] = &[
     "ZDOTDIR",
@@ -1195,428 +1162,301 @@ fn startup_reader(name: &str, args: &[String]) -> Option<&'static [&'static str]
     }
 }
 
-/// The ways text the call itself produces can reach a command.
-struct Channels(Vec<Channel>);
-
-#[derive(PartialEq)]
-enum Channel {
-    Pipe,
-    Heredoc,
-    Substitution,
-    /// A file other than `/dev/null` the call writes (a redirect or `tee`).
-    Written,
-}
-
-impl Channels {
-    fn of(segments: &[String], text: &str) -> Self {
-        let written = segments.iter().any(|segment| {
-            let redirects = redirect_writes(segment);
-            let mut words = command_argv(segment);
-            strip_reserved_words(&mut words);
-            let tee = strip_launchers(&words).is_some_and(|(program, args)| {
-                basename(program) == "tee"
-                    && args.iter().any(|a| !a.starts_with('-') && a != "/dev/null")
-            });
-            tee || redirects
-                .targets
-                .iter()
-                .chain(&redirects.unread)
-                .any(|target| target != "/dev/null")
+/// Whether the call produces text a later command could take as its input or
+/// its script: a pipe, a heredoc, a process substitution, or a file other than
+/// `/dev/null` the call writes (a redirect or `tee`).
+fn produces_text(segments: &[String], text: &str) -> bool {
+    if text.contains('|') || text.contains("<<") || text.contains("<(") || text.contains(">(") {
+        return true;
+    }
+    segments.iter().any(|segment| {
+        let redirects = redirect_writes(segment);
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let tee = strip_launchers(&words).is_some_and(|(program, args)| {
+            basename(program) == "tee"
+                && args.iter().any(|a| !a.starts_with('-') && a != "/dev/null")
         });
-        let mut channels = Vec::new();
-        if text.contains('|') {
-            channels.push(Channel::Pipe);
-        }
-        if text.contains("<<") {
-            channels.push(Channel::Heredoc);
-        }
-        if text.contains("<(") || text.contains(">(") {
-            channels.push(Channel::Substitution);
-        }
-        if written {
-            channels.push(Channel::Written);
-        }
-        Self(channels)
-    }
-
-    fn has(&self, channel: &Channel) -> bool {
-        self.0.contains(channel)
-    }
-
-    /// Any text of the call can reach standard input or a file.
-    fn any(&self) -> bool {
-        !self.0.is_empty()
-    }
-
-    /// Call text can stand behind a file operand: a file the call writes, a
-    /// heredoc or a process substitution (a pipe cannot be named as a file).
-    fn file(&self) -> bool {
-        self.has(&Channel::Heredoc)
-            || self.has(&Channel::Substitution)
-            || self.has(&Channel::Written)
-    }
+        tee || redirects
+            .targets
+            .iter()
+            .chain(&redirects.unread)
+            .any(|target| target != "/dev/null")
+    })
 }
 
-/// What a script tool does when no option names its script.
-enum Fallback {
-    /// Nothing: it needs a script option (`awk '{print}'` hands it data).
-    Nothing,
-    /// Standard input is its script (`ed`, `patch`, `sqlite3`, `gdb`).
-    Stdin,
-    /// A `Makefile` in the working directory, which the call may have written.
-    Makefile,
-    /// A file operand is its script; without one, standard input is.
-    Operand,
-}
-
-/// How one script tool is told where its script is. A new tool is one row.
-struct ScriptTool {
-    programs: &'static [&'static str],
-    /// Short letters whose attached remainder, or next word, names a script
-    /// file or holds script commands (`-f`, gawk `-i`, vim `-S`).
-    file_letters: &'static str,
-    /// Short letters whose attached remainder, or next word, is another
-    /// value, so the scan of that word stops (`sed -i`, `awk -v`).
-    value_letters: &'static str,
-    /// Whole options that name a script or hold commands, as `--name value`,
-    /// `--name=value` or `-name value`.
-    options: &'static [&'static str],
-    /// Operands that run a script command (`vim +so s.vim`, sqlite3 `.read`).
-    operand_prefixes: &'static [&'static str],
-    fallback: Fallback,
-}
-
-const SCRIPT_TOOLS: &[ScriptTool] = &[
-    ScriptTool {
-        programs: &["awk", "gawk", "mawk", "nawk"],
-        file_letters: "fiE",
-        value_letters: "vFeWdDlLo",
-        options: &["--file", "--include", "--exec"],
-        operand_prefixes: &[],
-        fallback: Fallback::Nothing,
-    },
-    ScriptTool {
-        programs: &["sed", "gsed"],
-        file_letters: "f",
-        value_letters: "eli",
-        options: &["--file"],
-        operand_prefixes: &[],
-        fallback: Fallback::Nothing,
-    },
-    ScriptTool {
-        programs: &["make", "gmake"],
-        file_letters: "f",
-        value_letters: "CIjoWElO",
-        options: &["--file", "--makefile"],
-        operand_prefixes: &[],
-        fallback: Fallback::Makefile,
-    },
-    ScriptTool {
-        programs: &["ed", "patch"],
-        file_letters: "",
-        value_letters: "",
-        options: &[],
-        operand_prefixes: &[],
-        fallback: Fallback::Stdin,
-    },
-    ScriptTool {
-        programs: &["ex"],
-        file_letters: "Sc",
-        value_letters: "uUiwWtT",
-        options: &["--cmd"],
-        operand_prefixes: &["+"],
-        fallback: Fallback::Stdin,
-    },
-    ScriptTool {
-        programs: &["vim", "vi", "view", "rvim", "gvim"],
-        file_letters: "Sc",
-        value_letters: "uUiwWtT",
-        options: &["--cmd"],
-        operand_prefixes: &["+"],
-        fallback: Fallback::Nothing,
-    },
-    ScriptTool {
-        programs: &["nvim"],
-        file_letters: "Scl",
-        value_letters: "uUiwWtT",
-        options: &["--cmd"],
-        operand_prefixes: &["+"],
-        fallback: Fallback::Nothing,
-    },
-    ScriptTool {
-        programs: &["sqlite3"],
-        file_letters: "",
-        value_letters: "",
-        options: &["-cmd", "-init"],
-        operand_prefixes: &[".read", ".shell", ".system"],
-        fallback: Fallback::Stdin,
-    },
-    ScriptTool {
-        programs: &["gdb"],
-        file_letters: "",
-        value_letters: "",
-        options: &[
-            "-x",
-            "-ex",
-            "-ix",
-            "-iex",
-            "-command",
-            "--command",
-            "-eval-command",
-            "--eval-command",
-            "-init-command",
-            "--init-command",
-            "-init-eval-command",
-            "--init-eval-command",
-        ],
-        operand_prefixes: &[],
-        fallback: Fallback::Stdin,
-    },
-    ScriptTool {
-        programs: &["emacs"],
-        file_letters: "",
-        value_letters: "",
-        options: &[
-            "-l",
-            "-load",
-            "--load",
-            "-script",
-            "--script",
-            "-eval",
-            "--eval",
-            "-execute",
-            "--execute",
-        ],
-        operand_prefixes: &[],
-        fallback: Fallback::Nothing,
-    },
-    ScriptTool {
-        programs: &["tclsh", "expect", "Rscript", "julia", "m4"],
-        file_letters: "",
-        value_letters: "",
-        options: &[],
-        operand_prefixes: &[],
-        fallback: Fallback::Operand,
-    },
+/// Shell builtins and keywords that run no command of their own: they move,
+/// wait, set variables or open a control structure.
+const NO_COMMAND: &[&str] = &[
+    "cd", "pushd", "popd", "pwd", ":", "sleep", "shift", "export", "declare", "typeset", "local",
+    "readonly", "unset", "for", "case", "select", "done", "fi", "esac", "{", "}", "(", ")",
+    "command",
 ];
 
-impl ScriptTool {
-    /// The script file or command text `args` hand this tool, when an option
-    /// or an operand names one. A process substitution after an option is read
-    /// as a redirect and leaves no value behind: `"<("`, a file the call
-    /// produced.
-    fn source<'a>(&self, args: &'a [String]) -> Option<&'a str> {
-        let mut iter = args.iter().peekable();
-        while let Some(arg) = iter.next() {
-            let (name, attached) = match arg.split_once('=') {
-                Some((name, value)) => (name, Some(value)),
-                None => (arg.as_str(), None),
-            };
-            if self.options.contains(&name) {
-                return Some(
-                    attached.unwrap_or_else(|| iter.peek().map_or("<(", |next| next.as_str())),
-                );
-            }
-            if self
-                .operand_prefixes
-                .iter()
-                .any(|prefix| arg.starts_with(prefix))
-            {
-                return Some(arg);
-            }
-            let cluster = arg.strip_prefix('-').filter(|c| !c.starts_with('-'));
-            for (at, c) in cluster.into_iter().flat_map(str::char_indices) {
-                let rest = &arg[1 + at + c.len_utf8()..];
-                if self.file_letters.contains(c) {
-                    return Some(if rest.is_empty() {
-                        iter.peek().map_or("<(", |next| next.as_str())
-                    } else {
-                        rest
-                    });
-                }
-                if self.value_letters.contains(c) {
-                    if rest.is_empty() {
-                        iter.next();
-                    }
-                    break;
-                }
-            }
-        }
-        None
-    }
-}
+/// Filters that read standard input or named files and write only standard
+/// output. A write or exec path of their own is refused in [`data_reader`].
+const FILTERS: &[&str] = &[
+    "sort", "uniq", "cut", "tr", "paste", "column", "fold", "nl", "tac", "rev", "comm", "join",
+    "xxd", "base64", "tee",
+];
 
-/// Whether a script tool takes its script from text the call produced. The
-/// script source decides, not the pipe: `... | awk '{print $2}'` hands the
-/// program data and stays a read, while `... | awk -f -` hands it code.
-fn script_tool_consumes(name: &str, args: &[String], channels: &Channels) -> bool {
-    if name == "git" {
-        // `git apply` and `git am` apply patch text.
-        return git_subcommand(args).is_some_and(|(sub, _)| matches!(sub, "apply" | "am"))
-            && channels.any();
-    }
-    let Some(tool) = SCRIPT_TOOLS.iter().find(|t| t.programs.contains(&name)) else {
+/// Whether a word assigns a variable that picks or configures the program
+/// that runs (`PATH=.`, `GIT_SSH_COMMAND=sh`, `PAGER=sh`, `LD_PRELOAD`).
+fn assigns_program_variable(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
         return false;
     };
-    let by_source = match tool.source(args) {
-        Some("-" | "/dev/stdin") => channels.has(&Channel::Pipe) || channels.file(),
-        Some(_) => channels.file(),
-        None => false,
-    };
-    by_source
-        || match tool.fallback {
-            Fallback::Nothing => false,
-            Fallback::Stdin => channels.any(),
-            Fallback::Makefile => channels.file(),
-            Fallback::Operand => {
-                if args.iter().any(|a| !a.starts_with('-') && a != "-") {
-                    channels.file()
-                } else {
-                    channels.any()
-                }
-            }
-        }
+    name.starts_with("GIT_")
+        || name.starts_with("LD_")
+        || name.starts_with("DYLD_")
+        || matches!(
+            name,
+            "PATH"
+                | "PAGER"
+                | "MANPAGER"
+                | "EDITOR"
+                | "VISUAL"
+                | "FCEDIT"
+                | "LESSOPEN"
+                | "BROWSER"
+                | "SHELL"
+                | "BASH_ENV"
+                | "ENV"
+                | "PROMPT_COMMAND"
+        )
 }
 
-/// Programs that run another command given in their own arguments and that
-/// the launcher walker does not unwrap, so the command after them is judged
-/// here, from every word that can start it or from an argument that is itself
-/// a command line (`flock -c 'awk -f a.awk'`, `watch 'awk -f a.awk'`). A new
-/// wrapper is one entry.
-const WRAPPERS: &[&str] = &[
-    "flock",
-    "watch",
-    "unbuffer",
-    "chronic",
-    "setsid",
-    "taskset",
-    "chrt",
-    "arch",
-    "script",
-    "systemd-run",
-    "sandbox-exec",
-    "ssh",
-    "busybox",
-    "toybox",
-    "sudo",
-    "doas",
-    "su",
-    "runuser",
-    "pkexec",
-    "unshare",
-    "nsenter",
-    "chroot",
-    "entr",
+/// Directories a program named by an absolute path may live in and still be
+/// read as the system program of that name.
+const SYSTEM_DIRS: &[&str] = &[
+    "/bin",
+    "/usr/bin",
+    "/sbin",
+    "/usr/sbin",
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
 ];
 
-/// The `find` actions that run a command up to a `;` or `+` terminator.
-const FIND_EXEC: &[&str] = &["-exec", "-execdir", "-ok", "-okdir"];
-
-/// How many wrappers deep a command is followed.
-const NEST_DEPTH: u8 = 4;
-
-/// The commands a program runs on its own arguments.
-fn nested_commands(base: &str, args: &[String]) -> Vec<Vec<String>> {
-    let mut inner = Vec::new();
-    if base == "find" {
-        let mut at = 0;
-        while at < args.len() {
-            if FIND_EXEC.contains(&args[at].as_str()) {
-                let rest = &args[at + 1..];
-                let end = rest
-                    .iter()
-                    .position(|a| matches!(a.as_str(), ";" | "\\;" | "+"))
-                    .unwrap_or(rest.len());
-                inner.push(rest[..end].to_vec());
-                at += end;
-            }
-            at += 1;
+/// Whether a short-option word (`-rno`) has `letter` before any letter that
+/// takes the rest of the word as its value.
+fn cluster_has(arg: &str, letter: char, valued: &str) -> bool {
+    let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
+        return false;
+    };
+    for c in cluster.chars() {
+        if c == letter {
+            return true;
         }
-    } else if WRAPPERS.contains(&base) {
-        for (at, arg) in args.iter().enumerate() {
-            if arg.contains(char::is_whitespace) {
-                inner.push(command_argv(arg));
-            }
-            if !arg.starts_with('-') {
-                inner.push(args[at..].to_vec());
-            }
+        if valued.contains(c) {
+            return false;
         }
     }
-    inner
+    false
 }
 
-/// `env -S 'cmd args' rest` split into the words `env` then runs, with the
-/// words before `env` kept. The launcher walker reads the packed string as one
-/// word, so the startup rule unpacks it itself.
-fn unpack_env_split(words: &[String]) -> Option<Vec<String>> {
-    let env_at = words.iter().position(|w| basename(w) == "env")?;
-    let mut at = env_at + 1;
-    while let Some(word) = words.get(at) {
-        let packed = if matches!(word.as_str(), "-S" | "--split-string") {
-            at += 1;
-            words.get(at).map(String::as_str)
-        } else if let Some(value) = word.strip_prefix("--split-string=") {
-            Some(value)
-        } else if let Some(value) = word.strip_prefix("-S").filter(|v| !v.is_empty()) {
-            Some(value)
-        } else if word.starts_with('-') || word.contains('=') {
-            at += 1;
-            continue;
-        } else {
-            return None;
-        };
-        let mut unpacked = words[..env_at].to_vec();
-        unpacked.extend(command_argv(packed?));
-        unpacked.extend(words[at + 1..].iter().cloned());
-        return Some(unpacked);
-    }
-    None
+/// The operands among `args`: `-` and words that are not options and not a
+/// bare number (the value of `-c 16`).
+fn operands(args: &[String]) -> usize {
+    args.iter()
+        .filter(|a| {
+            (a.as_str() == "-" || !a.starts_with('-')) && !a.chars().all(|c| c.is_ascii_digit())
+        })
+        .count()
 }
 
-/// The program, among `words` and the commands inside them, that can take its
-/// script from text the call produced.
-fn runs_call_text(words: &[String], channels: &Channels, depth: u8) -> Option<String> {
-    if depth == 0 {
-        return None;
+/// awk used as a filter: an inline program that starts no program, writes no
+/// file and loads no library, over files and `var=value` operands. A program
+/// file or library (`-f`, `-i`, `-E`, `-e`, `--file`, `--include`, `--exec`,
+/// `--source`), `system`, a pipe, `>>`, a `>` after `print` and any `@`
+/// (`@include`, `@load`) are all refused. Any other option fails closed.
+fn awk_reads(args: &[String]) -> bool {
+    let risky = |a: &str| a.contains('@');
+    let mut iter = args.iter();
+    let mut program = None;
+    while let Some(arg) = iter.next() {
+        let a = arg.as_str();
+        if risky(a) {
+            return false;
+        }
+        match a {
+            "-F" | "-v" => match iter.next() {
+                Some(value) if !risky(value) => {}
+                _ => return false,
+            },
+            "-n" | "--posix" | "--traditional" | "--re-interval" => {}
+            _ if (a.starts_with("-F") || a.starts_with("-v")) && a.len() > 2 => {}
+            _ if a.starts_with('-') && a != "-" => return false,
+            _ => {
+                program = Some(a);
+                break;
+            }
+        }
     }
-    if let Some(unpacked) = unpack_env_split(words) {
-        return runs_call_text(&unpacked, channels, depth - 1);
-    }
-    let (program, args) = strip_launchers(words)?;
-    let base = basename(program);
-    if RUNNERS.contains(&base)
-        || script_tool_consumes(base, args, channels)
-        || program.starts_with("./")
-        || (program.starts_with('/') && !READERS.contains(&base))
-    {
-        return Some(program.to_string());
-    }
-    nested_commands(base, args)
+    let Some(program) = program else {
+        return false;
+    };
+    let unsafe_text = program.contains('|')
+        || program.contains("system")
+        || program.contains(">>")
+        || program
+            .find("print")
+            .is_some_and(|at| program[at..].contains('>'));
+    !unsafe_text && iter.all(|a| !risky(a))
+}
+
+/// sed used as a filter: no script file, no in-place suffix confusion, and a
+/// script of print-only commands (no `e`, `w`, `W`, `r`, `R`). `-i` edits the
+/// file operand in place; that write is judged on its own.
+fn sed_filter_reads(args: &[String]) -> bool {
+    let kept: Vec<String> = args
         .iter()
-        .find_map(|inner| runs_call_text(inner, channels, depth - 1))
+        .filter_map(|a| {
+            if a == "--in-place" || a.starts_with("--in-place=") {
+                None
+            } else if a.starts_with('-') && !a.starts_with("--") {
+                match a.find('i') {
+                    Some(1) => None,
+                    Some(at) => Some(a[..at].to_string()),
+                    None => Some(a.clone()),
+                }
+            } else {
+                Some(a.clone())
+            }
+        })
+        .collect();
+    sed_reads(&kept)
 }
 
-/// The one staged-run rule. A line that names a startup file refuses when a
-/// command on it can take its script from text the call itself produced:
-/// a shell or interpreter from any channel (a heredoc, a pipe, a process or
-/// command substitution, a file the call writes), and a script tool (awk,
-/// sed, make, ed, ex, patch, vim, sqlite3, gdb, emacs, tclsh, m4, git apply)
-/// when its script source is such a channel. The command is found behind
-/// launchers, `env -S`, `find -exec` and the [`WRAPPERS`]. A new interpreter
-/// is one entry in [`RUNNERS`], a new script tool one row of
-/// [`SCRIPT_TOOLS`], a new wrapper one entry of [`WRAPPERS`].
+/// The git subcommands that run no program of their own beyond the hooks
+/// installed in the repository (a hook written by the call is a hook write).
+const GIT_PLAIN: &[&str] = &[
+    "checkout",
+    "switch",
+    "merge",
+    "pull",
+    "reset",
+    "restore",
+    "stash",
+    "cherry-pick",
+    "revert",
+    "mv",
+    "clone",
+];
+
+/// git used as a data reader: a built-in subcommand other than `apply` and
+/// `am`, with no `-c` or `--config-env` before it (a `-c alias.x=!cmd` runs a
+/// shell), no `--exec`, pager, external diff or output option.
+fn git_reads(args: &[String]) -> bool {
+    let Some((sub, rest)) = git_subcommand(args) else {
+        return false;
+    };
+    let globals = &args[..args.len() - rest.len() - 1];
+    if globals.iter().any(|a| {
+        a == "-c" || a.starts_with("--config-env") || a.starts_with("--exec-path") || a == "-p"
+    }) {
+        return false;
+    }
+    if !(GIT_READS.contains(&sub) || GIT_KEEPS_WORKTREE.contains(&sub) || GIT_PLAIN.contains(&sub))
+    {
+        return false;
+    }
+    // A repository setting can name a program (`core.fsmonitor`, a filter,
+    // `core.hooksPath`), so `config` only reads, and `ext::` URLs run a command.
+    if sub == "config"
+        && !rest.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "--get" | "--get-all" | "--get-regexp" | "--list" | "-l"
+            )
+        })
+    {
+        return false;
+    }
+    if args.iter().any(|a| a.contains("ext::")) {
+        return false;
+    }
+    !rest.iter().any(|a| {
+        a == "-o"
+            || a == "-O"
+            || a.starts_with("--output")
+            || a.starts_with("--exec")
+            || a.starts_with("--upload-pack")
+            || a.starts_with("--receive-pack")
+            || a.starts_with("--open-files-in-pager")
+            || a.starts_with("--ext-diff")
+            || a.starts_with("--pager")
+    })
+}
+
+/// Whether `program` with `args` only reads the text it is given: a listed
+/// data reader used as one. Everything else, an unknown program or option
+/// included, is not.
+fn data_reader(program: &str, args: &[String]) -> bool {
+    let name = basename(program);
+    if program.starts_with("./") || (program.contains('/') && !program.starts_with('/')) {
+        return false;
+    }
+    if program.starts_with('/') {
+        let dir = program.rsplit_once('/').map_or("", |(dir, _)| dir);
+        if !SYSTEM_DIRS.contains(&dir) {
+            return false;
+        }
+    }
+    match name {
+        _ if NO_COMMAND.contains(&name) => true,
+        "source" | "." | "eval" | "exec" => false,
+        "sed" | "gsed" => sed_filter_reads(args),
+        "awk" | "gawk" | "mawk" | "nawk" => awk_reads(args),
+        "git" => git_reads(args),
+        "sort" => !args.iter().any(|a| {
+            a.starts_with("--output")
+                || a.starts_with("--compress-program")
+                || cluster_has(a, 'o', "ktTS")
+        }),
+        "uniq" | "xxd" => operands(args) <= 1,
+        "base64" => !args
+            .iter()
+            .any(|a| a.starts_with("--output") || cluster_has(a, 'o', "")),
+        _ if FILTERS.contains(&name) => true,
+        _ => reads_only(name, args),
+    }
+}
+
+/// The staged-run rule. A line that names a startup file and produces text
+/// (a pipe, heredoc, substitution or written file) refuses unless every
+/// program on it is a data reader used as one ([`data_reader`]): the text may
+/// then be read but cannot be run or applied. The allowlist replaces the
+/// list of programs that run text (shells, interpreters, script tools,
+/// wrappers, `find -exec`, `env -S`), which an unlisted spelling always
+/// escaped. A program or option the guard does not know fails closed.
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
-    let channels = Channels::of(segments, line.text);
-    if !channels.any() {
+    if !produces_text(segments, line.text) {
         return None;
     }
     let name = line.names(line.text)?;
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        runs_call_text(&words, &channels, NEST_DEPTH).map(|program| {
+        if let Some(word) = words.iter().find(|w| assigns_program_variable(w)) {
+            return Some(finding(format!(
+                "text this call produces names the shell startup file `{name}`, and the line sets `{word}`, which changes the program that runs; read the file in its own call"
+            )));
+        }
+        let Some((program, args)) = strip_launchers(&words) else {
+            // `env -S 'cmd'` and `env --split-string=cmd` leave no program
+            // behind: the command is inside the option.
+            return words
+                .iter()
+                .any(|w| w.starts_with("-S") || w.starts_with("--split-string"))
+                .then(|| {
+                    finding(format!(
+                        "text this call produces names the shell startup file `{name}`, and the line runs a command packed into `env -S`, which the guard cannot read; read the file in its own call"
+                    ))
+                });
+        };
+        (!data_reader(program, args)).then(|| {
             finding(format!(
-                "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which can run or apply it"
+                "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which is not a data reader, so it could run or apply that text; read the file in its own call"
             ))
         })
     })
