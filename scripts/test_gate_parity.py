@@ -597,6 +597,50 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
             self.assertEqual(self.problems(called, text), [])
             self.assertTrue(self.problems(called, text.replace("    timeout-minutes: 10\n", "")))
 
+    CALLER = "name: x\non: push\njobs:\n  call:\n    uses: {target}\n"
+    BOUNDED = "on: workflow_call\njobs:\n  one:\n    timeout-minutes: 5\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n"
+    UNBOUNDED = BOUNDED.replace("    timeout-minutes: 5\n", "")
+
+    def caller_problems(self, target: str, callee_files: dict[str, str] | None = None) -> list[str]:
+        """Check a one-job caller of `target` against a scratch tree holding `callee_files`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / "scripts").mkdir()
+            for name, text in (callee_files or {}).items():
+                (root / name).write_text(text)
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                return parity.timeout_problems(self.CALLER.format(target=target), "caller.yml")
+            finally:
+                parity.ROOT = original
+
+    def test_a_caller_is_exempt_only_when_it_calls_a_bounded_local_workflow(self):
+        ok = {".github/workflows/ok.yml": self.BOUNDED}
+        self.assertEqual(self.caller_problems("./.github/workflows/ok.yml", ok), [])
+        self.assertEqual(self.caller_problems("'./.github/workflows/ok.yml'  # bounded", ok), [])
+
+        remote = self.caller_problems("some-org/some-repo/.github/workflows/ci.yml@v1")
+        self.assertTrue(any("job 'call' in caller.yml" in p and "cannot open and bound" in p for p in remote), remote)
+        outside = self.caller_problems("./scripts/hang.yml", {"scripts/hang.yml": self.UNBOUNDED})
+        self.assertTrue(any("./scripts/hang.yml" in p for p in outside), outside)
+        pinned = self.caller_problems("./.github/workflows/ok.yml@main", ok)
+        self.assertTrue(pinned, "a local path with a ref is not a local call")
+        sideways = self.caller_problems("./.github/workflows/../../scripts/hang.yml", {"scripts/hang.yml": self.BOUNDED})
+        self.assertTrue(sideways, "a path that climbs out of .github/workflows is refused")
+        missing = self.caller_problems("./.github/workflows/gone.yml")
+        self.assertTrue(missing, "a callee that does not exist cannot be shown bounded")
+
+        hang = self.caller_problems("./.github/workflows/hang.yml", {".github/workflows/hang.yml": self.UNBOUNDED})
+        self.assertTrue(any("job 'call' in caller.yml" in p and "job 'one' in .github/workflows/hang.yml" in p
+                            for p in hang), hang)
+
+        loop = self.caller_problems("./.github/workflows/loop.yml", {
+            ".github/workflows/loop.yml": self.CALLER.format(target="./.github/workflows/loop.yml")})
+        self.assertTrue(any("calls itself again" in p for p in loop), loop)
+
     def test_the_adopter_template_exempts_only_its_named_jobs(self):
         path = "assets/base/ci/codeflow-ci.yml"
         text = self.files()[path]

@@ -469,10 +469,13 @@ def gate_binary_problems(cfg: dict) -> list[str]:
 # workflow this repository runs or ships names its own `timeout-minutes`, a
 # plain whole number, so a stall frees the slot and fails the verdict. A job
 # that only calls a reusable workflow (`uses:`) cannot carry the key (GitHub
-# rejects it); the called workflow's own jobs carry it and are checked here.
+# rejects it), so the called workflow's own jobs must carry it and are checked
+# here. Only a local workflow under `.github/workflows/` can be opened and
+# checked; a remote or out-of-tree callee cannot, so its caller is refused.
 TIMEOUT_KEY = re.compile(r"^ {4}timeout-minutes:")
 TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: [1-9][0-9]*$")
 CALLER_LINE = re.compile(r"^ {4}uses:", re.M)
+CALLER_TARGET = re.compile(r"^ {4}uses:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
 WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
 # A shipped template cannot size a job that runs the adopter's own commands.
 # Each exemption names its reason; a stale one (the job is gone) is drift.
@@ -490,7 +493,29 @@ def jobs_section(workflow: str) -> dict[str, str]:
     return workflow_jobs("jobs:" + parts[1]) if len(parts) == 2 else {}
 
 
-def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None) -> list[str]:
+def caller_problems(name: str, text: str, where: str, seen: frozenset[str]) -> list[str]:
+    """A reusable-workflow caller is exempt only when its callee is a local
+    workflow under `.github/workflows/` that this check can open and that has
+    no timeout problem of its own."""
+    targets = [next(g for g in m.groups() if g is not None) for m in CALLER_TARGET.finditer(text)]
+    if len(targets) != 1:
+        return [f"job '{name}'{where} must have exactly one `uses:` value; found {targets}"]
+    target = targets[0]
+    relative = Path(target[2:] if target.startswith("./") else target)
+    local = (target.startswith("./") and "@" not in target and ".." not in relative.parts
+             and relative.parent == Path(".github/workflows") and relative in workflow_files())
+    if not local:
+        return [f"job '{name}'{where} calls `{target}`, which this check cannot open and bound (a caller job cannot "
+                "carry `timeout-minutes`); call a workflow under .github/workflows/ as `./.github/workflows/<file>`"]
+    if relative.as_posix() in seen:
+        return [f"job '{name}'{where} calls `{target}`, which calls itself again"]
+    callee = timeout_problems((ROOT / relative).read_text(), relative.as_posix(),
+                              seen=seen | {relative.as_posix()})
+    return [f"job '{name}'{where} calls `{target}`, whose own jobs are not all bounded: {callee}"] if callee else []
+
+
+def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | None = None,
+                     seen: frozenset[str] = frozenset()) -> list[str]:
     jobs = jobs_section(workflow)
     where = f" in {label}" if label else ""
     exempt = exempt or {}
@@ -500,7 +525,10 @@ def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | No
             problems.append(f"{label or 'the workflow'} exempts job '{name}' from a timeout but has no such job; "
                             "drop the stale exemption")
     for name, text in jobs.items():
-        if name in exempt or CALLER_LINE.search(text):
+        if name in exempt:
+            continue
+        if CALLER_LINE.search(text):
+            problems += caller_problems(name, text, where, seen)
             continue
         own = [line.rstrip() for line in text.splitlines() if TIMEOUT_KEY.match(line)]
         if len(own) != 1 or not TIMEOUT_LINE.match(own[0]):
