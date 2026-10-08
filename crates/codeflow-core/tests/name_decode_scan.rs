@@ -4707,6 +4707,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // Treats a whitespace-only v1 stage title or caption as missing for an advisory check warning only; the document is never refused or changed.
+    (
+        "crates/codeflow-present/src/document.rs",
+        "review_warnings",
+        "trim",
+        1,
+        "prose",
+    ),
     // Collapses and truncates navigation labels only. Document and block identifiers remain exact.
     (
         "crates/codeflow-present/src/document.rs",
@@ -4744,6 +4752,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "crates/codeflow-present/src/entity.rs",
         "finish_label",
         "split_whitespace",
+        1,
+        "display",
+    ),
+    // Treats a whitespace-only human label attribute as no label when counting unnamed shapes for an advisory warning. Entity IDs are compared unchanged.
+    (
+        "crates/codeflow-present/src/entity.rs",
+        "labelled",
+        "trim",
         1,
         "display",
     ),
@@ -4907,6 +4923,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Compares a reviewer's quoted text, without its surrounding blank space, with the stage's human review label to re-anchor a note. Block and entity IDs are compared unchanged.
+    (
+        "crates/codeflow-present/src/state.rs",
+        "BlockNames::named_by",
+        "trim",
+        1,
+        "prose",
+    ),
     // The alternate UniqueKeys parse preserves the original typed parse error; SessionStore revision readers propagate Err and refuse loading the record.
     (
         "crates/codeflow-present/src/state.rs",
@@ -4914,6 +4938,14 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_slice",
         1,
         "unproven",
+    ),
+    // Skips a whitespace-only excerpt when re-anchoring a note by its quoted prose. The stored excerpt is unchanged and block IDs are compared exactly.
+    (
+        "crates/codeflow-present/src/state.rs",
+        "reanchor_note",
+        "trim",
+        1,
+        "prose",
     ),
     // Rejects whitespace-only selectors, labels, actors, instructions or notes. Original strings remain exact for identity comparisons.
     (
@@ -5784,8 +5816,10 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "ErrorKind::NotFound", 2, "The record home is absent only when both the followed and the unfollowed stat of the leaf under the discovered repository root find no name; a dangling link is reported as unreadable and fails validation."),
     ("crates/codeflow-cli/src/cmd/validate.rs", "validate_records", "is_file", 1, "Type check on metadata whose errors other than NotFound fail the check; a directory goes to collect_record_files, which propagates its errors."),
     ("crates/codeflow-cli/src/embedded.rs", "EmbeddedAssets::read", "ErrorKind::NotFound", 1, "Debug builds only (cfg(debug_assertions)) read the source tree's assets directory, mirroring the release Raw::get Option contract; release binaries never take this path."),
-    ("crates/codeflow-core/src/absence.rs", "proven_absent", "ErrorKind::NotFound", 3, "The helper defines proven absence: a leaf or ancestor that is not found only continues the ancestor walk, and a dangling ancestor link becomes an error."),
-    ("crates/codeflow-core/src/absence.rs", "proven_absent", "is_dir", 1, "Type check on ancestor metadata obtained with errors propagated; a non-directory ancestor returns an error, never absence."),
+    ("crates/codeflow-core/src/absence.rs", "failure_proves_no_entry", "ErrorKind::NotFound", 1, "Serves cannot_exist and existing_metadata for the guards: a leaf that is not found names nothing only when missing_leaf settles its ancestors (beneath a directory, beneath a non-directory, or under a refused name); a dangling or unreadable ancestor propagates its error, so the guard fails closed."),
+    ("crates/codeflow-core/src/absence.rs", "missing_leaf", "ErrorKind::NotFound", 2, "The ancestor walk behind proven absence: an ancestor that is not found only continues the walk to the first existing one, and a dangling ancestor link becomes an error."),
+    ("crates/codeflow-core/src/absence.rs", "missing_leaf", "is_dir", 1, "Type check on ancestor metadata obtained with errors propagated; a non-directory ancestor is reported as such, which proven_absent turns into an error, never absence."),
+    ("crates/codeflow-core/src/absence.rs", "proven_absent", "ErrorKind::NotFound", 1, "The helper defines proven absence: a leaf that is not found is absent only when missing_leaf finds a resolving directory above it; a non-directory ancestor or a refused name becomes an error."),
     ("crates/codeflow-core/src/absence.rs", "symlink_metadata_optional", "ErrorKind::NotFound", 1, "Returns None only when proven_absent confirms the leaf is missing; other errors propagate."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_bounded_regular_with_hook", "is_file", 1, "Type check on symlink_metadata obtained with its error propagated; false returns an InvalidData error."),
     ("crates/codeflow-core/src/bounded_file.rs", "read_opened_regular", "is_file", 2, "Both check metadata of the opened file obtained with errors propagated; false refuses with InvalidData."),
