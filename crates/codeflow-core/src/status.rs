@@ -894,6 +894,42 @@ mod tests {
         }
     }
 
+    /// The Windows form of issue 94: an empty or dangling junction at
+    /// `project-management` is named, never reported absent, and nothing
+    /// is created where it points.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_at_project_management_is_named_not_absent() {
+        for dangling in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let target = outside.path().join("pm");
+            std::fs::create_dir(&target).unwrap();
+            let pm = dir.path().join("project-management");
+            std::fs::create_dir(&pm).unwrap();
+            let redirect =
+                crate::bounded_file::confined::windows::tests::junction(&pm, &target).unwrap();
+            if dangling {
+                std::fs::remove_dir(&target).unwrap();
+            }
+            let mut notes = Vec::new();
+            assert!(collect_work(dir.path(), &mut notes).is_none());
+            assert!(
+                notes
+                    .iter()
+                    .any(|note| note.starts_with("project-management/ unreadable:")
+                        && note.contains("project-management is a symbolic link")),
+                "dangling {dangling}: {notes:?}"
+            );
+            if dangling {
+                assert!(!target.exists());
+            } else {
+                assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            }
+            drop(redirect);
+        }
+    }
+
     #[test]
     fn minimal_tier_is_graceful_with_notes() {
         let dir = tempfile::tempdir().unwrap();

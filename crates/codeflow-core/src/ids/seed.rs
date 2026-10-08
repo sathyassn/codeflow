@@ -346,30 +346,36 @@ fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
     frontmatter_value(&text, "title")
 }
 
-/// The record files in the working tree, by id. A symbolic link, to a
-/// file or a directory, is never followed: a renumbering must not read or
-/// write outside the checkout. A linked record root is left out here;
-/// `backfill` refuses it by name (issue 94).
+/// The record files in the working tree, by id. A link, to a file or a
+/// directory, is never followed: a symbolic link, or on Windows any
+/// reparse point such as a junction, by the test the contained walk
+/// applies, so a renumbering never reads or writes outside the checkout.
+/// A linked record root is left out here; `backfill` refuses it by name
+/// (issue 94).
 fn worktree_records(root: &Path) -> BTreeMap<RegId, Vec<PathBuf>> {
     let mut out: BTreeMap<RegId, Vec<PathBuf>> = BTreeMap::new();
     let mut stack: Vec<PathBuf> = RECORD_ROOTS
         .iter()
-        .filter_map(|base| guard_beneath_root(root, Path::new(base)).ok())
+        .filter(|base| crate::contained::linked_component(root, base).is_none())
+        .map(|base| root.join(base))
         .collect();
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            let path = entry.path();
-            if kind.is_dir() {
+            if crate::contained::is_link(&metadata) {
+                continue;
+            }
+            if metadata.is_dir() {
                 stack.push(path);
                 continue;
             }
-            if !kind.is_file() {
+            if !metadata.is_file() {
                 continue;
             }
             let Ok(relative) = path.strip_prefix(root) else {
@@ -514,9 +520,13 @@ pub fn retarget(root: &Path, from: &RegId) -> Result<Retarget, IdsError> {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/");
-    guard_beneath_root(root, Path::new(&rel))
+    // Read through the contained walk before the registry changes, so a
+    // link refuses before any reservation is dropped or made (issue 94).
+    let bytes = crate::contained::Tree::open(root)
+        .and_then(|tree| tree.read(&rel, u64::MAX))
         .map_err(|error| IdsError::Invalid(format!("{rel} cannot be renumbered: {error}")))?;
-    let text = std::fs::read_to_string(path)?;
+    let text =
+        String::from_utf8(bytes).map_err(|error| IdsError::Invalid(format!("{rel}: {error}")))?;
     let uid = frontmatter_value(&text, "uid").ok_or_else(|| {
         IdsError::Invalid(format!(
             "{from} has no uid; run `codeflow ids backfill` first"
@@ -913,6 +923,82 @@ mod tests {
             }
             assert!(!root.join(NEW).exists(), "the new record is removed");
         }
+    }
+
+    /// The record is read through the contained walk before the registry
+    /// changes: a refused read leaves no reservation and no file changed.
+    #[test]
+    fn a_refused_record_read_reserves_nothing() {
+        let dir = retarget_fixture();
+        let root = dir.path();
+        let before = std::fs::read(root.join(OLD)).unwrap();
+        fault::arm(Point::BeforeRead, OLD);
+        let error = retarget(root, &RegId::parse("TSK-005").unwrap()).unwrap_err();
+        assert!(error.to_string().contains("injected failure"), "{error}");
+        assert_eq!(
+            Git::new(root).rev(crate::ids::REGISTRY_REF),
+            None,
+            "nothing was reserved"
+        );
+        assert_eq!(std::fs::read(root.join(OLD)).unwrap(), before);
+        for link in LINKS {
+            assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
+        }
+        assert!(!root.join(NEW).exists());
+    }
+
+    /// A linked kind folder is refused before the registry changes, and the
+    /// record it points at keeps its bytes.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_task_folder_is_refused_before_any_reservation() {
+        let dir = retarget_fixture();
+        let root = dir.path();
+        let outside = tempfile::tempdir().unwrap();
+        let tasks = root.join("project-management/tasks");
+        std::fs::rename(&tasks, outside.path().join("tasks")).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("tasks"), &tasks).unwrap();
+        let record = outside.path().join("tasks/TSK-005.md");
+        let before = std::fs::read(&record).unwrap();
+        assert!(retarget(root, &RegId::parse("TSK-005").unwrap()).is_err());
+        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF), None);
+        assert_eq!(std::fs::read(&record).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(outside.path().join("tasks"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    /// The Windows form: a junction at the kind folder is refused before
+    /// the registry changes, and the record behind it keeps its bytes.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_at_the_task_folder_is_refused_before_any_reservation() {
+        let dir = retarget_fixture();
+        let root = dir.path();
+        let outside = tempfile::tempdir().unwrap();
+        let tasks = root.join("project-management/tasks");
+        std::fs::create_dir(outside.path().join("tasks")).unwrap();
+        let record = outside.path().join("tasks/TSK-005.md");
+        std::fs::rename(root.join(OLD), &record).unwrap();
+        let before = std::fs::read(&record).unwrap();
+        let redirect = crate::bounded_file::confined::windows::tests::junction(
+            &tasks,
+            &outside.path().join("tasks"),
+        )
+        .unwrap();
+        assert!(retarget(root, &RegId::parse("TSK-005").unwrap()).is_err());
+        assert_eq!(Git::new(root).rev(crate::ids::REGISTRY_REF), None);
+        assert_eq!(std::fs::read(&record).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(outside.path().join("tasks"))
+                .unwrap()
+                .count(),
+            1
+        );
+        drop(redirect);
     }
 
     #[test]

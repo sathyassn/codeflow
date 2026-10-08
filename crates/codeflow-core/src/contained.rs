@@ -112,7 +112,7 @@ impl Tree {
         relative: &str,
         operation: impl FnOnce() -> io::Result<T>,
     ) -> io::Result<T> {
-        operation().map_err(|error| match self.linked_component(relative) {
+        operation().map_err(|error| match linked_component(&self.path, relative) {
             Some(link) => io::Error::new(
                 error.kind(),
                 format!(
@@ -122,22 +122,6 @@ impl Tree {
             ),
             None => error,
         })
-    }
-
-    /// The first component of `relative` that is a link or reparse point,
-    /// found without following. It only words an error.
-    fn linked_component(&self, relative: &str) -> Option<String> {
-        let mut path = self.path.clone();
-        let mut shown: Vec<&str> = Vec::new();
-        for part in relative.split('/').filter(|part| !part.is_empty()) {
-            path.push(part);
-            shown.push(part);
-            let metadata = std::fs::symlink_metadata(&path).ok()?;
-            if is_link(&metadata) {
-                return Some(shown.join("/"));
-            }
-        }
-        None
     }
 
     /// Enter each component of `path`, creating a missing folder when
@@ -180,7 +164,11 @@ impl Tree {
     ///
     /// When a component is a link or the leaf is not a regular file.
     pub(crate) fn read(&self, relative: &str, maximum: u64) -> io::Result<Vec<u8>> {
-        self.explained(relative, || self.anchor.read(checked(relative)?, maximum))
+        self.explained(relative, || {
+            #[cfg(test)]
+            fault::check(fault::Point::BeforeRead, relative)?;
+            self.anchor.read(checked(relative)?, maximum)
+        })
     }
 
     /// The leaf's metadata; a link at the leaf is refused.
@@ -458,8 +446,8 @@ impl Tree {
 }
 
 /// Test-only failure injection at the points a disk error is otherwise hard
-/// to provoke: before and after a replacement's rename, after a new file's write, and
-/// before and after a removal.
+/// to provoke: before a read, before and after a replacement's rename, after
+/// a new file's write, and before and after a removal.
 #[cfg(test)]
 pub(crate) mod fault {
     use std::cell::RefCell;
@@ -468,6 +456,7 @@ pub(crate) mod fault {
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub(crate) enum Point {
+        BeforeRead,
         BeforeRename,
         AfterRename,
         AfterCreate,
@@ -509,13 +498,41 @@ pub(crate) mod fault {
     }
 }
 
+/// The first component of `relative` beneath `root` that is a link or
+/// reparse point, by a lexical walk that never follows one. A check made
+/// before an operation is best effort; [`Tree`] is what refuses.
+pub(crate) fn linked_component(root: &Path, relative: &str) -> Option<String> {
+    let mut path = root.to_path_buf();
+    let mut shown: Vec<&str> = Vec::new();
+    for part in relative.split('/').filter(|part| !part.is_empty()) {
+        path.push(part);
+        shown.push(part);
+        let metadata = std::fs::symlink_metadata(&path).ok()?;
+        if is_link(&metadata) {
+            return Some(shown.join("/"));
+        }
+    }
+    None
+}
+
+/// Whether `path` itself, read without following, is a link: on Unix a
+/// symbolic link, on Windows any reparse point, a junction included, which
+/// is what [`Tree`] refuses.
+pub(crate) fn is_link_at(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| is_link(&metadata))
+}
+
+/// Whether `metadata`, taken without following, is a link as [`Tree`]
+/// sees one: on Unix a symbolic link, on Windows any reparse point.
 #[cfg(unix)]
-fn is_link(metadata: &Metadata) -> bool {
+pub(crate) fn is_link(metadata: &Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
+/// Whether `metadata`, taken without following, is a link as [`Tree`]
+/// sees one: on Unix a symbolic link, on Windows any reparse point.
 #[cfg(windows)]
-fn is_link(metadata: &Metadata) -> bool {
+pub(crate) fn is_link(metadata: &Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     metadata.file_attributes()
         & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT

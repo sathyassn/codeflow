@@ -290,7 +290,8 @@ pub fn is_feedback_path(path: &str) -> bool {
 }
 
 /// `rel` under `root`, refused when a part of it below `root` is a
-/// symbolic link or `rel` is not a plain relative path; a part that does
+/// symbolic link (on Windows any reparse point, a junction included) or
+/// `rel` is not a plain relative path; a part that does
 /// not exist yet is allowed. Feedback reads and writes go through it, so a
 /// committed link cannot point them outside the repository.
 ///
@@ -305,9 +306,9 @@ pub fn contained_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
             Component::CurDir => continue,
             _ => return Err(format!("{rel} is not a path inside the repository")),
         }
-        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        if crate::contained::is_link_at(&path) {
             return Err(format!(
-                "{} is a symbolic link; feedback files are never read or written through one",
+                "{} is a symbolic link or junction; feedback files are never read or written through one",
                 relative(root, &path)
             ));
         }

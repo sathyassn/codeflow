@@ -524,6 +524,39 @@ mod tests {
         assert!(!dangling.exists());
     }
 
+    /// The Windows form of issue 94: an empty or dangling junction at
+    /// `project-management` is named in the digest and nothing is created
+    /// where it points.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_at_project_management_is_named_not_written() {
+        for dangling in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let target = outside.path().join("pm");
+            std::fs::create_dir(&target).unwrap();
+            let pm = dir.path().join("project-management");
+            std::fs::create_dir(&pm).unwrap();
+            let redirect =
+                crate::bounded_file::confined::windows::tests::junction(&pm, &target).unwrap();
+            if dangling {
+                std::fs::remove_dir(&target).unwrap();
+            }
+            let line = work_line(dir.path()).unwrap();
+            assert!(
+                line.starts_with("work: records unreadable:")
+                    && line.contains("project-management is a symbolic link"),
+                "dangling {dangling}: {line}"
+            );
+            if dangling {
+                assert!(!target.exists());
+            } else {
+                assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            }
+            drop(redirect);
+        }
+    }
+
     #[test]
     fn test_work_counts_from_markdown_store() {
         use crate::models::{Epic, Task};
