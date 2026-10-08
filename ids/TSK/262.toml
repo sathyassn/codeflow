@@ -1,0 +1,11 @@
+id = "TSK-262"
+uid = "9700c6c4-5313-43de-90dc-7b18f462dbb1"
+kind = "TSK"
+title = "Present show waits out a dying browser group on Linux"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T18:15:29Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
