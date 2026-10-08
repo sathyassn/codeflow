@@ -179,6 +179,81 @@ fn remote_protect_dry_run_prints_plan_from_policy() {
     );
 }
 
+/// A policy the schema refuses stops `remote protect` before it sends
+/// anything: a blank `git.required_checks` entry would otherwise be dropped
+/// and the default checks applied in its place (TSK-261).
+#[cfg(unix)]
+#[test]
+fn remote_protect_refuses_an_invalid_policy_and_writes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    init_repo(repo.path(), "bad-policy");
+    fs::write(
+        repo.path().join(".codeflow/policy.json"),
+        r#"{ "schema_version": 1, "git": { "protected_branches": ["main"], "required_checks": [" "] } }"#,
+    )
+    .unwrap();
+
+    // gh shim: records every write call and answers reads like a host with
+    // no rules, so an applied plan would be visible in `writes`.
+    let shims = tempfile::tempdir().unwrap();
+    let writes = shims.path().join("writes");
+    let gh = shims.path().join("gh");
+    fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+               \"repo view\"*) printf '%s' '{{\"nameWithOwner\":\"o/r\",\"isPrivate\":false,\"defaultBranchRef\":{{\"name\":\"main\"}}}}' ;;\n\
+               \"api -X \"*) echo \"$*\" >> '{}'; cat >/dev/null; printf '{{}}' ;;\n\
+               \"api repos/o/r/rulesets?\"*) printf '[]' ;;\n\
+               *) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;\n\
+             esac\n",
+            writes.display()
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&gh).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&gh, perms).unwrap();
+
+    let path = format!(
+        "{}:{}",
+        shims.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    for args in [
+        &["remote", "protect"][..],
+        &["remote", "protect", "--dry-run"][..],
+    ] {
+        let out = codeflow()
+            .args(args)
+            .current_dir(repo.path())
+            .env("CODEFLOW_HOME", home.path())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "{args:?} must refuse: {}",
+            stdout(&out)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("required_checks"), "{args:?}: {err}");
+        assert!(
+            err.contains("no rules were planned or applied"),
+            "{args:?}: {err}"
+        );
+        assert!(
+            !writes.exists(),
+            "{args:?} sent a write: {}",
+            fs::read_to_string(&writes).unwrap_or_default()
+        );
+    }
+}
+
 /// The doctor reads the default branch's live rules through `gh` and warns
 /// when they do not require an up-to-date branch (TSK-261).
 #[cfg(unix)]
