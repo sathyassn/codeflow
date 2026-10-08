@@ -1151,13 +1151,15 @@ fn resolve_reviewed(repo: &Repository, reviewed: &str) -> Option<Oid> {
 /// other files and so never passes this check either, and a pin that
 /// binding refuses would pass `work claim` and then fail its own push. A
 /// root commit in the span refuses, since the record appears in it
-/// unreviewed. `path` is the pinned record's path at the pin
-/// ([`PinBranches::record_path`]).
+/// unreviewed. A history overlay (grafts or replace refs) could fake the
+/// parents walked, and a shallow boundary cuts the walk, so either stops
+/// it, as in the acceptance binding's own walk. `path` is the pinned
+/// record's path at the pin ([`PinBranches::record_path`]).
 ///
 /// # Errors
 /// Returns why the ancestry or the history walk between the review and the
-/// pin cannot be read. A record or tree that cannot be read inside the
-/// span is no proof of coverage and returns `Ok(false)`.
+/// pin cannot be read or trusted. A record or tree that cannot be read
+/// inside the span is no proof of coverage and returns `Ok(false)`.
 pub(crate) fn review_covers_pin(
     repo: &Repository,
     pin: &ReviewedPin,
@@ -1170,6 +1172,12 @@ pub(crate) fn review_covers_pin(
     if review == pin.revision {
         return Ok(true);
     }
+    if let Some(overlay) = super::release_line::history_overlay(repo)? {
+        return Err(format!(
+            "this clone overlays its recorded history with {overlay}, so the parents from the review to the pin cannot be trusted; remove it, or judge from a clone without it"
+        ));
+    }
+    let shallow = super::release_line::shallow_boundary(repo)?;
     if !repo
         .graph_descendant_of(pin.revision, review)
         .map_err(|e| e.to_string())?
@@ -1181,6 +1189,11 @@ pub(crate) fn review_covers_pin(
     walk.hide(review).map_err(|e| e.to_string())?;
     for revision in walk {
         let revision = revision.map_err(|e| e.to_string())?;
+        if shallow.contains(&revision) {
+            return Err(format!(
+                "this clone is shallow at {revision}, so the history to the reviewed commit is cut; fetch it in full"
+            ));
+        }
         let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
         let Some(content) = super::acceptance::blob_at(repo, revision, path) else {
             return Ok(false);

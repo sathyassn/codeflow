@@ -1019,6 +1019,56 @@ fn tsk250_other_changes_reverts_and_non_ancestors_are_refused() {
 
 #[test]
 #[cfg(unix)]
+fn tsk250_a_graft_cannot_hide_a_reverted_change_from_the_pin_review() {
+    for graft in [false, true] {
+        let (dir, bin, reviewed) = stacked_fixture();
+        let root = dir.path();
+        write(root, "src/a.rs", "pub fn a() {}\nChanged.\n");
+        git(root, &["commit", "-qam", "feat: unreviewed change"]);
+        write(root, "src/a.rs", "pub fn a() {}\n");
+        git(root, &["commit", "-qam", "fix: undo change"]);
+        write(
+            root,
+            "project-management/tasks/TSK-001.md",
+            &format!("{}\n## Closeout\nCloseout.\n", record("TSK-001", "[]")),
+        );
+        git(root, &["commit", "-qam", "docs: record acceptance"]);
+        let tip = git(root, &["rev-parse", "HEAD"]);
+        let grafts = root.join(".git/info/grafts");
+        if graft {
+            // libgit2 reads the tip's parent as the reviewed commit, so
+            // the span looks like one status-and-Closeout commit.
+            std::fs::create_dir_all(grafts.parent().unwrap()).unwrap();
+            std::fs::write(&grafts, format!("{tip} {reviewed}\n")).unwrap();
+        }
+        review_tool_with(
+            bin.path(),
+            "task/TSK-001-work",
+            &tip,
+            &reviewed,
+            true,
+            "owner",
+            "project",
+            false,
+        );
+        let out = start_stack(root, bin.path(), &tip);
+        assert!(
+            !out.status.success(),
+            "accepted the revert span, graft {graft}"
+        );
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(error.contains(&reviewed), "{error}");
+        if graft {
+            assert!(
+                error.contains("graft file") && error.contains("info/grafts"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn tsk250_live_review_table_accepts_record_only_tip() {
     use std::os::unix::fs::PermissionsExt;
     let (dir, bin, reviewed) = stacked_fixture();

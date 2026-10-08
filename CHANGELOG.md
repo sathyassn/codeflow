@@ -409,8 +409,11 @@ erratum below, never an edit of the section.
   predecessor's own acceptance binding refuses it. The visible Reviews table may
   use a scope column or an approving prose verdict with a uniquely resolved
   abbreviated revision. A push of a stacked branch honours a predecessor
-  head by the same rule. Other changes require a new review. The CI reader
-  also requests only the supported `name,state` fields from `gh pr checks`.
+  head by the same rule. Other changes require a new review. A clone with a
+  graft file, a replace ref or a shallow cut in that span cannot verify an
+  ancestor review, since those can rewrite the commits checked. The CI
+  reader also requests only the supported `name,state` fields from
+  `gh pr checks`.
 
 <!-- codeflow:release-impact patch -->
 - **A pull request can no longer lower its own security review.** The
