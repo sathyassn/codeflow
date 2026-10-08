@@ -93,6 +93,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
     ("DOCS_ADRS_UNCHECKED", Runs),
+    ("FEEDBACK_INDEX_STALE", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
     ("WORK_START_RECONCILE", Runs),
     ("WORK_START_MERGE_PLANNING", Runs),
@@ -106,6 +107,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
+    ("LINE_ADOPTION_OUTSIDE_RANGE", Excluded(HumanAuthority)),
     ("CRITERIA_DELTA", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_CHANGE", Excluded(HumanAuthority)),
     ("RELEASE_LEGACY_RECORD", Excluded(HumanAuthority)),
@@ -1485,6 +1487,41 @@ fn clears_docs_adrs_unchecked() {
 }
 
 #[test]
+fn clears_feedback_index_stale() {
+    let dir = scaffolded("--full");
+    let root = project(&dir);
+    let quote = |id: &str| {
+        let rel = format!("project-management/feedback/{id}.md");
+        let text = read(&root, &rel).replacen("## Verbatim\n", "## Verbatim\n\n> words\n", 1);
+        write(&root, &rel, &text);
+    };
+    codeflow(
+        &root,
+        &[
+            "feedback", "new", "--topic", "process", "--source", "chat", "first",
+        ],
+    );
+    quote("FB-001");
+    codeflow(&root, &["feedback", "list", "--write"]);
+    codeflow(
+        &root,
+        &[
+            "feedback", "new", "--topic", "process", "--source", "chat", "second",
+        ],
+    );
+    quote("FB-002");
+    prove(
+        "FEEDBACK_INDEX_STALE",
+        "INDEX.md does not match the feedback items",
+        || validate(&root),
+        |printed| {
+            let step = printed_command(printed, "FEEDBACK_INDEX_STALE", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
 fn clears_docs_capabilities_unchecked() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
@@ -1961,17 +1998,15 @@ fn clears_push_range_unresolved() {
         "{started}"
     );
     let other = root.parent().unwrap().join("other");
-    git(
+    codeflow_fixture::clone(
         root.parent().unwrap(),
-        &[
-            "clone",
-            "-q",
-            "-b",
-            "chore/archive",
-            dest.to_str().unwrap(),
-            other.to_str().unwrap(),
-        ],
-    );
+        dest.to_str().unwrap(),
+        other.to_str().unwrap(),
+    )
+    .branch("chore/archive")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     write(&other, "o.txt", "o\n");
     git(&other, &["add", "o.txt"]);
     git(&other, &["commit", "-q", "-m", "feat: add o"]);

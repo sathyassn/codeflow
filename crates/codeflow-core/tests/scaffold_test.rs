@@ -2107,3 +2107,23 @@ fn update_says_a_renamed_scan_step_needs_review() {
     let again = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
     assert!(advised(&again), "{again}");
 }
+
+/// TSK-241 AC-7: the shipped feedback template installs at the full tier
+/// only, verbatim, and is a template `codeflow feedback new` can use.
+#[test]
+fn the_shipped_feedback_template_installs_at_the_full_tier_only() {
+    let assets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let assets = DirSource::new(&assets_dir);
+    let manifest = scaffold::ScaffoldManifest::load(&assets).unwrap();
+    let entry = manifest
+        .entries
+        .iter()
+        .find(|entry| entry.dest == "project-management/templates/feedback.md")
+        .expect("the feedback template has a manifest entry");
+    assert_eq!(entry.src, "pm/feedback.md.tmpl");
+    assert_eq!(entry.tiers, vec![Tier::Full]);
+    assert_eq!(entry.ownership, scaffold::Ownership::Managed);
+    let shipped = include_str!("../../../assets/base/pm/feedback.md.tmpl");
+    assert!(manifest.installs_verbatim(&assets, &entry.dest, shipped.as_bytes()));
+    codeflow_core::feedback::check_template(shipped).unwrap();
+}
