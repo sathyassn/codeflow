@@ -689,7 +689,7 @@
     ".agents/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "14b5d4c4db1ff7beb9a29f134f6b3f1b273e7581ae75c03d80c7f6d60bad8eff",
+      "sha256": "6ab0c460e44e0fbabfbf4f2cc58fe8bc749e1f84bea5be7ed4921c123a8b8e39",
       "exec": false
     },
     ".agents/skills/cf-present/references/feedback-loop.md": {
@@ -1529,7 +1529,7 @@
     ".claude/skills/cf-present/references/document-authoring.md": {
       "src": "agents/skills/cf-present/references/document-authoring.md",
       "ownership": "managed",
-      "sha256": "14b5d4c4db1ff7beb9a29f134f6b3f1b273e7581ae75c03d80c7f6d60bad8eff",
+      "sha256": "6ab0c460e44e0fbabfbf4f2cc58fe8bc749e1f84bea5be7ed4921c123a8b8e39",
       "exec": false
     },
     ".claude/skills/cf-present/references/feedback-loop.md": {

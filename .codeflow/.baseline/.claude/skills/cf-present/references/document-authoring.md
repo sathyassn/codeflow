@@ -8,9 +8,10 @@ subject.
 
 Write a `schema_version: 2` document. Its machine contract is
 `.codeflow/schemas/present/document-v2.schema.json` (see "Schema version 2"
-below); version 1, `document-v1.schema.json`, is what a 3.0.0 binary reads.
-The runtime is authoritative for semantic and byte limits. Schema validity
-never means the page is a good present.
+below); version 1,
+`.codeflow/schemas/present/document-v1.schema.json`, is what a 3.0.0 binary
+reads. The runtime is authoritative for semantic and byte limits. Schema
+validity never means the page is a good present.
 
 ## Envelope
 
