@@ -23,7 +23,6 @@
 //! indexed are reported, never silently empty (charter principle 8).
 
 use std::collections::HashSet;
-#[cfg(unix)]
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -320,17 +319,15 @@ fn display_encoded_path(encoded: &str) -> String {
 /// (OS text rule, issue 79).
 #[cfg(not(unix))]
 fn encode_path(path: &Path) -> String {
-    match path.to_str() {
-        Some(text) => text.replace('%', "%25"),
-        None => {
-            let mut encoded = path.to_string_lossy().replace('%', "%25");
-            encoded.push_str("%00");
-            for byte in path.as_os_str().as_encoded_bytes() {
-                let _ = write!(encoded, "{byte:02x}");
-            }
-            encoded
-        }
+    if let Some(text) = path.to_str() {
+        return text.replace('%', "%25");
     }
+    let mut encoded = path.to_string_lossy().replace('%', "%25");
+    encoded.push_str("%00");
+    for byte in path.as_os_str().as_encoded_bytes() {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 fn source_file(root: &Path, abs: PathBuf, kind: &'static str) -> SourceFile {

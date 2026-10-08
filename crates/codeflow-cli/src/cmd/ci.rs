@@ -2883,7 +2883,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = codeflow_core::git::command()
                 .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
                 .args([
                     "-c",
@@ -2920,7 +2920,7 @@ mod tests {
 
     /// Delete the loose object `spec` names, as a damaged clone lacks it.
     fn r24_remove(root: &std::path::Path, spec: &str) {
-        let out = std::process::Command::new("git")
+        let out = codeflow_core::git::command()
             .args(["rev-parse", spec])
             .current_dir(root)
             .output()

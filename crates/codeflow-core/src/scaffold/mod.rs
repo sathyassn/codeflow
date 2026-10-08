@@ -154,11 +154,11 @@ impl ScaffoldError {
     }
 }
 
-#[cfg(test)]
+// Every case needs a Unix file name or link, so the module is Unix only.
+#[cfg(all(test, unix))]
 mod r22_tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn r22_initial_adr_recognizes_non_utf8_names() {
         use std::os::unix::ffi::OsStrExt;
@@ -177,7 +177,6 @@ mod r22_tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn r22_initial_adr_refuses_dangling_decisions() {
         let dir = tempfile::tempdir().unwrap();
@@ -187,7 +186,6 @@ mod r22_tests {
         assert!(should_skip_initial_stack_adr(dir.path(), INITIAL_STACK_ADR).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
     fn r22_scaffold_existence_requires_resolvable_paths() {
         let dir = tempfile::tempdir().unwrap();

@@ -12201,18 +12201,30 @@ mod tests {
         // The resolver cannot read the target repository (TSK-112, T112-4):
         // the guard cannot prove the target is unprotected, so a commit
         // blocks whatever the session branch is, and says how to resolve it.
+        // The target is a folder that does not exist on any host: a folder
+        // that exists but cannot be read (`/root` for a user other than
+        // root) adds its own `git.policy_authority` refusal (issue 79).
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("absent");
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| None;
         for session in ["feat/x", "main"] {
             let v = evaluate(
-                "git -C /root commit -m x",
+                &format!("git -C {} commit -m x", target.display()),
                 &ctx_with_dir_branch(&p, session, &resolver),
             );
-            assert!(has_rule(&v, "git.commit_to_protected"), "{session}: {v:?}");
-            assert!(v[0]
-                .message
-                .contains("target unresolved: no readable repository at `/root`"));
-            assert!(v[0].remedy.contains("literal path"));
+            let commit = v
+                .iter()
+                .find(|x| x.rule == "git.commit_to_protected")
+                .unwrap_or_else(|| panic!("{session}: {v:?}"));
+            assert!(
+                commit.message.contains(&format!(
+                    "target unresolved: no readable repository at `{}`",
+                    target.display()
+                )),
+                "{session}: {v:?}"
+            );
+            assert!(commit.remedy.contains("literal path"));
         }
     }
 

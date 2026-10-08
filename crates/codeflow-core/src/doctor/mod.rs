@@ -6163,6 +6163,7 @@ mod tests {
         std::os::unix::fs::symlink("gone", path).unwrap();
     }
 
+    #[cfg(unix)]
     fn opts_at(dir: &Path) -> Options {
         Options {
             project_dir: dir.to_string_lossy().into_owned(),

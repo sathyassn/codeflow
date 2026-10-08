@@ -245,6 +245,13 @@ pub(crate) fn add_commit_modes(
         )
         .unwrap();
     drop(tree);
+    // `Repository::init` names the unborn HEAD from the host's
+    // `init.defaultBranch`, which is `master` where none is set (a CI
+    // runner). The fixture commits on `main`, so an unborn HEAD is pointed
+    // there; otherwise `HEAD` reads would depend on the host's git config.
+    if matches!(repo.head(), Err(error) if error.code() == git2::ErrorCode::UnbornBranch) {
+        repo.set_head("refs/heads/main").unwrap();
+    }
     commit
 }
 
