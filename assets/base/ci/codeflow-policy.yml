@@ -186,7 +186,7 @@ jobs:
           git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
           fetched=$(git rev-parse refs/codeflow/pr-head)
           if [ "$fetched" != "$HEAD_SHA" ]; then
-            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); the newer run judges it"; exit 1
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); this run belongs to an older event, so it fails; re-run the check for the current head"; exit 1
           fi
 
       # The body is read when the job runs, never taken from the event. An
