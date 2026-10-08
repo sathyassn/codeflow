@@ -541,7 +541,7 @@ while the guards judge each command by the name it spells.
    remains outside it. The sandboxes on all three harnesses hold writes
    into the unwritable home; an unsandboxed seat stays open. The limits for
    relocated startup files and writable workspace paths are listed in
-   `docs/architecture/enforcement-planes.md`. For reviewers, a new copier
+   `docs/policy-reference.md`. For reviewers, a new copier
    option is a residual, not a new member of the startup class.
 4. **No run-time source following.** The guards do not read what a startup
    file sources. `codeflow doctor --check startup-files` lists the files the

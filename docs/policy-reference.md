@@ -98,10 +98,202 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 `security.shell_startup` is enforced by exec-guard and edit-guard. It
 refuses a write to a shell startup file, or a write that can place one, in an
-agent session (issue 86, TSK-242). The class and the forms are in
-[enforcement planes](architecture/enforcement-planes.md#shell-startup-files).
-No key relaxes it at any integrity level; the operator edits their own
+agent session (issue 86, TSK-242). The class and the sandbox containment
+per harness are in
+[enforcement planes](architecture/enforcement-planes.md#shell-startup-files);
+the forms the guards refuse follow here. No key relaxes it at any integrity level; the operator edits their own
 startup files outside the agent session.
+
+### What security.shell_startup refuses
+
+The guards refuse under `security.shell_startup`, whatever the integrity
+level:
+
+- a redirect, copy, link, move, in-place edit, `tee`, `dd` or interpreter
+  call that names a file of the class, in any spelling the guard expands
+  (`~`, `$HOME`, `${HOME}`, `$ZDOTDIR`, braces, globs, case) and through
+  symbolic links;
+- an archive, sync, download or checkout that writes into the home, `/etc`
+  or a startup directory, where it can place a file it does not name;
+- a path the guard cannot resolve near the class, such as `~/$NAME`;
+- code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
+  class file once the line's own literal assignments are filled in
+  (`p=src/.envrc; python3 -c "open('$p','a')"`), and such code that carries
+  an expansion the guard cannot read on a line that names a class file;
+- a staged run: a line that names a class file and produces text (a pipe,
+  a heredoc, a process substitution or a file the call writes) refuses
+  unless every program on it is a data reader used as one. The allowlist is
+  `cat`, `grep`, `ls`, `jq`, `find` without `-exec` and the other read-only
+  programs of the module, the filters `sort`, `uniq`, `cut`, `tr`, `paste`,
+  `column`, `fold`, `nl`, `tac`, `rev`, `comm`, `join`, `xxd`, `base64` and
+  `tee`, `git` other than `apply`, `am`, a command-running `-c`, a
+  repository `config` write and a path list read from input
+  (`--pathspec-from-file`, `--stdin`, `-p`), `awk` with an inline program,
+  and `sed` by a flag scan. A reader with a write or exec path of its own is
+  refused in that use: `awk` with `-f`, `-i`, `-E`, `-e`, `system`, a pipe,
+  `>>`, a `>` after `print` or an `@`; `sed` with `-f`, an `e`, `w` or `r` command,
+  or a `w` or `e` flag on `s///`; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
+  Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, an
+  `env -S` string, a variable that picks the program (`PATH`, `GIT_*`,
+  `PAGER`) and any program or option the guard does not know are refused.
+  The refusal names the program: read the class file in its own call. The
+  rule also refuses ordinary lines that only read, such as `cp b.txt
+  docs/a.txt` or `cargo test` after a redirect of a class file, `| vim -`,
+  `awk '/a|b/ {print}'` and `sed 's|a|b|'`; the task record lists them. The
+  line must name the file; a script written in one call and run in another
+  stays a residual. This replaces a list of programs that run text, which an
+  unlisted spelling always escaped;
+- a command-valued setting that names a class file, on any line, with or
+  without produced text: a global `git -c`, `--config-env` or `--exec-path=`
+  whose value names a class file or, on a line that names one, cannot be
+  read, and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`, `LESSOPEN`,
+  `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`,
+  `GIT_ASKPASS`, `GIT_CONFIG_VALUE_n` and similar variables, set on the call
+  or exported (`GIT_EDITOR='echo x >> ~/.zshrc' git commit`). The value is
+  read after the line's own assignments are filled in, including those that
+  only use `$HOME`, `${HOME}`, `$ZDOTDIR`, `$XDG_CONFIG_HOME` or an earlier
+  assigned name (`F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'`). An innocent
+  value (`-c color.ui=never`, `EDITOR=vim`) changes nothing. On a staged line
+  a git setting is judged by its key, for `-c`, `--config-env` (`=` or a
+  separate word) and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` alike, with the
+  one key classification git-guard also uses: a key known to run nothing
+  (`color.*`, `user.*`, `diff.renames`, `log.date`, `core.commentChar`,
+  `clean.requireForce`, a `pager.<command>` boolean, a
+  `submodule.<name>.update` set to one of git's own modes, and similar)
+  passes; a key known to run a command (`core.pager`, `core.fsmonitor`,
+  `core.gitProxy`, `alias.*`, `remote.<name>.uploadpack`, and
+  `include.path`, which pulls in any key) must hold an ordinary viewer or
+  tool; any other key refuses. A command-valued variable on a staged line
+  must start with a viewer, editor, ssh or diff tool (`vim`, `less`, `code`,
+  `ssh`, `diff`) followed only by plain flags that name no class file, no
+  shell character and nothing that runs code (`code -w`, `vim -R`,
+  `ssh -o BatchMode=yes`). `less` and `diff` take their own letters that
+  need no value, run together (`less -RF`, `diff -u`), and never less's
+  `-o`, `-k` or `+command` or diff's `-l`; other tools take one letter per
+  word, and `vim -S x`, `vim -u x`, `vim -c cmd`, `vim +cmd`, `sh r.sh` and
+  `ssh -o ProxyCommand=sh` refuse. `--exec-path=DIR` with an empty or
+  unknown directory refuses on a staged line; without `=`, `--exec-path`
+  takes no value, so the next word is read as the subcommand. The variables
+  that pick the program itself (`PATH`, `SHELL`, `LD_*`,
+  `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_EXEC_PATH`,
+  `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`) refuse
+  whatever the value, because a value can point at a program or a
+  configuration file the call wrote;
+- quoting is decoded before any of these checks reads a word: ANSI-C
+  `$'\x2ezshrc'` (hex, octal, `\u`, `\U`, `\c` and the letter escapes),
+  locale `$"..."`, and adjacent quoted pieces (`'.zs''hrc'`, `.z"s"hrc`);
+- `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
+  `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
+  zsh launch counts as reading them unless it turns them off with `-f` or
+  `--no-rcs` and carries no `+` option, `-o` or other long option;
+- `ln`, `cp -s` or `cp -l` whose named source or destination is a class
+  file, resolved from the command's working directory through the ordinary
+  path check; the guard does not interpret link text from its landing place;
+- a copy into a target directory spelled `-t DIR`, `-tDIR` or the exact
+  `--target-directory`, when the named file lands in the class;
+- `rg` without `--no-config`, since its configuration file can name a
+  `--pre` program, and `sed` unless its options change no file and its
+  script is only addressed print commands.
+
+The backstop reads text, not a parse of copier behavior. For reviewers, a
+new copier option is a residual, not a new member of the startup class.
+
+### Git settings that can run a program
+
+git-guard refuses a user- or system-scope git setting that is not known to
+run nothing, under `git.hook_integrity`: a key that runs a program, such as
+an alias, `core.pager`, `credential.helper`, `difftool.<tool>.path` or
+`gpg.ssh.defaultKeyCommand`, and any key the classification does not know,
+such as `safe.directory` or `init.templateDir`. The known-safe keys
+(`user.*`, `color.*`, `init.defaultBranch`, `pull.rebase`,
+`push.autoSetupRemote`, `core.autocrlf`, `commit.gpgsign` and the others in
+`security/git.rs`) pass, and so do the switches beside the tool programs
+(`difftool.prompt`, `mergetool.keepBackup`, `pager.<command>`) and
+`core.fsmonitor`, whose boolean starts git's own monitor, set to a boolean;
+keys match by exact name. Repository-scope settings, unsets and
+reads pass. git has many keys that run a program and adds more, so a list
+of them always missed one (review round ten); an unknown key costs a
+refusal the operator can clear by setting it by hand.
+
+A write into a file counts as user or system scope unless the file is a
+repository's own configuration: a `config` or `config.worktree` in a git
+directory, a `.gitmodules` or a `.lfsconfig`, judged through its symbolic
+links. git reads its system file under the prefix it was built with
+(`/opt/homebrew/etc/gitconfig`, `/usr/local/etc/gitconfig`, a source
+build's `~/etc/gitconfig`) and every file a configuration includes, so a
+list of user and system files always missed one (review round eleven).
+`--file`, `-f`, `--blob` and, for a call with no scope option, the file
+`GIT_CONFIG` names are judged this way. The cost is a refusal for a project
+fixture or scratch file given a key not known to run nothing. A shell
+write or native edit of a `gitconfig` in any `etc` directory is refused
+with the user's own files.
+
+A default, `--local` or `--worktree` write is judged by the file git opens:
+the `config` of the git directory the call selects (through `-C`,
+`--git-dir`, `GIT_DIR`, a worktree's or submodule's `.git` file, and the
+payload's working directory), and with `--worktree` also that worktree's
+`config.worktree`. git follows a symbolic link there, so a key not known to
+run nothing refuses when that file, through its links, is not a
+repository's own configuration (review round twelve): a submodule's
+`.git/modules/<name>/config`, a bare git directory's `config` or an
+existing `.git/config` that links to the user's file. A git directory the
+call names that does not exist yet is judged by its path, and a call whose
+repository the guard cannot locate (`cd "$D"`) refuses such a key. The file
+is read only for a key not known to run nothing, at the cost of one
+repository lookup on that hook call. As a second layer, `ln`, `cp`, `mv` and `rsync` may not put
+a file in place of the `config` or `config.worktree` of any git directory,
+so a link made on the same line as the write is refused before git follows
+it. A link made by an interpreter or another program on the same line
+stays outside the text guard; the write it serves is caught on any later
+call.
+
+Every guard that reads a git command line skips the same global options
+that take the next word as their value (`-C`, `-c`, `--git-dir`,
+`--work-tree`, `--namespace`, `--config-env`, `--attr-source`,
+`--shallow-file`), so a value is never read as the subcommand (issue 120).
+
+### What the startup backstop leaves open
+
+- **Every harness.** The text guard does not inspect links inside a copied
+  or moved tree, judge link text from where it lands, emulate dereference
+  and preserve option semantics, or recognize long-option prefixes beyond
+  exact names. Everything built at run time remains outside it, including
+  a path assembled by a program, a path an interpreter reads from its
+  environment at run time (`export p=~/.zshrc; python3 -c
+  'open(os.environ["p"])'`) and a script written in one call and run in
+  another. It does not read archive contents. The sandboxes on all three
+  harnesses hold writes into the unwritable home; an unsandboxed seat stays
+  open. Relocated startup files and writable workspace paths have the
+  limits listed below. An interpreter call whose code names a startup file
+  is refused even when it only reads; read with `cat` or `grep` instead.
+  A dotfile-manager symlink can be backed up with `cp -a ~/.zshrc backup`;
+  its preservation semantics are left to the sandbox.
+- **Claude Code.** The generated denies name the default locations. A
+  `ZDOTDIR` or `XDG_CONFIG_HOME` moved elsewhere has no native deny, and
+  Claude's file tools do not run edit-guard, so a native `Write` there is
+  not refused. On macOS Claude merges the `Edit` denies into the sandbox
+  write deny, so a nested `.envrc` written from Bash is held there too. On
+  Linux and WSL2 a wildcard `denyWrite` entry is skipped, so `.envrc` in an
+  arbitrary directory is an `Edit` deny only and a nested one written from
+  Bash is refused by exec-guard, not by the sandbox.
+- **Codex.** The profile keeps the home and `/etc` entries and the
+  workspace root's `.envrc` read only. A nested `.envrc`, including one in
+  a linked worktree or a temporary directory, is writable to the profile
+  (probed on Codex 0.160.0) and left to the guards. Like Claude's denies,
+  the entries name the default locations, so a `ZDOTDIR` or
+  `XDG_CONFIG_HOME` moved elsewhere is writable to the profile. A
+  `--sandbox` flag or the operator's own profile override replaces these
+  entries.
+- **Grok Build.** Its `workspace` sandbox leaves the home unwritable (not
+  probed in this task), which covers a moved `ZDOTDIR` or
+  `XDG_CONFIG_HOME` only when it sits outside the workspace. `.envrc` in the workspace has no Grok rule, since a
+  Grok deny also blocks reads; the guards refuse it.
+- **Windows.** A PowerShell profile under a redirected `Documents` folder,
+  such as one in OneDrive, is outside the class. On native Windows Claude
+  Code has no Bash sandbox, so the class rests on the `Edit` denies for its
+  file tools and on the guards; the Codex read-only entries and Grok's
+  workspace sandbox were not probed there.
+- **Sourced files.** The guards do not follow what a startup file sources.
 
 <!-- No table here: the portal's row count for this page expects every table
 to be generated from the schema or checked against the hook dispatcher. -->
