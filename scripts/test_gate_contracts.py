@@ -111,7 +111,7 @@ class GateContracts(unittest.TestCase):
         # The quick gate stays light: no quick target pulls in a build producer
         # (fmt and clippy need no web build; there is no present build.rs).
         quick = {name for name, t in targets.items() if 'quick' in t['modes']}
-        self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
+        self.assertEqual(quick, {'rust-format', 'rust-clippy', 'repository-update-noop', 'contract-scans', 'gate-parity', 'skill-triggers', 'herdr-delivery'})
         for name in quick:
             self.assertLessEqual(closure(name), quick, name)
         # TSK-256: the push set replays `codeflow update` on this repository, so a
@@ -122,6 +122,16 @@ class GateContracts(unittest.TestCase):
         self.assertEqual(replay['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test repository_update_noop --quiet'}})
         self.assertEqual(replay.get('requires', []), [])
         self.assertTrue((ROOT / 'crates/codeflow-core/tests/repository_update_noop.rs').is_file())
+        # TSK-261: the push set runs the cross-cutting source scans: the one that
+        # judges every git spawn and the one that checks every instruction
+        # artifact reference. A branch that holds a refused spawn or a stale
+        # reference fails before push, not in hosted CI after a merge. Quick mode
+        # only, no producer, like the replay.
+        scans = targets['contract-scans']
+        self.assertEqual(scans['modes'], {'quick': {'command': 'cargo test -p codeflow-core --test git_spawn_contract --test artifact_budget_contract --quiet'}})
+        self.assertEqual(scans.get('requires', []), [])
+        self.assertTrue((ROOT / 'crates/codeflow-core/tests/git_spawn_contract.rs').is_file())
+        self.assertTrue((ROOT / 'crates/codeflow-core/tests/artifact_budget_contract.rs').is_file())
         for name in ['present-browser', 'read-benchmark', 'present-web-build']:
             self.assertTrue(targets[name]['exclusive'], name)
         self.assertEqual(targets['journey-gate']['requires'], ['rust-coverage'])
