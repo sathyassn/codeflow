@@ -143,6 +143,12 @@ export async function checkResolverRules(browser) {
         labelledGroup: at("node-a-rect"),
         ancestorLabel: at("aria-rect"),
         bareRect: at("bare-rect"),
+        wrappedLine: at("wrapped-line"),
+        wrappedText: at("wrapped-text"),
+        wrappedGroup: at("wrapped-group-rect"),
+        wrappedOwn: at("wrapped-own-rect"),
+        capturedWrapped: h.captureElement(root, document.getElementById("wrapped-line")),
+        capturedWrappedText: h.captureElement(root, document.getElementById("wrapped-text")),
         noneOnly: at("none-rect"),
         noneInEntity: at("ledger-none-rect"),
         markerPath: at("marker-path"),
@@ -192,10 +198,25 @@ export async function checkResolverRules(browser) {
     assert.equal(result.top, null);
     assert.deepEqual(result.targetText, entity("entity", "service", "Service"));
     // Step 4: a shape in a labelled group resolves to the group; an explicit
-    // ancestor label names a shape; else the block label, never a tag name.
+    // label on an ancestor other than the picture names a shape; else the
+    // part is "Unnamed part of" its block, never a tag name. The svg's or
+    // figure's own label names the picture, never a part of it (TSK-259).
     assert.deepEqual(result.labelledGroup, { via: "shape", element: "node-a", entity: null, label: "Node A" });
-    assert.deepEqual(result.ancestorLabel, { via: "shape", element: "aria-rect", entity: null, label: "Answer flow" });
-    assert.deepEqual(result.bareRect, { via: "shape", element: "bare-rect", entity: null, label: "How an answer reaches the agent" });
+    assert.deepEqual(result.ancestorLabel, { via: "shape", element: "aria-rect", entity: null, label: "Unnamed part of How an answer reaches the agent" });
+    assert.deepEqual(result.bareRect, { via: "shape", element: "bare-rect", entity: null, label: "Unnamed part of How an answer reaches the agent" });
+    // The delivery stages' wrapper: <figure role="img" aria-label="..."> around the svg.
+    const unnamed = "Unnamed part of What a task stores, and what is computed";
+    assert.deepEqual(result.wrappedLine, { via: "shape", element: "wrapped-line", entity: null, label: unnamed });
+    assert.deepEqual(result.wrappedText, { via: "shape", element: "wrapped-text", entity: null, label: "claim: push task branch" });
+    assert.deepEqual(result.wrappedGroup, { via: "shape", element: "wrapped-group", entity: null, label: "Todo box" });
+    assert.deepEqual(result.wrappedOwn, { via: "shape", element: "wrapped-own-rect", entity: null, label: "Side panel" });
+    // The note stores the full label and no quote; the crop is added later.
+    assert.equal(result.capturedWrapped.element_selector.label, unnamed);
+    assert.equal(result.capturedWrapped.element_selector.tag_name, "line");
+    assert.equal(result.capturedWrapped.summary, `Element: ${unnamed}`);
+    assert.equal(result.capturedWrapped.excerptText, undefined);
+    assert.equal(result.capturedWrapped.entity_selector, undefined);
+    assert.equal(result.capturedWrappedText.excerptText, "claim: push task branch");
     // none: the nearest target ancestor, else the block.
     assert.deepEqual(result.noneOnly, { via: "block", element: "answer-flow", entity: null, label: "How an answer reaches the agent" });
     assert.deepEqual(result.noneInEntity, entity("entity", "ledger", "Ledger"));
@@ -277,4 +298,19 @@ const STAGE_FIXTURE = `<section data-cf-block-id="answer-flow" data-cf-block-lab
     <ul class="cf-legend" aria-label="Legend"><li data-cf-entity="legend-1" data-cf-entity-label="a request">Solid line: a request</li></ul>
     <figcaption class="cf-frame-caption">An answer goes from the page to the service and is appended to the ledger before the agent reads it.</figcaption>
   </figure>
+</section>
+<section data-cf-block-id="stage-lifecycle" data-cf-block-label="What a task stores, and what is computed" data-cf-block-digest="${"c".repeat(64)}">
+  <p class="cf-frame-title">What a task stores, and what is computed</p>
+  <div data-cf-review-text-root data-cf-canonical-text="What a task stores, and what is computed claim: push task branch">
+    <div class="cf-stage-host">
+      <figure role="img" aria-label="Task states. Todo, blocked, complete and cancelled are stored; active is computed from a pushed task branch." style="margin:0">
+        <svg viewBox="0 0 400 80" width="400" height="80" aria-label="Task states">
+          <line id="wrapped-line" x1="10" y1="60" x2="200" y2="60" stroke="#333" stroke-width="2"/>
+          <text id="wrapped-text" x="20" y="45">claim: push task branch</text>
+          <g id="wrapped-group" aria-label="Todo box"><rect id="wrapped-group-rect" x="220" y="20" width="60" height="40" fill="#bbb"/></g>
+          <g><rect id="wrapped-own-rect" aria-label="Side panel" x="300" y="20" width="60" height="40" fill="#ccc"/></g>
+        </svg>
+      </figure>
+    </div>
+  </div>
 </section>`;

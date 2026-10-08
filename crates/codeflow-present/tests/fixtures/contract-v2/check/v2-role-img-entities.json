@@ -1,0 +1,13 @@
+{
+  "schema_version": 2,
+  "title": "Named parts inside a picture role",
+  "blocks": [
+    {
+      "type": "html",
+      "id": "hidden-parts",
+      "title": "Two services",
+      "caption": "The page calls the service, which writes the ledger.",
+      "html": "<figure role='img' aria-label='Two services'><svg viewBox='0 0 300 80'><rect data-cf-target='service' x='10' y='20' width='100' height='40'/><text data-cf-for='service' x='60' y='45'>Service</text><rect data-cf-target='ledger' x='190' y='20' width='100' height='40'/><text data-cf-for='ledger' x='240' y='45'>Ledger</text></svg></figure>"
+    }
+  ]
+}

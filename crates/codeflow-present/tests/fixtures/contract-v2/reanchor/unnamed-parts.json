@@ -1,0 +1,113 @@
+{
+  "clause": "B1 step 2 and B3 step 4, as TSK-259 changed them in docs/architecture/present.md",
+  "note": "Each case stores one note on the block of its source revision, updates the session to the target revision and reads the anchor. `before` is what the runtime reported before TSK-259.",
+  "cases": [
+    {
+      "name": "unnamed part with no quote",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-revision-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "path",
+        "label": "Unnamed part of What a task stores, and what is computed"
+      },
+      "before": "reanchored at 0, changed (the label scores 0.757 against the title)",
+      "expect": {"state": "block_fallback", "reason": "the element changed and the note has no quote to search"}
+    },
+    {
+      "name": "shape quoting the stage title",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-revision-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "path",
+        "label": "What a task stores, and what is computed",
+        "excerpt_text": "What a task stores, and what is computed"
+      },
+      "before": "reanchored at 0, changed",
+      "expect": {"state": "block_fallback", "reason": "the part had no name and its stage changed"}
+    },
+    {
+      "name": "shape quoting the cut stage label",
+      "source": "reanchor/unnamed-v1-long-1.json",
+      "target": "reanchor/unnamed-v1-long-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "rect",
+        "label": "What a task stores, and what is compute…",
+        "excerpt_text": "What a task stores, and what is compute…"
+      },
+      "before": "reanchored at 0 by the fuzzy step, changed",
+      "expect": {"state": "block_fallback", "reason": "the part had no name and its stage changed"}
+    },
+    {
+      "name": "shape quoting the old title after a retitle",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-retitled.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "line",
+        "label": "What a task stores, and what is computed",
+        "excerpt_text": "What a task stores, and what is computed"
+      },
+      "before": "reanchored on the old title left as drawn text, changed",
+      "expect": {"state": "block_fallback", "reason": "the part had no name and its stage changed"}
+    },
+    {
+      "name": "drawn text quoting the title",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-revision-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "text",
+        "label": "What a task stores, and what is computed",
+        "excerpt_text": "What a task stores, and what is computed"
+      },
+      "before": "reanchored at 0, changed",
+      "expect": {"state": "reanchored", "start_utf16": 0, "end_utf16": 40, "changed": true}
+    },
+    {
+      "name": "frame title quoting the title",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-revision-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "tag_name": "p",
+        "label": "What a task stores, and what is computed",
+        "excerpt_text": "What a task stores, and what is computed"
+      },
+      "before": "reanchored at 0, changed",
+      "expect": {"state": "reanchored", "start_utf16": 0, "end_utf16": 40, "changed": true}
+    },
+    {
+      "name": "text note quoting the title",
+      "source": "reanchor/unnamed-v1-revision-1.json",
+      "target": "reanchor/unnamed-v1-revision-2.json",
+      "note": {
+        "block_id": "stage-lifecycle",
+        "selector": {
+          "exact": "What a task stores, and what is computed",
+          "prefix": "",
+          "suffix": " todo active computed: branch pu",
+          "start_utf16": 0,
+          "end_utf16": 40
+        }
+      },
+      "before": "reanchored at 0, unchanged",
+      "expect": {"state": "reanchored", "start_utf16": 0, "end_utf16": 40, "changed": false}
+    },
+    {
+      "name": "entity gone, quote is the stage title",
+      "source": "documents/v2-framed.json",
+      "target": "reanchor/revision-2.json",
+      "note": {
+        "block_id": "answer-flow",
+        "entity_id": "submit-edge",
+        "label": "submit",
+        "excerpt_text": "How an answer reaches the agent"
+      },
+      "before": "reanchored at 0, changed",
+      "expect": {"state": "block_fallback", "reason": "the entity is gone and its label was not found"}
+    }
+  ]
+}

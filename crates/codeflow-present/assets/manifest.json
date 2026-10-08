@@ -14,7 +14,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-SLDKUQGB.js",
+      "present.app": "/app/assets/app-XSOKGUIO.js",
       "present.style": "/app/assets/app-MDM2S4P6.css"
     },
     "inline": {
@@ -58,14 +58,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-SLDKUQGB.js",
-        "stored_path": "service/app-SLDKUQGB.js.br",
+        "request_path": "/app/assets/app-XSOKGUIO.js",
+        "stored_path": "service/app-XSOKGUIO.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 117188,
-        "encoded_bytes": 34535,
-        "sha256": "2bf6147b602cbece5af253ba8c56d6b3260f360feae55cccdbbf80a21aa86987",
-        "etag": "\"sha256-K/YUe2Asvs5a8lO6jFbWsyYPNg/q5VzM27+AohqoaYc=\"",
+        "raw_bytes": 117294,
+        "encoded_bytes": 34579,
+        "sha256": "9efc6adba3255e166f99b749bd153edfc1b45423095b6f4620559884ef72b28d",
+        "etag": "\"sha256-nvxq26MlXhZvmbdJvRU+38G0VCMJW29GIFWYhO9yso0=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -90,14 +90,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-SLDKUQGB.js",
-        "stored_path": "service/app-SLDKUQGB.js.gz",
+        "request_path": "/app/assets/app-XSOKGUIO.js",
+        "stored_path": "service/app-XSOKGUIO.js.gz",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "gzip",
-        "raw_bytes": 117188,
-        "encoded_bytes": 38768,
-        "sha256": "b1cc4d2d657d9bb9a1ecaa017f6ae1b6097adf3f098eb93f649b1aeaa36213fd",
-        "etag": "\"sha256-scxNLWV9m7mh7KoBf2rhtgl63z8Jjrk/ZJsa6qNiE/0=\"",
+        "raw_bytes": 117294,
+        "encoded_bytes": 38817,
+        "sha256": "9425455d79d17548eb4dca3e883beafa7c2ed736070ae66f382b6a5605170611",
+        "etag": "\"sha256-lCVFXXnRdUjrTco+iDvq+nwu1zYHCuZvOCtqVgUXBhE=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -603,9 +603,9 @@
     "metrics": {
       "asset_count": 15,
       "representation_count": 30,
-      "raw_corpus_bytes": 1068057,
-      "brotli_corpus_bytes": 279815,
-      "gzip_corpus_bytes": 305879,
+      "raw_corpus_bytes": 1068163,
+      "brotli_corpus_bytes": 279859,
+      "gzip_corpus_bytes": 305928,
       "largest_gzip_chunk_bytes": 132502,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
@@ -630,5 +630,5 @@
     "largest_gzip_chunk_bytes": 150000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "a4193d1e8b17a89f95daff45d50dcc5c967dd3ee1e64b5766aa91574a43c7323"
+  "corpus_sha256": "d5317522962f6439a15e6554d7badfd7dffc790aa828ec96a5cc23bc3fa7b832"
 }
