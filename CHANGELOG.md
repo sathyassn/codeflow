@@ -332,7 +332,7 @@ erratum below, never an edit of the section.
   builds the portal and deploys it to GitHub Pages once the repository owner
   enables Pages; the portal `base` is now `/codeflow/`.
 
-<!-- codeflow:release-impact patch -->
+<!-- codeflow:release-impact minor -->
 - **Builders and reviewers ask whether a change fits the repository.** The
   plan challenge in `cf-model-orchestrator` now also asks for the change's
   fit to the existing code, one failure case that composes two mechanisms
