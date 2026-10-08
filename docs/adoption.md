@@ -343,8 +343,9 @@ The version-skew warning is gone and no `.new` file remains.
 
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
-and verify it against that release's `sha256.sum`. A missing or wrong
-checksum fails the job, and nothing unverified is installed.
+and verify it against that release's `sha256.sum` and the target's
+pinned digests (below). A mismatch fails the job and installs nothing
+unverified.
 
 - The commit and PR-body standards run in `codeflow-policy.yml` on
   `pull_request_target`.
@@ -356,9 +357,9 @@ checksum fails the job, and nothing unverified is installed.
 
 An upgrade therefore takes two pull requests, in order:
 
-1. Install the new binary locally, then land a pull request that raises only
-   `scaffold_version`. The target's current binary judges it, and the
-   `candidate codeflow` job tests the new one.
+1. Install the new binary locally, run `codeflow update --pin <version>`,
+   and land the pin it raises. The target's current binary judges it, and
+   the `candidate codeflow` job tests the new one.
 2. On a new branch, run `codeflow update` and land its new keys and files;
    the new binary judges them.
 
@@ -368,15 +369,28 @@ An upgrade therefore takes two pull requests, in order:
 | A pull request lowers the pin | The target's binary still judges it, and the job then fails |
 | A branch started before the target raised its pin and kept the pin it started from | It lowers nothing and is judged by the new binary |
 | A raised pin | Its release is installed separately and only tested |
-| `codeflow doctor` | Reports the version CI installs, a raise alone (step 1), a lowered pin, or new policy keys or schema carried before the raise has landed, with this order |
+| A hand-raised pin that leaves an older `[scaffold_sha256]` table | The `candidate codeflow` job fails closed and names `codeflow update --pin <version>` |
+| `codeflow doctor` | Reports the version CI installs and whether it is checked against pinned digests or `sha256.sum` alone, a digest table CI would refuse, a raise alone (step 1), a lowered pin, or new policy keys or schema carried before the raise has landed, with this order |
 | The git hook shims | Check the binary first and warn when it is older than they are, then run the checks it has |
 
 The other CI templates carry the same pin: `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
 CodeFlow repository; copy the one your host needs). They run one shared
 script. It reads the pin from the target branch's current commit, installs
-that release with the same checksum verification, and runs `codeflow ci` from
+that release with the same verification, and runs `codeflow ci` from
 a checkout of that commit, so the target's policy judges the change.
+
+| Managed CI, 3.1.0 | What it does |
+|---|---|
+| Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, since whoever replaces a release asset can replace `sha256.sum` too |
+| A table CI cannot use | One from another version, missing the runner's platform, declared or keyed twice, written as a quoted header, an inline or dotted table or a sub-table, a table holding any line but plain `key = "value"` entries, or a state with a backslash in a header or before a line's first `=`, three quote marks in a row on any line but a full-line comment (they could open a multi-line string), a line starting with a character that is not printable ASCII (a byte-order mark or a Unicode space could hide the header), a control character other than a tab, a header or key name outside printable ASCII, or a carriage return inside a line fails the job closed, even where a value, an array element or a comment happens to match. CodeFlow writes the values it serializes so they never match; a name you wrote yourself is kept, so `--pin` refuses and doctor names the line to rewrite. Keep the plain table `--pin` writes |
+| No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request adding the table pass |
+| Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
+| Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit. To adopt: run `codeflow update`, review the merged workflow, land it on the default branch (the only place the schedule runs) and check the scheduled run appears |
+| Security review levels | The `security review` job reads `git.security_review`, `git.dep_audit` and the `osv-scanner.toml` suppressions from the trusted commit (the pull request's base, or the pushed commit), so a pull request cannot lower them; osv-scanner runs with `--no-ignore`. A missing file, key or unknown value fails the job, so land missing keys (`codeflow update` adds them) before the 3.1.0 workflow. `codeflow ci` names a change that lowers either key or edits the setup hook |
+| `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
+
+Details: `assets/base/ci/README.md`.
 
 | Host | Target commit |
 |---|---|
