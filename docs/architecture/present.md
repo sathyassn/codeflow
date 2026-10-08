@@ -115,12 +115,22 @@ macOS, Linux, WSL2 and Windows matrix with a qualified browser is recorded.
 
 ### Review-surface anchoring and resolve
 
+A note on an older revision is placed on the current one in this order
+(SPC-014 B1); its state always says what happened, and no note is dropped.
+
 | Rule | Behavior |
 |---|---|
 | Snapshot | the current review surface loads a bounded recent feedback snapshot |
-| Same-revision selectors | retain their exact offsets |
-| Older selectors | re-anchor only when the exact quote plus prefix and suffix context has one match |
-| Missing or ambiguous match | remains visibly orphaned |
+| Same revision | every note keeps its exact target: text offsets, element path, region box or entity |
+| 1. Entity | a note on a named part whose entity is still in the block is `entity_anchored` while the block digest is unchanged, else `entity_reanchored`, with `label_changed` when the service's label moved; an element path or region box holds while the digest does |
+| 2. Exact quote | otherwise the quote (a text note's exact text with its context, or the note's excerpt text) re-anchors on its single exact match |
+| 3. Fuzzy quote | else the bounded fuzzy search re-anchors on the best window at or above its threshold, marked changed and shown as "Moved" |
+| Unnamed parts | an element note with no excerpt text, or a drawn shape whose quote is its stage's name in either revision, skips steps 2 and 3, so an unnamed part never moves onto a title |
+| 4. Block | no match: `block_fallback` with its reason, shown on the block |
+| 5. Document | the block is gone: `orphaned`, shown unpositioned; a whole-document note holds while the document does |
+| Entity checks | on submit the service refuses a note with `unknown_entity`, `label_mismatch`, `digest_mismatch` or `crop_outside_entity`, and stores its own label |
+| Ledgers | review notes are in `events.jsonl`; answers, replies, reopens and tombstones append to `responses.jsonl` |
+| `present check` | each line carries a `severity`: a `fault` fails the check with exit 9; a `warning` (`framing`, `entities`, `version`) never does, and `open` and `update` print the warnings on stderr and proceed |
 | Agent-side `resolve` | requires the event's current delivered version and appends addressed or dismissed state; stale or cross-session updates fail closed |
 | Text selection | retains the selected occurrence and revalidates live ranges before pinning |
 | Comment capture | toolbar capture survives focus changes, and leaving Comment releases it; iframe figures use native hit-testing while commenting and regain their pointer interaction afterwards |
