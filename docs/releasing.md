@@ -42,7 +42,7 @@ The stages, in order, with the actor for each:
 |---|---|---|
 | Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor |
-| Merge | A human | PR CI checks the actual proposed merge tree, and the human merger requires the fresh check |
+| Merge | A human | PR CI checks the actual proposed merge tree; `main` requires an up-to-date branch (ADR-0081), and where `doctor` warns that it does not, the human merger requires the fresh check |
 | Dispatch | A human with current write, maintain or admin permission | A dry run passes, then a dispatch with the `vX.Y.Z` tag |
 | Local-artifact authority job | The generated workflow | Checks the dispatch rules, source, version, notes and prior results, then creates or resumes an empty draft |
 | Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |

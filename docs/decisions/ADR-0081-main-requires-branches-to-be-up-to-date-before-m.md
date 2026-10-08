@@ -3,7 +3,7 @@ id: ADR-0081
 uid: 8336ca3b-7fed-4415-a2d0-d4155b7145b9
 title: "Main requires branches to be up to date before merging"
 date: 2026-10-08
-status: proposed          # proposed | accepted | superseded
+status: accepted          # proposed | accepted | superseded
 superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: docs/architecture.md, the doctor check table names remote-perimeter # none | one line naming what in architecture.md changes
 ---
@@ -52,9 +52,11 @@ stands. Integration lines keep `codeflow integrate` and the batch candidate.
 - Each landing behind `main` costs one update and one fresh hosted run, and
   landings serialize at CI latency. When several ready pull requests should
   land in a day, they go on one integration candidate with one full gate.
-- A clean update keeps a completed task's acceptance block (SPC-013 R-60); a
-  hand-resolved update invalidates it, so the task is reopened and completed
-  again.
+- A clean update keeps a completed task's acceptance block only when the pull
+  request did not reopen its task (SPC-013 R-60); a hand-resolved update
+  invalidates it. A pull request that reopened its task inside its own range
+  never takes that allowance, so after the update it needs a new review and a
+  new acceptance binding (SPC-013 R-60, R-119).
 - The rule binds the operator too, since the ruleset has no bypass actors.
 - Merge queue stays out of reach unless the repository moves to an
   organization, which is the operator's call.

@@ -266,7 +266,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001, EPC-002, EPC-003, EPC-020]
-adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
+adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
 - `codeflow remote protect` applies the policy's `protected_branches` to the
