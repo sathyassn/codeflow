@@ -1512,6 +1512,99 @@ fn quoting_is_decoded_and_command_valued_settings_are_read() {
 /// `$XDG_CONFIG_HOME` or an earlier assigned name is substituted, so
 /// `F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'` names the file.
 #[test]
+fn git_settings_are_judged_by_key_kind_and_commands_by_their_words() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "git -c core.gitProxy='echo x >> ~/.zshrc' fetch",
+        "git -c core.gitProxy='sh /tmp/r.sh' log -p -- .envrc | head",
+        "git -c include.path=/tmp/x log -p -- .envrc | head",
+        "git -c includeIf.gitdir:/a/.path=/tmp/x log -p -- .envrc | head",
+        "git -c remote.o.uploadpack=/tmp/r.sh log -p -- .envrc | head",
+        "git -c remote.o.receivepack=/tmp/r.sh log -p -- .envrc | head",
+        "git -c mystery.key=1 log -p -- .envrc | head",
+        "git -c core.pager='sh /tmp/r.sh' log -p -- .envrc | head",
+        "git -c pager.log='sh /tmp/r.sh' log -p -- .envrc | head",
+        "git -c core.fsmonitor=/tmp/r.sh status -- .envrc | head",
+        "git -c color.ui='echo x >> ~/.zshrc' log",
+        "git -c user.name='$(echo x >> ~/.zshrc)' log",
+        "C=1 git --config-env mystery.key=C log -p -- .envrc | head",
+        "C=1 git --config-env=mystery.key=C log -p -- .envrc | head",
+        "C='sh /tmp/r.sh' git --config-env core.gitProxy=C log -p -- .envrc | head",
+        "C='sh /tmp/r.sh' git --config-env=core.gitProxy=C log -p -- .envrc | head",
+        "C=1 git --config-env include.path=C log -p -- .envrc | head",
+        "C='sh /tmp/r.sh' git --config-env core.pager=C log -p -- .envrc | head",
+        "C='sh /tmp/r.sh' git --config-env=core.pager=C log -p -- .envrc | head",
+        "git --config-env color.ui=C log -p -- .envrc | head",
+        "git --config-env color.ui=NOPE log -p -- .envrc | head",
+        "git --config-env=color.ui=NOPE log -p -- .envrc | head",
+        "C=~/.zshrc git --config-env color.ui=C log",
+        "C=~/.zshrc git --config-env=color.ui=C log",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.gitProxy GIT_CONFIG_VALUE_0='sh /tmp/r.sh' git log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=mystery.key GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/x git log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0='sh /tmp/r.sh' git log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=~/.zshrc git log",
+        "GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head",
+        "EDITOR='sh /tmp/r.sh' git log -p -- .envrc | head",
+        "GIT_EDITOR='echo pwned >> ~/.zshrc' git log -p -- .envrc | head",
+        "EDITOR='vim -S /tmp/r.vim' git log -p -- .envrc | head",
+        "EDITOR='vim -c !sh' git log -p -- .envrc | head",
+        "EDITOR='vim +!sh' git log -p -- .envrc | head",
+        "EDITOR='vim -R; sh /tmp/r.sh' git log -p -- .envrc | head",
+        "EDITOR='vim -R $(sh /tmp/r.sh)' git log -p -- .envrc | head",
+        "GIT_SSH_COMMAND='ssh -o ProxyCommand=sh' git log -p -- .envrc | head",
+        "GIT_SSH_COMMAND='ssh -o ProxyCommand=sh' git fetch; cat ~/.zshrc | head",
+        "GIT_EXTERNAL_DIFF='diff ~/.zshrc' git log -p -- .envrc | head",
+        "EDITOR='vim -R /tmp/x.sh' git log -p -- .envrc | head",
+        "EDITOR='code -w ~/.zshrc' git commit --allow-empty",
+        "git --exec-path /tmp/x log -p -- .envrc | head",
+        "git --exec-path '' log -p -- .envrc | head",
+        "git --exec-path= log -p -- .envrc | head",
+        "git --exec-path ~/.zshrc log",
+        "git --exec-path /tmp/x diff -- .envrc | head",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "git -c color.ui=always log -p -- .envrc | head",
+        "git -c core.fsmonitorHookVersion=2 log -p -- .envrc | head",
+        "git -c clean.requireForce=yes log -p -- .envrc | head",
+        "git -c color.pager=yes log -p -- .envrc | head",
+        "git -c pager.log=1 log -p -- .envrc | head",
+        "git -c pager.log=false log -p -- .envrc | head",
+        "git -c user.name=Ann -c user.email=a@b.c log -p -- .envrc | head",
+        "git -c diff.renames=true log -p -- .envrc | head",
+        "git -c core.commentChar=';' log -p -- .envrc | head",
+        "git -c merge.ff=false log -p -- .envrc | head",
+        "git -c core.whitespace=trailing-space log -p -- .envrc | head",
+        "git -c core.pager=less log -p -- .envrc | head",
+        "git -c core.pager='less -R' log -p -- .envrc | head",
+        "C=always git --config-env color.ui=C log -p -- .envrc | head",
+        "C=always git --config-env=color.ui=C log -p -- .envrc | head",
+        "C=always git --config-env diff.renames=C log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=always git log -p -- .envrc | head",
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=always git log -- src/a.rs",
+        "EDITOR='code -w' git log -p -- .envrc | head",
+        "EDITOR='vim -R' git log -p -- .envrc | head",
+        "EDITOR=vim git log -p -- .envrc | head",
+        "GIT_SSH_COMMAND='ssh -o BatchMode=yes' git log -p -- .envrc | head",
+        "GIT_EXTERNAL_DIFF=diff git log -p -- .envrc | head",
+        "git --exec-path /usr/bin diff -- .envrc",
+        "git --exec-path /usr/lib/git-core log -p -- .envrc | head",
+        "git --exec-path=/usr/lib/git-core log -p -- .envrc | head",
+        "git --exec-path /tmp/x log -- src/a.rs",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn settings_and_variables_are_read_by_value() {
     let f = Fixture::new();
     let mut wrong = Vec::new();

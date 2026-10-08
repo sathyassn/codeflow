@@ -28,6 +28,11 @@ fn refused_with(outputs: &[Output], rule: &str) -> bool {
 
 /// Visible shell writes, on Claude, Codex and Grok.
 const REFUSED: &[&str] = &[
+    "git -c core.gitProxy='sh /tmp/r.sh' log -p -- .envrc | head",
+    "git -c mystery.key=1 log -p -- .envrc | head",
+    "git -c include.path=/tmp/x log -p -- .envrc | head",
+    "EDITOR='sh /tmp/r.sh' git log -p -- .envrc | head",
+    "git --exec-path /tmp/x log -p -- .envrc | head",
     "echo 'alias git=true' >> ~/.zshrc",
     "printf 'git() { :; }' > $HOME/.bashrc",
     "printf x > ${HOME}/.profile",
@@ -110,6 +115,10 @@ const REFUSED: &[&str] = &[
 
 /// Reads and ordinary work stay allowed.
 const ALLOWED: &[&str] = &[
+    "git -c core.fsmonitorHookVersion=2 log -p -- .envrc | head",
+    "git -c clean.requireForce=yes log -p -- .envrc | head",
+    "EDITOR='vim -R' git log -p -- .envrc | head",
+    "git --exec-path /usr/bin diff -- .envrc",
     "cat ~/.zshrc",
     "grep alias ~/.bashrc",
     "ls ~/.config",

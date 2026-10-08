@@ -1347,30 +1347,110 @@ fn assigns_program_variable(word: &str) -> bool {
         )
 }
 
-/// Viewers and editors an ordinary `EDITOR` or `PAGER` names, as one bare
-/// word. On a line that names a class file and produces text, a command-valued
-/// variable may only be one of these: any other command could run a script
-/// the call wrote.
+/// Viewers, editors and the ordinary ssh and diff tools an `EDITOR`, `PAGER`,
+/// `GIT_SSH_COMMAND` or `GIT_EXTERNAL_DIFF` names. On a line that names a class
+/// file and produces text, a command-valued setting may only start with one of
+/// these: any other command could run a script the call wrote.
 const VIEWERS: &[&str] = &[
-    "vim", "vi", "nvim", "view", "vimdiff", "nano", "pico", "micro", "emacs", "less", "more",
-    "most", "cat", "bat", "batcat", "delta", "head", "tail", "true", "false", "open", "code",
+    "vim",
+    "vi",
+    "nvim",
+    "view",
+    "vimdiff",
+    "nano",
+    "pico",
+    "micro",
+    "emacs",
+    "less",
+    "more",
+    "most",
+    "cat",
+    "bat",
+    "batcat",
+    "delta",
+    "head",
+    "tail",
+    "true",
+    "false",
+    "open",
+    "code",
     "subl",
+    "ssh",
+    "diff",
+    "colordiff",
+    "meld",
+    "opendiff",
+    "kdiff3",
 ];
+
+/// Words in an option that run something of their own.
+const RUNNING_WORDS: &[&str] = &["cmd", "command", "exec", "script", "eval", "load", "source"];
+
+/// Whether a command-valued setting is an ordinary viewer or tool: its first
+/// word is in [`VIEWERS`], and the rest are plain options (`-w`, `-R`,
+/// `--wait`, `-o BatchMode=yes`) that name no class file, hold no shell
+/// character and run nothing of their own. `vim -S x`, `sh r.sh` and
+/// `ssh -o ProxyCommand=sh` are not.
+fn viewer_command(value: &str, line: &Line<'_>) -> bool {
+    let mut words = value.split_whitespace();
+    if !words.next().is_some_and(|w| VIEWERS.contains(&w)) {
+        return false;
+    }
+    let plain_flag = |w: &str| {
+        let letters = w
+            .strip_prefix("--")
+            .map(|r| r.chars().all(|c| c.is_ascii_lowercase() || c == '-'))
+            .or_else(|| {
+                w.strip_prefix('-')
+                    .map(|r| r.len() == 1 && r.chars().all(|c| c.is_ascii_alphabetic()))
+            })
+            .unwrap_or(false);
+        letters
+            && !matches!(
+                w,
+                "-c" | "-S" | "-s" | "-u" | "-U" | "-x" | "-X" | "-e" | "-E"
+            )
+    };
+    let option_value = |w: &str| {
+        w.split_once('=').is_some_and(|(k, v)| {
+            !k.is_empty()
+                && !v.is_empty()
+                && k.chars().all(|c| c.is_ascii_alphanumeric())
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        })
+    };
+    words.all(|w| {
+        let lower = w.to_lowercase();
+        (plain_flag(w) || option_value(w))
+            && !RUNNING_WORDS.iter().any(|r| lower.contains(r))
+            && line.names(w).is_none()
+    })
+}
 
 /// Whether `name` is a variable whose value is a command.
 fn command_valued_name(name: &str) -> bool {
-    COMMAND_VARIABLES.contains(&name) || name.starts_with("GIT_CONFIG_VALUE_")
+    COMMAND_VARIABLES.contains(&name)
 }
 
-/// A command-valued variable on a staged line whose value is not a bare
-/// viewer or editor, or cannot be read.
+/// A command-valued variable on a staged line whose value is not an ordinary
+/// viewer or tool, or cannot be read; and a `GIT_CONFIG_VALUE_n` whose key
+/// is not known to leave commands alone ([`config_setting_problem`]).
 fn staged_variable(word: &str, line: &Line<'_>) -> Option<String> {
     let (name, value) = word.split_once('=')?;
+    if let Some(n) = name.strip_prefix("GIT_CONFIG_VALUE_") {
+        let key = line
+            .assigned
+            .get(&format!("GIT_CONFIG_KEY_{n}"))
+            .map_or("", String::as_str);
+        return config_setting_problem(&format!("`{name}`"), key, value, line)
+            .map(|_| word.to_string());
+    }
     if !command_valued_name(name) {
         return None;
     }
     let value = line.substitute(value);
-    (!VIEWERS.contains(&value.as_str())).then(|| word.to_string())
+    (!viewer_command(&value, line)).then(|| word.to_string())
 }
 
 /// Directories a program named by an absolute path may live in and still be
@@ -1936,7 +2016,39 @@ fn git_globals<'a>(args: &'a [String], rest: &[String]) -> &'a [String] {
     &args[..args.len() - rest.len() - 1]
 }
 
-/// Config keys whose value is a command or a path to one.
+/// Config keys known not to run a command or pull in other keys. A key ending
+/// in a dot is a prefix.
+const SAFE_CONFIG: &[&str] = &[
+    "color.",
+    "column.",
+    "advice.",
+    "status.",
+    "grep.",
+    "user.name",
+    "user.email",
+    "diff.renames",
+    "diff.algorithm",
+    "diff.context",
+    "diff.colormoved",
+    "merge.ff",
+    "pull.ff",
+    "push.default",
+    "fetch.prune",
+    "init.defaultbranch",
+    "core.commentchar",
+    "core.whitespace",
+    "core.quotepath",
+    "core.autocrlf",
+    "core.safecrlf",
+    "core.filemode",
+    "core.ignorecase",
+    "core.abbrev",
+    "clean.requireforce",
+    "core.fsmonitorhookversion",
+];
+
+/// Config keys known to run a command, or a path to one, or to pull in other
+/// keys that can (`include.path`). A key is matched by what its name contains.
 const COMMAND_CONFIG: &[&str] = &[
     "pager",
     "editor",
@@ -1955,7 +2067,53 @@ const COMMAND_CONFIG: &[&str] = &[
     "process",
     "command",
     "exec",
+    "gitproxy",
+    "uploadpack",
+    "receivepack",
+    "include.",
+    "includeif.",
+    ".cmd",
+    "difftool.",
+    "mergetool.",
 ];
+
+/// What the global git setting `key` can do. A key on [`SAFE_CONFIG`] (and a
+/// `pager.<command>` set to a boolean) runs nothing; a key whose name matches
+/// [`COMMAND_CONFIG`] runs a command; any other key is not known.
+fn config_setting_problem(label: &str, key: &str, value: &str, line: &Line<'_>) -> Option<String> {
+    let value = line.substitute(value);
+    if let Some(class) = line.names(&value) {
+        return Some(format!("{label} names the shell startup file `{class}`"));
+    }
+    if line.names(line.text).is_some() && unresolved_word(&value) {
+        return Some(format!("{label} has a value the guard cannot read"));
+    }
+    if !line.staged {
+        return None;
+    }
+    let key = key.to_lowercase();
+    let boolean = matches!(
+        value.to_lowercase().as_str(),
+        "true" | "false" | "yes" | "no" | "on" | "off" | "0" | "1"
+    );
+    if SAFE_CONFIG.iter().any(|k| {
+        if k.ends_with('.') {
+            key.starts_with(k)
+        } else {
+            key == *k
+        }
+    }) || (key.starts_with("pager.") && boolean)
+    {
+        return None;
+    }
+    if COMMAND_CONFIG.iter().any(|k| key.contains(k)) {
+        return (!viewer_command(&value, line))
+            .then(|| format!("{label} is a command that could run text this call produced"));
+    }
+    Some(format!(
+        "{label} sets `{key}`, a setting the guard does not know, on a line that produces text"
+    ))
+}
 
 /// Directories git's own programs live in, for `--exec-path`.
 const GIT_EXEC_DIRS: &[&str] = &[
@@ -1966,27 +2124,13 @@ const GIT_EXEC_DIRS: &[&str] = &[
 ];
 
 /// What the global settings of a git call do (`-c key=value`,
-/// `--config-env=key=VAR`, `--exec-path=DIR`): why the call is not a reader,
-/// or `None` when every value is harmless. A value that names a class file
-/// refuses on any line. On a line that names a class file, a value the guard
-/// cannot read refuses too, and on a staged line so does a command-valued
-/// setting that is not a bare viewer, since the command could run what the
-/// call wrote.
+/// `--config-env key=VAR` in either spelling, `--exec-path DIR`): why the
+/// call is not a reader, or `None` when every setting is harmless. See
+/// [`config_setting_problem`] for the key and value rules.
 fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
     let (_, rest) = git_subcommand(args)?;
     let globals = git_globals(args, rest);
     let near_class = line.names(line.text).is_some();
-    let judge = |label: &str, runs_command: bool, value: &str| -> Option<String> {
-        let value = line.substitute(value);
-        if let Some(class) = line.names(&value) {
-            return Some(format!("{label} names the shell startup file `{class}`"));
-        }
-        if near_class && unresolved_word(&value) {
-            return Some(format!("{label} has a value the guard cannot read"));
-        }
-        (line.staged && runs_command && !VIEWERS.contains(&value.as_str()))
-            .then(|| format!("{label} is a command that could run text this call produced"))
-    };
     let mut at = 0;
     while at < globals.len() {
         let arg = globals[at].as_str();
@@ -1995,9 +2139,7 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
             let setting = globals.get(at).map(String::as_str).unwrap_or_default();
             at += 1;
             let (key, value) = setting.split_once('=').unwrap_or((setting, ""));
-            let key_lower = key.to_lowercase();
-            let runs = COMMAND_CONFIG.iter().any(|k| key_lower.contains(k));
-            judge(&format!("`git -c {key}`"), runs, value)
+            config_setting_problem(&format!("`git -c {key}`"), key, value, line)
         } else if arg == "--config-env" || arg.starts_with("--config-env=") {
             let setting = arg.strip_prefix("--config-env=").map_or_else(
                 || {
@@ -2008,24 +2150,33 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
             );
             let (key, var) = setting.split_once('=').unwrap_or((setting.as_str(), ""));
             match line.assigned.get(var) {
-                Some(value) => judge(&format!("`git --config-env {key}`"), true, value),
+                Some(value) => {
+                    config_setting_problem(&format!("`git --config-env {key}`"), key, value, line)
+                }
                 None => near_class.then(|| {
                     format!("`git --config-env {key}` takes its value from `{var}`, which the guard cannot read")
                 }),
             }
         } else if arg == "--exec-path" || arg.starts_with("--exec-path=") {
-            let value = arg.strip_prefix("--exec-path=").unwrap_or_default();
-            if let Some(class) = line.names(value) {
+            let value = arg.strip_prefix("--exec-path=").map_or_else(
+                || {
+                    at += 1;
+                    globals.get(at - 1).cloned().unwrap_or_default()
+                },
+                str::to_string,
+            );
+            let value = line.substitute(&value);
+            if let Some(class) = line.names(&value) {
                 Some(format!(
                     "`--exec-path` names the shell startup file `{class}`"
                 ))
-            } else if near_class && unresolved_word(value) {
+            } else if near_class && unresolved_word(&value) {
                 Some("`--exec-path` has a value the guard cannot read".to_string())
             } else {
                 (line.staged
-                    && !value.is_empty()
-                    && !GIT_EXEC_DIRS.contains(&value)
-                    && !SYSTEM_DIRS.contains(&value))
+                    && (value.is_empty()
+                        || !(GIT_EXEC_DIRS.contains(&value.as_str())
+                            || SYSTEM_DIRS.contains(&value.as_str()))))
                 .then(|| "`--exec-path` picks where git's programs run from".to_string())
             }
         } else {
@@ -2044,7 +2195,12 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     while let Some(arg) = args.get(at) {
         if matches!(
             arg.as_str(),
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
+            "-C" | "-c"
+                | "--git-dir"
+                | "--work-tree"
+                | "--namespace"
+                | "--exec-path"
+                | "--config-env"
         ) {
             at += 2;
         } else if arg.starts_with('-') {
@@ -2063,7 +2219,12 @@ fn git_dirs(args: &[String]) -> Vec<&str> {
     while let Some(arg) = args.get(at) {
         if matches!(
             arg.as_str(),
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
+            "-C" | "-c"
+                | "--git-dir"
+                | "--work-tree"
+                | "--namespace"
+                | "--exec-path"
+                | "--config-env"
         ) {
             if arg == "-C" {
                 if let Some(dir) = args.get(at + 1) {
