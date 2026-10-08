@@ -31,9 +31,11 @@ records the required interactive seat unavailable and the reduced assurance.
 4. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
-      tests where they carry the risk; preserve justified reuse, modular
-      boundaries, and explicit failure handling while adding no speculative
-      behavior, abstraction, or dependency. Apply the quality contract's
+      tests where they carry the risk. Before adding a helper, type, flag,
+      check, key or module, find the neighbour that already does the job and
+      extend it or say why not; the written rule wins over a precedent. Keep
+      modular boundaries and explicit failure handling; add no speculative
+      behavior, abstraction or dependency. Apply the quality contract's
       typed-interface and runtime trust-boundary rule and test accepted
       invalid-input behavior; never force a stricter compiler, dependency,
       language, or stack migration merely for compliance. When the change fixes
