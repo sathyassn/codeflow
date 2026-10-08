@@ -117,8 +117,8 @@ authoritative:
   each landing and say what was not checked against the host.
 - When the base itself fails its release state, accept only a repair that
   changes the changelog and coupled version stamps, judged by the base's
-  configuration, keeps every existing entry's words, and leaves each stamp,
-  baseline and recorded hash consistent; refuse other work until it lands.
+  configuration, keeps every existing entry's words, and leaves each stamp
+  and baseline consistent; refuse other work until it lands.
   A pull request runs the checker in its own merge tree, so ship this repair
   path before the state can break: a checker without it cannot pass a repair.
 
