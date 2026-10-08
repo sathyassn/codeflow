@@ -410,10 +410,12 @@ erratum below, never an edit of the section.
   newest body is judged whichever run survives; the job's token gains
   `pull-requests: read` and stays read-only. Push, schedule and dispatch
   runs each get a group of their own and are never cancelled.
-  CodeFlow's own CI also bounds every
-  job, installs the Playwright browsers and their system libraries only
-  where a browser runs, from cached apt archives with a bounded, retried
-  install, and stops a hung read benchmark after 15 minutes instead of 40.
+  CodeFlow's own CI also bounds every job in every workflow it runs (the
+  release, portal and release-support workflows included, checked by
+  `scripts/gate-parity.py`), installs the Playwright browsers and their
+  system libraries only where a browser runs, from cached apt archives
+  with a bounded, retried install, and stops a hung read benchmark after
+  15 minutes instead of 40.
   To adopt: run `codeflow update`; it merges the change into an edited
   copy.
 
