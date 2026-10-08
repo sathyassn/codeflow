@@ -82,10 +82,9 @@ as a **shape** (carrier first), not a form to pad.
 1. Write one UTF-8 JSON document in a task-owned temporary or explicitly
    requested durable path, not staged by default; keep credentials, private
    history, external URLs, and filesystem paths out of it.
-2. Validate against `.codeflow/schemas/present/document-v1.schema.json`, then
-   let `codeflow present open <document.json>` perform authoritative semantic
-   and byte-bound validation (schema alone cannot enforce unique IDs, byte
-   limits, or cross-field invariants).
+2. Write a `schema_version: 2` document by
+   `references/document-authoring.md`; read the warnings of `codeflow present
+   check --file <document.json>`, then let `codeflow present open` validate.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
    recovery, automation, or an agent sandbox (run in the project tree); it
    never attaches to the operator's browser or active view.
