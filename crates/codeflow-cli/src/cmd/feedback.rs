@@ -330,16 +330,18 @@ fn list(root: &Path, open: bool, topic: Option<&str>, json: bool, write: bool) -
     for (path, reason) in &loaded.unreadable {
         eprintln!("warning: {path} cannot be read: {reason}");
     }
+    // An item or a directory that cannot be read is an error, never a
+    // smaller inventory or index that reads as complete.
+    if !loaded.unreadable.is_empty() {
+        eprintln!("error: fix the unreadable items first; nothing is listed or written");
+        return 1;
+    }
     if write {
         if !tracked {
             eprintln!(
                 "error: {} does not exist; record an item with `codeflow feedback new` first",
                 feedback::FEEDBACK_DIR
             );
-            return 1;
-        }
-        if !loaded.unreadable.is_empty() {
-            eprintln!("error: fix the unreadable items before writing the index");
             return 1;
         }
         // The index is rendered from item frontmatter, so it is written

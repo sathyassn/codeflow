@@ -243,8 +243,8 @@ pub fn parse_item(path: &str, content: &str) -> Result<Item, String> {
 /// The item files under [`FEEDBACK_DIR`]: every Markdown file directly in
 /// it except the index, sorted. Empty when the directory is proven absent.
 /// A symbolic link is never followed: the directory is skipped when a part
-/// of its path is one (which [`lint`] reports), and a linked entry is left
-/// out.
+/// of its path is one (which [`tracked`] refuses and [`lint`] reports), and
+/// a linked entry is left out.
 ///
 /// # Errors
 ///
@@ -276,13 +276,22 @@ pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 /// Whether the project keeps feedback items (the directory exists).
+/// `false` only when the directory is proven absent.
 ///
 /// # Errors
 ///
-/// The directory cannot be read, so whether it exists is unknown.
+/// The directory cannot be read, so whether it exists is unknown; or it
+/// is present but unusable: a symbolic link (to a directory or dangling)
+/// is at or above it, or something other than a directory is there.
 pub fn tracked(root: &Path) -> std::io::Result<bool> {
-    let dir = root.join(FEEDBACK_DIR);
-    Ok(crate::absence::symlink_metadata_optional(&dir)?.is_some_and(|meta| meta.is_dir()))
+    let dir = contained_path(root, FEEDBACK_DIR).map_err(std::io::Error::other)?;
+    match crate::absence::symlink_metadata_optional(&dir)? {
+        None => Ok(false),
+        Some(meta) if meta.is_dir() => Ok(true),
+        Some(_) => Err(std::io::Error::other(format!(
+            "{FEEDBACK_DIR} is not a directory"
+        ))),
+    }
 }
 
 /// Whether a repository-relative path is a feedback item (`FB-NNN.md`) or
@@ -931,6 +940,15 @@ fn line_of(content: &str, key: &str) -> usize {
 #[must_use]
 pub fn lint(root: &Path) -> Lint {
     let mut lint = Lint::default();
+    // A link at or above the directory is present, never absent: name it.
+    if let Err(reason) = contained_path(root, FEEDBACK_DIR) {
+        lint.errors.push(LintFinding {
+            path: FEEDBACK_DIR.to_string(),
+            line: 1,
+            message: format!("{reason}; keep the items in the directory itself"),
+        });
+        return lint;
+    }
     match tracked(root) {
         Ok(true) => {}
         Ok(false) => return lint,
@@ -966,13 +984,6 @@ pub fn lint(root: &Path) -> Lint {
     let mut uids: BTreeMap<&str, &str> = BTreeMap::new();
     for item in &loaded.items {
         lint_item(root, item, &topics, &ids, &mut uids, &mut lint.errors);
-    }
-    if let Err(reason) = contained_path(root, FEEDBACK_DIR) {
-        lint.errors.push(LintFinding {
-            path: FEEDBACK_DIR.to_string(),
-            line: 1,
-            message: format!("{reason}; keep the items in the directory itself"),
-        });
     }
     let written =
         contained_path(root, INDEX_PATH).and_then(|path| match std::fs::symlink_metadata(&path) {
@@ -1229,7 +1240,7 @@ pub fn render_index(items: &[Item], topics: &[String]) -> String {
 #[must_use]
 pub fn open_summary(root: &Path) -> Option<(usize, Vec<(String, usize)>)> {
     // A summary only: `validate --docs` and `feedback list` report a
-    // directory that cannot be read.
+    // directory that cannot be read or is reached through a link.
     if !matches!(tracked(root), Ok(true)) {
         return None;
     }
@@ -1575,5 +1586,64 @@ mod tests {
         assert_eq!(open_summary(root).unwrap().0, 3);
         let bare = tempfile::tempdir().unwrap();
         assert!(open_summary(bare.path()).is_none());
+    }
+
+    /// A feedback directory that is a symbolic link, to a directory or
+    /// dangling, or that sits under one, is present: the lint names the
+    /// link and the directory never reads as absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_or_dangling_feedback_directory_is_reported_never_absent() {
+        use std::os::unix::fs::symlink;
+        let elsewhere = tempfile::tempdir().unwrap();
+        for target in [
+            elsewhere.path().to_path_buf(),
+            elsewhere.path().join("gone"),
+        ] {
+            let dir = project();
+            let root = dir.path();
+            std::fs::remove_dir(root.join(FEEDBACK_DIR)).unwrap();
+            symlink(&target, root.join(FEEDBACK_DIR)).unwrap();
+            assert!(tracked(root).is_err(), "{}", target.display());
+            let found = messages(root);
+            assert!(
+                found
+                    .iter()
+                    .any(|m| m.contains("project-management/feedback is a symbolic link")),
+                "{found:?}"
+            );
+            assert!(open_summary(root).is_none());
+        }
+        // A link above the directory is reported the same way.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(elsewhere.path().join("pm/feedback")).unwrap();
+        symlink(elsewhere.path().join("pm"), root.join("project-management")).unwrap();
+        assert!(tracked(root).is_err());
+        let found = messages(root);
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("project-management is a symbolic link")),
+            "{found:?}"
+        );
+    }
+
+    /// A file where the directory belongs is present, never no feedback.
+    #[test]
+    fn a_file_at_the_feedback_directory_is_reported_never_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("project-management")).unwrap();
+        std::fs::write(root.join(FEEDBACK_DIR), "not a directory\n").unwrap();
+        assert!(tracked(root).is_err());
+        let found = messages(root);
+        assert!(
+            found.iter().any(|m| m.contains("is not a directory")),
+            "{found:?}"
+        );
+        let absent = tempfile::tempdir().unwrap();
+        assert!(!tracked(absent.path()).unwrap());
+        assert!(messages(absent.path()).is_empty());
     }
 }

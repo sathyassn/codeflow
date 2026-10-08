@@ -360,7 +360,7 @@ pub fn check_only(
     }
 }
 
-/// Git's text output, or `None` when it failed or is not valid UTF-8.
+/// Git's text output, or an error when it failed or is not valid UTF-8.
 ///
 /// OS text rule (issue 79, `docs/architecture.md`): kept strict on purpose.
 /// The output decides which targets a run may skip, and an error makes every

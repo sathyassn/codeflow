@@ -685,6 +685,82 @@ fn feedback_files_are_never_written_or_resolved_through_a_symbolic_link() {
     assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }
 
+/// A feedback directory that is a symbolic link, to a directory or
+/// dangling, is reported and never read as absent: `validate --docs` names
+/// the link, `feedback list` and `list --json` fail, and `feedback new`
+/// writes nothing through it.
+#[cfg(unix)]
+#[test]
+fn a_linked_or_dangling_feedback_directory_is_reported_never_absent() {
+    use std::os::unix::fs::symlink;
+    for dangling in [false, true] {
+        let (dir, root, _bare) = project("full");
+        new_item(&root, "process", "first");
+        quote(&root, "FB-001", "first words");
+        let elsewhere = dir.path().join("elsewhere");
+        let feedback_dir = root.join("project-management/feedback");
+        std::fs::rename(&feedback_dir, root.join("moved")).unwrap();
+        if !dangling {
+            std::fs::create_dir_all(&elsewhere).unwrap();
+        }
+        symlink(&elsewhere, &feedback_dir).unwrap();
+        let what = if dangling { "dangling" } else { "linked" };
+
+        let out = refused(&codeflow(&root, &["validate", "--docs"]), what);
+        assert!(
+            out.contains("project-management/feedback is a symbolic link"),
+            "{what}: {out}"
+        );
+        for args in [
+            &["feedback", "list"][..],
+            &["feedback", "list", "--json"][..],
+        ] {
+            let out = refused(&codeflow(&root, args), what);
+            assert!(out.contains("symbolic link"), "{what} {args:?}: {out}");
+            assert!(!out.contains("does not exist"), "{what} {args:?}: {out}");
+        }
+        let out = refused(
+            &codeflow(
+                &root,
+                &[
+                    "feedback", "new", "--topic", "process", "--source", "chat", "x",
+                ],
+            ),
+            what,
+        );
+        assert!(out.contains("symbolic link"), "{what}: {out}");
+        if dangling {
+            assert!(!elsewhere.exists(), "{what}: nothing written through");
+        } else {
+            assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+        }
+    }
+}
+
+/// A feedback directory that exists but cannot be listed fails `list` and
+/// `list --json`, never an empty inventory with a success status.
+#[cfg(unix)]
+#[test]
+fn an_unlistable_feedback_directory_fails_the_list() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        // Root ignores directory permissions, so the denial cannot be staged.
+        return;
+    }
+    let (_dir, root, _bare) = project("full");
+    new_item(&root, "process", "first");
+    quote(&root, "FB-001", "first words");
+    let feedback_dir = root.join("project-management/feedback");
+    std::fs::set_permissions(&feedback_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let plain = codeflow(&root, &["feedback", "list"]);
+    let json = codeflow(&root, &["feedback", "list", "--json"]);
+    std::fs::set_permissions(&feedback_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (out, what) in [(plain, "list"), (json, "list --json")] {
+        let out = refused(&out, what);
+        assert!(out.contains("cannot be read"), "{what}: {out}");
+    }
+}
+
 /// The index is written only from items that pass the lint: an id that is
 /// not its file's name, or a topic that is not listed (here one that spans
 /// lines), refuses `--write` and leaves no index behind.
