@@ -3152,19 +3152,10 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = Command::new("git")
-        .args([
-            "clone",
-            origin.path().to_str().unwrap(),
-            work.to_str().unwrap(),
-        ])
+    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .unwrap();
+        .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -5402,10 +5393,11 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    git(
-        clone.path(),
-        &["clone", "-q", "--filter=blob:none", &url, "."],
-    );
+    codeflow_fixture::clone(clone.path(), &url, ".")
+        .filter("blob:none")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
     git(source.path(), &["checkout", "-q", "-b", "feature"]);
@@ -7164,4 +7156,75 @@ fn r16_pre_push_input_error_refuses_at_real_hook_boundary() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("operation blocked"));
+}
+
+#[path = "support/line_adoption.rs"]
+mod line_adoption_fixture;
+
+/// TSK-248 AC-3 (issue 85): a push that adds an unadopted direct commit to
+/// an epic line is refused with the `git reset --keep` remedy, on a first
+/// push and on an update; an older direct commit outside the pushed range
+/// does not block later merges, and a landed adoption clears the line.
+#[test]
+fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
+    use line_adoption_fixture::{blocks, output, passes, Line, LINE, ZERO};
+    let f = Line::new();
+    passes(&f.push(ZERO));
+    let direct = f.direct();
+    blocks(&f.push(ZERO), "git reset --keep main");
+    let refused = f.push(&f.git(&["rev-parse", "main"]));
+    blocks(&refused, &direct[..9]);
+    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains("line_adoptions"));
+    // The already shared direct commit must not prevent unrelated merges.
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn work() {}\n");
+    f.commit("feat: build work");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&direct));
+    f.land_adoption(&direct);
+    passes(&f.push(ZERO));
+    passes(&f.push(&direct));
+}
+
+/// TSK-248 AC-3 controls: a push of merges only passes, on an update and on
+/// the line's first push.
+#[test]
+fn epic_line_adoption_pre_push_merge_only_control() {
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    let f = Line::new();
+    let old = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.direct();
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&old));
+    passes(&f.push(ZERO));
+}
+
+/// TSK-248 control: in a repository that never had durable work tracking
+/// (no task record on the target or the line) there is no epic class and no
+/// adoption route, so the push check stays off, as before this change.
+#[test]
+fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
+    use line_adoption_fixture::{passes, Line, ZERO};
+    let f = Line::untracked();
+    let first = f.direct();
+    passes(&f.push(ZERO));
+    f.write("src/lib.rs", "pub fn again() {}\n");
+    f.commit("fix: second direct change");
+    passes(&f.push(&first));
+}
+
+/// TSK-248 review finding: tracking is on when the target or the pushed tip
+/// has it, as in CI (SPC-013 R-70), so a direct commit that deletes the only
+/// task record is still refused while the target keeps tracking on.
+#[test]
+fn epic_line_adoption_pre_push_refuses_a_tip_that_drops_tracking() {
+    use line_adoption_fixture::{blocks, Line, ZERO};
+    let f = Line::new();
+    f.git(&["rm", "-q", "project-management/tasks/TSK-001.md"]);
+    let direct = f.direct();
+    blocks(&f.push(ZERO), &direct[..9]);
 }

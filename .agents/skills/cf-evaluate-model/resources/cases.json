@@ -2192,6 +2192,9 @@
           "codex_security_challenge",
           "codex_testing_challenge",
           "codex_maintainability_challenge",
+          "codex_fit_challenge",
+          "codex_composed_failure_case",
+          "codex_criteria_challenge",
           "matching_dual_approval"
         ],
         "references": [

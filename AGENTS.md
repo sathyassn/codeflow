@@ -109,7 +109,8 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   the manifest or a drifted mirror fails the build.
 - **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli` +
   `crates/codeflow-present`;
-  `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
+  `scaffold` = `assets/` (base scaffold with its test-config templates, and
+  the docs-portal starter); `docs` = `docs/`.
 - **Rust gates:** before every push, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`, targeted

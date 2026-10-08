@@ -1130,7 +1130,11 @@ mod tests {
         let dir = history(UID, UID);
         let clone = tempfile::tempdir().unwrap();
         let url = format!("file://{}", dir.path().display());
-        git(clone.path(), &["clone", "-q", "--depth", "2", &url, "copy"]);
+        codeflow_fixture::clone(clone.path(), &url, "copy")
+            .depth(2)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let judgement = judge(&clone.path().join("copy"), UID);
         match judgement.landing {
             Landing::Unreadable(reason) => assert!(reason.contains("shallow"), "{reason}"),

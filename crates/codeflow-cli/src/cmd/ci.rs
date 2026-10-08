@@ -1012,7 +1012,7 @@ fn verified_epic_line(
         .map(|proof| {
             matches!(
                 proof,
-                codeflow_core::workgraph::work_start::EpicLineProof::Verified(_)
+                codeflow_core::workgraph::work_start::EpicLineProof::Verified(..)
             )
         })
         .map_err(|error| format!("cannot prove epic line {branch}: {error}"))

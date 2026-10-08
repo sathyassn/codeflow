@@ -5,6 +5,7 @@ pub mod ci;
 pub mod delegate;
 pub mod doctor;
 pub mod estimate;
+pub mod feedback;
 pub mod git_hook;
 pub mod hook;
 pub mod ids;

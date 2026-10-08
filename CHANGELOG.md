@@ -244,6 +244,30 @@ erratum below, never an edit of the section.
   Standard and full tiers receive the method text with `codeflow update`; no
   record, key or required file changes.
 
+<!-- codeflow:release-impact minor -->
+- **Operator feedback has one tracker at the full tier (issue 75).**
+  `codeflow feedback new --topic <topic> --source <source> "<summary>"`
+  issues an `FB-NNN` id from the shared registry and writes
+  `project-management/feedback/FB-NNN.md` from a new template, with the
+  operator's words verbatim and the agent's reading kept apart.
+  `codeflow feedback status` moves an item by one table (received, placed,
+  closed, declined only with the operator's confirmation, superseded), and
+  `codeflow feedback list` groups items by topic with open items first,
+  with `--json` and an optional generated `INDEX.md` (`--write`).
+  `validate --docs` fails a malformed item and warns, never fails, when a
+  written index is stale; `codeflow status` counts open items and
+  `codeflow recall` searches them. Topics are the project's
+  `[feedback] topics` in `.codeflow/project.toml`, written with a default
+  list on first use. A record is for feedback that sets a standing rule,
+  declines or reorders planned work, or spans several units; nothing
+  requires one. `cf-method`'s project organization reference gains an
+  "Operator feedback" section, and cf-ship's PR evidence names FB ids under
+  Links. After `codeflow update`, a full-tier project has the template; the
+  folder and the `[feedback]` section appear only on first use, and the
+  standard and minimal tiers change nothing on disk. The registry gains an
+  `FB` kind: an older binary's `ids check` reports an `ids/FB/` entry as a
+  repaired-history warning and still passes.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -332,7 +356,47 @@ erratum below, never an edit of the section.
   builds the portal and deploys it to GitHub Pages once the repository owner
   enables Pages; the portal `base` is now `/codeflow/`.
 
+<!-- codeflow:release-impact minor -->
+- **Builders and reviewers ask whether a change fits the repository.** The
+  plan challenge in `cf-model-orchestrator` now also asks for the change's
+  fit to the existing code, one failure case that composes two mechanisms
+  the design names, and whether a criterion can pass while the outcome is
+  missed. `cf-develop` asks the builder to find the neighbour that already
+  does the job before adding a helper, type, flag, check, key or module,
+  and says the written rule wins over a precedent. `cf-reviewer` requires a
+  finding that asks for a change to policy, hooks, CI, templates, schema or
+  managed instructions to cite the rule it applies; a precedent commit is
+  evidence, not the rule. The review brief contract names fit. No step, record or round is
+  added. To pay for the words, the lifecycle reference and the reviewer's
+  UI step point at the text they restated, and issue intake notes go in the
+  PR Summary or the design note instead of an issue comment.
+  `codeflow update` replaces the unmodified files.
+
 ### Fixed
+
+<!-- codeflow:release-impact minor -->
+- **Work claims share the target's remote scope.** Archive and other unrelated
+  remote branches no longer prevent a claim or mark a task active. They remain
+  visible as information. Local branches, origin and the target's fetch remote
+  still count; projects can opt in other remotes with `git.claim_remotes`.
+  The shipped policy file does not list the key, so neither `init` nor
+  `update` writes it and an older binary never meets it; a project that sets
+  it runs 3.1.0 or later locally and in CI.
+
+<!-- codeflow:release-impact patch -->
+- **CodeFlow's own fixture clones no longer race with automatic Git
+  maintenance.** Hosted CI failed `readiness_journey` and
+  `read_commands_offline` at random with "hardlink different from source"
+  (2026-10-05 and 2026-10-06): a test fixture cloned a repository by copying
+  its object files while the detached `git maintenance run --auto`, started
+  by a commit in `codeflow init`, rewrote them. Every Rust fixture clone now
+  goes through Git's transport (`git clone --no-local`) in one private helper
+  crate, `codeflow-fixture`, and `.cargo/config.toml` turns automatic
+  maintenance and garbage collection off for every process a test starts. A
+  contract test refuses a new local clone, a `git-*` program spawned outside
+  the git constructor and an unlisted environment override. The binary, the
+  scaffold and the docs do not change; the fix concerns contributors and
+  CodeFlow's own CI.
 
 <!-- codeflow:release-impact patch -->
 - **The deletion guard reads `xargs` and `parallel` input by its
@@ -461,6 +525,19 @@ erratum below, never an edit of the section.
   releases, with `@img/sharp-libvips-*` at 1.3.4. `codeflow update`
   installs both files; the portal's recorded runtime scripts are
   unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **An epic line with a direct commit can be repaired and land.** A commit
+  made directly on an `integration/EPC-*` line used to block the line's pull
+  request to `main` for good, and the only ways out were a force push or a
+  new line name. The epic record now takes a `line_adoptions` list: each
+  entry names the commit by its full id, why it belongs and where it was
+  reviewed. CI accepts the line once that entry has landed by merge, or is
+  already on the target, and prints each adopted commit on the class line
+  for the reviewer. The pre-push hook now refuses a push that adds an
+  unadopted direct commit to an epic line, with a `git reset --keep` remedy
+  that moves the work into a pull request. Older direct commits outside the
+  pushed range do not block further merges (issue 85).
 
 <!-- codeflow:release-impact patch -->
 - **`codeflow init` no longer hangs on a full pipe.** In a repository with

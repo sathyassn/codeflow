@@ -681,6 +681,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // git clone's stderr after a failed release clone, shown in the refusal only
+    (
+        "codeflow-cli/examples/release_integration.rs",
+        "prepare",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // a fixture clone's stderr in its panic message and its stdout returned to tests that show or discard it; neither is compared as a name
+    (
+        "codeflow-fixture/src/lib.rs",
+        "Clone::run",
+        "from_utf8_lossy",
+        2,
+        "display",
+    ),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -2931,13 +2947,21 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:ids-ledger-ledger-range-violations-records",
     ),
-    // Edits YAML physical CRLF/LF lines when adding former_ids; identifiers are retained, and flow-list padding uses explicit ASCII blanks.
+    // Edits YAML physical CRLF/LF lines when adding former_ids: each line's terminator is set apart and kept; identifiers are retained, and flow-list padding uses explicit ASCII blanks.
     (
         "crates/codeflow-core/src/ids/seed.rs",
         "add_former_id",
-        "lines",
+        "trim_end_matches",
         1,
         "framing:ids-seed-add-former-id-records",
+    ),
+    // A frontmatter fence is `---` with only ASCII space, tab, CR or LF after it, as the record parser reads it.
+    (
+        "crates/codeflow-core/src/ids/seed.rs",
+        "is_fence",
+        "trim_end_matches",
+        1,
+        "grammar:yaml-frontmatter-fence",
     ),
     // Formats Git error stderr after an unsuccessful command; the checkout or merge result is decided by exit status.
     (
@@ -5035,10 +5059,144 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // Git's stderr after a failed release clone, trimmed for the refusal text only.
+    (
+        "crates/codeflow-cli/examples/release_integration.rs",
+        "prepare",
+        "trim",
+        1,
+        "display",
+    ),
+    // The first non-blank line of an item's title text for one index table cell; shown, never matched.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "cell",
+        "lines",
+        1,
+        "display",
+    ),
+    // Trims an index table cell's text for display; nothing is decided from it.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "cell",
+        "trim",
+        2,
+        "display",
+    ),
+    // Finds the line number of a frontmatter key for a lint message only.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "line_of",
+        "lines",
+        1,
+        "display",
+    ),
+    // Re-reads an item only for the line numbers in its lint messages; load already read it and reports a read failure as an error.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "lint_item",
+        "obtain-absent:read_to_string",
+        1,
+        "display",
+    ),
+    // YAML string items of a feedback item's frontmatter lists (file content), trimmed as values, not git or OS names.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "list",
+        "trim",
+        2,
+        "format-contract",
+    ),
+    // Operator-typed one-line record text (summary, placement, evidence); the trimmed text is what is recorded and checked, so nothing differs between the check and its use.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "one_line",
+        "trim",
+        1,
+        "prose",
+    ),
+    // A placement reference is the trimmed record text; it resolves exactly as it is recorded.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "placement_resolves",
+        "trim",
+        1,
+        "prose",
+    ),
+    // Operator-typed one-line flag text (evidence, reason, successor); blank text refuses.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "required",
+        "trim",
+        1,
+        "prose",
+    ),
+    // A YAML string value of a feedback item's frontmatter (file content), trimmed as a value.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "scalar",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // The visible Markdown text of an item section (file content), trimmed for emptiness checks and display.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "section_text",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // The visible Markdown text of an item section (file content), each line's trailing blanks dropped.
+    (
+        "crates/codeflow-core/src/feedback.rs",
+        "section_text",
+        "trim_end",
+        1,
+        "format-contract",
+    ),
+    // A topic with any whitespace inside it is refused; nothing is normalized.
+    (
+        "crates/codeflow-core/src/scaffold/state.rs",
+        "FeedbackConfig::load",
+        "is_whitespace",
+        1,
+        "schema-reject-only",
+    ),
+    // A TOML topic string (file content), trimmed as a value.
+    (
+        "crates/codeflow-core/src/scaffold/state.rs",
+        "FeedbackConfig::load",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // Finds the `[feedback]` TOML header line to insert under; the result is parsed again and refused unless feedback.topics reads back.
+    (
+        "crates/codeflow-core/src/scaffold/state.rs",
+        "FeedbackConfig::write_defaults",
+        "trim",
+        1,
+        "format-contract",
+    ),
+    // A blank adoption field is refused; the value is kept untrimmed.
+    (
+        "crates/codeflow-core/src/workgraph/line_adoption.rs",
+        "parse",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // A fixture clone's stdout, trimmed for tests that show or discard it.
+    (
+        "crates/codeflow-fixture/src/lib.rs",
+        "Clone::run",
+        "trim",
+        1,
+        "display",
+    ),
 ];
 
-/// A framing exception belongs only to its named reader; consumers do not
-/// remove the delimiter again. Entries are (grammar, file, enclosing item).
 const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
     (
         "acceptance-input-lines",
@@ -5659,6 +5817,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/doctor/mod.rs", "update_leaves", "is_file", 1, "Selects whether the message names the .codeflow/.baseline copy; wording only inside an existing Warn."),
     ("crates/codeflow-core/src/doctor/mod.rs", "walk_json_files_inner", "is_dir", 1, "Type check on std::fs::metadata, whose error propagates to the config check Fail."),
     ("crates/codeflow-core/src/estimate/sources.rs", "Reader::new", "is_dir", 1, "False yields None, and the estimate check records the project_root finding and returns, a refusal."),
+    ("crates/codeflow-core/src/feedback.rs", "item_files", "is_file", 1, "Type check on entry.file_type() with its error propagated; a link is left out, never followed."),
+    ("crates/codeflow-core/src/feedback.rs", "propose", "is_file", 1, "Type check on metadata from symlink_metadata_optional, whose read errors refuse; false refuses the supersede."),
+    ("crates/codeflow-core/src/feedback.rs", "read_project_template", "is_file", 1, "Type check on metadata from symlink_metadata_optional, whose read errors propagate; a non-file returns Err, which feedback new shows as a warning before it uses the shipped template."),
+    ("crates/codeflow-core/src/feedback.rs", "replace_whole", "is_file", 1, "Type check on metadata from symlink_metadata_optional, whose read errors propagate; only a proven-absent or non-file mode_from leaves the default permissions."),
+    ("crates/codeflow-core/src/feedback.rs", "tracked", "is_dir", 1, "Type check on metadata from symlink_metadata_optional, whose read errors are returned, never read as no feedback directory."),
     ("crates/codeflow-core/src/file_lock.rs", "locked_read_critical", "is_dir", 1, "Type check on the parent's metadata obtained with its error propagated; false returns an error."),
     ("crates/codeflow-core/src/file_lock.rs", "locked_rmw_typed_io", "ErrorKind::NotFound", 1, "The sidecar lock's create_dir_all and open prove the parent resolves; the only caller is the per-user registry, a rebuildable view."),
     ("crates/codeflow-core/src/hooks/adoption.rs", "detect_release_tools", "is_file", 1, "Optional advisory release-tool inventory for doctor, CI text and scaffold notes; it does not select release.backend or authorize a release or gate exemption."),
@@ -5685,7 +5848,9 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/ids/inventory.rs", "collect_files", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/ids/inventory.rs", "collect_files", "is_file", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/ids/seed.rs", "worktree_records", "ErrorKind::NotFound", 1, "Skips an optional root only after proven_absent confirms it is missing."),
-    ("crates/codeflow-core/src/ids/seed.rs", "worktree_records", "is_dir", 1, "Type check on std::fs::metadata with its error propagated."),
+    ("crates/codeflow-core/src/ids/seed.rs", "plan_link_rewrites", "is_file", 1, "Type check on symlink_metadata with its error propagated; a tracked link or a non-file is left alone, never followed."),
+    ("crates/codeflow-core/src/ids/seed.rs", "worktree_records", "is_dir", 1, "Type check on entry.file_type() with its error propagated; a link is never followed."),
+    ("crates/codeflow-core/src/ids/seed.rs", "worktree_records", "is_file", 1, "Type check on entry.file_type() with its error propagated; a link or other non-file is not a record."),
     ("crates/codeflow-core/src/ids/state.rs", "load", "ErrorKind::NotFound", 1, "Gives the empty state only after proven_absent confirms the file is missing."),
     ("crates/codeflow-core/src/ledger/rebuild.rs", "rebuild_ledger_type", "try_exists", 2, "try_exists propagates metadata errors; the only reader is the ceremony retrospective, where an empty ledger becomes Refusals::Unknown, never allow or refuse."),
     ("crates/codeflow-core/src/ledger/refusal.rs", "mark_recording", "exists", 1, "A false negative only appends a duplicate recording marker; readers take the earliest event and the caller discards the result."),
@@ -5766,6 +5931,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/scaffold/state.rs", "read_beneath_root", "ErrorKind::NotFound", 1, "guard_beneath_root refuses any linked component beneath the root first, so not found means a missing leaf or plain ancestor; other read errors propagate."),
     ("crates/codeflow-core/src/scaffold/state.rs", "remove_beneath_root", "ErrorKind::NotFound", 1, "guard_beneath_root refuses links first, so not found proves the file already absent, the goal of the remove; other errors propagate."),
     ("crates/codeflow-core/src/scaffold/state.rs", "sync::device_at", "exists", 1, "Only picks which device the sync batch flushes; the write that follows fails on a parent it cannot resolve, so no allow, refuse or presence decision depends on it."),
+    ("crates/codeflow-core/src/scaffold/state.rs", "write_file_with_mode", "is_file", 1, "Type check on metadata from symlink_metadata_optional, whose read errors propagate; only a proven-absent or non-file mode_from leaves the default permissions."),
     ("crates/codeflow-core/src/scaffold/update.rs", "prune_orphans", "ErrorKind::NotFound", 1, "guard_beneath_root refuses links in the destination first, so not found is proven absence; an absent orphan only drops its record and baseline."),
     ("crates/codeflow-core/src/scaffold/update.rs", "prune_orphans", "exists", 1, "Repeats a read that either succeeded or proved the file missing beneath a link-free path; remove_beneath_root also tolerates only not found."),
     ("crates/codeflow-core/src/security/deletion.rs", "Reader::change_dir", "is_dir", 1, "Metadata classification failure sets may_fail and preserves both shell outcomes, never removes the target candidate."),

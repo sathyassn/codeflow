@@ -12,7 +12,8 @@
 //! refused, never read as some other program. It enforces a supported
 //! subset, in which every spawn is written `…Command::new(ARG)` or
 //! `<…Command>::new(ARG)`, and judges each argument. A literal that names
-//! git (`git`, `git.exe`, `/usr/bin/git` and the like) is refused. Any other
+//! git (`git`, `git.exe`, `/usr/bin/git` and the like) or a `git-*` program
+//! (`git-clone`, `git-upload-pack`) is refused. Any other
 //! argument that is not one literal must be listed in [`DYNAMIC`] with the
 //! reason it never holds git, so a new spawn built from a value has to be
 //! looked at. Every other form that would hide a spawn from that reading
@@ -26,6 +27,14 @@
 //! uses one). A shell that runs git from its own script text, such as a
 //! test target the runner starts through `sh -c`, is the user's command,
 //! not one codeflow builds.
+
+//! Fixture guards use decoded Rust tokens. Clones live only in the private
+//! fixture helper: a literal that can carry a clone invocation (see
+//! [`clone_invocation`]) is refused elsewhere, and prose that only names a
+//! clone is not. Environment exceptions bind normalized call spans and counts.
+//! Runtime string assembly, procedural macros, a child program that clones on
+//! its own, and environment changes by external programs remain outside the
+//! scans. The non-Rust scope check excludes the live-host scripts/proofs prototype.
 
 use std::path::{Path, PathBuf};
 
@@ -501,9 +510,29 @@ fn hidden_spawns(file: &str, toks: &[Token]) -> Vec<String> {
 /// Whether a program name runs git: its last path part, without an
 /// extension, is `git`.
 fn names_git(program: &str) -> bool {
-    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = name.split('.').next().unwrap_or(name);
-    stem.eq_ignore_ascii_case("git")
+    names_program(program, "git")
+}
+
+/// Whether a program name starts a git process: `git` itself, or a `git-*`
+/// program, which is git's own command (`git-clone` in git's exec path) or
+/// a helper git dispatches (`git-upload-pack`).
+fn names_git_process(program: &str) -> bool {
+    let stem = program_stem(program);
+    names_git(stem)
+        || stem
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("git-"))
+}
+
+/// Whether `program`'s last path part, without an extension, is `name`.
+fn names_program(program: &str, name: &str) -> bool {
+    program_stem(program).eq_ignore_ascii_case(name)
+}
+
+/// A program's last path part, without an extension.
+fn program_stem(program: &str) -> &str {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    file.split('.').next().unwrap_or(file)
 }
 
 /// Why `text`, read as the file `file`, breaks the contract.
@@ -513,7 +542,7 @@ fn violations(file: &str, text: &str) -> Vec<String> {
     let mut dynamic: Vec<(String, usize)> = Vec::new();
     for (argument, value) in spawns(&toks) {
         match value {
-            Some(program) if names_git(&program) => out.push(format!(
+            Some(program) if names_git_process(&program) => out.push(format!(
                 "{file}: Command::new({argument}) starts git; use codeflow_core::git"
             )),
             Some(_) => {}
@@ -580,6 +609,491 @@ fn every_git_process_is_built_by_the_one_constructor() {
     assert!(offenders.is_empty(), "{}", offenders.join("\n"));
 }
 
+/// The closing delimiter of a Rust token group.
+fn group_end(toks: &[Token], start: usize) -> usize {
+    let mut depth = 0_usize;
+    for (index, token) in toks.iter().enumerate().skip(start) {
+        if token.punct('[') || token.punct('(') || token.punct('{') {
+            depth += 1;
+        } else if token.punct(']') || token.punct(')') || token.punct('}') {
+            depth -= 1;
+            if depth == 0 {
+                return index;
+            }
+        }
+    }
+    panic!("unclosed Rust token group");
+}
+
+/// Comma-separated expressions, retaining nested calls/indexing as one argument.
+fn arguments(toks: &[Token]) -> Vec<&[Token]> {
+    let mut args = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < toks.len() {
+        if toks[index].punct('[') || toks[index].punct('(') || toks[index].punct('{') {
+            index = group_end(toks, index);
+        } else if toks[index].punct(',') {
+            args.push(&toks[start..index]);
+            start = index + 1;
+        }
+        index += 1;
+    }
+    if start < toks.len() {
+        args.push(&toks[start..]);
+    }
+    args
+}
+
+fn literal(toks: &[Token]) -> Option<&str> {
+    match toks {
+        [Token::Str(value)] => Some(value),
+        _ => None,
+    }
+}
+
+fn fixture_sources() -> (PathBuf, Vec<PathBuf>) {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&crates).unwrap() {
+        let krate = entry.unwrap().path();
+        for area in ["src", "tests", "examples"] {
+            let dir = krate.join(area);
+            if dir.is_dir() {
+                rust_files(&dir, &mut files);
+            }
+        }
+    }
+    files.sort();
+    (crates, files)
+}
+
+#[derive(Debug)]
+struct Allowance<'a> {
+    file: &'a str,
+    span: &'a str,
+    count: usize,
+    reason: &'a str,
+}
+
+fn allowances(table: &str) -> Vec<Allowance<'_>> {
+    table
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let fields: Vec<_> = line.splitn(4, '\t').collect();
+            assert_eq!(fields.len(), 4, "{line}");
+            Allowance {
+                file: fields[0],
+                span: fields[1],
+                count: fields[2].parse().unwrap(),
+                reason: fields[3],
+            }
+        })
+        .collect()
+}
+
+const ENV_ALLOWANCES: &str = include_str!("fixtures/git_environment_allowlist.tsv");
+const CLONE_ALLOWANCES: &str = include_str!("fixtures/git_clone_allowlist.tsv");
+
+fn normalized(toks: &[Token]) -> String {
+    toks.iter().map(Token::text).collect()
+}
+
+/// The nearest enclosing call, including its callee and its entire argument
+/// group. Tuple/array groups are skipped so a setting's value remains bound.
+fn call_span(toks: &[Token], index: usize) -> (usize, usize) {
+    let mut stack = Vec::new();
+    for (at, token) in toks[..index].iter().enumerate() {
+        if token.punct('(') || token.punct('[') || token.punct('{') {
+            stack.push(at);
+        } else if token.punct(')') || token.punct(']') || token.punct('}') {
+            stack.pop();
+        }
+    }
+    for open in stack.into_iter().rev() {
+        if !toks[open].punct('(') || open == 0 {
+            continue;
+        }
+        let callee = if toks[open - 1].punct('!') && open > 1 {
+            open - 2
+        } else {
+            open - 1
+        };
+        if matches!(toks[callee], Token::Ident(_)) {
+            return (callee, group_end(toks, open));
+        }
+    }
+    (index, index)
+}
+
+/// Whether a decoded literal can carry a clone invocation, read as the shell
+/// commands it could hold: in one command (text between line ends, `;`,
+/// `&`, `|`, backticks or parentheses), whose words are split at blanks and
+/// commas and stripped of quotes and brackets, the word `clone` comes first
+/// or after an option (`-C`, `--no-pager`) or a word that names git, or a
+/// word names the `git-clone` program itself (`git-clone`, a path to it in
+/// git's exec path, `git-clone.exe`). An
+/// argument vector element (`"clone"`), a shell line (`"git -C dir clone a
+/// b"`), an argument list without the program (`"-C dir clone a b"`) and a
+/// split command (`"clone --bare a b"`) each match; prose that says "this
+/// clone" or quotes `git fetch` beside it does not, so a message is judged
+/// as text and never needs an allowance.
+fn clone_invocation(value: &str) -> bool {
+    value
+        .split(['\n', ';', '&', '|', '`', '(', ')'])
+        .any(|command| {
+            let words: Vec<&str> = command
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .map(|word| word.trim_matches(|c: char| "\"'[]{}".contains(c)))
+                .filter(|word| !word.is_empty())
+                .collect();
+            let option = |word: &str| {
+                word.strip_prefix('-')
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|c| c == '-' || c.is_ascii_alphanumeric())
+            };
+            words.iter().enumerate().any(|(at, word)| {
+                names_program(word, "git-clone")
+                    || (*word == "clone"
+                        && (at == 0
+                            || words[..at]
+                                .iter()
+                                .any(|before| option(before) || names_git(before))))
+            })
+        })
+}
+
+fn clone_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = std::collections::BTreeSet::new();
+    for (index, token) in toks.iter().enumerate() {
+        if matches!(token, Token::Str(value) if clone_invocation(value)) {
+            spans.insert(call_span(&toks, index));
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end)| normalized(&toks[start..=end]))
+        .collect()
+}
+
+fn injected_configuration(value: &str) -> bool {
+    value
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|part| {
+            !part.is_empty()
+                && ([
+                    "GIT_CONFIG_COUNT",
+                    "GIT_CONFIG_PARAMETERS",
+                    "GIT_CONFIG_KEY_",
+                    "GIT_CONFIG_VALUE_",
+                ]
+                .iter()
+                .any(|name| name.starts_with(part))
+                    || ["GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"]
+                        .iter()
+                        .any(|prefix| {
+                            part.strip_prefix(prefix)
+                                .is_some_and(|tail| tail.chars().all(|c| c.is_ascii_digit()))
+                        }))
+        })
+}
+
+fn environment_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = std::collections::BTreeSet::new();
+    for (index, token) in toks.iter().enumerate() {
+        let call = toks.get(index + 1).is_some_and(|token| token.punct('('));
+        if token.is("env_clear") || (token.is("envs") && call) {
+            spans.insert((
+                index,
+                if call {
+                    group_end(&toks, index + 1)
+                } else {
+                    index
+                },
+            ));
+        } else if (token.is("env") || token.is("env_remove")) && call {
+            let end = group_end(&toks, index + 1);
+            let args = arguments(&toks[index + 2..end]);
+            if args.first().and_then(|arg| literal(arg)).is_none() {
+                spans.insert((index, end));
+            }
+        }
+        if matches!(token, Token::Str(value) if injected_configuration(value)) {
+            spans.insert(call_span(&toks, index));
+        }
+    }
+    spans
+        .into_iter()
+        .map(|(start, end)| normalized(&toks[start..=end]))
+        .collect()
+}
+
+fn unlisted_spans(file: &str, spans: &[String], allowed: &[Allowance<'_>]) -> Vec<String> {
+    let mut counts = std::collections::BTreeMap::new();
+    for span in spans {
+        *counts.entry(span.as_str()).or_insert(0_usize) += 1;
+    }
+    for entry in allowed.iter().filter(|entry| entry.file == file) {
+        counts.entry(entry.span).or_insert(0);
+    }
+    counts
+        .into_iter()
+        .filter_map(|(span, count)| {
+            let entry = allowed
+                .iter()
+                .find(|entry| entry.file == file && entry.span == span);
+            (!entry.is_some_and(|entry| entry.count == count && !entry.reason.is_empty())).then(
+                || {
+                    format!(
+                        "{file}: {span}: found {count}, allowed {}; AC-4 requires review",
+                        entry.map_or(0, |entry| entry.count)
+                    )
+                },
+            )
+        })
+        .collect()
+}
+
+fn scan_rust(spans: fn(&str) -> Vec<String>, table: &str, exclude_helper: bool) -> Vec<String> {
+    let (crates, files) = fixture_sources();
+    let root = crates.parent().unwrap();
+    let allowed = allowances(table);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut findings = Vec::new();
+    for file in files {
+        let name = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        if exclude_helper && name.starts_with("crates/codeflow-fixture/") {
+            continue;
+        }
+        findings.extend(unlisted_spans(
+            &name,
+            &spans(&std::fs::read_to_string(&file).unwrap()),
+            &allowed,
+        ));
+        seen.insert(name);
+    }
+    for entry in allowed {
+        assert!(
+            seen.contains(entry.file),
+            "allowance names missing file {}",
+            entry.file
+        );
+    }
+    findings
+}
+
+#[test]
+fn fixture_clones_go_through_the_helper() {
+    let findings = scan_rust(clone_spans, CLONE_ALLOWANCES, true);
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn fixture_processes_keep_the_inherited_git_configuration() {
+    let findings = scan_rust(environment_spans, ENV_ALLOWANCES, false);
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn clone_literals_refuse_every_invocation_form() {
+    for source in [
+        r#"cmd.args(["--no-pager","clone",src,dst]);"#,
+        r#"git(dir, &["clone","--no-local","-ql",src,dst]);"#,
+        r#"cmd.arg("clone");"#,
+        r#"cmd.args(["clone","--no-local",src,dst]).arg("--local");"#,
+        r#"cmd.args(["sh", "-c", "git clone x y"]);"#,
+        r#"cmd.arg("cl\x6fne");"#,
+        r#"cmd.args(["sh", "-c", "cd x && git -C dir clone --depth 2 a b"]);"#,
+        r#"cmd.args("clone --bare a b".split(' '));"#,
+        r#"cmd.args(["-c", &format!("{git} clone {src} {dst}")]);"#,
+        r#"cmd.args(["sh", "-c", "/usr/bin/git --no-pager clone a b"]);"#,
+        r#"cmd.args(["sh", "-c", "set -e\ngit clone a b"]);"#,
+        r#"let js = "spawnSync(\"git\",[\"clone\",a,b])";"#,
+        r#"cmd.args("-C dir clone --depth 2 a b".split(' '));"#,
+        r#"Command::new("git-clone").args([src, dst]);"#,
+        r#"cmd.args(["sh", "-c", "git-clone src dst"]);"#,
+    ] {
+        assert!(!clone_spans(source).is_empty(), "{source}");
+    }
+    assert!(clone_spans("codeflow_fixture::clone(dir, src, dst).run();").is_empty());
+    assert!(clone_spans("// git clone x y").is_empty());
+}
+
+/// Prose that names a clone is a message, not an invocation: it needs no
+/// allowance, whether or not it quotes a git command beside the word.
+#[test]
+fn clone_prose_is_not_an_invocation() {
+    for source in [
+        r#"unknown("the reviewed commit is not in this clone");"#,
+        r#"format!("this clone's history is shallow at {at}; run `git fetch --unshallow`");"#,
+        r#"format!("this clone is shallow at {commit}, so fetch it in full (`git fetch --unshallow`)");"#,
+        r#"panic!("a shallow clone proved an answer");"#,
+        r#"assert!(ok, "clone: {}", err);"#,
+        r#"ok(&out, "task new in a second clone");"#,
+        r#"dir.join("managed-clone");"#,
+        r#"eprintln!("this repository - a clone of the fixture - is shallow");"#,
+    ] {
+        assert!(clone_spans(source).is_empty(), "{source}");
+    }
+}
+
+/// The narrowing keeps a raw clone in code visible: the clone `landing.rs`
+/// held before it moved to the helper fails the scan when written back into
+/// that file, while the file's own prose about clones still passes.
+#[test]
+fn a_raw_clone_in_code_still_fails_beside_prose() {
+    let file = "crates/codeflow-core/src/workgraph/landing.rs";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let source = std::fs::read_to_string(root.join(file)).unwrap();
+    assert!(source.contains("this clone is shallow"));
+    let allowed = allowances(CLONE_ALLOWANCES);
+    assert!(unlisted_spans(file, &clone_spans(&source), &allowed).is_empty());
+    let raw = format!(
+        "{source}\nfn raw() {{ git(dir, &[\"clone\", \"-q\", \"--depth\", \"2\", &url, \"copy\"]); }}"
+    );
+    let findings = unlisted_spans(file, &clone_spans(&raw), &allowed);
+    assert_eq!(
+        findings,
+        vec![format!(
+            "{file}: git(dir,&[\"clone\",\"-q\",\"--depth\",\"2\",&url,\"copy\"]): \
+             found 1, allowed 0; AC-4 requires review"
+        )]
+    );
+}
+
+#[test]
+fn decoded_environment_tokens_bind_the_whole_call() {
+    for source in [
+        "cmd.env_clear();",
+        "Command::env_clear(&mut cmd);",
+        r#"cmd.envs([("GIT_CONFIG_COUNT","0")]);"#,
+        r#"let key = "GIT_CONFIG_COUNT"; cmd.env_remove(key);"#,
+        r#"cmd.env("GIT_CONFIG_\x43OUNT", "0");"#,
+        "cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");",
+        r#"concat!("GIT_CONFIG_", "COUNT");"#,
+        "cmd.env(key, value);",
+        "cmd.env_remove(key);",
+    ] {
+        assert!(!environment_spans(source).is_empty(), "{source}");
+    }
+    assert!(environment_spans(r#"cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");"#).is_empty());
+    assert!(environment_spans("// GIT_CONFIG_COUNT env_clear").is_empty());
+    assert_eq!(
+        environment_spans("cmd.env(\"GIT_CONFIG_COUNT\",\n \"0\");"),
+        vec![r#"env("GIT_CONFIG_COUNT","0")"#.to_owned()]
+    );
+}
+
+#[test]
+fn environment_allowances_bind_values_and_duplicate_counts() {
+    let file = "crates/codeflow-cli/tests/ci_pin_platforms.rs";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let source = std::fs::read_to_string(root.join(file)).unwrap();
+    let original = environment_spans(&source);
+    let allowed = allowances(ENV_ALLOWANCES);
+    assert!(unlisted_spans(file, &original, &allowed).is_empty());
+    let changed = source.replace("std::env::var(\"GIT_CONFIG_COUNT\").unwrap()", "\"0\"");
+    assert_ne!(changed, source);
+    let findings = unlisted_spans(file, &environment_spans(&changed), &allowed);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.contains(file) && finding.contains("env(")));
+    let duplicate = format!("{source}\nfn duplicate_site() {{ cmd.{}; }}", original[0]);
+    let findings = unlisted_spans(file, &environment_spans(&duplicate), &allowed);
+    assert!(findings.iter().any(|finding| {
+        finding.contains(file)
+            && finding.contains(&original[0])
+            && finding.contains("found 2, allowed 1")
+    }));
+    assert!(unlisted_spans(file, &environment_spans(&format!("\n{source}")), &allowed).is_empty());
+}
+
+fn scope_clone(source: &str) -> bool {
+    let words: Vec<_> = source
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|word| !word.is_empty())
+        .collect();
+    // Conservative vocabulary check: options or bindings between these words
+    // cannot hide a newly introduced fixture operation.
+    words.contains(&"git") && words.contains(&"clone")
+}
+
+fn non_rust_sources(dir: &Path, files: &mut Vec<PathBuf>) {
+    if !dir.is_dir() {
+        return;
+    }
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            // The live-host registry prototype clones a remote URL, outside the suite.
+            if path.file_name().is_some_and(|name| name == "proofs") && dir.ends_with("scripts") {
+                continue;
+            }
+            non_rust_sources(&path, files);
+        } else if path.extension().is_some_and(|ext| {
+            [
+                "mjs", "cjs", "js", "ts", "mts", "cts", "jsx", "tsx", "py", "sh", "bash", "zsh",
+            ]
+            .iter()
+            .any(|name| ext == *name)
+        }) {
+            files.push(path);
+        }
+    }
+}
+
+#[test]
+fn non_rust_fixtures_never_clone() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let mut files = Vec::new();
+    for area in ["docs-portal/tests", "scripts", "tests"] {
+        non_rust_sources(&root.join(area), &mut files);
+    }
+    let findings: Vec<_> = files
+        .into_iter()
+        .filter(|file| scope_clone(&std::fs::read_to_string(file).unwrap()))
+        .map(|file| {
+            format!(
+                "{}: AC-4 forbids non-Rust fixture git clone",
+                file.display()
+            )
+        })
+        .collect();
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn scope_check_refuses_node_and_shell_clones() {
+    assert!(scope_clone(r#"spawnSync("git", ["clone", source, dest]);"#));
+    assert!(scope_clone("git clone source dest"));
+    assert!(scope_clone(
+        r#"spawnSync("git", ["--no-pager", "clone", source, dest]);"#
+    ));
+    assert!(!scope_clone(r#"spawnSync("git", ["status"]);"#));
+}
+
 #[test]
 fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     let refused = [
@@ -587,6 +1101,11 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
         "let c = std::process::Command\n    ::new(\n        \"git\"\n    );",
         r#"let c = Command::new("/usr/bin/git");"#,
         r#"let c = Command::new("git.exe");"#,
+        // A git-* program is git's own command (`git-clone` in git's exec
+        // path) or a helper git dispatches, so it is a git process too.
+        r#"let c = Command::new("git-clone");"#,
+        r#"let c = Command::new("/usr/libexec/git-core/git-upload-pack");"#,
+        r#"let c = Command::new("GIT-RECEIVE-PACK.EXE");"#,
         r#"let c = Command::new(r"C:\Program Files\Git\cmd\git.exe");"#,
         "let c = Command::new(r#\"GIT\"#);",
         "const GIT: &str = \"git\"; let c = Command::new(GIT);",
@@ -633,6 +1152,8 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
     let passed = [
         r#"let c = Command::new("gh");"#,
         r#"let c = Command::new("gitleaks");"#,
+        r#"let c = Command::new("github");"#,
+        r#"let c = Command::new("my-git-tool");"#,
         r#"// Command::new("git")"#,
         r#"/* Command::new("git") */"#,
         r#"let s = "Command::new(\"git\")";"#,
