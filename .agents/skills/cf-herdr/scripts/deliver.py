@@ -28,11 +28,12 @@ brief must name that full range, every dotted pair it names must be that
 pair, and every git diff, difftool, log or show must sit in a code span or
 fenced block as exactly `git <verb> [display options] <base>...<head>` (the
 pair dotted or as two tokens, any case; a path, `--`, a glob, a magic
-pathspec, another revision or any other option is refused). A command
-outside a span is refused with the span form named; text outside a span or
-fence is prose and is never read as part of a command. A backslash before a
-newline, a space or a tab is folded to one space before anything is read. A
-review is one holistic pass over the whole unit at one head.
+pathspec, another revision or any other option is refused, and so is a later
+line of the same fence that is `--`, a path, a glob or a magic pathspec). A
+command outside a span is refused with the span form named; text outside a
+span or fence is prose and is never read as part of a command. A backslash
+before a newline, a space or a tab is folded to one space before anything is
+read. A review is one holistic pass over the whole unit at one head.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
 3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown;
@@ -133,29 +134,42 @@ def narrower(shown: str, unit: str) -> Stop:
                    f"re-brief for {unit}; nothing was sent")
 
 
-def carve(text: str) -> tuple[list[str], str]:
-    """Split a brief into command texts and prose. A fenced block (a line
-    starting with three backticks to the next such line) is cut out and each
-    of its lines is a command line, the opening and closing lines included
-    (their text after the backticks); a code span (backticks paired in
-    document order, newlines allowed) is cut out and is a command span; what
-    remains is prose."""
-    commands: list[str] = []
+def carve(text: str) -> tuple[list[list[str]], str]:
+    """Split a brief into command groups and prose. A fenced block (a line
+    starting with three backticks to the next such line) is cut out and is one
+    group, each of its lines a command line, the opening and closing lines
+    included (their text after the backticks); a code span (backticks paired
+    in document order, newlines allowed) is cut out and is a group of one;
+    what remains is prose."""
+    groups: list[list[str]] = []
     prose: list[str] = []
     fenced = False
     for line in text.split("\n"):
         if line.lstrip().startswith(FENCE) and (fenced or line.count(FENCE) == 1):
+            if not fenced:
+                groups.append([])
             fenced = not fenced
-            commands.append(line.lstrip().lstrip("`"))
+            groups[-1].append(line.lstrip().lstrip("`"))
             if not fenced:
                 prose.append(CUT)
         elif fenced:
-            commands.append(line)
+            groups[-1].append(line)
         else:
             prose.append(line)
     rest = "\n".join(prose)
-    commands += re.findall(r"`([^`]*)`", rest)
-    return commands, re.sub(r"`[^`]*`", CUT, rest)
+    groups += [[span] for span in re.findall(r"`([^`]*)`", rest)]
+    return groups, re.sub(r"`[^`]*`", CUT, rest)
+
+
+def pathlike(line: str) -> bool:
+    """Whether a fence line after a git command can only narrow it: a lone
+    word, or words that are all `--`, a path, a glob or a magic pathspec. A
+    blank line and a `#` comment are not."""
+    words = line.split()
+    if not words or words[0].startswith("#"):
+        return False
+    return len(words) == 1 or words[0] == "--" or all(
+        word.startswith(":") or re.search(r"[/.*?\[]", word) for word in words)
 
 
 def fits(tokens: list[str], base: str, head: str, verb: str, unit: str) -> bool:
@@ -180,6 +194,18 @@ def fits(tokens: list[str], base: str, head: str, verb: str, unit: str) -> bool:
     return index == len(tokens)
 
 
+def too_narrow(path: str, span: str, unit: str) -> Stop:
+    span = span if len(span) <= 80 else span[:77] + "..."
+    return Stop(6, f"review brief {path} writes `{span}`; a git diff, "
+                   "difftool, log or show in a code span or fence is "
+                   "exactly git <verb> [display options] "
+                   "<base>...<head>, so a path, --, a glob, a magic "
+                   "pathspec, another revision, a global or a "
+                   "non-display option is refused; a review is one "
+                   "holistic pass over the whole unit at one head "
+                   f"({DISCIPLINE}); re-brief for {unit}; nothing was sent")
+
+
 def check_review(brief: str, unit: str, path: str) -> None:
     base, head = PAIR.match(unit).groups()
     text = re.sub(r"\\[ \t]*\n[ \t]*", " ", brief.replace("\r\n", "\n"))
@@ -193,7 +219,7 @@ def check_review(brief: str, unit: str, path: str) -> None:
     for dotted in DOTTED.finditer(text):
         if not (same(dotted.group(1), base) and same(dotted.group(3), head)):
             raise narrower(f"{dotted.group(1)}..{dotted.group(3)}", unit)
-    commands, prose = carve(text)
+    groups, prose = carve(text)
     outside = MENTION.search(prose)
     if outside:
         verb = outside.group(1).lower()
@@ -205,23 +231,21 @@ def check_review(brief: str, unit: str, path: str) -> None:
                       "display options only; a review is one holistic pass "
                       f"over the whole unit at one head ({DISCIPLINE}); "
                       "nothing was sent")
-    for command in commands:
-        found = MENTION.search(command)
-        if found is None:
-            continue
-        verb = found.group(1).lower()
-        tokens = command[found.start():].split()
-        if tokens[1].lower() != verb or not fits(tokens[2:], base, head, verb, unit):
-            span = " ".join(tokens)
-            span = span if len(span) <= 80 else span[:77] + "..."
-            raise Stop(6, f"review brief {path} writes `{span}`; a git diff, "
-                          "difftool, log or show in a code span or fence is "
-                          "exactly git <verb> [display options] "
-                          "<base>...<head>, so a path, --, a glob, a magic "
-                          "pathspec, another revision, a global or a "
-                          "non-display option is refused; a review is one "
-                          "holistic pass over the whole unit at one head "
-                          f"({DISCIPLINE}); re-brief for {unit}; nothing was sent")
+    for group in groups:
+        given = ""  # the git command already seen in this fence
+        for command in group:
+            found = MENTION.search(command)
+            if found is None:
+                if given and pathlike(command):
+                    raise too_narrow(path, f"{given} {' '.join(command.split())}",
+                                     unit)
+                continue
+            verb = found.group(1).lower()
+            tokens = command[found.start():].split()
+            given = " ".join(tokens)
+            if tokens[1].lower() != verb or not fits(tokens[2:], base, head,
+                                                      verb, unit):
+                raise too_narrow(path, given, unit)
 
 
 def deliver(args: argparse.Namespace) -> str:

@@ -575,6 +575,22 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f -- crates/foo.rs\n"),
             ("two backslash lines in a fence", "Run:\n```\ngit \\\n\\\ndiff "
              "97ede7aa1...c5f54046f -- crates/foo.rs\n```\n"),
+            # Review of PR 126, round 6: a later line of the same fence.
+            ("-- and a path on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n-- crates/foo.rs\n```\n"),
+            ("a bare path on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\ncrates/foo.rs\n```\n"),
+            ("a glob on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n*.rs\n```\n"),
+            ("a magic pathspec on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n:(exclude)docs\n```\n"),
+            ("a path on the next line of an sh fence", "Run:\n```sh\ngit diff "
+             "97ede7aa1...c5f54046f\ncrates/foo.rs\n```\n"),
+            ("a path after a comment in a fence", "Run:\n```\ngit log "
+             "97ede7aa1...c5f54046f\n# the rest\n\ncrates/foo.rs\n```\n"),
+            ("a path line after a clean line in an unclosed fence", "Run:\n```\n"
+             "git show 97ede7aa1...c5f54046f\ngit diff 97ede7aa1...c5f54046f\n"
+             "-- docs\n"),
             ("uppercase ids and a path in prose", "The unit is "
              "97ede7aa1...c5f54046f. Run git diff 97EDE7AA1 C5F54046F -- "
              "crates/foo.rs\n"),
@@ -649,6 +665,24 @@ class StubDeliveryTests(unittest.TestCase):
             self.assertEqual(seat.state()["calls"], [], name)
             self.assertIn("nothing was sent", done.stderr, name)
             self.assertIn("whole", done.stderr, name)
+
+    def test_review_sends_a_fence_that_stays_whole(self) -> None:
+        # Review of PR 126, round 6: only a path line after a git line refuses.
+        unit = "97ede7aa1...c5f54046f"
+        for name, brief in (
+            ("a clean fence", "Run:\n```\ngit diff 97ede7aa1...c5f54046f\n```\n"),
+            ("a comment after the command", "Run:\n```sh\ngit diff "
+             "97ede7aa1...c5f54046f\n# the whole unit\n\n```\n"),
+            ("two clean git commands", "Run:\n```\ngit diff --stat "
+             "97ede7aa1...c5f54046f\ngit log --oneline 97ede7aa1..c5f54046f\n```\n"),
+            ("a path before the command", "Run:\n```\ncrates/foo.rs\ngit diff "
+             "97ede7aa1...c5f54046f\n```\n"),
+            ("a path in the next fence", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n```\n```\ncrates/foo.rs\n```\n"),
+        ):
+            seat, done = self.review(brief, "--review", unit)
+            self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
+            self.assertEqual(seat.sent("send-text")[0][3], brief, name)
 
     def test_review_names_the_missing_range_and_the_rule(self) -> None:
         _, done = self.review("Review `git diff f6f402804 f74718e25`.\n",
