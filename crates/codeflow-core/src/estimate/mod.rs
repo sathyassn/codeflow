@@ -1,10 +1,14 @@
 //! Bounded read-only checking of explicit delivery forecast allocations.
 //!
-//! This module never schedules work, infers durations, approves execution, reads
-//! adoption state, or writes the work graph. See the version-one report contract.
+//! This module never schedules work, approves execution or writes the work
+//! graph. The checker reads no adoption state and infers no duration; the
+//! outcomes report reads the adoption record and derives completed tasks'
+//! timings from git history. See the version-one report contracts.
 
+pub mod adoption;
 mod checks;
 mod model;
+pub mod outcomes;
 mod shape;
 mod sources;
 

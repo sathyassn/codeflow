@@ -383,6 +383,10 @@ pub fn run(args: &CiArgs) -> i32 {
     let Some(judging) = judging_policy(&root, authority.as_ref(), working) else {
         return 2;
     };
+    note_lowered_security_levels(&root, &judging.raw, &head);
+    if let Some(authority) = authority.as_ref() {
+        note_changed_setup_hook(&root, authority.sha(), &head);
+    }
     let configured = &judging.policy.git;
     let mut tagged: Vec<TaggedViolation> = Vec::new();
     let adoption = match adopter::resolve(
@@ -1601,6 +1605,131 @@ fn judging_policy(root: &Path, authority: Option<&Authority>, working: Policy) -
         policy,
         raw: Ok(Some(raw)),
     })
+}
+
+/// The strength of a security level as the managed security review reads
+/// it; anything else ranks below `off`, since that job refuses it.
+fn security_rank(level: &str) -> u8 {
+    match level {
+        "block" => 3,
+        "warn" => 2,
+        "off" => 1,
+        _ => 0,
+    }
+}
+
+/// sathyassn/codeflow#81: name a change that lowers or removes
+/// `git.security_review` or `git.dep_audit`, so its reviewer sees it. The
+/// managed security review keeps reading the target's levels, so the lower
+/// level applies only once the change lands.
+fn note_lowered_security_levels(
+    root: &Path,
+    judging: &Result<Option<serde_json::Value>, String>,
+    head: &str,
+) {
+    let Ok(Some(base)) = judging else {
+        return;
+    };
+    // A head without the policy file removes every key it held; one that
+    // cannot be read or parsed leaves each key's change unknown, which is
+    // named too, never passed over.
+    let head_raw = match codeflow_core::hooks::landed_policy::policy_text_at(root, head) {
+        Ok(Some(text)) => serde_json::from_str::<serde_json::Value>(&text)
+            .map(Some)
+            .map_err(|error| format!("does not parse ({error})")),
+        Ok(None) => Ok(None),
+        Err(error) => Err(format!("cannot be read ({error})")),
+    };
+    for key in ["security_review", "dep_audit"] {
+        let pointer = format!("/git/{key}");
+        let Some(was) = base.pointer(&pointer).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let text = match &head_raw {
+            Err(why) => format!(
+                "whether this change lowers git.{key} ({was} on the target) cannot be told: the head's .codeflow/policy.json {why}"
+            ),
+            Ok(head_raw) => {
+                let now = head_raw
+                    .as_ref()
+                    .and_then(|raw| raw.pointer(&pointer))
+                    .and_then(serde_json::Value::as_str);
+                match now {
+                    None => format!(
+                        "this change removes git.{key} (it is {was} on the target); the security review fails closed without it once the change lands"
+                    ),
+                    Some(now) if security_rank(now) < security_rank(was) => format!(
+                        "this change lowers git.{key} from {was} to {now}; the security review keeps the target's {was} until the change lands"
+                    ),
+                    Some(_) => continue,
+                }
+            }
+        };
+        let finding = codeflow_core::remedy::Finding::new(
+            text,
+            codeflow_core::remedy::CI_SECURITY_LEVEL_LOWERED.with(&[("key", key), ("was", was)]),
+        );
+        println!("{}", finding.line("codeflow ci", "note"));
+    }
+}
+
+/// The blob id of `path` at `rev`: `None` when the commit lacks it, which
+/// `rev-parse --verify --quiet` answers with exit 1 and no output; any other
+/// failure is the error.
+fn blob_at(root: &Path, rev: &str, path: &str) -> Result<Option<String>, String> {
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--verify", "--quiet"])
+        .arg(format!("{rev}:{path}"))
+        .output()
+        .map_err(|error| format!("cannot run git rev-parse: {error}"))?;
+    if !out.status.success() {
+        return if out.status.code() == Some(1) && out.stdout.is_empty() {
+            Ok(None)
+        } else {
+            Err(format!(
+                "git rev-parse {rev}:{path} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        };
+    }
+    let id = std::str::from_utf8(&out.stdout)
+        .map_err(|_| format!("git rev-parse {rev}:{path} printed an id that is not UTF-8"))?
+        .trim_end_matches('\n');
+    if id.is_empty() {
+        return Err(format!("git rev-parse {rev}:{path} printed no id"));
+    }
+    Ok(Some(id.to_string()))
+}
+
+/// sathyassn/codeflow#81: name a change that adds, edits or removes the
+/// project setup hook. The hook runs in the gates job with the gate's
+/// authority, as the CI file does, so its reviewer is the boundary.
+fn note_changed_setup_hook(root: &Path, base: &str, head: &str) {
+    const HOOK: &str = ".codeflow/ci-setup.sh";
+    let (was, now) = match (blob_at(root, base, HOOK), blob_at(root, head, HOOK)) {
+        (Ok(was), Ok(now)) => (was, now),
+        (Err(error), _) | (_, Err(error)) => {
+            let finding = codeflow_core::remedy::Finding::new(
+                format!("whether this change edits {HOOK}, which runs in the gates job before `codeflow test`, cannot be told: {error}"),
+                codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
+            );
+            println!("{}", finding.line("codeflow ci", "note"));
+            return;
+        }
+    };
+    let verb = match (&was, &now) {
+        (None, Some(_)) => "adds",
+        (Some(_), None) => "removes",
+        (Some(a), Some(b)) if a != b => "edits",
+        _ => return,
+    };
+    let finding = codeflow_core::remedy::Finding::new(
+        format!("this change {verb} {HOOK}, which runs in the gates job before `codeflow test` with the gate's authority; review it as you would the CI file"),
+        codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
+    );
+    println!("{}", finding.line("codeflow ci", "note"));
 }
 
 /// Report the policy source. Loading refuses malformed or unreadable policy;

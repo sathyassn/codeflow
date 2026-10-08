@@ -672,6 +672,22 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // git's stderr after a failed rev-parse, shown in the note's reason only; the blob id itself is read with from_utf8 and refuses when it is not UTF-8
+    (
+        "codeflow-cli/src/cmd/ci.rs",
+        "blob_at",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
+    // curl's stderr after a failed download, shown in the refusal only; the downloaded bytes are returned unchanged
+    (
+        "codeflow-core/src/scaffold/release_pin.rs",
+        "fetch_with_curl",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -4930,6 +4946,118 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "schema-reject-only",
     ),
+    // Trims git's stderr after a failed rev-parse for the note's reason; the id is cut at its line feed only.
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "blob_at",
+        "trim",
+        1,
+        "display",
+    ),
+    // rev-parse --verify prints one object id and a line feed; only that line feed is removed, and an empty id refuses.
+    (
+        "crates/codeflow-cli/src/cmd/ci.rs",
+        "blob_at",
+        "trim_end_matches",
+        1,
+        "format-contract",
+    ),
+    // Finds the setup hook's first command to show doctor's reader; nothing is decided from it, and control characters are escaped.
+    (
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "setup_note",
+        "lines",
+        1,
+        "display",
+    ),
+    // Trims the setup hook's lines only to show its first command; nothing is decided from it.
+    (
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "setup_note",
+        "trim",
+        1,
+        "display",
+    ),
+    // A CI file is read by line as the shell runs it; the source line is matched with only spaces and tabs around it.
+    (
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "sources_setup_hook",
+        "lines",
+        1,
+        "grammar:shell-script-lines",
+    ),
+    // The digest table is compared by line as the installers' awk reader splits it; each line is trimmed of POSIX blanks only.
+    (
+        "crates/codeflow-core/src/doctor/ci_pin.rs",
+        "table_lines",
+        "lines",
+        1,
+        "grammar:installer-awk-lines",
+    ),
+    // Mirrors the installers' awk reader in the C locale: leading POSIX [[:space:]] (space, tab, LF, VT, FF, CR) only.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "byte_line",
+        "trim_start_matches",
+        1,
+        "grammar:installer-awk-lines",
+    ),
+    // Trims curl's stderr for the refusal message only.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "fetch_with_curl",
+        "trim",
+        1,
+        "display",
+    ),
+    // sha256.sum is read as sha256sum writes it: one digest and one file name per line, separated by blanks; a file that is not UTF-8 refuses before this split.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "pin_release",
+        "lines",
+        1,
+        "grammar:sha256sum-lines",
+    ),
+    // sha256.sum fields are the digest then the file name, split as sha256sum separates them; the name must equal the ASCII asset name and the digest must be lowercase hex, so no other spacing is accepted.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "pin_release",
+        "split_whitespace",
+        1,
+        "grammar:sha256sum-lines",
+    ),
+    // Reads the state by line as the installers' awk reader does; byte_line refuses a carriage return inside a line and other control characters.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "pinned_digests",
+        "lines",
+        1,
+        "grammar:installer-awk-lines",
+    ),
+    // Trims the value after `=` on a line the ENTRY pattern already matched with ASCII [[:space:]], so only those blanks precede its quote.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "pinned_digests",
+        "trim_start",
+        1,
+        "grammar:installer-awk-lines",
+    ),
+    // Drops the line break from the line shown in doctor's label, which is printed escaped.
+    (
+        "crates/codeflow-core/src/scaffold/release_pin.rs",
+        "unread_line",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    // A forecast whose bytes do not deserialize is reported as forecast_invalid with its path and joins nothing; the report says so instead of reading it as absent.
+    (
+        "crates/codeflow-core/src/estimate/outcomes/mod.rs",
+        "forecasts",
+        "obtain-absent:from_slice",
+        1,
+        "unproven",
+    ),
 ];
 
 /// A framing exception belongs only to its named reader; consumers do not
@@ -5730,6 +5858,11 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/work_start.rs", "durable_work_tracking_enabled", "ErrorKind::NotFound", 2, "Callers pass the discovered repository root: a .codeflow that is not found there is proven, and the state file is read under a real .codeflow or an absent one."),
     ("crates/codeflow-core/src/workgraph/work_start.rs", "durable_work_tracking_enabled", "is_dir", 1, "Type check on symlink_metadata already obtained; a non-directory, a symlink included, returns StatePath, and other errors return StateMetadata."),
     ("crates/codeflow-core/src/workgraph/work_start.rs", "durable_work_tracking_enabled", "is_file", 1, "Type check on symlink_metadata already obtained; a non-file returns StatePath, and other errors return StateMetadata."),
+    ("crates/codeflow-core/src/estimate/adoption.rs", "home", "ErrorKind::NotFound", 1, "Only a root that names nothing is Home::Missing; any other metadata error is Home::Unusable with the reason."),
+    ("crates/codeflow-core/src/estimate/adoption.rs", "home", "is_dir", 1, "The kind of a root whose metadata was read: a non-directory is Home::Unusable, never missing."),
+    ("crates/codeflow-core/src/estimate/adoption.rs", "home", "is_file", 1, "The kind of a v<N>.json entry whose file type was read; a type that cannot be read leaves the home unusable."),
+    ("crates/codeflow-core/src/estimate/adoption.rs", "real_dirs", "ErrorKind::NotFound", 1, "A forecasts directory that is proven missing holds no forecast; any other metadata error refuses through Home::Unusable."),
+    ("crates/codeflow-core/src/estimate/adoption.rs", "real_dirs", "is_dir", 2, "The kinds of the forecasts directory and of each entry, read from metadata that was read; an unreadable entry refuses."),
 ];
 
 #[test]

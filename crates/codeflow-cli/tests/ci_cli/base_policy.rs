@@ -81,6 +81,83 @@ fn a_head_that_loosens_its_own_policy_gets_the_base_verdict() {
     );
 }
 
+/// sathyassn/codeflow#81: a change that lowers or removes a security level
+/// is named for its reviewer; raising one or leaving it alone says nothing.
+#[test]
+fn a_head_that_lowers_a_security_level_is_named() {
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#,
+    ));
+    let root = dir.path();
+    write(root, POLICY, r#"{"git": {"security_review": "off"}}"#);
+    commit(root, "chore: relax the security review");
+    let out = ci(root);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("this change lowers git.security_review from block to off"),
+        "{text}"
+    );
+    assert!(text.contains("this change removes git.dep_audit"), "{text}");
+    for (key, was) in [("security_review", "block"), ("dep_audit", "warn")] {
+        assert!(
+            text.contains(&format!("clear it: restore git.{key} to {was} in {POLICY}")),
+            "{text}"
+        );
+    }
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("this change"));
+
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "warn", "dep_audit": "warn"}}"#,
+    ));
+    let root = dir.path();
+    write(
+        root,
+        POLICY,
+        r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#,
+    );
+    commit(root, "chore: harden the security review");
+    let text = said(&ci(root));
+    assert!(!text.contains("this change lowers"), "{text}");
+    assert!(!text.contains("this change removes"), "{text}");
+
+    // Deleting the whole policy file removes both keys.
+    let dir = fixture(Some(
+        r#"{"git": {"security_review": "block", "dep_audit": "block"}}"#,
+    ));
+    let root = dir.path();
+    std::fs::remove_file(root.join(POLICY)).unwrap();
+    commit(root, "chore: drop the policy");
+    let text = said(&ci(root));
+    assert!(
+        text.contains("this change removes git.security_review"),
+        "{text}"
+    );
+    assert!(text.contains("this change removes git.dep_audit"), "{text}");
+}
+
+/// sathyassn/codeflow#81: a change that adds, edits or removes the project
+/// setup hook is named, since the hook runs with the gate's authority.
+#[test]
+fn a_head_that_changes_the_setup_hook_is_named() {
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    let text = said(&ci(root));
+    assert!(!text.contains("ci-setup.sh"), "{text}");
+    write(root, ".codeflow/ci-setup.sh", "export X=1\n");
+    commit(root, "ci: add the setup hook");
+    let out = ci(root);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("this change adds .codeflow/ci-setup.sh"),
+        "{text}"
+    );
+    assert!(
+        text.contains("clear it: restore .codeflow/ci-setup.sh to its target state"),
+        "{text}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("this change adds"));
+}
+
 #[test]
 fn the_base_policy_also_lets_through_what_it_allows() {
     let dir = fixture(Some(LOOSER));
