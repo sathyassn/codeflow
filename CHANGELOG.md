@@ -268,6 +268,30 @@ erratum below, never an edit of the section.
   `FB` kind: an older binary's `ids check` reports an `ids/FB/` entry as a
   repaired-history warning and still passes.
 
+<!-- codeflow:release-impact minor -->
+- **Required checks must run on the current base before a merge.** A pull
+  request's checks test its merge with the base as it was when the run
+  started, so two pull requests each green on an older base could both
+  merge and leave the base red, as happened to this repository's `main` on
+  2026-10-08. `codeflow remote protect` now requires the checks on a branch
+  that is up to date with its base on both host paths: the ruleset rule
+  pins each check to GitHub Actions with
+  `strict_required_status_checks_policy`, as classic protection already did
+  with `strict`. It reads the live rules first, updates a ruleset that
+  already targets the branch in place instead of adding a second one, and
+  keeps the classic settings it does not own, such as conversation
+  resolution. The check names come from a new optional
+  `git.required_checks` key whose default is the four shipped CI job names;
+  the shipped policy file does not list it, so an older binary never meets
+  the key. `codeflow doctor --check remote-perimeter` reads the default
+  branch's live rules through `gh` and warns when they require no checks,
+  do not require an up-to-date branch, miss a listed check or can be
+  bypassed; without `gh`, the network or a GitHub `origin` it is a note.
+  Nothing changes on a host until you run `codeflow remote protect` or turn
+  the setting on yourself (ADR-0081). The git rules say a pull request is
+  ready when its checks ran on the current target tip; `codeflow update`
+  replaces the unmodified rules file and portal skill references.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->

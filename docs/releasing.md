@@ -70,8 +70,13 @@ Merge:
 - Main-push and integration-line CI repeat the state check without writing.
 - These release jobs live in `codeflow-release.yml`, outside the managed
   `codeflow-ci.yml` that every adopter receives. No scaffold installs them.
-- Without strict branch protection a stale clean merge is still possible, so
-  the human merger must require the fresh check.
+- A PR check tests the merge with `main` as it was when the run started, so
+  a green from an older `main` says nothing about the current one. Under
+  ADR-0081 the `main` ruleset requires branches to be up to date before
+  merging, a setting the operator turns on: a PR that is behind is updated
+  and its checks run again before it can merge. `codeflow doctor --check
+  remote-perimeter` reads whether the setting is on; while it warns, the
+  human merger must require the fresh check.
 
 Dispatch:
 

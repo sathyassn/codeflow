@@ -55,3 +55,10 @@ repo **rebase-only**: squash and merge-commits are disabled at the GitHub level
 and the per-commit standard is never papered over by a squash. Follow ADR-0020
 for the merge method; the PR-based-landings decision here otherwise stands.
 (Append-only note; the decision body above is unchanged.)
+
+## Note of 2026-10-08: the revisit line is superseded by ADR-0081
+
+The Decision's "Revisit if the repo goes public" line is settled by
+ADR-0081: the repository is public, and `main` requires branches to be up
+to date before merging. Auto-merge stays off. (Append-only note; the
+decision body above is unchanged.)

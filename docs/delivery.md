@@ -101,7 +101,11 @@ each batch.
 
 - A standalone pull request is its own candidate. It lands on the integration
   line it targets, or, when it targets `main`, it is the pull request the
-  operator merges.
+  operator merges. Its required checks count only when they ran on the
+  current tip of `main`; under ADR-0081 the `main` ruleset requires an
+  up-to-date branch, so a pull request that is behind is updated first. A
+  clean update leaves a completed task's acceptance block standing; a
+  hand-resolved one invalidates it (SPC-013 R-60).
 - A later task may build on a predecessor's exact reviewed head before that
   predecessor lands, named with `--on TSK-NNN@<sha>`. The predecessor still
   lands first, and a change to it after review means a rebase and a recheck.
