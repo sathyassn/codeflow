@@ -10,7 +10,10 @@ const RULE: &str = "security.shell_startup";
 fn startup_project() -> (Project, PathBuf) {
     let project = Project::new();
     if let Ok(old) = std::env::var("TSK242_TEST_BINARY") {
-        std::fs::copy(old, project.bin.join("codeflow")).unwrap();
+        // A new file: macOS kills a binary overwritten in place after it ran.
+        let bin = project.bin.join("codeflow");
+        std::fs::remove_file(&bin).unwrap();
+        std::fs::copy(old, bin).unwrap();
     }
     let home = std::fs::canonicalize(&project.home).unwrap();
     for name in [".zshrc", ".bashrc"] {
@@ -247,6 +250,98 @@ fn installed_hooks_judge_git_config_files_and_switches() {
     if !refused_with(&outputs, "git.hook_integrity") {
         wrong.push("codex:Write: allowed /opt/homebrew/etc/gitconfig".to_string());
     }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+#[test]
+fn installed_hooks_judge_the_file_a_repository_config_write_opens() {
+    // Review round twelve: git follows a symbolic link at a repository's
+    // configuration, so a default, `--local` or `--worktree` write through a
+    // link to the user's file sets the key for every repository. The links
+    // point at the fixture home's file; nothing is written.
+    let (project, home) = startup_project();
+    let user = home.join(".gitconfig");
+    std::fs::write(&user, "[user]\n\tname = fixture\n").unwrap();
+    let temp = std::fs::canonicalize(project.temp.path()).unwrap();
+    let git_dir = |dir: &std::path::Path, config: bool| {
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
+        std::fs::create_dir_all(dir.join("refs/heads")).unwrap();
+        std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        if config {
+            std::os::unix::fs::symlink(&user, dir.join("config")).unwrap();
+        }
+    };
+    let modules = project.root.join(".git").join("modules");
+    git_dir(&modules.join("sub2"), true);
+    git_dir(&modules.join("sub3"), false);
+    git_dir(&temp.join("gd"), true);
+    git_dir(&temp.join("gd2"), false);
+    let init = |name: &str| {
+        let dir = temp.join(name);
+        success(
+            &project
+                .command("git")
+                .args(["init", "-q", "-b", "task/x"])
+                .arg(&dir)
+                .output()
+                .unwrap(),
+        );
+        dir.join(".git")
+    };
+    let other = init("other");
+    std::os::unix::fs::symlink(&user, other.join("config.worktree")).unwrap();
+    let other2 = init("other2");
+    let linked = init("linked");
+    std::fs::remove_file(linked.join("config")).unwrap();
+    std::os::unix::fs::symlink(&user, linked.join("config")).unwrap();
+    let (u, t) = (user.display(), temp.display());
+    let refused = [
+        // The modules chain: the link, then the write through it.
+        format!("ln -s {u} .git/modules/sub3/config"),
+        format!("git --git-dir=.git/modules/sub2 config core.fsmonitor {t}/m"),
+        format!("GIT_DIR=.git/modules/sub2 git config core.sshCommand {t}/m"),
+        // config.worktree from a payload cwd outside that repository.
+        format!("ln -s {u} {}/config.worktree", other2.display()),
+        format!("git -C {t}/other config --worktree core.fsmonitor {t}/m"),
+        // A bare git directory whose path has no `.git`.
+        format!("ln -s {u} {t}/gd2/config"),
+        format!("GIT_DIR={t}/gd git config core.fsmonitor {t}/m"),
+        // A repository whose `.git/config` is already a link.
+        format!("git -C {t}/linked config core.sshCommand {t}/m"),
+        format!("cd {t}/linked && git config credential.helper {t}/m"),
+        // A path value of the monitor setting runs that program.
+        "git config --global core.fsmonitor ./hook".to_string(),
+    ];
+    let allowed = [
+        "git config --file .git/config alias.co checkout".to_string(),
+        format!(
+            "git --git-dir={} config alias.co checkout",
+            project.root.join(".git").display()
+        ),
+        "git config core.pager cat".to_string(),
+        format!("git -C {t}/linked config user.name Test"),
+        format!("git -C {t}/linked config --unset core.sshCommand"),
+        "git config --global core.fsmonitor true".to_string(),
+    ];
+    let mut wrong = Vec::new();
+    for harness in ["claude", "codex", "grok"] {
+        for command in &refused {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, "git.hook_integrity") {
+                wrong.push(format!("{harness}: allowed {command}"));
+            }
+        }
+        for command in &allowed {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if outputs.iter().any(|o| !o.status.success()) {
+                wrong.push(format!("{harness}: refused {command}: {outputs:?}"));
+            }
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(&user).unwrap(),
+        "[user]\n\tname = fixture\n"
+    );
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
 }
 

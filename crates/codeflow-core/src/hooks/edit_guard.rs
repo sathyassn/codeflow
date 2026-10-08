@@ -441,7 +441,7 @@ pub(crate) fn normalize_case(_path: &mut PathBuf, _metadata: &std::fs::Metadata)
 // Missing suffixes are kept, so adding a new file beneath an existing symlink
 // is judged against that symlink's destination. Broken links and permissions
 // are errors, not an implicit allow.
-fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
+pub(crate) fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -480,9 +480,14 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
 
 pub(crate) const AUTHORITY_PATH: &str = "remote-tracking policy metadata";
 
+/// How a shell write names a user or system git configuration file, which
+/// [`repository_authority_target`] also covers (TSK-242 review round 12: the
+/// shell sentence named remote-tracking metadata for it).
+pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuration file";
+
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
-fn global_git_config_target(target: &Path, root: &Path) -> bool {
+pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from);

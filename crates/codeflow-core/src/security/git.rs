@@ -157,11 +157,13 @@ const COMMAND_CONFIG: &[&str] = &[
 ];
 
 /// Settings a boolean value leaves harmless: the switches beside the program
-/// settings of the tool sections, and `pager.<command>`, which takes a
-/// boolean or a program. Set to anything else, a switch is
-/// [`ConfigKind::Unknown`] and a pager is a program.
+/// settings of the tool sections, `pager.<command>`, which takes a boolean or
+/// a program, and `core.fsmonitor`, which takes a boolean (git's own
+/// monitor daemon) or a hook program (review round twelve). Set to anything
+/// else, a switch is [`ConfigKind::Unknown`] and the others are programs.
 const BOOLEAN_CONFIG: &[&str] = &[
     "pager.",
+    "core.fsmonitor",
     "difftool.prompt",
     "difftool.trustexitcode",
     "mergetool.prompt",
@@ -285,6 +287,8 @@ mod tests {
             ("pager.log", "2"),
             ("pager.log", "off"),
             ("pager.log", ""),
+            ("core.fsmonitor", "true"),
+            ("core.fsmonitor", "False"),
             ("submodule.a.b.update", "checkout"),
             ("color.ui", "auto"),
             ("clean.requireForce", "yes"),
@@ -298,6 +302,8 @@ mod tests {
             ("mergetool.vimdiff.path", "/x"),
             ("gpg.ssh.defaultKeyCommand", "x"),
             ("pager.log", "less"),
+            ("core.fsmonitor", "./hook"),
+            ("core.fsmonitor", "/usr/local/bin/watchman-hook"),
             ("submodule.a.update", "!x"),
             ("credential.https://example.invalid.helper", "store"),
             ("diff.tool.command", "x"),

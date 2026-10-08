@@ -525,7 +525,8 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
             command,
             &run,
         ) {
-            let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH);
+            let authority = v.message.contains(super::edit_guard::AUTHORITY_PATH)
+                || v.message.contains(super::edit_guard::GIT_CONFIG_AUTHORITY);
             if authority {
                 v.level = PolicyLevel::Block;
                 v.level_fixed = true;
@@ -1371,6 +1372,9 @@ fn token_integrity_path_literal(
         return None;
     }
     let path = integrity_shell_path(token, cwd);
+    if super::edit_guard::global_git_config_target(&path, payload_cwd) {
+        return Some(super::edit_guard::GIT_CONFIG_AUTHORITY);
+    }
     if super::edit_guard::repository_authority_target(&path, payload_cwd, true) {
         return Some(super::edit_guard::AUTHORITY_PATH);
     }
@@ -4156,6 +4160,14 @@ fn direct_write_violation(
             }
         }
     }
+    if let Some(p) = git_config_destination(cmd, args, cwd) {
+        return Some(hook_integrity_violation(
+            level,
+            format!(
+                "`{cmd}` would put a file in place of the git configuration `{p}`, and a symbolic link there sends later `git config` writes to the file it points at"
+            ),
+        ));
+    }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
         if let Some(p) = arg_integrity_path(&args[1..], cwd, payload_cwd) {
             return Some(hook_integrity_violation(
@@ -4165,6 +4177,73 @@ fn direct_write_violation(
         }
     }
     None
+}
+
+/// The git configuration a link, copy or move puts a file in place of: its
+/// destination, or each entry it makes in a destination directory, when that
+/// is the `config` or `config.worktree` of a git directory, such as a
+/// submodule's under `modules` or a bare git directory's. git follows a
+/// symbolic link there, so a link made on the same line as a `git config`
+/// write would send that write to the user's file before the guard can read
+/// the link (review round twelve).
+fn git_config_destination(cmd: &str, args: &[String], cwd: &Path) -> Option<String> {
+    if !matches!(cmd, "ln" | "cp" | "mv" | "rsync") {
+        return None;
+    }
+    let mut operands: Vec<&str> = Vec::new();
+    let mut target_dir: Option<&str> = None;
+    let mut words = args.iter().map(String::as_str);
+    let mut options = true;
+    while let Some(word) = words.next() {
+        match word {
+            "--" if options => options = false,
+            "-t" | "--target-directory" if options && cmd != "rsync" => target_dir = words.next(),
+            "-S" | "--suffix" if options && cmd != "rsync" => {
+                words.next();
+            }
+            _ if options && word.starts_with("--target-directory=") => {
+                target_dir = word.split_once('=').map(|(_, dir)| dir);
+            }
+            _ if options && word.starts_with('-') && word.len() > 1 => {}
+            _ => operands.push(word),
+        }
+    }
+    let destinations: Vec<PathBuf> = match (target_dir, operands.split_last()) {
+        (Some(dir), _) => {
+            let dir = integrity_shell_path(dir, cwd);
+            operands.iter().map(|op| entry_in(&dir, op)).collect()
+        }
+        (None, Some((only, []))) if cmd == "ln" => vec![entry_in(cwd, only)],
+        (None, Some((dest, sources))) => {
+            let path = integrity_shell_path(dest, cwd);
+            if dest.ends_with('/') || path.is_dir() {
+                sources.iter().map(|op| entry_in(&path, op)).collect()
+            } else {
+                vec![path]
+            }
+        }
+        (None, None) => Vec::new(),
+    };
+    destinations.into_iter().find_map(|path| {
+        let config = |p: &Path| {
+            p.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy().to_lowercase();
+                name == "config" || name == "config.worktree"
+            }) && repository_config_file(p, true)
+        };
+        (config(&path) || real(&path).as_deref().is_some_and(config))
+            .then(|| path.to_string_lossy().into_owned())
+    })
+}
+
+/// The entry a link, copy or move of `source` makes in the directory `dir`.
+fn entry_in(dir: &Path, source: &str) -> PathBuf {
+    let name = source
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(source);
+    dir.join(name)
 }
 
 // ---------------------------------------------------------------------------
@@ -5388,18 +5467,34 @@ fn check_git(
     // plain reading is judged per case below.
     if sub == "config"
         && ctx.policy.hook_integrity.is_active()
-        && config_writes_code_key(rest, None, None).is_none()
+        && config_writes_code_key(rest, None, None, None).is_none()
     {
-        let dirs: Vec<PathBuf> = compose_targets(args, moved)
+        let targets = compose_targets(args, moved);
+        let dirs: Vec<PathBuf> = targets
+            .as_ref()
             .map(|specs| {
                 specs
-                    .into_iter()
-                    .map(|spec| spec.map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path)))
+                    .iter()
+                    .map(|spec| {
+                        spec.as_ref()
+                            .map_or_else(|| cwd.to_path_buf(), |s| cwd.join(&s.path))
+                    })
                     .collect()
             })
             .unwrap_or_default();
         let variable = git_config_variable(moved, std::env::var("GIT_CONFIG").ok());
-        if let Some(found) = config_writes_code_key(rest, Some(&dirs), variable.as_deref()) {
+        // The file a repository-scope write opens, read only for a write
+        // that sets a key not known to run nothing.
+        let worktree = parse_options(rest, &GIT_CONFIG_OPTIONS).has_long("--worktree");
+        let local = || {
+            targets
+                .as_ref()
+                .map(|specs| local_config_files(specs, cwd, worktree))
+                .map_err(Clone::clone)
+        };
+        if let Some(found) =
+            config_writes_code_key(rest, Some(&dirs), variable.as_deref(), Some(&local))
+        {
             out.push(hook_integrity_violation(
                 ctx.policy.hook_integrity,
                 config_write_message(&found),
@@ -6431,7 +6526,7 @@ fn judge_git_sub(
                     "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
             } else if policy.hook_integrity.is_active() {
-                if let Some(found) = config_writes_code_key(rest, None, None) {
+                if let Some(found) = config_writes_code_key(rest, None, None, None) {
                     out.push(hook_integrity_violation(
                         policy.hook_integrity,
                         config_write_message(&found),
@@ -6639,17 +6734,25 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
             .map(|p| p.to_string_lossy().to_lowercase()),
     );
     let scope_of = |path: &str| {
-        let real = real(Path::new(path));
+        // A link the guard cannot follow (a broken one, which git creates
+        // the file behind) is not shown to be a repository's own file.
+        // Any other failure (a `.git` file in place of a directory, where
+        // git cannot write either) is judged by the path as written.
+        let real = match super::edit_guard::normalized(Path::new(path), true) {
+            Ok(real) => real,
+            Err(_)
+                if std::fs::symlink_metadata(path)
+                    .is_ok_and(|meta| meta.file_type().is_symlink()) =>
+            {
+                return FileScope::Other;
+            }
+            Err(_) => PathBuf::from(lexical(path)),
+        };
         let is_user = user.contains(&lexical(path).to_lowercase())
-            || real
-                .as_ref()
-                .is_some_and(|r| user.contains(&r.to_string_lossy().to_lowercase()));
+            || user.contains(&real.to_string_lossy().to_lowercase());
         if is_user {
             FileScope::User
-        } else if repository_config_file(
-            &real.unwrap_or_else(|| PathBuf::from(lexical(path))),
-            true,
-        ) {
+        } else if repository_config_file(&real, true) {
             FileScope::Repository
         } else {
             FileScope::Other
@@ -6705,13 +6808,10 @@ fn lexical(text: &str) -> String {
     }
 }
 
-/// A path through its symbolic links: the file itself, else its directory
-/// with the name added.
+/// A path through its symbolic links, one component at a time, with a
+/// missing remainder kept as written; `None` when a link cannot be followed.
 fn real(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok().or_else(|| {
-        let parent = std::fs::canonicalize(path.parent()?).ok()?;
-        Some(parent.join(path.file_name()?))
-    })
+    super::edit_guard::normalized(path, true).ok()
 }
 
 /// Whether `path` is a repository's own configuration, which git reads only
@@ -6762,6 +6862,51 @@ enum ConfigPlace {
     UserOrSystem,
     /// A file outside a repository's own configuration, by its spelling.
     File(String),
+    /// The repository configuration a default, `--local` or `--worktree`
+    /// write opens, which leads through a symbolic link to the second file
+    /// (review round twelve).
+    Linked(String, String),
+    /// The repository configuration of a call whose repository the guard
+    /// cannot locate, and why.
+    Unlocated(String),
+}
+
+/// The repository configuration a `git config` write with no `--file`,
+/// `--blob`, `--global` or `--system` opens: the `config` file of the git
+/// directory it selects, which is the common directory's, and with
+/// `--worktree` also the `config.worktree` of the worktree's own git
+/// directory. `targets` are the places [`compose_targets`] read from `-C`,
+/// `--git-dir` and `GIT_DIR`, relative to `cwd`; a git directory named
+/// outright that the guard cannot open is judged by its path, and a
+/// directory outside any repository opens nothing, since git refuses the
+/// write there.
+fn local_config_files(targets: &[Option<TargetSpec>], cwd: &Path, worktree: bool) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for spec in targets {
+        let (path, git_dir) = spec.as_ref().map_or((cwd.to_path_buf(), false), |s| {
+            (cwd.join(&s.path), s.git_dir)
+        });
+        let repo = if git_dir {
+            git2::Repository::open_ext(
+                &path,
+                git2::RepositoryOpenFlags::NO_SEARCH,
+                std::iter::empty::<&std::ffi::OsStr>(),
+            )
+        } else {
+            git2::Repository::discover(&path)
+        };
+        let (own, common) = match repo {
+            Ok(repo) => (repo.path().to_path_buf(), repo.commondir().to_path_buf()),
+            Err(_) if git_dir => (path.clone(), path),
+            Err(_) => continue,
+        };
+        files.push(common.join("config"));
+        if worktree {
+            files.push(own.join("config.worktree"));
+        }
+    }
+    files.dedup();
+    files
 }
 
 /// What [`config_writes_code_key`] found: the key, the section a rename
@@ -6807,12 +6952,18 @@ fn git_config_variable(moved: &Moves<'_>, inherited: Option<String>) -> Option<S
 /// later, or one the guard does not know, refuses there (review round ten);
 /// git reads its system file under any install prefix and the files a
 /// configuration includes, so only a repository's own file is known to be
-/// read for that repository alone (review round eleven). `variable` is the
-/// file `GIT_CONFIG` names ([`git_config_variable`]).
+/// read for that repository alone (review round eleven). A default,
+/// `--local` or `--worktree` write is judged by the file it opens, which
+/// `local` resolves ([`local_config_files`]) only once the setting is known
+/// to need it: git follows a symbolic link there, so a repository whose
+/// `config` links to the user's file takes the setting for every repository
+/// (review round twelve). `variable` is the file `GIT_CONFIG` names
+/// ([`git_config_variable`]).
 fn config_writes_code_key(
     rest: &[String],
     dirs: Option<&[PathBuf]>,
     variable: Option<&str>,
+    local: Option<&dyn Fn() -> Result<Vec<PathBuf>, String>>,
 ) -> Option<ConfigWrite> {
     let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
     let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
@@ -6846,40 +6997,70 @@ fn config_writes_code_key(
     if let Some(blob) = blobs.first().filter(|_| place.is_none()) {
         place = Some(ConfigPlace::File((*blob).to_string()));
     }
-    let place = place?;
     let subcommand = parsed.operands.first().copied().filter(|word| {
         matches!(
             *word,
             "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
         )
     });
-    let write = |found: &str, value: &str, kind: Option<ConfigKind>| ConfigWrite {
+    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    // What the write sets that is not known to run nothing: an edit, a
+    // section renamed into one whose keys run code (`harmless` to `alias`),
+    // or a key. Unsets and removals set nothing.
+    let (found, value, kind) =
+        if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
+            ("--edit", "", None)
+        } else if any_long(&["--rename-section"]) || subcommand == Some("rename-section") {
+            let new = operands
+                .get(1)
+                .filter(|new| !git::config_section_is_safe(new))?;
+            (*new, "", None)
+        } else if any_long(&["--unset", "--unset-all", "--remove-section"])
+            || matches!(subcommand, Some("unset" | "remove-section"))
+        {
+            return None;
+        } else {
+            let key = operands.first()?;
+            let value = operands.get(1).copied().unwrap_or_default();
+            let kind = git::config_kind(key, value);
+            if kind == ConfigKind::Safe {
+                return None;
+            }
+            (*key, value, Some(kind))
+        };
+    // A default, `--local` or `--worktree` write opens the repository's own
+    // file, and git follows a symbolic link there: judged through it, the
+    // file may be the user's or another one every repository reads (review
+    // round twelve). It is read only for a setting that can run code.
+    let repository_scope =
+        files.is_empty() && blobs.is_empty() && !any_long(&["--global", "--system"]);
+    if place.is_none() && repository_scope {
+        place = match local.map(|resolve| resolve()) {
+            Some(Ok(paths)) => paths.iter().find_map(|path| {
+                let text = path.to_string_lossy();
+                (config_file_scope(&text, None) != FileScope::Repository).then(|| {
+                    let link = std::fs::symlink_metadata(path)
+                        .is_ok_and(|meta| meta.file_type().is_symlink());
+                    if !link {
+                        return ConfigPlace::File(text.into_owned());
+                    }
+                    let real = real(path).map_or_else(
+                        || "a link the guard cannot follow".to_string(),
+                        |real| format!("`{}`", real.display()),
+                    );
+                    ConfigPlace::Linked(text.into_owned(), real)
+                })
+            }),
+            Some(Err(why)) => Some(ConfigPlace::Unlocated(why)),
+            None => None,
+        };
+    }
+    Some(ConfigWrite {
         found: found.to_string(),
         value: value.to_string(),
         kind,
-        place: place.clone(),
-    };
-    if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
-        return Some(write("--edit", "", None));
-    }
-    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
-    // A section renamed into one whose keys run code (`harmless` to
-    // `alias`) makes every key it holds one of them.
-    if any_long(&["--rename-section"]) || subcommand == Some("rename-section") {
-        return operands
-            .get(1)
-            .filter(|new| !git::config_section_is_safe(new))
-            .map(|new| write(new, "", None));
-    }
-    if any_long(&["--unset", "--unset-all", "--remove-section"])
-        || matches!(subcommand, Some("unset" | "remove-section"))
-    {
-        return None;
-    }
-    let key = operands.first()?;
-    let value = operands.get(1).copied().unwrap_or_default();
-    let kind = git::config_kind(key, value);
-    (kind != ConfigKind::Safe).then(|| write(key, value, Some(kind)))
+        place: place?,
+    })
 }
 
 /// Why a write that [`config_writes_code_key`] found refuses, built from
@@ -6891,6 +7072,21 @@ fn config_write_message(write: &ConfigWrite) -> String {
         ConfigPlace::File(file) => format!(
             "`{file}`, which is not a repository's own configuration and may be one git reads for every repository (another install's system file, an included file, or one `GIT_CONFIG_GLOBAL` names)"
         ),
+        ConfigPlace::Linked(file, real) => format!(
+            "`{file}`, the repository configuration it opens, which is a symbolic link to {real}, not a repository's own configuration, so git writes the setting where every repository may read it"
+        ),
+        ConfigPlace::Unlocated(why) => format!(
+            "the configuration of a repository the guard cannot locate ({why}), which may be a symbolic link to a file every repository reads"
+        ),
+    };
+    let remedy = match &write.place {
+        ConfigPlace::Linked(..) => {
+            "Replace the link with the repository's own file, or ask the operator to set it"
+        }
+        ConfigPlace::Unlocated(_) => {
+            "Run it with the repository named literally (`git -C <path>`), or ask the operator to set it"
+        }
+        _ => "Set it with `--local` for this repository, or ask the operator to set it",
     };
     let ConfigWrite {
         found, value, kind, ..
@@ -6915,7 +7111,7 @@ fn config_write_message(write: &ConfigWrite) -> String {
             "`git config` would set `{found}` to `{value}` in {place}; the guard does not know that setting to run nothing, and such a setting can make a later git command run a program the guards never see"
         ),
     };
-    format!("{why}. Set it with `--local` for this repository, or ask the operator to set it")
+    format!("{why}. {remedy}")
 }
 
 /// Does this `git config` invocation only read? A get, list or single-name
@@ -10327,6 +10523,7 @@ mod tests {
         assert!(!has_rule(&v, "git.hook_integrity"), "{v:?}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn config_files_outside_a_repository_refuse_keys_not_known_safe() {
         // Review round eleven: git reads its system file under the prefix it
@@ -10424,6 +10621,150 @@ mod tests {
         assert!(
             text.contains("`/opt/homebrew/etc/gitconfig`")
                 && text.contains("runs that value as a program"),
+            "{text}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::too_many_lines)] // One fixture tree serves every shape the round found.
+    fn repository_scope_writes_are_judged_by_the_file_git_opens() {
+        // Review round twelve: a default, `--local` or `--worktree` write
+        // opens the selected git directory's configuration, and git follows
+        // a symbolic link there. The links point at a file in the temporary
+        // directory; nothing is written, only the verdict is read.
+        let p = default_policy();
+        let temp = tempfile::tempdir().unwrap();
+        let temp_path = std::fs::canonicalize(temp.path()).unwrap();
+        let system = temp_path.join("etc-elsewhere").join("gitconfig");
+        std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+        std::fs::write(&system, "").unwrap();
+        let git_dir = |dir: &Path, link: bool| {
+            std::fs::create_dir_all(dir.join("objects")).unwrap();
+            std::fs::create_dir_all(dir.join("refs").join("heads")).unwrap();
+            std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            if link {
+                std::os::unix::fs::symlink(&system, dir.join("config")).unwrap();
+            } else {
+                std::fs::write(dir.join("config"), "[core]\n").unwrap();
+            }
+        };
+        let repo = temp_path.join("repo");
+        git_dir(&repo.join(".git"), false);
+        let modules = repo.join(".git").join("modules");
+        git_dir(&modules.join("sub2"), true);
+        std::fs::create_dir_all(modules.join("sub3").join("objects")).unwrap();
+        let other = temp_path.join("other");
+        git_dir(&other.join(".git"), false);
+        std::os::unix::fs::symlink(&system, other.join(".git").join("config.worktree")).unwrap();
+        let bare = temp_path.join("gd");
+        git_dir(&bare, true);
+        let bare2 = temp_path.join("gd2");
+        std::fs::create_dir_all(bare2.join("objects")).unwrap();
+        std::fs::write(bare2.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let linked = temp_path.join("linked");
+        git_dir(&linked.join(".git"), true);
+        // A linked worktree, whose `.git` is a file naming its git directory.
+        let worktree = temp_path.join("wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git").display()),
+        )
+        .unwrap();
+        let broken = temp_path.join("broken");
+        git_dir(&broken.join(".git"), false);
+        std::fs::remove_file(broken.join(".git").join("config")).unwrap();
+        std::os::unix::fs::symlink(temp_path.join("absent"), broken.join(".git").join("config"))
+            .unwrap();
+        let at =
+            |cmd: &str, cwd: &Path| evaluate_report_at(cmd, &ctx(&p, "feat/x"), cwd).violations;
+        let (s, t) = (system.display(), temp_path.display());
+        for (cmd, cwd) in [
+            (format!("ln -s {s} .git/modules/sub3/config"), &repo),
+            (format!("ln -s {t}/config .git/modules/sub3/"), &repo),
+            (format!("ln -sf -t .git/modules/sub3 {t}/config"), &repo),
+            (format!("mv {t}/l .git/modules/sub3/config"), &repo),
+            (
+                "git --git-dir=.git/modules/sub2 config core.fsmonitor ./m".to_string(),
+                &repo,
+            ),
+            (
+                "GIT_DIR=.git/modules/sub2 git config core.sshCommand ./m".to_string(),
+                &repo,
+            ),
+            (format!("ln -s {s} {t}/other/.git/config.worktree"), &repo),
+            (
+                format!("git -C {t}/other config --worktree core.fsmonitor ./m"),
+                &repo,
+            ),
+            (format!("ln -s {s} {t}/gd2/config"), &repo),
+            (
+                format!("GIT_DIR={t}/gd git config core.fsmonitor ./m"),
+                &repo,
+            ),
+            (format!("git --git-dir={t}/gd config core.pager ./m"), &repo),
+            (format!("GIT_DIR={t}/gd3 git config core.pager ./m"), &repo),
+            ("git config core.sshCommand ./m".to_string(), &linked),
+            ("git config --local alias.x '!id'".to_string(), &linked),
+            ("git config set credential.helper ./m".to_string(), &linked),
+            ("git config --edit".to_string(), &linked),
+            (
+                format!("git -C {t}/linked config core.fsmonitor ./m"),
+                &repo,
+            ),
+            ("git config core.pager ./m".to_string(), &broken),
+            (
+                "cd \"$D\" && git config core.sshCommand ./m".to_string(),
+                &repo,
+            ),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        for (cmd, cwd) in [
+            (
+                "git config --file .git/config alias.co checkout".to_string(),
+                &repo,
+            ),
+            (
+                format!("git --git-dir={t}/repo/.git config alias.co checkout"),
+                &repo,
+            ),
+            ("git config core.pager cat".to_string(), &repo),
+            (
+                "git config --file .git/config alias.co checkout".to_string(),
+                &worktree,
+            ),
+            ("git config --worktree alias.co checkout".to_string(), &repo),
+            ("git config user.name Ada".to_string(), &linked),
+            ("git config core.fsmonitor true".to_string(), &linked),
+            ("git config --unset core.sshCommand".to_string(), &linked),
+            ("git config core.sshCommand".to_string(), &linked),
+            ("ln -s README.md docs-link".to_string(), &repo),
+            (format!("cp .git/modules/sub2/config {t}/backup"), &repo),
+            ("cd \"$D\" && git config user.name Ada".to_string(), &repo),
+        ] {
+            let v = at(&cmd, cwd);
+            assert!(
+                !has_rule(&v, "git.hook_integrity"),
+                "{cmd} in {cwd:?}: {v:?}"
+            );
+        }
+        // The refusal names the link and where it leads.
+        let v = at("git config core.sshCommand ./m", &linked);
+        let text = &v
+            .iter()
+            .find(|v| v.rule == "git.hook_integrity")
+            .unwrap()
+            .message;
+        assert!(
+            text.contains("symbolic link to")
+                && text.contains(&system.display().to_string())
+                && text.contains("Replace the link"),
             "{text}"
         );
     }

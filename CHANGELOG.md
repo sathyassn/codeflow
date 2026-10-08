@@ -401,7 +401,8 @@ erratum below, never an edit of the section.
   not known to run nothing, so a key that runs a program refuses even when
   no list names it; a `--file` that is not a repository's own
   configuration, such as Homebrew's `/opt/homebrew/etc/gitconfig`, counts
-  as that scope. Every guard now skips the git global options that take
+  as that scope, and so does a repository's own file that is a symbolic
+  link to another file, since git writes through the link. Every guard now skips the git global options that take
   the next word as a value, so `git --config-env color.ui=C log` is read as
   `git log` and a push behind `--attr-source` or `--shallow-file` is judged
   (issue 120). A new doctor check, `startup-files`, reports a
