@@ -71,14 +71,29 @@ fn succeeds(out: &Output) {
 
 #[cfg(unix)]
 fn review_tool(bin: &Path, branch: &str, sha: &str, reviewed: bool) {
+    review_tool_with(bin, branch, sha, sha, reviewed, "owner", "project", false);
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn review_tool_with(
+    bin: &Path,
+    branch: &str,
+    tip: &str,
+    revision: &str,
+    reviewed: bool,
+    owner: &str,
+    name: &str,
+    cross: bool,
+) {
     use std::os::unix::fs::PermissionsExt;
     let body = if reviewed {
-        format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {sha} | approved |\n")
+        format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {revision} | approved |\n")
     } else {
         "## Reviews\nNone: pending".into()
     };
-    let json = serde_json::json!({"headRefName":branch,"headRefOid":sha,"isCrossRepository":false,"headRepository":{"nameWithOwner":"owner/project"},"body":body}).to_string();
-    let script = format!("#!/bin/sh\ncat <<'PAYLOAD'\n{json}\nPAYLOAD\n");
+    let json = serde_json::json!({"headRefName":branch,"headRefOid":tip,"isCrossRepository":cross,"headRepository":{"id":"R_test","name":name},"headRepositoryOwner":{"login":owner},"body":body}).to_string();
+    let script = format!("#!/bin/sh\n[ \"$4\" = --repo ] && [ \"$5\" = github.com/owner/project ] || exit 1\ncat <<'PAYLOAD'\n{json}\nPAYLOAD\n");
     write(bin, "gh", &script);
     std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
@@ -186,7 +201,11 @@ fn review_lookup_binds_repository_and_bounds_descendant_stdout() {
     review_tool(bin.path(), branch, &pin, true);
     let script = bin.path().join("gh");
     let original = std::fs::read_to_string(&script).unwrap();
-    std::fs::write(&script, original.replace("owner/project", "other/project")).unwrap();
+    std::fs::write(
+        &script,
+        original.replace("\"login\":\"owner\"", "\"login\":\"other\""),
+    )
+    .unwrap();
     let out = cli(
         root,
         &["work", "start", "TSK-002", "--on", &on],
@@ -616,7 +635,7 @@ fn a_conflicting_remote_arriving_between_pin_lookups_is_refused() {
         let pin = git(root, &["rev-parse", "HEAD"]);
         pins.push(pin.clone());
         let body = format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {pin} | approved |\n");
-        let json = serde_json::json!({"headRefName":branch,"headRefOid":pin,"isCrossRepository":false,"headRepository":{"nameWithOwner":"owner/project"},"body":body}).to_string();
+        let json = serde_json::json!({"headRefName":branch,"headRefOid":pin,"isCrossRepository":false,"headRepository":{"id":"R_test","name":"project"},"headRepositoryOwner":{"login":"owner"},"body":body}).to_string();
         cases.push((branch, json));
     }
     // The first predecessor's lookup fetches a fork's copy of the second.
@@ -762,21 +781,436 @@ fn tsk189_start_prefers_fetched_line_without_local_upstream() {
     );
 }
 
-/// A fake `gh` whose pull request for `branch` has `head` as its tip and a
-/// Reviews row approving `named`.
 #[cfg(unix)]
-fn review_tool_naming(bin: &Path, branch: &str, head: &str, named: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    let body = format!(
-        "## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | {named} | approved |\n"
+fn stacked_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-work";
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
     );
-    let json = serde_json::json!({"headRefName":branch,"headRefOid":head,"isCrossRepository":false,"headRepository":{"nameWithOwner":"owner/project"},"body":body}).to_string();
+    git(
+        root,
+        &["config", &format!("branch.{branch}.remote"), "review"],
+    );
+    git(root, &["switch", "-qc", branch]);
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: predecessor"]);
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    (dir, tempfile::tempdir().unwrap(), reviewed)
+}
+
+#[cfg(unix)]
+fn start_stack(root: &Path, bin: &Path, tip: &str) -> Output {
+    git(root, &["switch", "-qc", "task/TSK-002-child"]);
+    cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-002",
+            "--on",
+            &format!("TSK-001@{tip}"),
+        ],
+        Some(bin),
+    )
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk250_real_repository_identity_accepts_and_refuses_mismatches() {
+    for (owner, name, cross, branch, tip_matches) in [
+        ("owner", "project", false, "task/TSK-001-work", true),
+        ("Owner", "Project", false, "task/TSK-001-work", true),
+        ("other", "project", false, "task/TSK-001-work", true),
+        ("owner", "other", false, "task/TSK-001-work", true),
+        ("owner", "project", true, "task/TSK-001-work", true),
+        ("owner", "project", false, "task/TSK-001-other", true),
+        ("owner", "project", false, "task/TSK-001-work", false),
+    ] {
+        let (dir, bin, reviewed) = stacked_fixture();
+        let tip = if tip_matches {
+            reviewed.as_str()
+        } else {
+            "0000000000000000000000000000000000000000"
+        };
+        review_tool_with(bin.path(), branch, tip, &reviewed, true, owner, name, cross);
+        let out = start_stack(dir.path(), bin.path(), &reviewed);
+        if owner.eq_ignore_ascii_case("owner")
+            && name.eq_ignore_ascii_case("project")
+            && !cross
+            && branch == "task/TSK-001-work"
+            && tip_matches
+        {
+            succeeds(&out);
+        } else {
+            assert!(!out.status.success());
+            let error = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                error.contains("identity or tip differs") && error.contains(&reviewed),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk250_record_only_commits_accept_the_reviewed_ancestor() {
+    for case in ["full", "abbreviated", "merge"] {
+        let (dir, bin, _) = stacked_fixture();
+        let root = dir.path();
+        // Use the supported nested layout to prove the path comes from the graph.
+        std::fs::create_dir_all(root.join("project-management/epics/EPC-001/tasks")).unwrap();
+        git(
+            root,
+            &[
+                "mv",
+                "project-management/tasks/TSK-001.md",
+                "project-management/epics/EPC-001/tasks/TSK-001.md",
+            ],
+        );
+        git(root, &["commit", "-qm", "docs: name predecessor record"]);
+        let reviewed = git(root, &["rev-parse", "HEAD"]);
+        if case == "abbreviated" {
+            // A ref with the same name must not redirect the hash lookup.
+            git(root, &["branch", &reviewed[..9], "main"]);
+        }
+        if case == "merge" {
+            git(root, &["switch", "-qc", "experiment/record"]);
+        }
+        for round in 1..=2 {
+            write(
+                root,
+                "project-management/epics/EPC-001/tasks/TSK-001.md",
+                &format!(
+                    "{}\n## Closeout\nCloseout {round}.\n",
+                    record("TSK-001", "[]")
+                ),
+            );
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "docs: record acceptance"]);
+        }
+        if case == "merge" {
+            git(root, &["switch", "-q", "task/TSK-001-work"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-qm",
+                    "docs: merge acceptance",
+                    "experiment/record",
+                ],
+            );
+        }
+        let tip = git(root, &["rev-parse", "HEAD"]);
+        let revision = if case == "abbreviated" {
+            &reviewed[..9]
+        } else {
+            &reviewed
+        };
+        review_tool_with(
+            bin.path(),
+            "task/TSK-001-work",
+            &tip,
+            revision,
+            true,
+            "owner",
+            "project",
+            false,
+        );
+        let out = start_stack(root, bin.path(), &tip);
+        if case == "merge" {
+            // A merge after the review carries no ancestor review: the
+            // predecessor's binding (R-60) refuses a merge unless it is a
+            // clean re-merge of its target, which changes more than the
+            // record, so this check refuses it too (R-42).
+            assert!(!out.status.success(), "accepted a merged span");
+            let error = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                error.contains("no review names") && error.contains(&reviewed),
+                "{error}"
+            );
+        } else {
+            succeeds(&out);
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk250_other_changes_reverts_and_non_ancestors_are_refused() {
+    for case in [
+        "source",
+        "other-record",
+        "revert",
+        "non-ancestor",
+        "merge-revert",
+    ] {
+        let (dir, bin, reviewed) = stacked_fixture();
+        let root = dir.path();
+        let mut review = reviewed.clone();
+        if case == "non-ancestor" {
+            git(root, &["switch", "-qc", "experiment/unrelated", "main"]);
+            git(root, &["commit", "--allow-empty", "-qm", "feat: unrelated"]);
+            review = git(root, &["rev-parse", "HEAD"]);
+            git(root, &["switch", "-q", "task/TSK-001-work"]);
+        } else {
+            if case == "merge-revert" {
+                git(root, &["switch", "-qc", "experiment/side"]);
+            }
+            let path = if case == "other-record" {
+                "project-management/tasks/TSK-002.md"
+            } else {
+                "src/a.rs"
+            };
+            let original = std::fs::read_to_string(root.join(path)).unwrap();
+            write(root, path, &format!("{original}\nChanged.\n"));
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "feat: unreviewed change"]);
+            if case == "revert" || case == "merge-revert" {
+                write(root, path, &original);
+                git(root, &["add", "."]);
+                git(root, &["commit", "-qm", "fix: undo change"]);
+            }
+            if case == "merge-revert" {
+                git(root, &["switch", "-q", "task/TSK-001-work"]);
+                git(
+                    root,
+                    &[
+                        "merge",
+                        "--no-ff",
+                        "-qm",
+                        "feat: merge side",
+                        "experiment/side",
+                    ],
+                );
+            }
+        }
+        write(
+            root,
+            "project-management/tasks/TSK-001.md",
+            &format!("{}\n## Closeout\nCloseout.\n", record("TSK-001", "[]")),
+        );
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "docs: record acceptance"]);
+        let tip = git(root, &["rev-parse", "HEAD"]);
+        review_tool_with(
+            bin.path(),
+            "task/TSK-001-work",
+            &tip,
+            &review,
+            true,
+            "owner",
+            "project",
+            false,
+        );
+        let out = start_stack(root, bin.path(), &tip);
+        assert!(!out.status.success(), "accepted {case}");
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(error.contains(&review), "{case}: {error}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk250_a_graft_cannot_hide_a_reverted_change_from_the_pin_review() {
+    for graft in [false, true] {
+        let (dir, bin, reviewed) = stacked_fixture();
+        let root = dir.path();
+        write(root, "src/a.rs", "pub fn a() {}\nChanged.\n");
+        git(root, &["commit", "-qam", "feat: unreviewed change"]);
+        write(root, "src/a.rs", "pub fn a() {}\n");
+        git(root, &["commit", "-qam", "fix: undo change"]);
+        write(
+            root,
+            "project-management/tasks/TSK-001.md",
+            &format!("{}\n## Closeout\nCloseout.\n", record("TSK-001", "[]")),
+        );
+        git(root, &["commit", "-qam", "docs: record acceptance"]);
+        let tip = git(root, &["rev-parse", "HEAD"]);
+        let grafts = root.join(".git/info/grafts");
+        if graft {
+            // libgit2 reads the tip's parent as the reviewed commit, so
+            // the span looks like one status-and-Closeout commit.
+            std::fs::create_dir_all(grafts.parent().unwrap()).unwrap();
+            std::fs::write(&grafts, format!("{tip} {reviewed}\n")).unwrap();
+        }
+        review_tool_with(
+            bin.path(),
+            "task/TSK-001-work",
+            &tip,
+            &reviewed,
+            true,
+            "owner",
+            "project",
+            false,
+        );
+        let out = start_stack(root, bin.path(), &tip);
+        assert!(
+            !out.status.success(),
+            "accepted the revert span, graft {graft}"
+        );
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(error.contains(&reviewed), "{error}");
+        if graft {
+            assert!(
+                error.contains("graft file") && error.contains("info/grafts"),
+                "{error}"
+            );
+        }
+    }
+}
+
+/// Two incomplete code dependencies whose two branch names share one tip, a
+/// review of an ancestor, and one later commit that changes only TSK-001's
+/// record. The span covers TSK-001's pin and not TSK-002's, because each pin
+/// judges its own record path. `work next` shares its review answers across
+/// waiting tasks, so the answer for the first branch must not stand for the
+/// second, and `work start --on` must refuse the second pin as well.
+#[test]
+#[cfg(unix)]
+fn tsk250_next_judges_each_pins_own_record_on_a_shared_tip() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
     write(
-        bin,
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[]"),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[TSK-001]"),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-004.md",
+        &record("TSK-004", "[TSK-002]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan dependents"]);
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: build the predecessors"]);
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &format!("{}\n## Closeout\nDone.\n", record("TSK-001", "[]")),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record acceptance"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["branch", "task/TSK-002-work", &tip]);
+    for branch in ["task/TSK-001-work", "task/TSK-002-work"] {
+        git(
+            root,
+            &["config", &format!("branch.{branch}.remote"), "review"],
+        );
+    }
+    let mut scripts = Vec::new();
+    for branch in ["task/TSK-001-work", "task/TSK-002-work"] {
+        review_tool_naming(bin.path(), branch, &tip, &reviewed);
+        let script = std::fs::read_to_string(bin.path().join("gh")).unwrap();
+        scripts.push(format!(
+            "{branch})\n{};;\n",
+            script.trim_start_matches("#!/bin/sh\n")
+        ));
+    }
+    let scripts = scripts.join("");
+    write(
+        bin.path(),
+        "gh",
+        &format!("#!/bin/sh\ncase \"$3\" in\n{scripts}esac\n"),
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            bin.path().join("gh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    git(root, &["switch", "-q", "main"]);
+    let out = cli(root, &["work", "next"], Some(bin.path()));
+    succeeds(&out);
+    let listing = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        listing.contains(&format!("startable on TSK-001@{tip}")),
+        "the span covers TSK-001's own record: {listing}"
+    );
+    assert!(
+        !listing.contains(&format!("TSK-002@{tip}")),
+        "work next reported TSK-002's pin as covered: {listing}"
+    );
+    git(root, &["switch", "-qc", "task/TSK-004-child"]);
+    let out = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-004",
+            "--on",
+            &format!("TSK-002@{tip}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("no review names"), "{}", text(&out));
+}
+
+#[test]
+#[cfg(unix)]
+fn tsk250_live_review_table_accepts_record_only_tip() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, bin, reviewed) = stacked_fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &format!("{}\n## Closeout\nCloseout.\n", record("TSK-001", "[]")),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record acceptance"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    let body = format!("## Reviews\n| Reviewer | Verdict |\n|---|---|\n| peer | approve at {} (round 19), nit fixed and confirmed in round 20 |\n", &reviewed[..9]);
+    let json = serde_json::json!({"headRefName":"task/TSK-001-work","headRefOid":tip,"isCrossRepository":false,"headRepository":{"id":"R_test","name":"project"},"headRepositoryOwner":{"login":"owner"},"body":body});
+    write(
+        bin.path(),
         "gh",
         &format!("#!/bin/sh\ncat <<'PAYLOAD'\n{json}\nPAYLOAD\n"),
     );
-    std::fs::set_permissions(bin.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        bin.path().join("gh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    succeeds(&start_stack(root, bin.path(), &tip));
+}
+
+/// A fake `gh` whose pull request for `branch` has `head` as its tip and a
+/// Reviews row approving `named`, in the payload shape gh really returns.
+#[cfg(unix)]
+fn review_tool_naming(bin: &Path, branch: &str, head: &str, named: &str) {
+    review_tool_with(bin, branch, head, named, true, "owner", "project", false);
 }
 
 /// TSK-001's own pull request on `branch`, as issue #69 found it: the
@@ -1434,4 +1868,135 @@ fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
     let shown = text(&out);
     assert!(!out.status.success(), "the name passed:\n{shown}");
     assert!(shown.contains("not UTF-8"), "{shown}");
+}
+
+/// TSK-250 merged with TSK-234: a commit after the review that changes
+/// only the predecessor's own record still needs a new review when it
+/// changes anything in that record but its status and Closeout, such as
+/// its criteria, in a commit of its own or brought in by a record-only
+/// merge. `work start --on` refuses naming the reviewed revision.
+#[test]
+#[cfg(unix)]
+fn tsk250_record_changes_beyond_status_and_closeout_need_a_new_review() {
+    for case in ["criteria", "merged-criteria"] {
+        let (dir, bin, reviewed) = stacked_fixture();
+        let root = dir.path();
+        if case == "merged-criteria" {
+            git(root, &["switch", "-qc", "experiment/record"]);
+        }
+        write(
+            root,
+            "project-management/tasks/TSK-001.md",
+            &format!(
+                "{}- AC-2 When rerun, the command shall still succeed.\n\n## Closeout\nCloseout.\n",
+                record("TSK-001", "[]")
+            ),
+        );
+        git(root, &["add", "."]);
+        git(
+            root,
+            &["commit", "-qm", "docs: change criteria after review"],
+        );
+        if case == "merged-criteria" {
+            git(root, &["switch", "-q", "task/TSK-001-work"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-qm",
+                    "docs: merge the record",
+                    "experiment/record",
+                ],
+            );
+        }
+        let tip = git(root, &["rev-parse", "HEAD"]);
+        review_tool_naming(bin.path(), "task/TSK-001-work", &tip, &reviewed);
+        let out = start_stack(root, bin.path(), &tip);
+        assert!(!out.status.success(), "accepted {case}: {}", text(&out));
+        for needle in ["no review names", reviewed.as_str()] {
+            assert!(
+                text(&out).contains(needle),
+                "{case}: {needle}: {}",
+                text(&out)
+            );
+        }
+    }
+}
+
+/// TSK-250 merged with TSK-234: `work claim --on` and a push of the
+/// stacked branch share one review lookup, so the review rows TSK-250
+/// reads (a two-column prose verdict with an abbreviated revision, as on
+/// PR 57) also honour the pin at push time, where TSK-234 judges the
+/// commits up to it as the predecessor's own pull request. A completion
+/// that arrives by a merge after the reviewed commit is refused at the
+/// claim, naming the reviewed revision: the predecessor's binding refuses a
+/// merge unless it is a clean re-merge of its target, which changes more
+/// than the record, so this check refuses it too.
+#[test]
+#[cfg(unix)]
+fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_is_refused_at_claim() {
+    use std::os::unix::fs::PermissionsExt;
+    for merged in [false, true] {
+        let dir = fixture();
+        let root = dir.path();
+        let bin = tempfile::tempdir().unwrap();
+        let branch = "task/TSK-001-work";
+        let (reviewed, mut pin) = reviewed_predecessor(root, branch);
+        if merged {
+            git(root, &["branch", "experiment/completion", &pin]);
+            git(root, &["switch", "-q", "-C", branch, &reviewed]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-qm",
+                    "docs: merge the completion",
+                    "experiment/completion",
+                ],
+            );
+            pin = git(root, &["rev-parse", "HEAD"]);
+            git(root, &["switch", "-q", "main"]);
+        }
+        let body = format!(
+            "## Reviews\n| Reviewer | Verdict |\n|---|---|\n| peer | approve at {} (round 2) |\n",
+            &reviewed[..9]
+        );
+        let json = serde_json::json!({"headRefName":branch,"headRefOid":pin,"isCrossRepository":false,"headRepository":{"id":"R_test","name":"project"},"headRepositoryOwner":{"login":"owner"},"body":body});
+        write(
+            bin.path(),
+            "gh",
+            &format!("#!/bin/sh\n[ \"$4\" = --repo ] && [ \"$5\" = github.com/owner/project ] || exit 1\ncat <<'PAYLOAD'\n{json}\nPAYLOAD\n"),
+        );
+        std::fs::set_permissions(
+            bin.path().join("gh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let on = format!("TSK-001@{pin}");
+        let claim = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        if merged {
+            assert!(!claim.status.success(), "{}", text(&claim));
+            assert!(
+                text(&claim).contains("no review names") && text(&claim).contains(&reviewed[..9]),
+                "{}",
+                text(&claim)
+            );
+            continue;
+        }
+        succeeds(&claim);
+        let child = "task/TSK-002-work-tsk-002";
+        let check = push_check(root, child, child, bin.path());
+        assert!(check.status.success(), "{}", text(&check));
+        assert!(
+            text(&check).contains("stacks on TSK-001's reviewed head"),
+            "{}",
+            text(&check)
+        );
+    }
 }

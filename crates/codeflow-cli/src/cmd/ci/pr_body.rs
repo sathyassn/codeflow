@@ -355,35 +355,76 @@ pub(super) fn find_section(body: &str, name: &str) -> SectionState {
     }
 }
 
-/// A current review row names the exact revision and an approving verdict.
+/// Revisions named by approving rows in the visible Reviews section.
 /// Fences, quotes, examples and HTML comments cannot supply the evidence.
-pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> bool {
+/// A verdict may be `approved` or prose beginning `approve at ...`, as in
+/// the two-column reviewer/verdict table used by completed tasks.
+pub(crate) fn reviewed_revisions(body: &str, heading: &str) -> Vec<String> {
     let outline = sections(body);
     let matching = matching_sections(&outline, heading);
     let [section] = matching.as_slice() else {
-        return false;
+        return Vec::new();
     };
-    rendered_text(section.content(), false, false)
-        .lines()
-        .any(|line| {
-            let cells: Vec<_> = line
-                .split('|')
-                .map(str::trim)
-                .filter(|cell| !cell.is_empty())
-                .collect();
-            cells.len() >= 3
-                && cells.last().is_some_and(|verdict| {
-                    matches!(
-                        verdict.to_ascii_lowercase().as_str(),
-                        "approved" | "approve"
-                    )
+    let mut revisions = Vec::new();
+    for line in rendered_text(section.content(), false, false).lines() {
+        let cells: Vec<_> = line
+            .split('|')
+            .map(str::trim)
+            .filter(|cell| !cell.is_empty())
+            .collect();
+        if cells.len() < 2
+            || !cells.last().is_some_and(|verdict| {
+                verdict.split_whitespace().next().is_some_and(|word| {
+                    matches!(word.to_ascii_lowercase().as_str(), "approved" | "approve")
                 })
-                && cells[1..cells.len() - 1].iter().any(|scope| {
-                    scope
-                        .split(|c: char| !c.is_ascii_hexdigit())
-                        .any(|token| token == sha)
-                })
-        })
+            })
+        {
+            continue;
+        }
+        for cell in &cells[1..] {
+            for token in cell.split(|c: char| !c.is_ascii_hexdigit()) {
+                if (7..=40).contains(&token.len()) && !revisions.iter().any(|r| r == token) {
+                    revisions.push(token.to_string());
+                }
+            }
+        }
+    }
+    revisions
+}
+
+#[cfg(test)]
+mod review_revision_tests {
+    use super::reviewed_revisions;
+
+    #[test]
+    fn approving_tables_accept_exact_scopes_and_prose_verdicts() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let three = format!("## Reviews\n| Reviewer | Scope | Verdict |\n| --- | --- | --- |\n| peer | `{sha}` | approved |\n");
+        assert_eq!(reviewed_revisions(&three, "Reviews"), [sha]);
+        let two = "## Reviews\n| Reviewer | Verdict |\n| --- | --- |\n| peer | approve at 316c7e8f7; nit fixed and confirmed |\n";
+        assert_eq!(reviewed_revisions(two, "Reviews"), ["316c7e8f7"]);
+        assert_eq!(
+            reviewed_revisions(&two.replace("Reviews", "Peer review"), "Peer review"),
+            ["316c7e8f7"]
+        );
+    }
+
+    #[test]
+    fn hidden_duplicate_and_non_approving_rows_supply_no_revision() {
+        let row = "| peer | 316c7e8f7 | approved |";
+        for body in [
+            format!("## Testing\n{row}\n"),
+            format!("## Reviews\n```text\n{row}\n```\n"),
+            format!("## Reviews\n> {row}\n"),
+            format!("## Reviews\n<!-- {row} -->\n"),
+            format!("## Reviews\n{row}\n## Reviews\n{row}\n"),
+            "## Reviews\n| peer | 316c7e8f7 | changes_requested |\n".into(),
+            "## Reviews\n| peer | changes_requested; previously approved 316c7e8f7 |\n".into(),
+            "## Reviews\n| 316c7e8f7 | approved |\n".into(),
+        ] {
+            assert!(reviewed_revisions(&body, "Reviews").is_empty(), "{body}");
+        }
+    }
 }
 
 /// A body over this many words draws the length warning (TSK-228).

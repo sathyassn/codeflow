@@ -102,9 +102,17 @@ each batch.
 - A standalone pull request is its own candidate. It lands on the integration
   line it targets, or, when it targets `main`, it is the pull request the
   operator merges.
-- A later task may build on a predecessor's exact reviewed head before that
-  predecessor lands, named with `--on TSK-NNN@<sha>`. The predecessor still
-  lands first, and a change to it after review means a rebase and a recheck.
+- A later task may build on a predecessor before it lands, named with
+  `--on TSK-NNN@<sha>`. The pin names the predecessor branch tip. Its Reviews
+  section must approve that tip or an ancestor whose later commits change
+  only the predecessor's own task record, and in it only its status and
+  Closeout. Every intervening commit is checked, so a change later reverted
+  still needs a new review, and a merge after the review is refused: the
+  predecessor's own acceptance binding refuses a merge unless it is a clean
+  re-merge of its target, and that re-merge changes more than the record,
+  so this check refuses it too. The
+  predecessor still lands first. Any other post-review change needs a new
+  review, then a rebase and a recheck.
 - Landing has priority: a new build starts only while no landing can proceed.
 
 Only the operator adds process. A rule that adds a pull request, an approval,

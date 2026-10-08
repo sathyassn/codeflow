@@ -1032,7 +1032,7 @@ fn stacked_pins(root: &Path, branch: &str, head: &str) -> Vec<ReviewedPin> {
         &task_id,
         &target.target,
         head,
-        &|branch, sha, named| super::work::review_lookup(root, branch, sha, named),
+        &|branch, sha, covers| super::work::review_lookup(root, branch, sha, covers),
     ) {
         Ok(pins) => {
             for pin in &pins {

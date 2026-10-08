@@ -99,7 +99,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
             &root,
             &entry.task_id,
             &entry.target,
-            &|branch, sha, named| {
+            &|branch, sha, covers| {
                 let repository = repositories
                     .get_or_init(|| {
                         codeflow_core::workgraph::work_start::ReviewRepositories::open(&root)
@@ -107,7 +107,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
                     .as_ref()
                     .map_err(Clone::clone)?
                     .repository(branch)?;
-                reviewed(&root, &repository, branch, sha, named)
+                reviewed(&root, &repository, branch, sha, covers)
             },
         ) {
             let noun = if pins.len() == 1 {
@@ -329,8 +329,8 @@ fn resolve_pins(
     root: &std::path::Path,
     on: &[String],
 ) -> Result<Vec<codeflow_core::workgraph::work_start::ReviewedPin>, String> {
-    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, named| {
-        review_lookup(root, branch, sha, named)
+    codeflow_core::workgraph::work_start::reviewed_pins(root, on, &|branch, sha, covers| {
+        review_lookup(root, branch, sha, covers)
     })
 }
 
@@ -340,39 +340,67 @@ pub(super) fn review_lookup(
     root: &std::path::Path,
     branch: &str,
     sha: &str,
-    named: &dyn Fn() -> Vec<String>,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
 ) -> Result<bool, String> {
     let repository = codeflow_core::workgraph::work_start::review_repository(root, branch)?;
-    reviewed(root, &repository, branch, sha, named)
+    reviewed(root, &repository, branch, sha, covers)
 }
 
 /// Whether the pull request of `branch` in `repository` has `sha` as its
-/// head and an approving review row naming one of `named()`: the head
-/// itself, or a commit the head follows only by the predecessor's status
-/// and Closeout. The names are read only once that pull request is found.
+/// head, from the same owner and repository, and an approving review row
+/// naming a revision that `covers` accepts: the head itself, or a commit
+/// the head follows only by the predecessor's status and Closeout. The
+/// revisions are judged only once that pull request is found.
 fn reviewed(
     root: &std::path::Path,
     repository: &str,
     branch: &str,
     sha: &str,
-    named: &dyn Fn() -> Vec<String>,
+    covers: &codeflow_core::workgraph::work_start::ReviewCovers<'_>,
 ) -> Result<bool, String> {
     let proof = pr_review(root, branch, repository)?;
+    // review_repository returns HOST/OWNER/NAME for gh's --repo argument.
+    // GitHub owner and repository names are case-insensitive, so a remote URL
+    // may differ in case from the API's canonical login and name.
+    let mut parts = repository.rsplit('/');
+    let name = parts.next().unwrap_or_default();
+    let owner = parts.next().unwrap_or_default();
+    if name.is_empty() || owner.is_empty() {
+        return Err("predecessor has no repository identity".into());
+    }
     if proof["headRefName"].as_str() != Some(branch)
         || proof["headRefOid"].as_str() != Some(sha)
         || proof["isCrossRepository"].as_bool() != Some(false)
-        || proof["headRepository"]["nameWithOwner"].as_str()
-            != repository.split_once('/').map(|(_, repo)| repo)
+        || !proof["headRepository"]["name"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(name))
+        || !proof["headRepositoryOwner"]["login"]
+            .as_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case(owner))
     {
-        return Err("predecessor PR identity or tip differs from the pin; rebase on its new reviewed head and recheck".into());
+        return Err(format!("predecessor PR identity or tip differs from the pin {sha}; rebase on its new reviewed head and recheck"));
     }
     let (policy, _) = Policy::load_effective(root);
     let headings =
         codeflow_core::hooks::adoption::mapped_sections(&policy.git, &["Reviews".into()]);
-    let body = proof["body"].as_str().unwrap_or_default();
-    Ok(named()
-        .iter()
-        .any(|revision| super::ci::pr_body::review_names_revision(body, &headings[0], revision)))
+    let revisions = super::ci::pr_body::reviewed_revisions(
+        proof["body"].as_str().unwrap_or_default(),
+        &headings[0],
+    );
+    for revision in &revisions {
+        if covers(revision).map_err(|error| {
+            format!("cannot verify reviewed revision {revision} for pin {sha}: {error}")
+        })? {
+            return Ok(true);
+        }
+    }
+    if !revisions.is_empty() {
+        return Err(format!(
+            "no review names pin {sha}, or a commit it follows only by the predecessor's status and Closeout; approved revisions {} do not cover it; cannot verify review for this pin",
+            revisions.join(", ")
+        ));
+    }
+    Ok(false)
 }
 
 /// Bound provider lifetime and response size; a regular output file means a
@@ -395,7 +423,7 @@ fn pr_review(
             "--repo",
             repository,
             "--json",
-            "body,headRefName,headRefOid,isCrossRepository,headRepository",
+            "body,headRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner",
         ])
         .current_dir(root)
         .stdin(Stdio::null())
