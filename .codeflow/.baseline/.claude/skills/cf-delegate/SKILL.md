@@ -131,10 +131,11 @@ read [agy notes](resources/agy.md).
 ## Guardrails
 
 - **Every delegate prompt narrows authority and data, not reading.** Name
-  purpose, permitted edits, data, processors, destinations, effects and a
-  step budget on edits and run time; a seat that outruns it says so and
-  keeps going; ambiguity blocks; never guess. Send only necessary minimized data to an
-  approved processor; route qualification is not data authority. An
+  purpose, the
+  actions/files/resources/data/processors/destinations/effects it allows and
+  a step budget on edits and run time; a seat that outruns it says so and
+  keeps going; ambiguity blocks; never guess. Send only necessary minimized
+  data to an approved processor; route qualification is not data authority. An
   already-authorized scoped handoff needs no new approval; the lead verifies
   effects and claims.
 - **Plain briefs.** Write each delegate prompt plainly: simple,
