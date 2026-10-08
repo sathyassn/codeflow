@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "title": "A prose review",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "summary",
+      "markdown": "The change adds advisory warnings to `present check`."
+    },
+    {
+      "type": "bullets",
+      "id": "points",
+      "items": ["Faults keep exit 9.", "Warnings alone exit 0."]
+    }
+  ]
+}
