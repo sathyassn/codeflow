@@ -282,6 +282,28 @@ impl Class {
     }
 }
 
+/// Whether `text` holds a tilde word that names a home: `~`, `~/x` or `~user`.
+/// A directory-stack word (`~1`, `~+1`, `~-`) does not.
+fn tilde_names_a_home(text: &str) -> bool {
+    text.match_indices('~').any(|(at, _)| {
+        let word_start = text[..at].chars().next_back().is_none_or(|c| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '\'' | '"' | '=' | ':' | ';' | '(' | '|' | '&' | '<' | '>'
+                )
+        });
+        let prefix: String = text[at + 1..]
+            .chars()
+            .take_while(|c| {
+                !(c.is_whitespace()
+                    || matches!(c, '/' | '\'' | '"' | ';' | ')' | '|' | '&' | '<' | '>'))
+            })
+            .collect();
+        word_start && !stack_token(&prefix)
+    })
+}
+
 /// A directory-stack tilde prefix: `+`, `-`, `N`, `+N` or `-N`.
 fn stack_token(prefix: &str) -> bool {
     let digits = prefix.strip_prefix(['+', '-']).unwrap_or(prefix);
@@ -1836,9 +1858,10 @@ fn placing_violation(
         }
     }
     if unknown {
-        let spelled = ["~", "$HOME", "${HOME}", "/etc"]
-            .iter()
-            .any(|marker| line.text.contains(marker))
+        let spelled = tilde_names_a_home(line.text)
+            || ["$HOME", "${HOME}", "/etc"]
+                .iter()
+                .any(|marker| line.text.contains(marker))
             || line
                 .env
                 .home

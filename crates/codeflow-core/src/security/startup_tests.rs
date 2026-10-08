@@ -860,6 +860,8 @@ fn only_a_user_home_path_is_an_unreadable_home() {
         "rm ~-/policy.json",
         "pushd -n review-stack; cd build; cd ~1; cat policy.json",
         "printf x | xargs rm ~+1",
+        "pushd -n review-stack; cd build; cd ~1; printf '%s\\n' policy.json | xargs rm",
+        "cd ~+1; printf '%s\\n' policy.json | xargs rm",
         "R=/scratch; git -C \"$R\" commit -m x",
     ] {
         if refused(&f.judge(command)) {
@@ -872,6 +874,7 @@ fn only_a_user_home_path_is_an_unreadable_home() {
         "cd H/ && echo x >> .zshrc",
         "cd ~root && echo x > .zshrc",
         "tar -xf a.tar -C ~root",
+        "cd ~root; printf '%s\\n' a | xargs rm",
     ] {
         if !refused(&f.judge(command)) {
             wrong.push(format!("allowed: {command}"));
