@@ -259,7 +259,7 @@ catalog! {
     /// A PR body whose Reviews section does not approve the commit the
     /// task's acceptance block binds (issue 121).
     REVIEW_ROW_BINDING = Step::Codeflow("codeflow ci"),
-        "name the reviewed commit in the Reviews row as `whole unit at {sha}` with the verdict of the review that covered the whole unit at that commit, and review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
+        "name the reviewed commit in a Reviews row as `whole unit at {sha}` with the full 40-character commit, for example `| reviewer | whole unit at {sha} | approved |`; the verdict cell is only `approved` or `approve`, so a shorter sha or any further words in that cell do not count; review that commit first when no review covered it; a light range with no review writes `None: <reason>` instead (cf-ship pr-evidence.md, Reviews rows); then rerun `codeflow ci`";
     /// An epic's own acceptance block that does not bind to its review or
     /// whose waiver is no planning amendment the review saw (R-33, R-60).
     EPIC_ACCEPTANCE_BINDING = Step::Edit("{path}"),

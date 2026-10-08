@@ -401,7 +401,7 @@
     ".agents/skills/cf-herdr/scripts/deliver.py": {
       "src": "agents/skills/cf-herdr/scripts/deliver.py",
       "ownership": "managed",
-      "sha256": "320a0907ba2973beabae273497046a837d6d3622de12a80431cb75831a8f0ac3",
+      "sha256": "a3e4e1a7c61c1469b7407c181343e8a7d4ff787cf3b303b3d53097fa4bb5e724",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -419,7 +419,7 @@
     ".agents/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "e936abd6c26ea8b118ac74cf9a7544575a838327a68d9daef586ef73c35119a0",
+      "sha256": "d3d201f82293b4837d125d4448941691f4e22f5b397b8dddba60a4ca6318465f",
       "exec": false
     },
     ".agents/skills/cf-method/references/issue-handling.md": {
@@ -449,7 +449,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "b783a75bae7302972280b1855db005de61888f3dc0918ae28be2853f72665dfc",
+      "sha256": "4b338b9ac110724f885b58ec1b7e9b0b45913ef53870f585c214ec4a7091fc39",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1241,7 +1241,7 @@
     ".claude/skills/cf-herdr/scripts/deliver.py": {
       "src": "agents/skills/cf-herdr/scripts/deliver.py",
       "ownership": "managed",
-      "sha256": "320a0907ba2973beabae273497046a837d6d3622de12a80431cb75831a8f0ac3",
+      "sha256": "a3e4e1a7c61c1469b7407c181343e8a7d4ff787cf3b303b3d53097fa4bb5e724",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
@@ -1259,7 +1259,7 @@
     ".claude/skills/cf-method/references/delivery-process.md": {
       "src": "claude/skills/cf-method/references/delivery-process.md",
       "ownership": "managed",
-      "sha256": "e936abd6c26ea8b118ac74cf9a7544575a838327a68d9daef586ef73c35119a0",
+      "sha256": "d3d201f82293b4837d125d4448941691f4e22f5b397b8dddba60a4ca6318465f",
       "exec": false
     },
     ".claude/skills/cf-method/references/issue-handling.md": {
@@ -1289,7 +1289,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "b783a75bae7302972280b1855db005de61888f3dc0918ae28be2853f72665dfc",
+      "sha256": "4b338b9ac110724f885b58ec1b7e9b0b45913ef53870f585c214ec4a7091fc39",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {

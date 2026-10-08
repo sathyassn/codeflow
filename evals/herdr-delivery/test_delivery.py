@@ -523,6 +523,31 @@ class StubDeliveryTests(unittest.TestCase):
              "Review `git diff HEAD -- crates/codeflow-cli/src/cmd/ci.rs`.\n"),
             ("a log of another range", "Review `git diff 97ede7aa1...c5f54046f` "
              "and `git log f74718e25 c5f54046f`.\n"),
+            # Grok round 4: narrowed briefs that still sent.
+            ("a pathspec after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` -- crates/foo.rs.\n"),
+            ("a path after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` crates/foo.rs.\n"),
+            ("a pathspec on the line after a code span", "Review "
+             "`git diff 97ede7aa1...c5f54046f`\n-- crates/foo.rs\n"),
+            ("a bare directory after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f crates and reply.\n"),
+            ("a bare docs directory after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f docs\n"),
+            ("a global option before diff", "Review `git --no-pager diff "
+             "97ede7aa1...c5f54046f -- crates/foo.rs`.\n"),
+            ("-C before diff", "Run git -C . diff 97ede7aa1...c5f54046f "
+             "-- crates/foo.rs\n"),
+            ("a global option before an unquoted diff", "Run git --no-pager "
+             "diff 97ede7aa1...c5f54046f\n-- crates/foo.rs\n"),
+            ("a blank line before the pathspec", "Run git diff "
+             "97ede7aa1...c5f54046f\n\n-- crates/foo.rs\n"),
+            ("backslash continuations before the pathspec", "Run git diff "
+             "97ede7aa1...c5f54046f \\\n  \\\n  -- crates/foo.rs\n"),
+            ("a diff filter", "Review `git diff --diff-filter=A "
+             "97ede7aa1...c5f54046f`.\n"),
+            ("a diff filter outside a span", "Run git diff --diff-filter=A "
+             "97ede7aa1...c5f54046f\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 6, f"{name}: {done.stdout}{done.stderr}")
@@ -563,6 +588,18 @@ class StubDeliveryTests(unittest.TestCase):
              "Round 1 approved f6f402804; the head is now c5f54046f.\n"),
             ("prose after the command", "Run git diff 97ede7aa1...c5f54046f and "
              "read crates/codeflow-cli/src/cmd/ci.rs.\n"),
+            ("prose after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` and read docs/delivery.md.\n"),
+            ("punctuation after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f`, then docs/delivery.md.\n"),
+            ("prose on the line after a code span", "Review "
+             "`git diff 97ede7aa1...c5f54046f`\n\ndocs/delivery.md has the "
+             "context.\n"),
+            ("a global option with the whole pair", "Review `git --no-pager "
+             "diff --stat 97ede7aa1...c5f54046f`, then `git -C . diff "
+             "-w 97ede7aa1...c5f54046f`.\n"),
+            ("display options", "Run git diff --name-status --no-color "
+             "97ede7aa1...c5f54046f and reply.\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")

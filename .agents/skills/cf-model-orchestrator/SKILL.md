@@ -314,7 +314,7 @@ Before exchanging conclusions, each seat independently returns its findings:
 source and documentation evidence; assumptions verified or still unresolved; edge,
 error and security cases; risks to compatibility, data, UX and operations.
 The host records both outputs without collapsing disagreements. A task inside
-an approved epic does not repeat it.
+an approved epic does not repeat discovery.
 
 ### 2. One plan, challenged once
 

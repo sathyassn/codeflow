@@ -249,8 +249,8 @@ reviewer; another task's criteria are never changed from this PR.
 - Batches stay small and in dependency order, so a red gate drops little.
   A red gate is diagnosed before anything is dropped: a member leaves the
   batch only when evidence attributes the failure to it.
-- The primary inspects each landing merge as "Land in batches" in the skill
-  says: a clean merge does not reopen unit review; a hand-resolved product
+- The primary inspects each landing merge as the skill's batch landing
+  steps say: a clean merge does not reopen unit review; a hand-resolved product
   hunk returns its task to a whole-unit review at the new head.
 - The PR cites the full gate by its run id and revision from its durable
   home, and the review verdict lives on the PR, so the evidence survives the

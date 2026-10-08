@@ -25,9 +25,14 @@ caller's next step.
 
 --review <base>...<head> (a unit review): before anything is sent, the
 brief must name that full range, and every commit range it names (`git
-diff` or `git log` with two commits, or a dotted pair) must be that pair; a
-path or `--` after the pair in a `git diff` narrows it and is refused too.
-A review is one holistic pass over the whole unit at one head.
+diff` or `git log` with two commits, or a dotted pair) must be that pair.
+A `git diff` or `git log` narrowed in any other way is refused too: a path,
+`--` or a bare directory before or after the pair (after the closing
+backtick, on a later line, or past a blank line or backslash), git global
+options before the verb, and any dash option outside the display set
+(`--stat`, `--name-only`, `-U`, `-w` and the like). Prose such as "and read
+<file>" still sends. A review is one holistic pass over the whole unit at
+one head.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
 3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown;
@@ -52,7 +57,10 @@ BUSY = STARTED | {"unknown"}
 SHA = r"[0-9a-f]{7,40}"
 PAIR = re.compile(rf"^({SHA})\.\.\.({SHA})$")
 DOTTED = re.compile(rf"(?<![0-9A-Za-z])({SHA})(\.\.\.?)({SHA})(?![0-9A-Za-z])")
-COMMAND = re.compile(r"\bgit\s+(diff|log)\b")
+COMMAND = re.compile(
+    r"\bgit(?:\s+(?:-[Cc]\s+\S+"
+    r"|--(?:git-dir|work-tree|namespace|super-prefix|config-env|exec-path)\s+\S+"
+    r"|--[\w-]+(?:=\S+)?|-[A-Za-z]))*\s+(?P<verb>diff|log)\b")
 DISCIPLINE = ".codeflow/rules/workflow-discipline.md, Review verdicts"
 
 
@@ -110,13 +118,31 @@ def is_path(token: str) -> bool:
 REVISION = re.compile(
     rf"{SHA}|(?:HEAD|@|FETCH_HEAD|ORIG_HEAD)(?:[~^][0-9]*)*|{SHA}(?:[~^][0-9]*)+|\S+\.\.\.?\S+")
 TRAILING = ".,;:)"
+# Options that change how a diff or log is shown and select no commits or
+# paths; every other dash option can narrow the unit and is refused.
+DISPLAY = re.compile(
+    r"-U\d*|--unified=\d+|-w|-b|--ignore-all-space|--ignore-space-change|-p|--patch"
+    r"|--stat(=\S*)?|--shortstat|--numstat|--name-only|--name-status|--summary"
+    r"|--no-color|--color(=\S*)?|--oneline|--minimal|--patience|--histogram"
+    r"|--no-ext-diff|--no-pager|-M\d*%?|--find-renames(=\S*)?")
+OPTION = re.compile(r"-{1,2}[A-Za-z0-9]")
+# Top-level names a bare word can mean when the brief runs from outside the
+# repository; a word that exists in the working folder counts too.
+DIRECTORIES = {"src", "crates", "docs", "assets", "lib", "tests", "test", "evals",
+               "scripts", "app", "apps", "packages", "bin", "cmd", "internal",
+               "pkg", "include", "config", "examples", "tools", "vendor"}
+
+
+def is_bare_path(token: str) -> bool:
+    return token in DIRECTORIES or (bool(re.fullmatch(r"[\w.-]+", token))
+                                    and os.path.exists(token))
 
 
 def invocation(tokens: list[str], in_span: bool) -> tuple[list[str], bool, bool]:
-    """The revisions one `git diff` or `git log` names, whether a path, `--`
-    or `--relative` narrows it, and whether it ran to the end of its text.
-    Options that select no path (`--stat`, `--name-only`, `-U`, `-w`) pass.
-    Outside a code span the command ends at the first plain word."""
+    """The revisions one `git diff` or `git log` names, whether a path, `--`,
+    `--relative`, a bare directory or an option outside the display set
+    narrows it, and whether it ran to the end of its text. Outside a code
+    span the command ends at the first plain word."""
     revisions: list[str] = []
     narrowed = False
     for raw in tokens:
@@ -125,11 +151,15 @@ def invocation(tokens: list[str], in_span: bool) -> tuple[list[str], bool, bool]
             continue
         if token == "--" or token.startswith("--relative"):
             return revisions, True, False
-        if token.startswith("-"):
-            pass
+        if token.startswith("-") and OPTION.match(token):
+            if not DISPLAY.fullmatch(token):
+                narrowed = True
+        elif token.startswith("-"):
+            if not in_span:
+                return revisions, narrowed, False
         elif REVISION.fullmatch(token):
             revisions.append(token)
-        elif in_span or is_path(token):
+        elif in_span or is_path(token) or is_bare_path(token):
             narrowed = True
         else:
             return revisions, narrowed, False
@@ -140,8 +170,9 @@ def invocation(tokens: list[str], in_span: bool) -> tuple[list[str], bool, bool]
 
 def commands(brief: str) -> list[tuple[str, list[str], bool]]:
     """Every `git diff` or `git log` the brief names, as its verb, its
-    revisions and whether it is narrowed to paths. A pathspec continued on
-    the next line belongs to the command."""
+    revisions and whether it is narrowed. Text after a closing backtick, a
+    backslash continuation, and a `--` pathspec on a later line (past blank
+    lines) belong to the command."""
     found = []
     lines = brief.splitlines()
     for number, line in enumerate(lines):
@@ -152,11 +183,36 @@ def commands(brief: str) -> list[tuple[str, list[str], bool]]:
             in_span = close is not None
             tokens = line[command.end():close].split()
             revisions, narrowed, ran_out = invocation(tokens, in_span)
-            following = lines[number + 1].split() if number + 1 < len(lines) else []
-            if (not in_span and ran_out and following
-                    and (following[0] == "--" or is_path(following[0].rstrip(TRAILING)))):
-                narrowed = True
-            found.append((command.group(1), revisions, narrowed))
+            if in_span:
+                rest = line[close + 1:]
+                tokens = []
+                if rest.strip() and rest[:1].isspace():
+                    tokens = rest.split()
+                    more, cut, ran_out = invocation(tokens, False)
+                    revisions += more
+                    narrowed = narrowed or cut
+                elif rest.strip():
+                    ran_out = False
+            cursor, skipped = number, False
+            while ran_out and not narrowed:
+                cursor += 1
+                if cursor >= len(lines):
+                    break
+                following = lines[cursor].split()
+                if not following or following == ["\\"]:
+                    skipped = True
+                    tokens = following or tokens
+                    continue
+                if tokens and tokens[-1].endswith("\\"):
+                    more, narrowed, ran_out = invocation(following, False)
+                    revisions += more
+                    tokens, skipped = following, False
+                    continue
+                first = following[0]
+                narrowed = (first == "--" or first.startswith("--relative")
+                            or (not skipped and is_path(first.rstrip(TRAILING))))
+                break
+            found.append((command.group("verb"), revisions, narrowed))
     return found
 
 
@@ -192,7 +248,7 @@ def check_review(brief: str, unit: str, path: str) -> None:
             raise narrower(f"{dotted.group(1)}..{dotted.group(3)}", unit)
     for verb, revisions, narrowed in commands(brief):
         if narrowed:
-            raise narrower(f"a git {verb} restricted to paths", unit)
+            raise narrower(f"a git {verb} restricted by a path or an option", unit)
         if revisions and not the_pair(revisions, base, head):
             shown = ("..".join(revisions) if len(revisions) == 2
                      else " ".join(revisions))

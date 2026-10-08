@@ -386,13 +386,16 @@ erratum below, never an edit of the section.
   not verify; a hand-resolved product hunk at a batch landing returns its task
   to a whole-unit review. Two checks back the words:
   `deliver.py --review <base>...<head>` sends nothing and exits 6 when a Herdr
-  brief names a narrower range or a path-restricted diff, and `codeflow ci`
+  brief names a narrower range or a diff narrowed by a path or option, and `codeflow ci`
   refuses a completed task's PR body whose Reviews section has no approving
   row for the acceptance block's `reviewed` commit (a light range may leave
   the section out or write `None: <reason>`). The pipeline workflow seed gains
   a `base` argument; existing copies of that user-owned file are not changed.
-  Migration: write each Reviews row as `whole unit at <reviewed>`, with the
-  acceptance block's commit in full, before completing a task;
+  Migration: before completing a task, write each Reviews row as
+  `reviewer | whole unit at <reviewed> | approved`, with the acceptance
+  block's commit in full (40 characters) and a verdict cell of only
+  `approved` or `approve`; a shorter sha or any further words in that cell
+  do not count;
   `codeflow update` replaces the unmodified instruction files.
 
 ### Fixed
