@@ -925,3 +925,91 @@ fn an_oversized_glob_ending_in_a_plain_name_is_judged_by_its_directory() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Grok round three. The one rule: a line that names a class file refuses
+/// when a command on it can take its script from text the call produced.
+/// Interpreters and shells take it from any channel; a script tool (awk, sed,
+/// make, ed, ex, patch, tclsh, m4, git apply) takes it from a file the call
+/// writes, a heredoc or substitution, or from a pipe when stdin is its script.
+/// A data pipe into awk or sed with an inline script is not a script channel.
+#[test]
+fn script_tools_fed_text_the_call_produced_refuse() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; awk -f a.awk",
+        "printf 'w src/.envrc\\n' > s.sed; sed -f s.sed README.md",
+        "printf 'w src/.envrc\\n' > s.sed; sed -nf s.sed README.md",
+        "printf 'w src/.envrc\\n' > s.sed; sed --file=s.sed README.md",
+        "printf 'all:\\n\\t@echo x >> src/.envrc\\n' > Makefile; make",
+        "printf 'all:\\n\\t@echo x >> src/.envrc\\n' > Makefile; make -C . all",
+        "printf 'BEGIN{print \"x\" > \"src/.envrc\"}\\n' | awk -f -",
+        "printf 'w src/.envrc\\n' | sed -f - README.md",
+        "printf '%s\\n' 'w src/.envrc' 'q' | ed -s README.md",
+        "printf '%s\\n' 'w src/.envrc' 'q' | ex -s README.md",
+        "printf '%s\\n' '--- a/src/.envrc' '+++ b/src/.envrc' '@@ -0,0 +1 @@' '+x' | patch -p1",
+        "printf '%s\\n' '--- /dev/null' '+++ b/src/.envrc' '@@ -0,0 +1 @@' '+x' | git apply",
+        "echo 'exec sh -c {echo x >> src/.envrc}' > t.tcl; tclsh t.tcl",
+        "echo 'syscmd(`echo x >> src/.envrc`)' > t.m4; m4 t.m4",
+        "printf 'echo x >> src/.envrc\\n' | parallel",
+        "echo 'echo x >> src/.envrc' | at now",
+        "echo 'echo x >> src/.envrc' | tee r.sh | bash",
+        "tee r.sh <<< 'echo x >> src/.envrc'; bash r.sh",
+        "awk -f <(echo 'BEGIN{print 1 > \".envrc\"}')",
+        "make -f - <<'EOF'\nall:\n\techo x >> src/.envrc\nEOF",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "grep alias ~/.zshrc | sed 's/a/b/'",
+        "grep alias ~/.zshrc | sed -n '1p'",
+        "cat ~/.zshrc | awk -F: '{print $1}'",
+        "grep -c alias ~/.zshrc > count.txt; awk '{print $1}' count.txt",
+        "sed -i 's/a/b/' README.md",
+        "awk '{print $1}' README.md",
+        "make test",
+        "make -C crates",
+        "bash <(echo 'echo hi')",
+        "git commit -F - <<'EOF'\nfix: handle .envrc\nEOF",
+        "printf '%s\\n' a b | patch -p1 --dry-run -i fix.diff",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round three, minor: a trailing slash on the glob is the same delete.
+#[test]
+fn a_trailing_slash_does_not_change_an_oversized_glob_verdict() {
+    let f = Fixture::new();
+    for n in 0..4200 {
+        std::fs::write(f.project.join(format!("f{n}")), "").unwrap();
+    }
+    let mut wrong = Vec::new();
+    for command in [
+        "rm -rf **/node_modules/",
+        "rm -rf **/node_modules//",
+        "rm -rf **/{dist,node_modules}/",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    for command in [
+        "rm -rf **/",
+        "rm -rf **//",
+        "rm -rf **/.envrc/",
+        "rm -rf **/.*/",
+        "rm -rf **/fish/",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

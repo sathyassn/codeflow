@@ -74,6 +74,13 @@ const REFUSED: &[&str] = &[
     "exec bash <(echo 'echo x >> src/.envrc')",
     "echo 'echo x >> src/.envrc' > r.sh; bash r.sh",
     "eval \"$(echo 'echo x >> src/.envrc')\"",
+    // Grok round three: script tools fed text the call produced.
+    "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; awk -f a.awk",
+    "printf 'w src/.envrc\\n' > s.sed; sed -f s.sed README.md",
+    "printf 'all:\\n\\t@echo x >> src/.envrc\\n' > Makefile; make",
+    "printf 'w src/.envrc\\n' | sed -f - README.md",
+    "printf '%s\\n' 'w src/.envrc' 'q' | ed -s README.md",
+    "printf '%s\\n' '--- a/src/.envrc' '+++ b/src/.envrc' '@@ -0,0 +1 @@' '+x' | patch -p1",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -94,6 +101,9 @@ const ALLOWED: &[&str] = &[
     "cat <(echo hello)",
     "diff <(echo a) <(echo b)",
     "bash <(echo 'echo hi')",
+    "grep alias ~/.zshrc | awk '{print $2}'",
+    "sed -i 's/a/b/' README.md",
+    "make test",
     "cd ~1; cat policy.json",
 ];
 

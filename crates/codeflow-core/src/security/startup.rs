@@ -673,7 +673,11 @@ impl Line<'_> {
     /// the glob can only reach a startup file through its directory part
     /// (`**/node_modules`). `**/.*`, a trailing `**` and `**/fish` are not.
     fn glob_ends_plain(&self, pattern: &str) -> bool {
-        let last = pattern.rsplit('/').next().unwrap_or_default();
+        let last = pattern
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default();
         let alternatives: Vec<&str> = match last.strip_prefix('{').and_then(|r| r.strip_suffix('}'))
         {
             Some(inner) => inner.split(',').collect(),
@@ -919,15 +923,9 @@ const RUNNERS: &[&str] = &[
     "lua",
     "osascript",
     "xargs",
-];
-
-/// Programs that run a script handed over as a file name or on standard
-/// input, so a heredoc or a process substitution (`awk -f <(...)`) feeds
-/// them code. They are not in [`RUNNERS`]: `... | awk '{print $2}'` reads
-/// and must stay allowed.
-const SCRIPT_RUNNERS: &[&str] = &[
-    "awk", "gawk", "mawk", "nawk", "sed", "gsed", "make", "gmake", "patch", "ed", "ex", "tclsh",
-    "expect", "Rscript", "julia", "m4",
+    "parallel",
+    "at",
+    "batch",
 ];
 
 /// The startup variables, and the shells each one changes.
@@ -1197,36 +1195,158 @@ fn startup_reader(name: &str, args: &[String]) -> Option<&'static [&'static str]
     }
 }
 
-/// A heredoc, here-string or piped text that names a startup file, on a
-/// line that also runs code or a file: "write the script, then run it"
-/// in one call.
+/// The ways text the call itself produces can reach a command.
+struct Channels(Vec<Channel>);
+
+#[derive(PartialEq)]
+enum Channel {
+    Pipe,
+    Heredoc,
+    Substitution,
+    /// A file other than `/dev/null` the call writes (a redirect or `tee`).
+    Written,
+}
+
+impl Channels {
+    fn of(segments: &[String], text: &str) -> Self {
+        let written = segments.iter().any(|segment| {
+            let redirects = redirect_writes(segment);
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            let tee = strip_launchers(&words).is_some_and(|(program, args)| {
+                basename(program) == "tee"
+                    && args.iter().any(|a| !a.starts_with('-') && a != "/dev/null")
+            });
+            tee || redirects
+                .targets
+                .iter()
+                .chain(&redirects.unread)
+                .any(|target| target != "/dev/null")
+        });
+        let mut channels = Vec::new();
+        if text.contains('|') {
+            channels.push(Channel::Pipe);
+        }
+        if text.contains("<<") {
+            channels.push(Channel::Heredoc);
+        }
+        if text.contains("<(") || text.contains(">(") {
+            channels.push(Channel::Substitution);
+        }
+        if written {
+            channels.push(Channel::Written);
+        }
+        Self(channels)
+    }
+
+    fn has(&self, channel: &Channel) -> bool {
+        self.0.contains(channel)
+    }
+
+    /// Any text of the call can reach standard input or a file.
+    fn any(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    /// Call text can stand behind a file operand: a file the call writes, a
+    /// heredoc or a process substitution (a pipe cannot be named as a file).
+    fn file(&self) -> bool {
+        self.has(&Channel::Heredoc)
+            || self.has(&Channel::Substitution)
+            || self.has(&Channel::Written)
+    }
+}
+
+/// The value of an `-f`, `--file` or `--makefile` option among `args`.
+fn script_file(args: &[String]) -> Option<&str> {
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg
+            .strip_prefix("--file=")
+            .or_else(|| arg.strip_prefix("--makefile="))
+        {
+            return Some(value);
+        }
+        if matches!(arg.as_str(), "--file" | "--makefile") {
+            // A process substitution after the option is read as a redirect and
+            // leaves no value behind: a file the call produced.
+            return Some(iter.peek().map_or("<(", |v| v.as_str()));
+        }
+        if arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 1 {
+            let flags = &arg[1..];
+            if flags.chars().all(|c| c.is_ascii_alphabetic()) {
+                if flags.ends_with('f') {
+                    // A process substitution after the option is read as a redirect and
+                    // leaves no value behind: a file the call produced.
+                    return Some(iter.peek().map_or("<(", |v| v.as_str()));
+                }
+                if let Some(at) = flags.find('f') {
+                    // `-fFILE` (the awk and sed attached form).
+                    return Some(&flags[at + 1..]);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether a script tool takes its script from text the call produced. The
+/// script source decides, not the pipe: `... | awk '{print $2}'` hands the
+/// program data and stays a read, while `... | awk -f -` hands it code.
+fn script_tool_consumes(name: &str, args: &[String], channels: &Channels) -> bool {
+    let has_operand = args.iter().any(|a| !a.starts_with('-') && a != "-");
+    match name {
+        "awk" | "gawk" | "mawk" | "nawk" | "sed" | "gsed" | "make" | "gmake" => {
+            match script_file(args) {
+                Some("-" | "/dev/stdin") => channels.has(&Channel::Pipe) || channels.file(),
+                Some(_) => channels.file(),
+                // `make` reads a `Makefile` the call may have written.
+                None => matches!(name, "make" | "gmake") && channels.file(),
+            }
+        }
+        // Standard input is their script.
+        "ed" | "ex" | "patch" => channels.any(),
+        "tclsh" | "expect" | "Rscript" | "julia" | "m4" => {
+            if has_operand {
+                channels.file()
+            } else {
+                channels.any()
+            }
+        }
+        "git" => {
+            // `git apply` and `git am` apply patch text.
+            git_subcommand(args).is_some_and(|(sub, _)| matches!(sub, "apply" | "am"))
+                && channels.any()
+        }
+        _ => false,
+    }
+}
+
+/// The one staged-run rule. A line that names a startup file refuses when a
+/// command on it can take its script from text the call itself produced:
+/// a shell or interpreter from any channel (a heredoc, a pipe, a process or
+/// command substitution, a file the call writes), and a script tool (awk,
+/// sed, make, ed, ex, patch, tclsh, m4, git apply) when its script source is
+/// such a channel. A new interpreter or script tool is one entry in
+/// [`RUNNERS`] or [`script_tool_consumes`].
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
-    let substitution = line.text.contains("<(") || line.text.contains(">(");
-    let heredoc = line.text.contains("<<");
-    // A script written to a file and run in the same call.
-    let written = segments.iter().any(|segment| {
-        let redirects = redirect_writes(segment);
-        redirects
-            .targets
-            .iter()
-            .chain(&redirects.unread)
-            .any(|target| target != "/dev/null")
-    });
-    if !(heredoc || line.text.contains('|') || substitution || written) {
+    let channels = Channels::of(segments, line.text);
+    if !channels.any() {
         return None;
     }
     let name = line.names(line.text)?;
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        let (program, _) = strip_launchers(&words)?;
-        let runner = RUNNERS.contains(&basename(program))
-            || ((heredoc || substitution) && SCRIPT_RUNNERS.contains(&basename(program)))
+        let (program, args) = strip_launchers(&words)?;
+        let base = basename(program);
+        let runner = RUNNERS.contains(&base)
+            || script_tool_consumes(base, args, &channels)
             || program.starts_with("./")
-            || (program.starts_with('/') && !READERS.contains(&basename(program)));
+            || (program.starts_with('/') && !READERS.contains(&base));
         runner.then(|| {
             finding(format!(
-                "a heredoc, pipe, process substitution or written file names the shell startup file `{name}`, and the line runs `{program}`, which can write it"
+                "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which can run or apply it"
             ))
         })
     })

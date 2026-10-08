@@ -320,6 +320,16 @@ level:
   class file once the line's own literal assignments are filled in
   (`p=src/.envrc; python3 -c "open('$p','a')"`), and such code that carries
   an expansion the guard cannot read on a line that names a class file;
+- a staged run: a line that names a class file and has a command that can
+  run or apply text the call itself produced. A shell or interpreter counts
+  when that text reaches it by a heredoc, a pipe, a process or command
+  substitution, or a file the call writes. A script tool (`awk`, `sed`,
+  `make`, `ed`, `ex`, `patch`, `git apply`, `tclsh`, `m4`) counts when its
+  script comes from such text: `-f` a file the call writes or `-f -` on a
+  pipe, a `Makefile` the call writes, or standard input for `ed`, `ex` and
+  `patch`. A data pipe into `awk '{print $2}'` or `sed 's/a/b/'` does not
+  count. The line must name the file; a script written in one call and run
+  in another stays a residual;
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
