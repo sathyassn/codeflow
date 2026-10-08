@@ -26,7 +26,7 @@ malformed, repeated or mismatched `Task:` line is refused.
 | Summary | always | a few lines that anchor the reader (rule below) |
 | Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
 | Testing | unless the range is docs-only or light; evidence required when the range is code | tested revision and command, fenced summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` (rules below) |
-| Reviews | unless the range is light | one row per current review: reviewer, `whole unit at <reviewed>`, verdict; `None: reason` when unreviewed |
+| Reviews | unless the range is light | one row per current review: reviewer, `whole unit at <reviewed>`, verdict; `None: reason` when unreviewed; a section present on a light range still names the bound commit or is `None:` |
 | Release impact | on a PR into a protected branch or whose range carries a breaking commit; checked whenever present | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields (rules below) |
 | Screenshots | after Changes, when a rendered surface changed | the changed surface |
 | Tests | after Testing, when an added or renamed test's name does not state what it pins | test and what it pins, about six rows; otherwise one `New tests:` line |
@@ -42,8 +42,7 @@ malformed, repeated or mismatched `Task:` line is refused.
 - A PR type never cancels a condition. Read the conditions from the whole
   target-to-head diff; a mixed or epic PR takes the union.
 - `codeflow ci` warns on unclosed HTML and on a Testing section with no
-  `Not tested:` line. Keep the body short by linking records instead of
-  copying them; never drop evidence to shorten it.
+  `Not tested:` line; never drop evidence to shorten a body.
 - `codeflow ci` also warns, and never blocks, when the body passes 1,000
   words as a reader sees it: HTML comments are left out, fenced blocks and
   tables count. The warning names the count and the three largest `##`
@@ -137,8 +136,7 @@ product UI. Docs-only means no executable behavior changed: scripts, hook
 settings, generated runtime assets, and executable examples do not qualify
 merely because they live under docs. Instruction-only changes name the doc
 checks and relevant behavioral evaluations; distinguish added cases from
-live trials actually run. Delete unused template lines, and omit a
-conditional section whose condition does not hold. After a rebase or
+live trials actually run. Delete unused template lines. After a rebase or
 substantive update, refresh the whole PR narrative and affected evidence
 before marking ready; a prior review carries only across a clean re-merge
 of the target, as `codeflow ci` binds it; any other change gets a new
