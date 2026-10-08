@@ -325,7 +325,7 @@ async function unnamedPartOnV1(page) {
   assert.equal(stored.element_selector.tag_name, "line");
   assert.equal(stored.entity_selector, undefined);
   assert.equal(stored.excerpt?.text, undefined, JSON.stringify(stored.excerpt?.text));
-  assert.ok(stored.excerpt?.image?.media_type, "the unnamed part kept no crop");
+  assert.ok(stored.excerpt?.image?.media_type, "the unnamed part lost its crop");
   assert.equal(stored.anchor.state, "element_anchored", JSON.stringify(stored.anchor));
   const revised = JSON.parse(await readFile(fixtureV1, "utf8"));
   const lifecycle = revised.blocks.find((block) => block.id === "stage-lifecycle");
