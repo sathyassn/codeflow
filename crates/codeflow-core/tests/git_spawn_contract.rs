@@ -28,7 +28,9 @@
 //! not one codeflow builds.
 
 //! Fixture guards use decoded Rust tokens. Clones live only in the private
-//! fixture helper; environment exceptions bind normalized call spans and counts.
+//! fixture helper: a literal that can carry a clone invocation (see
+//! [`clone_invocation`]) is refused elsewhere, and prose that only names a
+//! clone is not. Environment exceptions bind normalized call spans and counts.
 //! Runtime string assembly, procedural macros, a child program that clones on
 //! its own, and environment changes by external programs remain outside the
 //! scans. The non-Rust scope check excludes the live-host scripts/proofs prototype.
@@ -659,17 +661,38 @@ fn call_span(toks: &[Token], index: usize) -> (usize, usize) {
     (index, index)
 }
 
-fn word_clone(value: &str) -> bool {
+/// Whether a decoded literal can carry a clone invocation, read as the shell
+/// commands it could hold: in one command (text between line ends, `;`,
+/// `&`, `|`, backticks or parentheses), whose words are split at blanks and
+/// commas and stripped of quotes and brackets, the word `clone` comes first,
+/// right after an option, or anywhere after a word that names git. An argument
+/// vector element (`"clone"`), a shell line (`"git -C dir clone a b"`) and a
+/// split command (`"clone --bare a b"`) each match; prose that says "this
+/// clone" or quotes `git fetch` beside it does not, so a message is judged
+/// as text and never needs an allowance.
+fn clone_invocation(value: &str) -> bool {
     value
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .any(|word| word == "clone")
+        .split(['\n', ';', '&', '|', '`', '(', ')'])
+        .any(|command| {
+            let words: Vec<&str> = command
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .map(|word| word.trim_matches(|c: char| "\"'[]{}".contains(c)))
+                .filter(|word| !word.is_empty())
+                .collect();
+            words.iter().enumerate().any(|(at, word)| {
+                *word == "clone"
+                    && (at == 0
+                        || words[at - 1].starts_with('-')
+                        || words[..at].iter().any(|before| names_git(before)))
+            })
+        })
 }
 
 fn clone_spans(source: &str) -> Vec<String> {
     let toks = tokens(source);
     let mut spans = std::collections::BTreeSet::new();
     for (index, token) in toks.iter().enumerate() {
-        if matches!(token, Token::Str(value) if word_clone(value)) {
+        if matches!(token, Token::Str(value) if clone_invocation(value)) {
             spans.insert(call_span(&toks, index));
         }
     }
@@ -811,11 +834,62 @@ fn clone_literals_refuse_every_invocation_form() {
         r#"cmd.args(["clone","--no-local",src,dst]).arg("--local");"#,
         r#"cmd.args(["sh", "-c", "git clone x y"]);"#,
         r#"cmd.arg("cl\x6fne");"#,
+        r#"cmd.args(["sh", "-c", "cd x && git -C dir clone --depth 2 a b"]);"#,
+        r#"cmd.args("clone --bare a b".split(' '));"#,
+        r#"cmd.args(["-c", &format!("{git} clone {src} {dst}")]);"#,
+        r#"cmd.args(["sh", "-c", "/usr/bin/git --no-pager clone a b"]);"#,
+        r#"cmd.args(["sh", "-c", "set -e\ngit clone a b"]);"#,
+        r#"let js = "spawnSync(\"git\",[\"clone\",a,b])";"#,
     ] {
         assert!(!clone_spans(source).is_empty(), "{source}");
     }
     assert!(clone_spans("codeflow_fixture::clone(dir, src, dst).run();").is_empty());
     assert!(clone_spans("// git clone x y").is_empty());
+}
+
+/// Prose that names a clone is a message, not an invocation: it needs no
+/// allowance, whether or not it quotes a git command beside the word.
+#[test]
+fn clone_prose_is_not_an_invocation() {
+    for source in [
+        r#"unknown("the reviewed commit is not in this clone");"#,
+        r#"format!("this clone's history is shallow at {at}; run `git fetch --unshallow`");"#,
+        r#"format!("this clone is shallow at {commit}, so fetch it in full (`git fetch --unshallow`)");"#,
+        r#"panic!("a shallow clone proved an answer");"#,
+        r#"assert!(ok, "clone: {}", err);"#,
+        r#"ok(&out, "task new in a second clone");"#,
+        r#"dir.join("managed-clone");"#,
+    ] {
+        assert!(clone_spans(source).is_empty(), "{source}");
+    }
+}
+
+/// The narrowing keeps a raw clone in code visible: the clone `landing.rs`
+/// held before it moved to the helper fails the scan when written back into
+/// that file, while the file's own prose about clones still passes.
+#[test]
+fn a_raw_clone_in_code_still_fails_beside_prose() {
+    let file = "crates/codeflow-core/src/workgraph/landing.rs";
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let source = std::fs::read_to_string(root.join(file)).unwrap();
+    assert!(source.contains("this clone is shallow"));
+    let allowed = allowances(CLONE_ALLOWANCES);
+    assert!(unlisted_spans(file, &clone_spans(&source), &allowed).is_empty());
+    let raw = format!(
+        "{source}\nfn raw() {{ git(dir, &[\"clone\", \"-q\", \"--depth\", \"2\", &url, \"copy\"]); }}"
+    );
+    let findings = unlisted_spans(file, &clone_spans(&raw), &allowed);
+    assert_eq!(
+        findings,
+        vec![format!(
+            "{file}: git(dir,&[\"clone\",\"-q\",\"--depth\",\"2\",&url,\"copy\"]): \
+             found 1, allowed 0; AC-4 requires review"
+        )]
+    );
 }
 
 #[test]
