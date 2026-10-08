@@ -347,10 +347,13 @@ fn instrumented_suite_has_serial_membership_and_a_junit_consumer() {
 }
 
 /// The quick gate, which the pre-push hook runs on every push, is the light
-/// set: fmt, clippy and the Python contracts. The producers (the web build,
-/// the workspace build and the binary) belong to essential and full, where
-/// the tests embed their output; a quick target requires nothing outside
-/// the quick set, or the runner would wait for a target that never runs.
+/// set: fmt, clippy, the Python contracts and the repository update replay,
+/// the one cargo test that fails before review when a shipped asset changes
+/// without a resync of this repository's install. The producers (the web
+/// build, the workspace build and the binary) belong to essential and full,
+/// where the tests embed their output; a quick target requires nothing
+/// outside the quick set, or the runner would wait for a target that never
+/// runs.
 #[test]
 fn the_quick_gate_runs_only_the_light_targets() {
     let config: serde_json::Value =
@@ -366,6 +369,7 @@ fn the_quick_gate_runs_only_the_light_targets() {
         [
             "gate-parity",
             "herdr-delivery",
+            "repository-update-noop",
             "rust-clippy",
             "rust-format",
             "skill-triggers",

@@ -805,3 +805,6 @@ mod startup;
 #[cfg(unix)]
 #[path = "refusal_journey/landed.rs"]
 mod landed;
+
+#[path = "refusal_journey/line_adoption.rs"]
+mod line_adoption;

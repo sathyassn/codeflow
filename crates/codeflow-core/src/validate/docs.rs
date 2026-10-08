@@ -15,6 +15,7 @@
 //! * epic/task `specs[]` resolve to specification records
 //! * task `epic_id` resolves, or an explicit standalone reason exists
 //! * task `depends_on[]` references resolve and form an acyclic graph
+//! * operator feedback items are well formed ([`crate::feedback::lint`])
 //!
 //! Tier-graceful: an absent layer (no registry, no decisions dir, no
 //! project-management) skips its checks with a note — only references that
@@ -54,6 +55,8 @@ pub struct DocsLintReport {
     /// project's tier installs is missing, or a reference points into an
     /// absent layer.
     pub notes: Vec<crate::remedy::Finding>,
+    /// Findings reported without failing, each with the step that clears it.
+    pub warnings: Vec<crate::remedy::Finding>,
     /// References not checked because their layer is absent, by layer.
     unchecked: std::collections::BTreeMap<&'static str, std::collections::BTreeSet<String>>,
 }
@@ -124,9 +127,23 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_epics(repo_root, &graph, &mut report);
     lint_capability_epic_reciprocity(repo_root, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
+    lint_feedback(repo_root, &mut report);
     report.note_unchecked();
 
     report
+}
+
+/// Operator feedback items: their structure fails, a stale index warns.
+fn lint_feedback(repo_root: &Path, report: &mut DocsLintReport) {
+    let lint = crate::feedback::lint(repo_root);
+    report
+        .issues
+        .extend(lint.errors.into_iter().map(|finding| DocsLintIssue {
+            file: PathBuf::from(finding.path),
+            line: finding.line,
+            message: finding.message,
+        }));
+    report.warnings.extend(lint.warnings);
 }
 
 const CAPABILITIES_LAYER: &str = "docs/capabilities.md";
