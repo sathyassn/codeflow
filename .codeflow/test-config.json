@@ -137,6 +137,17 @@
       ]
     },
     {
+      "name": "repository-update-noop",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "quick": {
+          "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
+        }
+      },
+      "requires": []
+    },
+    {
       "name": "rust-doctest",
       "enabled": true,
       "runner": "custom",
