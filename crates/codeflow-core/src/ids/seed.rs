@@ -621,11 +621,16 @@ fn renumber_files(
         }
     }
     let moving = new != rel;
-    if moving {
-        // The renamed record keeps the permissions of the file it is
-        // renamed from.
-        let permissions = tree.metadata(rel)?.permissions();
-        tree.create_new_keeping(&new, record.after.as_bytes(), Some(&permissions))?;
+    // The renamed record keeps the permissions of the file it is renamed
+    // from, and they are held until the end so a restore after the old name
+    // was unlinked gives the record the same bits back.
+    let permissions = if moving {
+        Some(tree.metadata(rel)?.permissions())
+    } else {
+        None
+    };
+    if let Some(permissions) = &permissions {
+        tree.create_new_keeping(&new, record.after.as_bytes(), Some(permissions))?;
     }
     if let Err(error) = rewrite_links(&tree, &planned) {
         return Err(retarget_rollback_error(
@@ -644,7 +649,7 @@ fn renumber_files(
         // Removal can fail after unlinking, and replacement after renaming.
         // Restore the old record as well as every rewritten link in either case.
         let mut failed = restore_links(&tree, &planned);
-        let restored = tree.write(rel, record.before.as_bytes());
+        let restored = tree.write_keeping(rel, record.before.as_bytes(), permissions.as_ref());
         if let Err(error) = &restored {
             failed.push(format!("restoring {rel} failed: {error}"));
             if moving {
@@ -881,10 +886,28 @@ mod tests {
             let dir = retarget_fixture();
             let root = dir.path();
             let before = std::fs::read(root.join(OLD)).unwrap();
+            // A private record: a restore that recreates the name from
+            // scratch would give it the umask's bits instead.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(root.join(OLD), std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
             fault::arm(point, OLD);
             let error = retarget(root, &RegId::parse("TSK-005").unwrap()).unwrap_err();
             assert!(error.to_string().contains("injected failure"), "{error}");
             assert_eq!(std::fs::read(root.join(OLD)).unwrap(), before);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(root.join(OLD))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o7777;
+                assert_eq!(mode, 0o600, "{point:?} restored the record's mode");
+            }
             for link in LINKS {
                 assert_eq!(std::fs::read(root.join(link)).unwrap(), b"see TSK-005\n");
             }

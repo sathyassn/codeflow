@@ -209,8 +209,26 @@ impl Tree {
     /// When a component is a link, the leaf is not a regular file, or I/O
     /// fails.
     pub(crate) fn write(&self, relative: &str, bytes: &[u8]) -> io::Result<()> {
+        self.write_keeping(relative, bytes, None)
+    }
+
+    /// [`Tree::write`], where a leaf that is missing is created with
+    /// `fallback` (on Unix) on the new file's own descriptor before any byte
+    /// is written. An existing leaf keeps its own bits. A restore uses it
+    /// to put back a record whose name was already unlinked with the
+    /// permissions it had.
+    ///
+    /// # Errors
+    ///
+    /// As [`Tree::write`].
+    pub(crate) fn write_keeping(
+        &self,
+        relative: &str,
+        bytes: &[u8],
+        fallback: Option<&std::fs::Permissions>,
+    ) -> io::Result<()> {
         self.explained(relative, || {
-            self.write_with_hook(relative, bytes, || Ok(()))
+            self.write_with_hook(relative, bytes, fallback, || Ok(()))
         })
     }
 
@@ -218,13 +236,14 @@ impl Tree {
         &self,
         relative: &str,
         bytes: &[u8],
+        fallback: Option<&std::fs::Permissions>,
         hook: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
         let (parent, name) = self.parent(relative, true)?;
         let existing = match platform::metadata(&parent, &name) {
             Ok(metadata) if !metadata.is_file() => return Err(invalid()),
             Ok(metadata) => Some(metadata.permissions()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => fallback.cloned(),
             Err(error) => return Err(error),
         };
         let temporary = OsString::from(format!(".codeflow-{}.tmp", ulid::Ulid::new()));
@@ -1019,7 +1038,7 @@ mod tests {
                     io.remove_with_hook(&path, false, hook).unwrap();
                     assert!(!saved.join("value").exists());
                 } else {
-                    io.write_with_hook(&path, b"next", hook).unwrap();
+                    io.write_with_hook(&path, b"next", None, hook).unwrap();
                     assert_eq!(std::fs::read(saved.join("value")).unwrap(), b"next");
                 }
                 assert_eq!(
@@ -1098,7 +1117,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("guide")).unwrap();
         let io = Tree::open(root.path()).unwrap();
-        io.write_with_hook("guide/value", b"anchored object", || {
+        io.write_with_hook("guide/value", b"anchored object", None, || {
             std::fs::rename(root.path().join("guide"), outside.path().join("moved"))
         })
         .unwrap();
@@ -1141,7 +1160,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("guide")).unwrap();
         let io = Tree::open(root.path()).unwrap();
-        io.write_with_hook("guide/value", b"inside", || {
+        io.write_with_hook("guide/value", b"inside", None, || {
             assert!(std::fs::rename(root.path().join("guide"), root.path().join("moved")).is_err());
             Ok(())
         })
@@ -1297,6 +1316,25 @@ mod tests {
             assert_eq!(after, mode);
             assert_eq!(std::fs::read(&path).unwrap(), b"new");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_leaf_takes_the_kept_bits_and_an_existing_one_keeps_its_own() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let tree = Tree::open(root.path()).unwrap();
+        let path = root.path().join("record.md");
+        let kept = std::fs::Permissions::from_mode(0o600);
+        tree.write_keeping("record.md", b"new", Some(&kept))
+            .unwrap();
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(&path), 0o600);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        tree.write_keeping("record.md", b"again", Some(&kept))
+            .unwrap();
+        assert_eq!(mode(&path), 0o755);
+        assert_eq!(std::fs::read(&path).unwrap(), b"again");
     }
 
     #[test]
