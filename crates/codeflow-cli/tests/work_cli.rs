@@ -1067,6 +1067,114 @@ fn tsk250_a_graft_cannot_hide_a_reverted_change_from_the_pin_review() {
     }
 }
 
+/// Two incomplete code dependencies whose branches share one tip, a review of
+/// an ancestor, and one later commit that changes only TSK-001's record. The
+/// span covers TSK-001's pin and not TSK-002's, because each pin judges its
+/// own record path. `work next` shares its review answers across waiting
+/// tasks, so the first pin's answer must not stand for the second, and
+/// `work start --on` must refuse the second pin as well.
+#[test]
+#[cfg(unix)]
+fn tsk250_next_judges_each_pins_own_record_on_a_shared_tip() {
+    let dir = fixture();
+    let root = dir.path();
+    let bin = tempfile::tempdir().unwrap();
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[]"),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[TSK-001]"),
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-004.md",
+        &record("TSK-004", "[TSK-002]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan dependents"]);
+    git(
+        root,
+        &[
+            "config",
+            "remote.review.url",
+            "https://github.com/owner/project.git",
+        ],
+    );
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: build the predecessors"]);
+    let reviewed = git(root, &["rev-parse", "HEAD"]);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &format!("{}\n## Closeout\nDone.\n", record("TSK-001", "[]")),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: record acceptance"]);
+    let tip = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["branch", "task/TSK-002-work", &tip]);
+    for branch in ["task/TSK-001-work", "task/TSK-002-work"] {
+        git(
+            root,
+            &["config", &format!("branch.{branch}.remote"), "review"],
+        );
+    }
+    let mut scripts = Vec::new();
+    for branch in ["task/TSK-001-work", "task/TSK-002-work"] {
+        review_tool_naming(bin.path(), branch, &tip, &reviewed);
+        let script = std::fs::read_to_string(bin.path().join("gh")).unwrap();
+        scripts.push(format!(
+            "{branch})\n{};;\n",
+            script.trim_start_matches("#!/bin/sh\n")
+        ));
+    }
+    let scripts = scripts.join("");
+    write(
+        bin.path(),
+        "gh",
+        &format!("#!/bin/sh\ncase \"$3\" in\n{scripts}esac\n"),
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            bin.path().join("gh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    git(root, &["switch", "-q", "main"]);
+    let out = cli(root, &["work", "next"], Some(bin.path()));
+    succeeds(&out);
+    let listing = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        listing.contains(&format!("startable on TSK-001@{tip}")),
+        "the span covers TSK-001's own record: {listing}"
+    );
+    assert!(
+        !listing.contains(&format!("TSK-002@{tip}")),
+        "work next reported TSK-002's pin as covered: {listing}"
+    );
+    git(root, &["switch", "-qc", "task/TSK-004-child"]);
+    let out = cli(
+        root,
+        &[
+            "work",
+            "start",
+            "TSK-004",
+            "--on",
+            &format!("TSK-002@{tip}"),
+        ],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("no review names"), "{}", text(&out));
+}
+
 #[test]
 #[cfg(unix)]
 fn tsk250_live_review_table_accepts_record_only_tip() {

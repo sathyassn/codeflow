@@ -820,6 +820,9 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     claim_on(repo_root, task_id, &[])
 }
 
+/// A review answer's cache key: task id, branch and revision.
+type ReviewKey = (String, String, String);
+
 /// The reads behind `work next`'s reviewed-stack hints, made once per
 /// invocation and shared by every waiting task: the branches by the task id
 /// they carry, each target and tree's records, and each review answer.
@@ -828,7 +831,7 @@ pub struct StackHints {
     branches: Option<super::work_start::PinBranches>,
     targets: BTreeMap<String, Result<git2::Oid, String>>,
     records: BTreeMap<git2::Oid, Result<Rc<BTreeMap<String, Record>>, String>>,
-    reviews: std::cell::RefCell<BTreeMap<(String, String), Result<bool, String>>>,
+    reviews: std::cell::RefCell<BTreeMap<ReviewKey, Result<bool, String>>>,
 }
 
 impl StackHints {
@@ -876,7 +879,7 @@ impl StackHints {
 
     /// A prospective reviewed stack for a waiting task, without mutating
     /// refs: the `TSK-NNN@<sha>` pins that would start it. `lookup` is asked
-    /// once per branch and revision.
+    /// once per task, branch and revision.
     ///
     /// # Errors
     /// Refuses missing review evidence, ambiguous tips or ordinary readiness failures.
@@ -914,16 +917,34 @@ impl StackHints {
         if values.is_empty() {
             return Err("no unlanded code dependencies".into());
         }
-        let reviewed = |branch: &str, sha: &str, covers: &super::work_start::ReviewCovers<'_>| {
-            self.reviews
-                .borrow_mut()
-                .entry((branch.to_string(), sha.to_string()))
-                .or_insert_with(|| lookup(branch, sha, covers))
-                .clone()
-        };
-        // Only whether every pin holds matters here, so review evidence,
-        // asked once per pin, is checked before the pinned tree is read.
-        let pins = reviewed_pins_in(&self.repo, &mut self.branches, &values, &reviewed, true)?;
+        // Only whether every pin holds matters here, so review evidence is
+        // checked before the pinned tree is read. The answer is cached per
+        // task, branch and revision: `covers` judges the pin's own record
+        // path, so two records on one branch tip can have different answers.
+        let mut pins = Vec::new();
+        for value in &values {
+            let task = value.split_once('@').map_or("", |(task, _)| task);
+            let reviewed =
+                |branch: &str, sha: &str, covers: &super::work_start::ReviewCovers<'_>| {
+                    self.reviews
+                        .borrow_mut()
+                        .entry((task.to_string(), branch.to_string(), sha.to_string()))
+                        .or_insert_with(|| lookup(branch, sha, covers))
+                        .clone()
+                };
+            let held = reviewed_pins_in(
+                &self.repo,
+                &mut self.branches,
+                std::slice::from_ref(value),
+                &reviewed,
+                true,
+            )?;
+            if pins.iter().any(|(seen, _)| *seen == task) {
+                return Err(format!("duplicate --on pin for {task}"));
+            }
+            pins.extend(held.into_iter().map(|pin| (task, pin)));
+        }
+        let pins: Vec<_> = pins.into_iter().map(|(_, pin)| pin).collect();
         let tip =
             stack_base_in(&self.repo, &mut self.branches, &pins)?.ok_or("no prospective base")?;
         let records = self.records_at(tip)?;
