@@ -1727,7 +1727,7 @@
     ".codeflow/rules/worktrees.md": {
       "src": "rules/worktrees.md",
       "ownership": "managed",
-      "sha256": "655f6abe200ed978cfa8a10ab884f90e042dbe667495d9994d10385843eaf7c6",
+      "sha256": "beb35d199fde5ad3046c7084bb0f128ac3b25e1845323aeb0f3cf27a66789bf6",
       "exec": false
     },
     ".codeflow/rules/writing.md": {
