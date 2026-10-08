@@ -303,9 +303,11 @@ fn a_follow_up_corrects_the_task_it_follows() {
     let own = "task/TSK-005-correct";
     correct(root, own, "TSK-003", CORRECTED);
     let result = ci(root, own, "Task: TSK-005");
+    assert_eq!(result.0, 0, "{}", result.1);
     assert!(result.1.contains(DELTA), "{}", result.1);
     assert!(!result.1.contains(FROZEN), "{}", result.1);
     let pushed = ci_on(root, own, None);
+    assert_eq!(pushed.0, 0, "{}", pushed.1);
     assert!(pushed.1.contains(DELTA), "{}", pushed.1);
     assert!(!pushed.1.contains(FROZEN), "{}", pushed.1);
 }
