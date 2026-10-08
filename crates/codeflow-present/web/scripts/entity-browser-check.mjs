@@ -216,13 +216,18 @@ try {
   assert.equal(stored.at(-1).entity_selector, undefined, "the block note carried an entity");
   // A new revision re-anchors every note and says so when a note moved or
   // lost its part (B1): file-a is relabelled, reject-b is removed.
-  const revised = JSON.parse(await readFile(fixture, "utf8"));
-  const registry = revised.blocks.find((block) => block.id === "stage-registry");
-  registry.html = registry.html
+  // The revision edits the stage's text in place, so every other block keeps
+  // its bytes and its digest (a JSON round trip in JavaScript would rewrite
+  // the figure's numbers).
+  const source = await readFile(fixture, "utf8");
+  const registry = JSON.parse(source).blocks.find((block) => block.id === "stage-registry");
+  const html = registry.html
     .replace(">writes TSK-100.md<", ">writes the TSK-100 file<")
     .replace(/<line data-cf-target='reject-b'[^>]*><\/line><text data-cf-for='reject-b'[^>]*>[^<]*<\/text>/u, "");
-  assert.ok(!registry.html.includes("reject-b") && registry.html.includes("TSK-100 file"), "the revision did not change the stage");
-  await writeFile(join(project, "delivery-2.json"), `${JSON.stringify(revised, null, 2)}\n`);
+  assert.ok(!html.includes("reject-b") && html.includes("TSK-100 file"), "the revision did not change the stage");
+  const revisedText = source.replace(JSON.stringify(registry.html), JSON.stringify(html));
+  assert.notEqual(revisedText, source, "the revision did not reach the document");
+  await writeFile(join(project, "delivery-2.json"), revisedText);
   run(["present", "update", sessionId, join(project, "delivery-2.json")]);
   // The figure's block is unchanged, so its marks hold; the changed stage's
   // named parts are found again by id (AC-7 of TSK-259).
@@ -259,7 +264,7 @@ try {
   assert.ok(exportedTitles.includes("Figure 5 · From a question to a release"), JSON.stringify(exportedTitles));
   const unnamed = await unnamedPartOnV1(page);
   const browserVersion = context.browser()?.version() ?? (await page.evaluate(() => navigator.userAgent));
-  process.stdout.write(`cf-present entity checks passed in ${browserVersion} at ${VIEWPORT.width} x ${VIEWPORT.height}: ${stops.length} registry stops announced by their labels from the accessibility tree; ${unnamed}; `);
+  process.stdout.write(`cf-present entity checks ran in Chrome ${browserVersion} at ${VIEWPORT.width} x ${VIEWPORT.height}: ${stops.length} registry stops announced by their labels from the accessibility tree; figure marks entity_anchored and stage parts entity_reanchored after an update; ${unnamed}\n`);
   process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, the keyboard resuming after a highlight replaced its line, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
 } finally {
   if (context) await context.close().catch(() => undefined);
@@ -307,7 +312,11 @@ async function unnamedPartOnV1(page) {
   await composer.waitFor();
   const composed = await composer.innerText();
   assert.ok(composed.includes(cut) && !composed.includes(full), `the composer shows ${JSON.stringify(composed.slice(0, 200))}`);
-  await saveNote(page, "Unnamed: this arrow should be named.", full, "unnamed part on v1");
+  await page.getByTestId("composer-text").fill("Unnamed: this arrow should be named.");
+  await page.getByTestId("composer-save").click();
+  await composer.waitFor({ state: "detached" });
+  const rail = await page.getByTestId("note-row").last().innerText();
+  assert.ok(rail.includes(full), `the rail shows ${JSON.stringify(rail)}`);
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByRole("button", { name: "Submit review" }).click();
   await page.getByRole("status").getByText(/Review received/u).waitFor({ timeout: 60_000 });
