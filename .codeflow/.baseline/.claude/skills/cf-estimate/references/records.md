@@ -53,7 +53,9 @@ A profile states what constitutes full delivery, actual resources/availability,
 qualified binding references, evidence comparability, any justified local grade
 ranges, and prospective evaluation rules. Do not seed invented calibration data.
 An outcome record names the forecast and package, observed scope/status and stage
-timings, waits, failures/reopens, sources and missing observations. Revisions link
+timings, waits, failures/reopens, sources and missing observations. Its timings
+may come from `codeflow estimate outcomes`, which derives them from git and
+writes no record. Revisions link
 their predecessor and reason in the project's accompanying record; the checker
 JSON is closed and does not acquire arbitrary history fields.
 
