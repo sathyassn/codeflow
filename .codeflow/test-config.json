@@ -413,7 +413,7 @@
       ],
       "outputs": [],
       "exclusive": true,
-      "timeout_seconds": 2400
+      "timeout_seconds": 900
     },
     {
       "name": "prose-exhaustive",
