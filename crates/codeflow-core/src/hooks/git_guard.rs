@@ -6903,10 +6903,10 @@ fn config_write_message(write: &ConfigWrite) -> String {
             "`git config` would rename a section to `{found}` in {place}, and settings in that section can make a later git command run a program the guards never see"
         ),
         Some(ConfigKind::Command) if found.to_lowercase().starts_with("include") => format!(
-            "`git config` would set `{found}` in {place}, which pulls the settings of `{value}` into later git commands, out of the guards' sight"
+            "`git config` would set `{found}` in {place}; that pulls the settings of `{value}` into later git commands, out of the guards' sight"
         ),
         Some(ConfigKind::Command) if found.to_lowercase().starts_with("alias.") => format!(
-            "`git config` would set `{found}` in {place}, which defines a git command for later sessions; a `!` value makes it run a program the guards never see"
+            "`git config` would set `{found}` in {place}; that defines a git command for later sessions, and a `!` value makes it run a program the guards never see"
         ),
         Some(ConfigKind::Command) => format!(
             "`git config` would set `{found}` to `{value}` in {place}; a later git command runs that value as a program the guards never see"
