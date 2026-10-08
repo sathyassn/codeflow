@@ -354,9 +354,21 @@ level:
   only use `$HOME`, `${HOME}`, `$ZDOTDIR`, `$XDG_CONFIG_HOME` or an earlier
   assigned name (`F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'`). An innocent
   value (`-c color.ui=never`, `EDITOR=vim`) changes nothing. On a staged line
-  a command-valued setting must also be a bare viewer or editor (`vim`,
-  `less`), since any other command could run what the call wrote, and the
-  variables that pick the program itself (`PATH`, `SHELL`, `LD_*`,
+  a git setting is judged by its key, for `-c`, `--config-env` (`=` or a
+  separate word) and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` alike: a key
+  known to run nothing (`color.*`, `user.name`, `diff.renames`,
+  `core.commentChar`, `clean.requireForce`, `core.fsmonitorHookVersion`, a
+  `pager.<command>` boolean, and similar) passes; a key known to run a
+  command (`core.pager`, `core.fsmonitor`, `core.gitProxy`, `alias.*`,
+  `remote.<name>.uploadpack`, and `include.path`, which pulls in any key) must
+  hold an ordinary viewer or tool; any other key refuses. A command-valued
+  variable on a staged line must start with a viewer, editor, ssh or diff
+  tool (`vim`, `less`, `code`, `ssh`, `diff`) followed only by plain flags
+  that name no class file, no shell character and nothing that runs code
+  (`code -w`, `vim -R`, `ssh -o BatchMode=yes`); `vim -S x`, `sh r.sh` and
+  `ssh -o ProxyCommand=sh` refuse. `--exec-path` is read in either spelling,
+  and an empty or unknown directory refuses on a staged line. The variables
+  that pick the program itself (`PATH`, `SHELL`, `LD_*`,
   `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`) refuse
   whatever the value, because a value can point at a program or a
