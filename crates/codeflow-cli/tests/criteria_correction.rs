@@ -519,6 +519,133 @@ fn a_follow_up_that_exists_only_at_the_head_still_runs_the_preflight() {
     );
 }
 
+/// AC-4: a range that is not a correction keeps the anchored preflight.
+/// It is refused with `work.stable_planning_anchor` and the skip sentence
+/// is absent.
+fn assert_preflight_runs(result: &(i32, String), what: &str) {
+    assert_eq!(result.0, 1, "{what}: {}", result.1);
+    assert!(
+        result.1.contains("work.stable_planning_anchor"),
+        "{what}: {}",
+        result.1
+    );
+    assert!(
+        !result.1.contains("starts no work"),
+        "{what}: the skip sentence must be absent: {}",
+        result.1
+    );
+}
+
+/// On a `plan/` branch cut from `main` with TSK-005 blocked, run the edit
+/// `change` and commit it.
+fn blocked_follow_up_range(change: impl FnOnce(&Path)) -> (tempfile::TempDir, (i32, String)) {
+    let dir = repo();
+    let root = dir.path();
+    stick(root, Stuck::Blocked);
+    git(root, &["switch", "-C", PLAN, "main"]);
+    change(root);
+    commit(root, "docs(records): change the plan");
+    let result = ci(root, PLAN, "Task: TSK-005");
+    (dir, result)
+}
+
+/// AC-4: a blocked follow-up that adds only a plan note corrects nothing.
+#[test]
+fn a_blocked_follow_up_with_only_a_plan_note_runs_the_preflight() {
+    let (_dir, result) =
+        blocked_follow_up_range(|root| write(root, "docs/plan/note.md", "A planning note.\n"));
+    assert_preflight_runs(&result, "a plan note on a blocked follow-up");
+}
+
+/// AC-4: a blocked follow-up that moves to `todo` and drops its Blocker
+/// changes its own record, so the range is no correction.
+#[test]
+fn a_blocked_follow_up_moved_to_todo_runs_the_preflight() {
+    let (_dir, result) = blocked_follow_up_range(|root| {
+        write(
+            root,
+            &record_path("TSK-005"),
+            &task(
+                "TSK-005",
+                None,
+                Some("TSK-003"),
+                "todo",
+                CRITERIA,
+                "Pending.\n",
+            ),
+        );
+    });
+    assert_preflight_runs(&result, "a blocked follow-up moved to todo");
+}
+
+/// AC-4: a blocked follow-up that rewrites its own criterion text changes
+/// its own record, so the range is no correction.
+#[test]
+fn a_blocked_follow_up_changing_its_own_criterion_runs_the_preflight() {
+    let (_dir, result) = blocked_follow_up_range(|root| rewrite(root, "TSK-005", CORRECTED));
+    assert_preflight_runs(&result, "a blocked follow-up changing its own criterion");
+}
+
+/// AC-4: a range that names the completed task and changes no record of
+/// it, only a plan note, starts nothing to correct.
+#[test]
+fn naming_the_completed_task_with_only_a_plan_note_runs_the_preflight() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "-C", PLAN, "main"]);
+    write(root, "docs/plan/note.md", "A planning note.\n");
+    commit(root, "docs(plan): add a planning note");
+    assert_preflight_runs(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "the completed task named with a plan note only",
+    );
+}
+
+/// AC-4: a range that names the completed task but changes only another
+/// task's description is no correction of it.
+#[test]
+fn naming_the_completed_task_with_only_another_description_runs_the_preflight() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let path = root.join(record_path("TSK-006"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, current.replacen("\nWork.\n", "\nOther work.\n", 1)).unwrap();
+    commit(root, "docs(records): reword another task");
+    assert_preflight_runs(
+        &ci(root, PLAN, "Task: TSK-003"),
+        "the completed task named with another task's description changed",
+    );
+}
+
+/// AC-4: a description edit of the completed task is a change to its
+/// record, so the range still starts no work and skips the preflight.
+#[test]
+fn a_description_edit_of_the_completed_task_skips_the_preflight() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let path = root.join(record_path("TSK-003"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        current.replacen("\nWork.\n", "\nWork, reworded.\n", 1),
+    )
+    .unwrap();
+    commit(root, "docs(records): reword the description");
+    let result = ci(root, PLAN, "Task: TSK-003");
+    assert_passes(
+        &result,
+        "a description edit of the completed task",
+        &["starts no work"],
+    );
+    assert!(
+        !result.1.contains("work.stable_planning_anchor"),
+        "{}",
+        result.1
+    );
+}
+
 /// AC-3: the criteria set and every tag stay frozen. An added, removed,
 /// renumbered or reordered criterion, a changed `(journey)`,
 /// `(after release)` or `(serves ...)` tag, or a list item the parser does

@@ -2266,14 +2266,20 @@ fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -
 
 /// Whether the range from `base` (the target tip) to `head`, which changes
 /// `changed_paths`, only corrects the records of a completed standalone
-/// task that `task_id` names or follows up (ADR-0080): the range changes
-/// planning records only, and the task is in the correctable set (complete
-/// and standalone at the target and at the head, and not reopened by the
-/// range). `task_id` may be that task or a follow-up of it in any status,
-/// including one that is blocked, cancelled or awaiting selection, when the
-/// target already holds the follow-up. Such a range starts no work, so the
-/// anchored preflight for tracked work (R-72) has nothing to admit; the
-/// criteria and binding rules still judge it.
+/// task that `task_id` names or follows up (ADR-0080), and so starts no
+/// work. The range qualifies when all of these hold: it changes planning
+/// records only; the correctable set (complete and standalone at the target
+/// and at the head, and not reopened by the range) is not empty; every task
+/// record the range adds, removes or changes is in that set; at least one
+/// changed path is the record of a task in that set; and, when `task_id` is
+/// not itself in that set, it is a follow-up the target already holds and
+/// its record at the head is byte-equal to the target's. `task_id` may be
+/// that follow-up in any status, including blocked, cancelled or awaiting
+/// selection, so a range that also changes the follow-up's own record, or
+/// that changes no record of the completed task (a plan note, or another
+/// task's description), is not a correction and keeps the anchored
+/// preflight for tracked work (R-72). The criteria and binding rules still
+/// judge a correction.
 ///
 /// # Errors
 ///
@@ -2305,11 +2311,47 @@ pub fn records_correction(
         (oid(base)?, oid(head)?),
         &reopened,
     );
+    if correcting.is_empty() {
+        return Ok(false);
+    }
     // A follow-up named only by the range is read from the head, so the
-    // range could authorise itself; only a follow-up the target holds
-    // takes the skip.
-    Ok(correcting.contains(task_id)
-        || (!correcting.is_empty() && target.records.contains_key(task_id)))
+    // range could authorise itself; only a follow-up the target holds, with
+    // its record unchanged, takes the skip.
+    let named_unchanged = target
+        .records
+        .get(task_id)
+        .zip(at_head.records.get(task_id))
+        .is_some_and(|(before, after)| before.content == after.content);
+    if !correcting.contains(task_id) && !named_unchanged {
+        return Ok(false);
+    }
+    // Every task record the range touches is a correcting one, so a plan
+    // note, or a change to the follow-up's own record or to another task,
+    // is more than a correction.
+    let task_ids: std::collections::BTreeSet<&String> = target
+        .records
+        .iter()
+        .chain(&at_head.records)
+        .filter(|(_, record)| record.kind == RecordKind::Task)
+        .map(|(id, _)| id)
+        .collect();
+    let touched = |id: &String| match (target.records.get(id), at_head.records.get(id)) {
+        (Some(before), Some(after)) => before.content != after.content || before.path != after.path,
+        _ => true,
+    };
+    if task_ids
+        .iter()
+        .any(|id| touched(id) && !correcting.contains(*id))
+    {
+        return Ok(false);
+    }
+    // At least one changed path is a correcting task's record.
+    Ok(correcting.iter().any(|id| {
+        [&target, &at_head]
+            .iter()
+            .filter_map(|graph| graph.records.get(id))
+            .any(|record| changed_paths.contains(&record.path))
+    }))
 }
 
 /// The change from `old` to `new` criteria, one entry per criterion

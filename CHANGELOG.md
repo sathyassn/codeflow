@@ -257,7 +257,8 @@ erratum below, never an edit of the section.
   as a `work.criteria_frozen` note for the reviewer, who confirms that the
   meaning is unchanged; the task stays `complete`, its acceptance block
   stays bound, and the anchored work-start preflight does not apply to
-  such a range. An added, removed, renumbered or reordered criterion, a
+  a range that corrects the task's records (a range of only a plan note,
+  the follow-up's own record or another task's record keeps it). An added, removed, renumbered or reordered criterion, a
   changed `(journey)`, `(after release)` or `(serves ...)` tag, a
   changed checkbox form, or an added list item that is no criterion is
   still refused, and so is the same change on the

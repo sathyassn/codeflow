@@ -39,9 +39,14 @@ prints the criteria delta as a `work.criteria_frozen` note, and a human
 reviewer confirms that the substance of each changed criterion is
 unchanged; the machine guarantees structure only. The task stays
 `complete`, and its acceptance block stays bound to its reviewed commit:
-the range changes no block, so the binding is not judged again. Such a
-range starts no work, so the anchored preflight for tracked work (R-72)
-does not apply to it. On the corrected task's own `task/` branch, a range
+the range changes no block, so the binding is not judged again. A range
+that changes the record of the completed task, and no task record outside
+the correctable set (the named task and the task it follows), starts no
+work, so the anchored preflight for tracked work (R-72) does not apply to
+it. A follow-up named by the `Task:` line must be held by the target with
+its record unchanged. A range that changes only a plan note, the
+follow-up's own record or another task's record corrects nothing and
+keeps the preflight. On the corrected task's own `task/` branch, a range
 keeps today's behaviour, since that branch is the task's reopen route. An
 epic task keeps the amendment that names its epic.
 
