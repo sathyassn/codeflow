@@ -1,0 +1,11 @@
+id = "TSK-259"
+uid = "092dbe88-3a96-4c3f-8d97-9be4757af0c1"
+kind = "TSK"
+title = "A reviewer can comment on a named part of every stage the cf-present skill writes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T15:15:40Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
