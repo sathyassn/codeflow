@@ -631,16 +631,18 @@ mod tests {
 
     /// A push URL is not a local path because it cannot name one: Windows
     /// refuses `https:` as a file name (os error 123), and Unix refuses a
-    /// name past its length limit with the same error kind. A nameable local
-    /// destination is still refused (PR 84 Windows run).
+    /// name past its length limit. Windows may report a long name as
+    /// `ERROR_FILENAME_EXCED_RANGE`, which proves nothing, so the long form
+    /// is a Unix case. A nameable local destination is still refused (PR 84
+    /// Windows run).
     #[test]
     fn a_push_url_that_cannot_name_a_local_path_is_not_a_local_push() {
         let dir = repository_with_config(b"");
-        let long = "x".repeat(4096);
-        for destination in [
-            "https://user@example.invalid/o/r.git".to_string(),
-            format!("example.invalid:{long}/r.git"),
-        ] {
+        let mut destinations = vec!["https://user@example.invalid/o/r.git".to_string()];
+        if cfg!(unix) {
+            destinations.push(format!("example.invalid:{}/r.git", "x".repeat(4096)));
+        }
+        for destination in destinations {
             let args = ["push".to_string(), destination.clone(), "main".into()];
             assert_eq!(check(dir.path(), &args), None, "{destination:.40}");
         }

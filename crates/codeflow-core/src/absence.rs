@@ -72,9 +72,13 @@ fn missing_leaf(path: &Path) -> io::Result<Missing> {
 /// it reads as a path names something on disk. That holds for a path that is
 /// [`proven_absent`], for a name the platform cannot hold (a NUL anywhere; on
 /// Windows `*`, `?`, `"`, `:` or a control character in a name, refused as
-/// `ERROR_INVALID_NAME`; a name too long), and for a path beneath an existing
-/// non-directory. Any other read failure is returned, so a nameable path the
-/// guard cannot read still fails closed (OS text rule, issue 79).
+/// `ERROR_INVALID_NAME`, or a malformed path, `ERROR_BAD_PATHNAME`; on Unix a
+/// name the kernel refuses as too long), and for a path beneath an existing
+/// non-directory. Windows `ERROR_FILENAME_EXCED_RANGE` is not such a name: it
+/// is the legacy `MAX_PATH` limit, and a long-path-aware process (Git for
+/// Windows with `core.longpaths`) can still open that path. It and any other
+/// read failure are returned, so a path the guard cannot read fails closed
+/// (OS text rule, issue 79).
 pub(crate) fn cannot_exist(path: &Path) -> io::Result<bool> {
     if path.as_os_str().as_encoded_bytes().contains(&0) {
         return Ok(true);
@@ -100,8 +104,9 @@ pub(crate) fn existing_metadata(path: &Path) -> io::Result<Option<std::fs::Metad
 }
 
 /// Whether reading `path` failing with `error` proves nothing can exist
-/// there: the platform refused the name, a component is not a directory, or
-/// the leaf is not found and its ancestors settle it ([`missing_leaf`]).
+/// there: the platform refused the name ([`refuses_name`]), a component is
+/// not a directory, or the leaf is not found and its ancestors settle it
+/// ([`missing_leaf`]).
 fn failure_proves_no_entry(path: &Path, error: &io::Error) -> io::Result<bool> {
     if refuses_name(error) {
         return Ok(true);
@@ -112,14 +117,33 @@ fn failure_proves_no_entry(path: &Path, error: &io::Error) -> io::Result<bool> {
     Ok(false)
 }
 
-/// Whether the platform refused the path itself: a name it cannot hold
-/// (Windows `ERROR_INVALID_NAME`, a name too long) or a component that is not
-/// a directory.
+/// Whether the platform refused the path itself: a name it cannot hold, or a
+/// component that is not a directory. Rust reports Windows
+/// `ERROR_FILENAME_EXCED_RANGE` with the same `InvalidFilename` kind as a
+/// refused name, so on Windows the raw code decides
+/// ([`windows_error_refuses_name`]). On Unix that kind is `ENAMETOOLONG`, the
+/// kernel's refusal, which every process on the host shares.
 fn refuses_name(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::InvalidFilename | io::ErrorKind::NotADirectory
-    )
+    match error.kind() {
+        io::ErrorKind::InvalidFilename if cfg!(windows) => {
+            error.raw_os_error().is_some_and(windows_error_refuses_name)
+        }
+        io::ErrorKind::InvalidFilename | io::ErrorKind::NotADirectory => true,
+        _ => false,
+    }
+}
+
+/// Windows `ERROR_INVALID_NAME`: a name the filesystem cannot store.
+const ERROR_INVALID_NAME: i32 = 123;
+/// Windows `ERROR_BAD_PATHNAME`: a path that cannot be parsed.
+const ERROR_BAD_PATHNAME: i32 = 161;
+
+/// Whether a Windows raw OS error that Rust reports as `InvalidFilename`
+/// proves the name cannot exist. `ERROR_FILENAME_EXCED_RANGE` (206) does
+/// not: it says this call hit the legacy `MAX_PATH` limit, not that the path
+/// names nothing. Kept apart from `cfg(windows)` so every host tests it.
+fn windows_error_refuses_name(code: i32) -> bool {
+    matches!(code, ERROR_INVALID_NAME | ERROR_BAD_PATHNAME)
 }
 
 /// Obtain leaf metadata, returning None only for proven absence through its ancestors.
@@ -188,7 +212,23 @@ mod optional_metadata_tests {
 
 #[cfg(test)]
 mod cannot_exist_tests {
-    use super::{cannot_exist, existing_metadata, proven_absent};
+    use super::{cannot_exist, existing_metadata, proven_absent, windows_error_refuses_name};
+
+    /// Windows maps three codes to `InvalidFilename`. Only a name it cannot
+    /// store (123) or a malformed path (161) names nothing; a path past the
+    /// legacy `MAX_PATH` limit (206) can still exist for a long-path-aware
+    /// process, so it must stay a read failure.
+    #[test]
+    fn only_a_windows_name_refusal_proves_no_entry() {
+        assert!(windows_error_refuses_name(123), "ERROR_INVALID_NAME");
+        assert!(windows_error_refuses_name(161), "ERROR_BAD_PATHNAME");
+        assert!(
+            !windows_error_refuses_name(206),
+            "ERROR_FILENAME_EXCED_RANGE"
+        );
+        assert!(!windows_error_refuses_name(2), "ERROR_FILE_NOT_FOUND");
+        assert!(!windows_error_refuses_name(5), "ERROR_ACCESS_DENIED");
+    }
 
     /// A name the platform refuses names nothing: Windows refuses `"$d"`,
     /// `a*b` or a newline with `ERROR_INVALID_NAME` (os error 123), and Unix
@@ -234,6 +274,27 @@ mod cannot_exist_tests {
         assert!(!cannot_exist(&file).unwrap());
         assert!(existing_metadata(&file).unwrap().is_some());
         assert!(cannot_exist(&dir.path().join("missing/child")).unwrap());
+    }
+
+    /// A path past the legacy `MAX_PATH` limit that exists is read, and one
+    /// that is missing is settled by its ancestors; neither length is read
+    /// as a name Windows refuses.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_past_max_path_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut deep = dir.path().to_path_buf();
+        while deep.as_os_str().len() <= 300 {
+            deep.push("a-long-directory-name-for-max-path");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        let policy = deep.join("policy.json");
+        std::fs::write(&policy, "{}").unwrap();
+        assert!(policy.as_os_str().len() > 260);
+        assert!(!cannot_exist(&policy).unwrap());
+        assert!(existing_metadata(&policy).unwrap().is_some());
+        assert!(cannot_exist(&deep.join("missing/child")).unwrap());
+        assert!(existing_metadata(&deep.join("missing")).unwrap().is_none());
     }
 
     /// A nameable path the guard cannot read still fails closed.
