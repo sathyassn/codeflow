@@ -1,0 +1,11 @@
+id = "TSK-261"
+uid = "a428544f-c5ec-4c79-9133-f940bc493476"
+kind = "TSK"
+title = "Required checks run on the current target tip before a merge"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T15:32:35Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
