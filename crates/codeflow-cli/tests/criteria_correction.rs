@@ -268,7 +268,7 @@ fn a_named_task_corrects_its_criteria_text() {
         &[
             DELTA,
             "a human reviewer confirms that the substance of each changed criterion is unchanged",
-            "TSK-003 is complete at the target; this range of planning records only corrects its records and starts no work",
+            "this range of planning records only corrects the records of a completed standalone task that TSK-003 names or follows up, and starts no work",
         ],
     );
     assert!(!result.1.contains(FROZEN), "{}", result.1);
@@ -310,6 +310,167 @@ fn a_follow_up_corrects_the_task_it_follows() {
     assert_eq!(pushed.0, 0, "{}", pushed.1);
     assert!(pushed.1.contains(DELTA), "{}", pushed.1);
     assert!(!pushed.1.contains(FROZEN), "{}", pushed.1);
+}
+
+/// How `main` records the follow-up TSK-005 when it cannot start.
+#[derive(Clone, Copy)]
+enum Stuck {
+    Blocked,
+    Cancelled,
+    AwaitingSelection,
+}
+
+/// On `main`, record TSK-005 as a follow-up that cannot start, so a
+/// planning range that names it names a task the anchored preflight
+/// refuses.
+fn stick(root: &Path, how: Stuck) {
+    git(root, &["switch", "main"]);
+    let path = root.join(record_path("TSK-005"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    let blocker = |reason: &str, revisit: &str| {
+        format!("\n## Blocker\n\n- reason: {reason}\n- owner: operator\n- revisit: {revisit}\n")
+    };
+    let stuck = match how {
+        Stuck::Blocked => format!(
+            "{}{}",
+            current.replace("status: todo", "status: blocked"),
+            blocker("waiting on the operator", "approved")
+        ),
+        Stuck::Cancelled => current
+            .replace("status: todo", "status: cancelled")
+            .replace(
+                "Pending.\n",
+                "- cancelled: not needed\n- scope: folded into TSK-003\n",
+            ),
+        Stuck::AwaitingSelection => {
+            write(root, "docs/plan/choice.md", "Choose one.\n");
+            format!(
+                "{}{}",
+                current.replace(
+                    "status: todo",
+                    "status: blocked\nawaiting_selection: docs/plan/choice.md"
+                ),
+                blocker("awaiting selection", "docs/plan/choice.md")
+            )
+        }
+    };
+    std::fs::write(&path, stuck).unwrap();
+    commit(root, "docs(records): record why the follow-up cannot start");
+}
+
+/// A correction that names the follow-up TSK-005, recorded on `main` as
+/// `how` (described by `what`), passes with its delta, the skip sentence
+/// and no `work.stable_planning_anchor`.
+fn follow_up_that_cannot_start_corrects(how: Stuck, what: &str) {
+    let dir = repo();
+    let root = dir.path();
+    stick(root, how);
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    let result = ci(root, PLAN, "Task: TSK-005");
+    assert_passes(
+        &result,
+        &format!("a correction naming a follow-up that is {what}"),
+        &[
+            DELTA,
+            "this range of planning records only corrects the records of a completed standalone task that TSK-005 names or follows up, and starts no work",
+        ],
+    );
+    for absent in [FROZEN, "work.stable_planning_anchor"] {
+        assert!(!result.1.contains(absent), "{what}: {}", result.1);
+    }
+    let pushed = ci_on(root, PLAN, None);
+    assert_eq!(pushed.0, 0, "{what} pushed: {}", pushed.1);
+}
+
+/// The skip for a follow-up recorded as `how` admits no change to the
+/// criteria set: a criterion added through it is refused as frozen.
+fn follow_up_that_cannot_start_keeps_the_set(how: Stuck, what: &str) {
+    let dir = repo();
+    let root = dir.path();
+    stick(root, how);
+    correct(
+        root,
+        PLAN,
+        "TSK-003",
+        &format!("{CORRECTED}- AC-3 When asked, the system shall explain.\n"),
+    );
+    assert_blocks(
+        &ci(root, PLAN, "Task: TSK-005"),
+        &format!("a criterion added through a follow-up that is {what}"),
+        &[
+            "work.criteria_frozen",
+            FROZEN,
+            "this changes the criteria set itself",
+        ],
+    );
+}
+
+/// AC-2: a follow-up that cannot start (blocked, cancelled or awaiting
+/// selection) still names the completed task it follows. The range starts
+/// no work, so the anchored preflight does not apply (ADR-0080): the
+/// correction passes with its delta and no `work.stable_planning_anchor`.
+#[test]
+fn a_blocked_follow_up_corrects_the_task_it_follows() {
+    follow_up_that_cannot_start_corrects(Stuck::Blocked, "blocked");
+}
+
+#[test]
+fn a_cancelled_follow_up_corrects_the_task_it_follows() {
+    follow_up_that_cannot_start_corrects(Stuck::Cancelled, "cancelled");
+}
+
+#[test]
+fn a_follow_up_awaiting_selection_corrects_the_task_it_follows() {
+    follow_up_that_cannot_start_corrects(Stuck::AwaitingSelection, "awaiting selection");
+}
+
+/// AC-3: the skip for a follow-up that cannot start admits no change to
+/// the criteria set. A criterion added through it is refused as frozen,
+/// with the reason.
+#[test]
+fn a_blocked_follow_up_keeps_the_criteria_set_frozen() {
+    follow_up_that_cannot_start_keeps_the_set(Stuck::Blocked, "blocked");
+}
+
+#[test]
+fn a_cancelled_follow_up_keeps_the_criteria_set_frozen() {
+    follow_up_that_cannot_start_keeps_the_set(Stuck::Cancelled, "cancelled");
+}
+
+#[test]
+fn a_follow_up_awaiting_selection_keeps_the_criteria_set_frozen() {
+    follow_up_that_cannot_start_keeps_the_set(Stuck::AwaitingSelection, "awaiting selection");
+}
+
+/// AC-4: a follow-up of a task that is not complete is no correction. A
+/// blocked follow-up of the open TSK-006 that names a range of planning
+/// records still runs the anchored preflight and is refused.
+#[test]
+fn a_follow_up_of_an_open_task_still_runs_the_preflight() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "main"]);
+    let path = root.join(record_path("TSK-005"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n## Blocker\n\n- reason: waiting on the operator\n- owner: operator\n- revisit: approved\n",
+            current
+                .replace("follow_up_of: TSK-003", "follow_up_of: TSK-006")
+                .replace("status: todo", "status: blocked")
+        ),
+    )
+    .unwrap();
+    commit(root, "docs(records): follow up the open task");
+    git(root, &["switch", "-C", PLAN, "main"]);
+    write(root, "docs/plan/note.md", "A planning note.\n");
+    commit(root, "docs(plan): add a planning note");
+    assert_blocks(
+        &ci(root, PLAN, "Task: TSK-005"),
+        "a follow-up of a task that is not complete",
+        &["work.stable_planning_anchor", "task TSK-005 is blocked"],
+    );
 }
 
 /// AC-3: the criteria set and every tag stay frozen. An added, removed,
@@ -397,7 +558,7 @@ fn a_checkbox_form_change_is_refused() {
     // A mark removed: the target holds AC-1 as a legacy checkbox.
     git(root, &["switch", "main"]);
     rewrite(root, "TSK-003", &boxed);
-    commit(root, "docs(records): keep AC-1 as a checkbox");
+    let legacy = commit(root, "docs(records): keep AC-1 as a checkbox");
     git(root, &["switch", "-C", PLAN, "main"]);
     let path = root.join(record_path("TSK-003"));
     let current = std::fs::read_to_string(&path).unwrap();
@@ -431,12 +592,24 @@ fn a_checkbox_form_change_is_refused() {
         ],
     );
 
-    // Ticking the box changes no criterion.
+    // Ticking the box changes no criterion. The target records a migration
+    // baseline that holds the record, so the record is not new and the
+    // checkbox form it already has is not refused.
+    git(root, &["switch", "main"]);
+    write(
+        root,
+        ".codeflow/project.toml",
+        &format!(
+            "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.1.0\"\nstack = \"rust\"\nareas = [\"engine\"]\npolicy_armed = true\ngit_hooks = \"unwired\"\npermission_preset = \"default\"\nwork_records_baseline = \"{legacy}\"\n"
+        ),
+    );
+    commit(root, "chore: record the migration baseline");
     git(root, &["switch", "-C", PLAN, "main"]);
     let current = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, current.replace("- [ ] AC-1 ", "- [x] AC-1 ")).unwrap();
     commit(root, "docs(records): tick AC-1");
     let ticked = ci(root, PLAN, "Task: TSK-003");
+    assert_eq!(ticked.0, 0, "ticking a checkbox: {}", ticked.1);
     assert!(!ticked.1.contains("work.criteria_frozen"), "{}", ticked.1);
 }
 

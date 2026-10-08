@@ -751,7 +751,8 @@ fn tracked(
         );
     }
     // A range of planning records only that corrects a completed
-    // standalone task starts no work, so there is nothing to admit
+    // standalone task, named by the Task line or followed up by the task
+    // it names in any status, starts no work, so there is nothing to admit
     // (ADR-0080). Its own branch keeps the own-branch preflight.
     if !anchor.own_branch
         && codeflow_core::workgraph::acceptance::records_correction(
@@ -764,7 +765,7 @@ fn tracked(
         .unwrap_or(false)
     {
         println!(
-            "codeflow ci: {task_id} is complete at the target; this range of planning records only corrects its records and starts no work, so the anchored preflight does not apply (ADR-0080)"
+            "codeflow ci: this range of planning records only corrects the records of a completed standalone task that {task_id} names or follows up, and starts no work, so the anchored preflight does not apply (ADR-0080)"
         );
         return;
     }

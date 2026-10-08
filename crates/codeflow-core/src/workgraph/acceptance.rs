@@ -2265,12 +2265,15 @@ fn records_only(repo: &Repository, tips: (Oid, Oid), changed_paths: &[String]) -
 }
 
 /// Whether the range from `base` (the target tip) to `head`, which changes
-/// `changed_paths`, only corrects the records of `task_id` (ADR-0080): the
-/// task is complete and standalone at the target and at the head, the
-/// range does not reopen it, and it changes planning records only. Such a
-/// range starts no work, so the anchored preflight for tracked work
-/// (R-72) has nothing to admit; the criteria and binding rules still judge
-/// it.
+/// `changed_paths`, only corrects the records of a completed standalone
+/// task that `task_id` names or follows up (ADR-0080): the range changes
+/// planning records only ([`correctable`]), and the task is complete and
+/// standalone at the target and at the head and is not reopened by the
+/// range. `task_id` may be that task or a follow-up of it in any status,
+/// including one that is blocked, cancelled or awaiting selection, when the
+/// target already holds the follow-up. Such a range starts no work, so the
+/// anchored preflight for tracked work (R-72) has nothing to admit; the
+/// criteria and binding rules still judge it.
 ///
 /// # Errors
 ///
@@ -2292,15 +2295,21 @@ pub fn records_correction(
     };
     let target = Graph::from_revision(&repo, base)?;
     let at_head = Graph::from_revision(&repo, head)?;
-    let complete_both = target.records.get(task_id).is_some_and(standalone_complete)
-        && at_head
-            .records
-            .get(task_id)
-            .is_some_and(standalone_complete);
-    if !complete_both || !records_only(&repo, (oid(base)?, oid(head)?), changed_paths) {
-        return Ok(false);
-    }
-    Ok(!reopened_ids(&repo, base, head, &at_head)?.contains(task_id))
+    let reopened = reopened_ids(&repo, base, head, &at_head)?;
+    let correcting = correctable(
+        &repo,
+        &target,
+        &at_head,
+        changed_paths,
+        task_id,
+        (oid(base)?, oid(head)?),
+        &reopened,
+    );
+    // A follow-up named only by the range is read from the head, so the
+    // range could authorise itself; only a follow-up the target holds
+    // takes the skip.
+    Ok(correcting.contains(task_id)
+        || (!correcting.is_empty() && target.records.contains_key(task_id)))
 }
 
 /// The change from `old` to `new` criteria, one entry per criterion
