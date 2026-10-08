@@ -402,15 +402,32 @@ git-guard refuses a user- or system-scope git setting that is not known to
 run nothing, under `git.hook_integrity`: a key that runs a program, such as
 an alias, `core.pager`, `credential.helper`, `difftool.<tool>.path` or
 `gpg.ssh.defaultKeyCommand`, and any key the classification does not know,
-such as `safe.directory` or `imap.tunnel`. The known-safe keys (`user.*`,
-`color.*`, `init.defaultBranch`, `pull.rebase`, `push.autoSetupRemote`,
-`core.autocrlf`, `commit.gpgsign` and the others in `security/git.rs`)
-pass, as do repository-scope settings, unsets and reads. git has many keys
-that run a program and adds more, so a list of them always missed one
-(review round ten); an unknown key costs a refusal the operator can clear by
-setting it by hand. Every guard that reads a git command line skips the same
-global options that take the next word as their value (`-C`, `-c`,
-`--git-dir`, `--work-tree`, `--namespace`, `--config-env`, `--attr-source`,
+such as `safe.directory` or `init.templateDir`. The known-safe keys
+(`user.*`, `color.*`, `init.defaultBranch`, `pull.rebase`,
+`push.autoSetupRemote`, `core.autocrlf`, `commit.gpgsign` and the others in
+`security/git.rs`) pass, and so do the switches beside the tool programs
+(`difftool.prompt`, `mergetool.keepBackup`, `pager.<command>`) set to a
+boolean; keys match by exact name. Repository-scope settings, unsets and
+reads pass. git has many keys that run a program and adds more, so a list
+of them always missed one (review round ten); an unknown key costs a
+refusal the operator can clear by setting it by hand.
+
+A write into a file counts as user or system scope unless the file is a
+repository's own configuration: a `config` or `config.worktree` in a git
+directory, a `.gitmodules` or a `.lfsconfig`, judged through its symbolic
+links. git reads its system file under the prefix it was built with
+(`/opt/homebrew/etc/gitconfig`, `/usr/local/etc/gitconfig`, a source
+build's `~/etc/gitconfig`) and every file a configuration includes, so a
+list of user and system files always missed one (review round eleven).
+`--file`, `-f`, `--blob` and, for a call with no scope option, the file
+`GIT_CONFIG` names are judged this way. The cost is a refusal for a project
+fixture or scratch file given a key not known to run nothing. A shell
+write or native edit of a `gitconfig` in any `etc` directory is refused
+with the user's own files.
+
+Every guard that reads a git command line skips the same global options
+that take the next word as their value (`-C`, `-c`, `--git-dir`,
+`--work-tree`, `--namespace`, `--config-env`, `--attr-source`,
 `--shallow-file`), so a value is never read as the subcommand (issue 120).
 
 What stays open, by harness and platform:
