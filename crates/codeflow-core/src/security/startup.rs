@@ -257,6 +257,18 @@ impl Class {
         })
     }
 
+    /// Whether `name` is the last component of a class entry: a class file
+    /// name anywhere, or a class directory such as `fish`.
+    fn knows_name(&self, name: &str) -> bool {
+        let name = name.to_lowercase();
+        self.entries.iter().any(|entry| match entry {
+            Entry::At { readings, .. } => readings
+                .iter()
+                .any(|p| p.trim_end_matches('/').rsplit('/').next() == Some(name.as_str())),
+            Entry::Name(n) => n.to_lowercase() == name,
+        })
+    }
+
     /// The startup file `text` names, as a path or a file name, in any
     /// letter case and with either slash. A name inside a longer name
     /// (`user.profile`, `my.zshrc.txt` before the dot) does not count.
@@ -268,6 +280,13 @@ impl Class {
             .find(|needle| mentions(&text, needle))
             .cloned()
     }
+}
+
+/// A directory-stack tilde prefix: `+`, `-`, `N`, `+N` or `-N`.
+fn stack_token(prefix: &str) -> bool {
+    let digits = prefix.strip_prefix(['+', '-']).unwrap_or(prefix);
+    matches!(prefix, "+" | "-")
+        || (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Whether `needle` occurs in `text` as a path or a name: not preceded by
@@ -627,6 +646,25 @@ impl Line<'_> {
         placement.map_or(Judged::Ordinary, Judged::Placement)
     }
 
+    /// Whether every alternative of a glob's last segment is a literal that
+    /// is neither a class file name nor the name of a class directory, so
+    /// the glob can only reach a startup file through its directory part
+    /// (`**/node_modules`). `**/.*`, a trailing `**` and `**/fish` are not.
+    fn glob_ends_plain(&self, pattern: &str) -> bool {
+        let last = pattern.rsplit('/').next().unwrap_or_default();
+        let alternatives: Vec<&str> = match last.strip_prefix('{').and_then(|r| r.strip_suffix('}'))
+        {
+            Some(inner) => inner.split(',').collect(),
+            None => vec![last],
+        };
+        alternatives.iter().all(|alt| {
+            !alt.is_empty()
+                && !alt.contains(['*', '?', '[', '{', '}', '$', '`', '\u{1}', '\u{2}'])
+                && self.class.named_in(alt).is_none()
+                && !self.class.knows_name(alt)
+        })
+    }
+
     /// Whether an unresolved word may name a startup file: the line names
     /// one, or the literal directory before the part the shell fills in is
     /// the home, `/etc` or a startup directory.
@@ -637,7 +675,11 @@ impl Line<'_> {
         if dirs
             .iter()
             .filter_map(|dir| self.expand(word, dir))
-            .any(|path| has_glob(&shown(&path)) && startup_glob_paths(&path, false).is_none())
+            .any(|path| {
+                has_glob(&shown(&path))
+                    && startup_glob_paths(&path, false).is_none()
+                    && !self.glob_ends_plain(&shown(&path))
+            })
         {
             return Some("its glob exceeds the shell reader's bounded expansion".to_string());
         }
@@ -651,9 +693,11 @@ impl Line<'_> {
                 return Some(why);
             }
         }
-        if let Some(rest) = word.strip_prefix('~') {
-            let user = rest.split('/').next().unwrap_or_default();
-            if !user.is_empty() && user != "+" {
+        // Only `~user/rest` names a home the guard cannot read. The
+        // directory stack (`~+`, `~-`, `~N`, `~+N`, `~-N`) is not a home, and
+        // a tilde word without a slash is the home itself or a plain name.
+        if let Some((user, _)) = word.strip_prefix('~').and_then(|r| r.split_once('/')) {
+            if !user.is_empty() && !stack_token(user) {
                 return Some(format!("`{word}` names a home the guard cannot read"));
             }
         }
@@ -853,6 +897,15 @@ const RUNNERS: &[&str] = &[
     "lua",
     "osascript",
     "xargs",
+];
+
+/// Programs that run a script handed over as a file name or on standard
+/// input, so a heredoc or a process substitution (`awk -f <(...)`) feeds
+/// them code. They are not in [`RUNNERS`]: `... | awk '{print $2}'` reads
+/// and must stay allowed.
+const SCRIPT_RUNNERS: &[&str] = &[
+    "awk", "gawk", "mawk", "nawk", "sed", "gsed", "make", "gmake", "patch", "ed", "ex", "tclsh",
+    "expect", "Rscript", "julia", "m4",
 ];
 
 /// The startup variables, and the shells each one changes.
@@ -1126,7 +1179,18 @@ fn startup_reader(name: &str, args: &[String]) -> Option<&'static [&'static str]
 /// line that also runs code or a file: "write the script, then run it"
 /// in one call.
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
-    if !(line.text.contains("<<") || line.text.contains('|')) {
+    let substitution = line.text.contains("<(") || line.text.contains(">(");
+    let heredoc = line.text.contains("<<");
+    // A script written to a file and run in the same call.
+    let written = segments.iter().any(|segment| {
+        let redirects = redirect_writes(segment);
+        redirects
+            .targets
+            .iter()
+            .chain(&redirects.unread)
+            .any(|target| target != "/dev/null")
+    });
+    if !(heredoc || line.text.contains('|') || substitution || written) {
         return None;
     }
     let name = line.names(line.text)?;
@@ -1135,11 +1199,12 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
         strip_reserved_words(&mut words);
         let (program, _) = strip_launchers(&words)?;
         let runner = RUNNERS.contains(&basename(program))
+            || ((heredoc || substitution) && SCRIPT_RUNNERS.contains(&basename(program)))
             || program.starts_with("./")
             || (program.starts_with('/') && !READERS.contains(&basename(program)));
         runner.then(|| {
             finding(format!(
-                "a heredoc or piped text names the shell startup file `{name}`, and the line runs `{program}`, which can write it"
+                "a heredoc, pipe, process substitution or written file names the shell startup file `{name}`, and the line runs `{program}`, which can write it"
             ))
         })
     })
@@ -1196,6 +1261,18 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     if is_shell(name) || name == "eval" {
         // The script a shell is given is judged as its own commands; the
         // reader expands `-c` strings and `eval` arguments into segments.
+        // A script the shell fills in from a substitution cannot be read
+        // (`eval "$(echo ...)"`): on a line that names a class file it refuses.
+        if line.names(line.text).is_some()
+            && line.expands_unread(segment)
+            && args
+                .iter()
+                .any(|w| line.substitute(w).contains(['$', '`', '\u{1}', '\u{2}']))
+        {
+            return Some(finding(format!(
+                "`{name}` runs a script the guard cannot read, and the line names a shell startup file"
+            )));
+        }
         return None;
     }
     if let Some(call) = copy_call(name, args) {

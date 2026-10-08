@@ -67,6 +67,13 @@ const REFUSED: &[&str] = &[
     "p=src/.envrc; perl -e \"open(F,'>>$p')\"",
     "d=src; f=.envrc; python3 -c \"open('$d/$f','a')\"",
     "cat ~/.zshrc; python3 -c \"open('$NAME','a').write('x')\"",
+    // Grok round two: process substitution and the same shape elsewhere.
+    "bash <(echo 'echo x >> src/.envrc')",
+    "source <(echo 'echo x >> src/.envrc')",
+    "python3 <(echo 'open(\"src/.envrc\",\"a\").write(\"x\")')",
+    "exec bash <(echo 'echo x >> src/.envrc')",
+    "echo 'echo x >> src/.envrc' > r.sh; bash r.sh",
+    "eval \"$(echo 'echo x >> src/.envrc')\"",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -84,6 +91,10 @@ const ALLOWED: &[&str] = &[
     "sed -n 1,20p ~/.zshrc",
     "python3 -c 'print(1)'",
     "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
+    "cat <(echo hello)",
+    "diff <(echo a) <(echo b)",
+    "bash <(echo 'echo hi')",
+    "cd ~1; cat policy.json",
 ];
 
 #[test]

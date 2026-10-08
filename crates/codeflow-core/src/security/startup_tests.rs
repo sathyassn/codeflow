@@ -773,3 +773,152 @@ fn assigned_plain_paths_keep_the_verdict_of_the_literal() {
         assert!(refused(&f.judge(command)), "allowed: {command}");
     }
 }
+
+/// Grok round two, finding 1: a process substitution hands text to a runner
+/// as a pipe does, so a line that names a class file and runs one refuses.
+#[test]
+fn process_substitution_text_run_by_a_runner_refuses() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "bash <(echo 'echo x >> ~/.zshrc')",
+        "bash <(echo 'echo x >> src/.envrc')",
+        "sh <(printf 'echo x >> %s\\n' src/.envrc)",
+        "python3 <(echo 'open(\"src/.envrc\",\"a\").write(\"x\")')",
+        "source <(echo 'echo x >> src/.envrc')",
+        ". <(echo 'echo x >> src/.envrc')",
+        "zsh <(echo 'echo x >> src/.envrc')",
+        "eval <(echo 'echo x >> src/.envrc')",
+        "exec bash <(echo 'echo x >> src/.envrc')",
+        "bash --rcfile <(echo 'echo x >> src/.envrc') -i",
+        "env bash <(echo 'echo x >> src/.envrc')",
+        "node <(echo 'x') <(echo '.envrc')",
+        "awk -f <(echo 'BEGIN{print 1 > \".envrc\"}')",
+        "sed -f <(echo 'w .envrc') notes.txt",
+        "make -f <(echo 'all: ; echo x >> .envrc')",
+        "bash >(cat) <(echo 'echo x >> src/.envrc')",
+        "echo x > >(tee -a ~/.zshrc)",
+        "bash -c \"$(echo 'echo x >> src/.envrc')\"",
+        "printf 'echo x >> ~/.zshrc' | sh",
+        // The same shape in other spellings (sibling sweep): a script written
+        // and run in one call, a script from a substitution, a heredoc script.
+        "echo 'echo x >> src/.envrc' > r.sh; bash r.sh",
+        "printf 'echo x >> src/.envrc' > /tmp/s.sh && sh /tmp/s.sh",
+        "echo 'echo x >> src/.envrc' > r.sh; bash < r.sh",
+        "eval \"$(echo 'echo x >> src/.envrc')\"",
+        "eval $(echo 'echo x >> src/.envrc')",
+        "bash -c `echo 'echo x >> src/.envrc'`",
+        "awk -f - <<'EOF'\nBEGIN{print 1 > \"src/.envrc\"}\nEOF",
+        "patch -p0 < <(echo '--- a/.envrc')",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "git commit -F - <<'EOF'\nfix: handle .envrc\nEOF",
+        "cat > notes.md <<'EOF'\nmention .zshrc\nEOF",
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "sed 's/a/b/' <<< 'plain'",
+        "awk '{print $1}' <<< 'plain text'",
+        "echo ok > /dev/null; bash build.sh",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    for command in [
+        "cat <(echo hello)",
+        "diff <(echo a) <(echo b)",
+        "bash <(echo 'echo hi')",
+        "grep alias <(cat ~/.zshrc)",
+        "diff <(cat ~/.zshrc) <(cat ~/.bashrc)",
+        "comm -12 <(sort notes.txt) <(sort other.txt)",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round two, finding 2: only `~user/rest` is a home the guard cannot
+/// read. The directory stack (`~+`, `~-`, `~N`, `~+N`, `~-N`) and a tilde
+/// word without a slash are not.
+#[test]
+fn only_a_user_home_path_is_an_unreadable_home() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "echo a 2> ~err.log",
+        "cd ~+1 && rm x",
+        "cd ~- && rm x",
+        "cd ~-1 && rm x",
+        "cd ~1 && rm x",
+        "pushd ~2 && rm x",
+        "cd ~1; cat policy.json",
+        "rm ~-/policy.json",
+        "pushd -n review-stack; cd build; cd ~1; cat policy.json",
+        "printf x | xargs rm ~+1",
+        "R=/scratch; git -C \"$R\" commit -m x",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    for command in [
+        "echo x > ~root/.zshrc",
+        "echo x > ~root/notes.txt",
+        "cd H/ && echo x >> .zshrc",
+        "cd ~root && echo x > .zshrc",
+        "tar -xf a.tar -C ~root",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round two, finding 3: an oversized glob whose last segment is a
+/// literal that is not a class name falls through to the ordinary rule.
+#[test]
+fn an_oversized_glob_ending_in_a_plain_name_is_judged_by_its_directory() {
+    let f = Fixture::new();
+    for n in 0..4200 {
+        std::fs::write(f.project.join(format!("f{n}")), "").unwrap();
+    }
+    let mut wrong = Vec::new();
+    for command in [
+        "rm -rf **/node_modules",
+        "rm -rf node_modules",
+        "rm -rf **/{dist,node_modules}",
+        "cd /nonexistent/project && rm -rf **/node_modules",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    for command in [
+        "rm -rf **/.zshrc",
+        "rm -rf **/.envrc",
+        "rm -rf **/.*",
+        "rm -rf **",
+        "rm -rf **/",
+        "echo x > ~/**/.zshrc",
+        "rm -rf **/{dist,.envrc}",
+        "rm -rf **/fish",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    // From the home an oversized relative glob still lands in the home.
+    for n in 0..4200 {
+        std::fs::write(f.home.join(format!("g{n}")), "").unwrap();
+    }
+    if !refused(&f.judge_in("rm -rf **/node_modules", &f.home, &f.env())) {
+        wrong.push("allowed from the home: rm -rf **/node_modules".to_string());
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
