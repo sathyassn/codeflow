@@ -475,18 +475,20 @@ impl GithubProvider {
         })
     }
 
-    /// The repository ruleset that already targets `pattern`, read in full:
-    /// a branch ruleset of this repository whose conditions include
-    /// `refs/heads/<pattern>`, or `~DEFAULT_BRANCH` when `pattern` is the
-    /// default branch, and do not exclude it. `None` when there is none.
-    fn ruleset_for(
+    /// Every repository ruleset that is active and already targets
+    /// `pattern`, read in full (the list does not carry `enforcement`):
+    /// see [`ruleset_targets`]. Empty when there is none. A ruleset that is
+    /// `disabled` or only `evaluate`s enforces nothing, so it neither counts
+    /// as the branch's ruleset nor stops the search.
+    fn rulesets_for(
         &self,
         nwo: &str,
         pattern: &str,
         default_branch: Option<&str>,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Vec<Value>, String> {
         // Page until a short page, so a repository with more rulesets than
         // one page holds is still searched in full.
+        let mut found = Vec::new();
         let mut page = 1;
         loop {
             let list = self.run_gh(
@@ -510,12 +512,14 @@ impl GithubProvider {
                 let full = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
                 let full: Value =
                     serde_json::from_str(&full).map_err(|e| format!("ruleset {id} parse: {e}"))?;
-                if ruleset_targets(&full, pattern, default_branch) {
-                    return Ok(Some(full));
+                if full.get("enforcement").and_then(Value::as_str) == Some("active")
+                    && ruleset_targets(&full, pattern, default_branch)
+                {
+                    found.push(full);
                 }
             }
             if summaries.len() < RULESET_PAGE_SIZE {
-                return Ok(None);
+                return Ok(found);
             }
             page += 1;
         }
@@ -775,29 +779,32 @@ impl GithubProvider {
     /// Returns the mechanism applied.
     fn apply_rule(&self, repo: &RepoInfo, rule: &BranchRule) -> Result<String, String> {
         let nwo = &repo.nwo;
-        if let Some(existing) =
-            self.ruleset_for(nwo, &rule.pattern, repo.default_branch.as_deref())?
-        {
-            let id = existing
-                .get("id")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| "ruleset without an id".to_string())?;
-            let name = existing
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("unnamed");
-            self.run_gh(
-                &[
-                    "api",
-                    "-X",
-                    "PUT",
-                    &format!("repos/{nwo}/rulesets/{id}"),
-                    "--input",
-                    "-",
-                ],
-                Some(&Self::ruleset_update_body(&existing, rule)),
-            )?;
-            return Ok(format!("updated ruleset '{name}' ({id}) in place"));
+        let existing = self.rulesets_for(nwo, &rule.pattern, repo.default_branch.as_deref())?;
+        if !existing.is_empty() {
+            let mut updated = Vec::new();
+            for ruleset in &existing {
+                let id = ruleset
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "ruleset without an id".to_string())?;
+                let name = ruleset
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed");
+                self.run_gh(
+                    &[
+                        "api",
+                        "-X",
+                        "PUT",
+                        &format!("repos/{nwo}/rulesets/{id}"),
+                        "--input",
+                        "-",
+                    ],
+                    Some(&Self::ruleset_update_body(ruleset, rule)),
+                )?;
+                updated.push(format!("'{name}' ({id})"));
+            }
+            return Ok(format!("updated ruleset {} in place", updated.join(", ")));
         }
         if rule.uses_ruleset() {
             self.run_gh(
@@ -858,9 +865,11 @@ struct RepoInfo {
     default_branch: Option<String>,
 }
 
-/// Whether a full ruleset targets `pattern`: it includes `refs/heads/<pattern>`,
-/// or `~DEFAULT_BRANCH` when `pattern` is the default branch, and excludes
-/// neither.
+/// Whether a full ruleset targets `pattern`: one of its includes matches
+/// the branch and none of its excludes does. An entry matches when it is
+/// `~ALL`, `~DEFAULT_BRANCH` with `pattern` the default branch, the branch
+/// ref itself, or an fnmatch pattern the ref `refs/heads/<pattern>` fits
+/// (`*` stops at `/`, as GitHub's pathname matching does).
 fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>) -> bool {
     let names = |list: &str| -> Vec<&str> {
         ruleset
@@ -871,9 +880,20 @@ fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>)
             .filter_map(Value::as_str)
             .collect()
     };
-    let exact = format!("refs/heads/{pattern}");
-    let matches = |entry: &&str| {
-        *entry == exact || (*entry == "~DEFAULT_BRANCH" && default_branch == Some(pattern))
+    let reference = format!("refs/heads/{pattern}");
+    let options = glob::MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let matches = |entry: &&str| match *entry {
+        "~ALL" => true,
+        "~DEFAULT_BRANCH" => default_branch == Some(pattern),
+        entry => {
+            entry == reference
+                || glob::Pattern::new(entry)
+                    .is_ok_and(|fnmatch| fnmatch.matches_with(&reference, options))
+        }
     };
     names("include").iter().any(matches) && !names("exclude").iter().any(matches)
 }
@@ -1520,6 +1540,116 @@ esac
             live["rules"][0]["parameters"]["required_status_checks"]
         );
         assert!(writes[0].1.get("bypass_actors").is_none());
+    }
+
+    /// `LIVE_RULESET` with another id, enforcement and ref conditions.
+    #[cfg(unix)]
+    fn ruleset_with(id: u64, enforcement: &str, include: &[&str], exclude: &[&str]) -> String {
+        let mut ruleset: serde_json::Value = serde_json::from_str(LIVE_RULESET).unwrap();
+        ruleset["id"] = id.into();
+        ruleset["name"] = format!("ruleset {id}").into();
+        ruleset["enforcement"] = enforcement.into();
+        ruleset["conditions"]["ref_name"] = serde_json::json!({
+            "include": include, "exclude": exclude
+        });
+        ruleset.to_string()
+    }
+
+    /// Apply `main` against rulesets that are all branch rulesets of the
+    /// repository; each is `(id, enforcement, include, exclude)`. Returns
+    /// the write calls.
+    #[cfg(unix)]
+    fn writes_against(rulesets: &[(u64, &str, &[&str], &[&str])]) -> Vec<String> {
+        let bodies: Vec<(u64, String)> = rulesets
+            .iter()
+            .map(|(id, enforcement, include, exclude)| {
+                (*id, ruleset_with(*id, enforcement, include, exclude))
+            })
+            .collect();
+        let list: Vec<serde_json::Value> = rulesets
+            .iter()
+            .map(|(id, ..)| {
+                serde_json::json!({
+                    "id": id, "name": format!("ruleset {id}"), "target": "branch",
+                    "source_type": "Repository"
+                })
+            })
+            .collect();
+        let by_id: Vec<(u64, &str)> = bodies.iter().map(|(id, b)| (*id, b.as_str())).collect();
+        let host = Host::new(&serde_json::to_string(&list).unwrap(), &by_id, None);
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        host.writes().into_iter().map(|(call, _)| call).collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_disabled_ruleset_listed_first_is_skipped_for_the_active_one() {
+        let writes = writes_against(&[
+            (1, "disabled", &["refs/heads/main"], &[]),
+            (2, "evaluate", &["~DEFAULT_BRANCH"], &[]),
+            (3, "active", &["~DEFAULT_BRANCH"], &[]),
+        ]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_active_ruleset_that_targets_the_branch_is_updated() {
+        let writes = writes_against(&[
+            (1, "active", &["refs/heads/main"], &[]),
+            (2, "disabled", &["~ALL"], &[]),
+            (3, "active", &["~ALL"], &[]),
+        ]);
+        assert_eq!(
+            writes,
+            ["PUT repos/o/r/rulesets/1", "PUT repos/o/r/rulesets/3"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ruleset_that_includes_all_branches_is_updated_without_a_classic_put() {
+        let writes = writes_against(&[(5, "active", &["~ALL"], &[])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/5"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_fnmatch_include_that_matches_the_branch_is_updated() {
+        for include in ["refs/heads/ma*", "refs/heads/*", "refs/heads/m?in"] {
+            let writes = writes_against(&[(6, "active", &[include], &[])]);
+            assert_eq!(writes, ["PUT repos/o/r/rulesets/6"], "{include}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_fnmatch_include_that_does_not_match_the_branch_is_left_alone() {
+        for include in ["refs/heads/release/*", "refs/heads/ma", "refs/tags/*"] {
+            let writes = writes_against(&[(6, "active", &[include], &[])]);
+            assert_eq!(
+                writes,
+                ["PUT repos/o/r/branches/main/protection"],
+                "{include}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exclude_that_removes_the_branch_leaves_the_ruleset_alone() {
+        for exclude in ["refs/heads/main", "refs/heads/m*", "~DEFAULT_BRANCH"] {
+            let writes = writes_against(&[(7, "active", &["~ALL"], &[exclude])]);
+            assert_eq!(
+                writes,
+                ["PUT repos/o/r/branches/main/protection"],
+                "{exclude}"
+            );
+        }
+        // An exclude of another branch does not.
+        let writes = writes_against(&[(7, "active", &["~ALL"], &["refs/heads/dev"])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/7"]);
     }
 
     #[cfg(unix)]
