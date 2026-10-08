@@ -1144,17 +1144,24 @@ fn resolve_reviewed(repo: &Repository, reviewed: &str) -> Option<Oid> {
 
 /// Whether a review that approves `reviewed` covers `pin` (SPC-013 R-42,
 /// issue #69, TSK-250): `reviewed` resolves to the pin, or to an ancestor
-/// of it that the pin follows only by commits that change the pinned
-/// task's own record and nothing in it but its status and Closeout. A
-/// completion recorded after the review, as cf-ship asks, so needs no
-/// second review before a successor stacks on it. Every commit in the span
-/// is judged against each of its parents, merged side commits included,
-/// so a change followed by its revert still refuses; a root commit in the
-/// span refuses, since the record appears in it unreviewed. `path` is the
-/// pinned record's path at the pin ([`PinBranches::record_path`]).
+/// of it that the pin follows only by single-parent commits that change
+/// the pinned task's own record and nothing in it but its status and
+/// Closeout. A completion recorded after the review, as cf-ship asks, so
+/// needs no second review before a successor stacks on it. Each commit in
+/// the span is judged against its parent, so a change followed by its
+/// revert still refuses. A merge in the span carries no review: the
+/// predecessor's own acceptance binding (R-60) accepts a merge after its
+/// reviewed commit only as a clean re-merge of its target, which changes
+/// other files and so never passes this check either, and a pin that
+/// binding refuses would pass `work claim` and then fail its own push. A
+/// root commit in the span refuses, since the record appears in it
+/// unreviewed. `path` is the pinned record's path at the pin
+/// ([`PinBranches::record_path`]).
 ///
 /// # Errors
-/// Returns why the history between the review and the pin cannot be read.
+/// Returns why the ancestry or the history walk between the review and the
+/// pin cannot be read. A record or tree that cannot be read inside the
+/// span is no proof of coverage and returns `Ok(false)`.
 pub(crate) fn review_covers_pin(
     repo: &Repository,
     pin: &ReviewedPin,
@@ -1182,10 +1189,11 @@ pub(crate) fn review_covers_pin(
         let Some(content) = super::acceptance::blob_at(repo, revision, path) else {
             return Ok(false);
         };
-        if commit.parent_count() == 0
-            || commit.parent_ids().any(|parent| {
-                super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
-            })
+        let Ok(parent) = commit.parent_id(0) else {
+            return Ok(false);
+        };
+        if commit.parent_count() != 1
+            || super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
         {
             return Ok(false);
         }

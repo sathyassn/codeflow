@@ -340,8 +340,9 @@ A pin left out keeps the edge unmet.
   ancestor whose later commits change only the predecessor's own record path,
   read from the pinned work graph, and in that record only its status and
   Closeout.
-  Every commit is checked, including merged commits and changes later
-  reverted. A review may name a full revision or a uniquely resolved
+  Every commit is checked, so a change later reverted still needs a new
+  review, and a merge after the review is refused, as the predecessor's own
+  acceptance binding refuses it. A review may name a full revision or a uniquely resolved
   hexadecimal abbreviation of at least 7 characters. Repository owner,
   name and branch must match, and a cross-repository pull request is refused.
   - `claim` checks the pins and cuts the branch from the pin that contains the

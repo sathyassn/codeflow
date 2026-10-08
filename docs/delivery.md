@@ -106,8 +106,9 @@ each batch.
   `--on TSK-NNN@<sha>`. The pin names the predecessor branch tip. Its Reviews
   section must approve that tip or an ancestor whose later commits change
   only the predecessor's own task record, and in it only its status and
-  Closeout. Every intervening commit is
-  checked, including merged commits and changes later reverted. The
+  Closeout. Every intervening commit is checked, so a change later reverted
+  still needs a new review, and a merge after the review is refused, as the
+  predecessor's own acceptance binding refuses it. The
   predecessor still lands first. Any other post-review change needs a new
   review, then a rebase and a recheck.
 - Landing has priority: a new build starts only while no landing can proceed.

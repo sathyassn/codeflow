@@ -232,11 +232,13 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   accepted change is in this task's execution base, by merge or an explicit
   reviewed port. A predecessor complete only on another line is not here yet,
   and an unfetched line is unknown, never met. Before that, a task may be
-  claimed and started on the predecessor's exact reviewed head, named with
+  claimed and started on the predecessor's reviewed head, named with
   `--on TSK-NNN@<sha>`: the tool checks the pin structurally (an ancestor of
   HEAD, on the predecessor's branch, still its tip, and named by a review row,
-  or following the commit the review names only by the predecessor's status
-  and Closeout), which is not authentication of the review. Each push of the
+  in full or by a unique abbreviation of at least 7 characters, or following
+  the commit the review names only by single-parent commits that change the
+  predecessor's status and Closeout), which is not authentication of the
+  review. Each push of the
   new branch judges the commits up to the pin as the predecessor's own
   reviewed pull request. CI still requires the predecessor complete at the
   merge base when the task lands, so the stack lands in order.

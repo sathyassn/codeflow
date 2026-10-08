@@ -282,8 +282,9 @@ erratum below, never an edit of the section.
   returns. A pin still names the predecessor branch tip. A review may name
   that tip or an ancestor whose later commits touch only the predecessor's
   own task record, and in it only its status and Closeout. Every
-  intervening commit is checked against each of its parents, including
-  merged commits and changes later reverted. The visible Reviews table may
+  intervening commit is checked, so a change later reverted still needs a
+  new review, and a merge after the review is refused, as the
+  predecessor's own acceptance binding refuses it. The visible Reviews table may
   use a scope column or an approving prose verdict with a uniquely resolved
   abbreviated revision. A push of a stacked branch honours a predecessor
   head by the same rule. Other changes require a new review. The CI reader

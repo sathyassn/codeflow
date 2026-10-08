@@ -396,7 +396,8 @@ A `work start --on` pin names the predecessor branch tip. Its Reviews section
 must approve that tip or an ancestor whose later commits touch only the
 predecessor's own task record, and in it only its status and Closeout.
 Every intervening commit is checked, so a
-change followed by a revert still requires review. The repository owner,
+change followed by a revert still requires review, and a merge after the
+review is refused. The repository owner,
 name and branch must match; cross-repository pull requests are refused.
 
 ### Remember notes

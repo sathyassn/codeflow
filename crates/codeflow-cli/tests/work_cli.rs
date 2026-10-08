@@ -926,7 +926,19 @@ fn tsk250_record_only_commits_accept_the_reviewed_ancestor() {
             "project",
             false,
         );
-        succeeds(&start_stack(root, bin.path(), &tip));
+        let out = start_stack(root, bin.path(), &tip);
+        if case == "merge" {
+            // A merge after the review carries no ancestor review, as the
+            // predecessor's own acceptance binding refuses it (R-42, R-60).
+            assert!(!out.status.success(), "accepted a merged span");
+            let error = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                error.contains("no review names") && error.contains(&reviewed),
+                "{error}"
+            );
+        } else {
+            succeeds(&out);
+        }
     }
 }
 
@@ -1756,15 +1768,13 @@ fn tsk250_record_changes_beyond_status_and_closeout_need_a_new_review() {
 /// stacked branch share one review lookup, so the review rows TSK-250
 /// reads (a two-column prose verdict with an abbreviated revision, as on
 /// PR 57) also honour the pin at push time, where TSK-234 judges the
-/// commits up to it as the predecessor's own pull request. When the
-/// completion arrives by a merge after the reviewed commit, the pin still
-/// covers the review (only the record's status and Closeout changed), but
-/// the push refuses on the predecessor's own acceptance binding, as that
-/// predecessor's pull request check would: the merge brings commits from
-/// off the target line after its reviewed commit.
+/// commits up to it as the predecessor's own pull request. A completion
+/// that arrives by a merge after the reviewed commit is refused at the
+/// claim, naming the reviewed revision, since the predecessor's own
+/// acceptance binding refuses that merge too and the push could not pass.
 #[test]
 #[cfg(unix)]
-fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_does_not_bind() {
+fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_is_refused_at_claim() {
     use std::os::unix::fs::PermissionsExt;
     for merged in [false, true] {
         let dir = fixture();
@@ -1804,28 +1814,28 @@ fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_does_
         )
         .unwrap();
         let on = format!("TSK-001@{pin}");
-        succeeds(&cli(
+        let claim = cli(
             root,
             &["work", "claim", "TSK-002", "--on", &on],
             Some(bin.path()),
-        ));
+        );
+        if merged {
+            assert!(!claim.status.success(), "{}", text(&claim));
+            assert!(
+                text(&claim).contains("no review names") && text(&claim).contains(&reviewed[..9]),
+                "{}",
+                text(&claim)
+            );
+            continue;
+        }
+        succeeds(&claim);
         let child = "task/TSK-002-work-tsk-002";
         let check = push_check(root, child, child, bin.path());
+        assert!(check.status.success(), "{}", text(&check));
         assert!(
             text(&check).contains("stacks on TSK-001's reviewed head"),
             "{}",
             text(&check)
         );
-        if merged {
-            assert!(!check.status.success(), "{}", text(&check));
-            assert!(
-                text(&check).contains("work.acceptance_binding")
-                    && text(&check).contains("does not stack on it"),
-                "{}",
-                text(&check)
-            );
-        } else {
-            assert!(check.status.success(), "{}", text(&check));
-        }
     }
 }
