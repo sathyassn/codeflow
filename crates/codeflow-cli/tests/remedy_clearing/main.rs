@@ -155,6 +155,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("CI_RANGE_UNREADABLE", Runs),
     ("CI_BRANCH_UNRESOLVED", Runs),
     ("CI_BODY_UNSUPPLIED", Runs),
+    ("CI_SECURITY_LEVEL_LOWERED", Runs),
+    ("CI_SETUP_HOOK_CHANGED", Runs),
     ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("ENV_FILE_STAGED", Runs),
     ("SECRET_SCAN_INCOMPLETE", Runs),
@@ -202,6 +204,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_CI_PIN_TARGET", Runs),
     ("DOCTOR_CI_PIN_LOWERED", Runs),
     ("DOCTOR_CI_PIN_ORDER", Runs),
+    ("DOCTOR_CI_DIGEST", Runs),
+    ("DOCTOR_CI_DIGEST_LINE", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
@@ -1029,6 +1033,87 @@ fn clears_ci_body_unsupplied() {
 // ---------------------------------------------------------------------------
 // `codeflow ci` itself.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn clears_ci_security_level_lowered() {
+    const POLICY: &str = ".codeflow/policy.json";
+    let original = r#"{"git":{"security_review":"block","dep_audit":"warn"}}"#;
+    for changed in [Some(r#"{"git":{"security_review":"off"}}"#), None] {
+        let dir = ci_repo(original);
+        let root = dir.path();
+        if let Some(changed) = changed {
+            write(root, POLICY, changed);
+        } else {
+            std::fs::remove_file(root.join(POLICY)).unwrap();
+        }
+        git(root, &["add", POLICY]);
+        git(
+            root,
+            &["commit", "-q", "-m", "chore: change security levels"],
+        );
+        let before = ci(root, &[]);
+        for (key, was) in [("security_review", "block"), ("dep_audit", "warn")] {
+            let verb = if changed.is_some() && key == "security_review" {
+                "lowers"
+            } else {
+                "removes"
+            };
+            let printed = block(&before, &format!("this change {verb} git.{key}"));
+            assert_prints_row(printed, "CI_SECURITY_LEVEL_LOWERED");
+            assert!(
+                printed.contains(&format!("restore git.{key} to {was}")),
+                "{printed}"
+            );
+        }
+        // Perform the printed edit and include it in the range CI judges.
+        write(root, POLICY, original);
+        git(root, &["add", POLICY]);
+        git(
+            root,
+            &["commit", "-q", "-m", "chore: restore security levels"],
+        );
+        let after = ci(root, &[]);
+        assert!(!after.contains("this change lowers git."), "{after}");
+        assert!(!after.contains("this change removes git."), "{after}");
+    }
+}
+
+#[test]
+fn clears_ci_setup_hook_changed() {
+    const HOOK: &str = ".codeflow/ci-setup.sh";
+    for verb in ["adds", "edits", "removes"] {
+        let dir = ci_repo(DEFAULTS);
+        let root = dir.path();
+        if verb != "adds" {
+            git(root, &["switch", "-q", "main"]);
+            write(root, HOOK, "export X=1\n");
+            git(root, &["add", HOOK]);
+            git(root, &["commit", "-q", "-m", "ci: seed the setup hook"]);
+            git(root, &["switch", "-q", "feat/x"]);
+            git(root, &["merge", "--ff-only", "main"]);
+        }
+        if verb == "removes" {
+            std::fs::remove_file(root.join(HOOK)).unwrap();
+        } else {
+            write(root, HOOK, "export X=2\n");
+        }
+        git(root, &["add", HOOK]);
+        git(root, &["commit", "-q", "-m", "ci: change the setup hook"]);
+        let before = ci(root, &[]);
+        let finding = format!("this change {verb} {HOOK}");
+        assert_prints_row(block(&before, &finding), "CI_SETUP_HOOK_CHANGED");
+        // Restore the target state, including absence for a new hook.
+        if verb == "adds" {
+            std::fs::remove_file(root.join(HOOK)).unwrap();
+        } else {
+            write(root, HOOK, "export X=1\n");
+        }
+        git(root, &["add", HOOK]);
+        git(root, &["commit", "-q", "-m", "ci: restore the setup hook"]);
+        let after = ci(root, &[]);
+        assert!(!after.contains("codeflow ci: note: this change"), "{after}");
+    }
+}
 
 #[test]
 fn clears_ci_base_unresolved() {
@@ -2662,6 +2747,96 @@ fn clears_doctor_ci_pin_order() {
             );
             assert_eq!(read(&root, STATE), raised);
             write(&root, policy_path, &updated);
+        },
+    );
+}
+
+/// A local release of `version` under `dir`: an archive per published
+/// triple and a `sha256.sum` that lists them. Returns its base URL.
+fn local_release(dir: &Path, version: &str) -> String {
+    let release = dir.join(format!("releases/v{version}"));
+    std::fs::create_dir_all(&release).unwrap();
+    let mut sums = String::new();
+    for triple in codeflow_core::scaffold::release_pin::TRIPLES {
+        let asset = format!("codeflow-cli-{triple}.tar.xz");
+        let bytes = format!("{triple} {version}\n").into_bytes();
+        sums.push_str(&codeflow_core::scaffold::sha256_hex(&bytes));
+        sums.push_str(" *");
+        sums.push_str(&asset);
+        sums.push('\n');
+        std::fs::write(release.join(&asset), bytes).unwrap();
+    }
+    std::fs::write(release.join("sha256.sum"), sums).unwrap();
+    format!("file://{}", dir.join("releases").display())
+}
+
+/// sathyassn/codeflow#47: a digest table left from another version, as a
+/// hand-raised pin leaves it, fails the CI install closed; the printed
+/// `codeflow update --pin` writes the pinned release's digests.
+#[test]
+fn clears_doctor_ci_digest() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    let pinned = pin_line(&state).split('"').nth(1).unwrap().to_string();
+    write(
+        &root,
+        STATE,
+        &format!("{state}\n[scaffold_sha256]\nversion = \"0.0.1\"\n"),
+    );
+    let url = local_release(dir.path(), &pinned);
+    prove(
+        "DOCTOR_CI_DIGEST",
+        "so the CI install fails closed",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_CI_DIGEST", None);
+            assert_eq!(step, format!("codeflow update --pin {pinned}"));
+            let parts = words(&step);
+            let out = command(exe().to_str().unwrap(), &root)
+                .args(&parts[1..])
+                .env("CODEFLOW_RELEASE_URL", &url)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "`{step}` failed:\n{}", text(&out));
+            // The target pins no table yet, so the checkout's applies once
+            // it lands.
+            let after = doctor(&root, "ci-perimeter");
+            assert!(
+                after.contains("(then: the release digests pinned"),
+                "{after}"
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_ci_digest_line() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    git(&root, &["switch", "-q", "-c", "feat/x"]);
+    let state = read(&root, STATE);
+    write(
+        &root,
+        STATE,
+        &format!("{state}\n[notes]\n\"caf\u{e9}\" = \"kept\"\n"),
+    );
+    prove(
+        "DOCTOR_CI_DIGEST_LINE",
+        "so the CI install fails closed",
+        || doctor(&root, "ci-perimeter"),
+        |printed| {
+            let line = state.lines().count() + 3;
+            assert!(
+                printed.contains(&format!("rewrite or remove line {line} of")),
+                "{printed}"
+            );
+            write(
+                &root,
+                STATE,
+                &format!("{state}\n[notes]\ncafe = \"kept\"\n"),
+            );
         },
     );
 }

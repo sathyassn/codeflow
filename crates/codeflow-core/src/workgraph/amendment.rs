@@ -8,9 +8,13 @@
 //! with its delta, the records added or removed, the status transitions,
 //! and the instruction and doc files the range touches. A record of an epic
 //! the line does not name is refused; a standalone task or a spec belongs
-//! to no epic and is listed, never refused. A criteria change to a task
-//! complete on both sides is flagged, since its acceptance block was
-//! reviewed against the earlier criteria (R-119). Before any of that, [`range_problem`] keeps
+//! to no epic and is listed, never refused. A criteria change to a task a
+//! completion of which landed is flagged, since its acceptance block was
+//! reviewed against the earlier criteria (R-119); whether one landed is read
+//! from the judged history, not the tip (TSK-234), and a record the target
+//! deleted is compared with, and owned as, its newest judged version. The
+//! amendment's permission never depends on that answer: the reopen freeze
+//! is checked before it. Before any of that, [`range_problem`] keeps
 //! product, instruction and enforcement paths out of the range. The
 //! amendment lands on
 //! the target, and a line takes it by merging the target; a record that
@@ -45,6 +49,7 @@ pub fn findings(
     changed_paths: &[String],
     named: Option<&[String]>,
     target_tip: Oid,
+    judging: &mut super::acceptance::Judging<'_>,
 ) -> Vec<Finding> {
     let changed: BTreeSet<&str> = changed_paths.iter().map(String::as_str).collect();
     let ids: BTreeSet<&str> = head
@@ -57,8 +62,10 @@ pub fn findings(
     let mut refused = Vec::new();
     let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for id in ids {
-        let before = target.records.get(id);
         let after = head.records.get(id);
+        let tip = target.records.get(id);
+        let (recovered, landed) = judged(tip, after, judging);
+        let before = tip.or(recovered.as_ref());
         let owners = owners(before, after);
         if let Some(named) = named {
             for owner in owners.iter().filter(|owner| !named.contains(owner)) {
@@ -75,7 +82,12 @@ pub fn findings(
                 ));
             }
         }
-        let mut lines = changes(id, before, after);
+        let mut lines = changes(id, before, after, &landed);
+        if recovered.is_some() {
+            lines.push(format!(
+                "{id} is added again: the target deleted its record, so it is compared with its newest judged version"
+            ));
+        }
         if let Some(line) = before.and_then(|record| newer_on_line(repo, target_tip, record)) {
             lines.push(line);
         }
@@ -170,8 +182,48 @@ fn kind_name(kind: RecordKind) -> &'static str {
     }
 }
 
+/// For a task record whose criteria the amendment changes, or that the
+/// target no longer holds, its judgement (TSK-234): the newest judged
+/// version when the target deleted the record, which also names its epic,
+/// and whether a completion of it landed.
+fn judged(
+    tip: Option<&RecordView>,
+    after: Option<&RecordView>,
+    judging: &mut super::acceptance::Judging<'_>,
+) -> (Option<RecordView>, Landed) {
+    let Some(record) = after.filter(|record| record.kind == RecordKind::Task) else {
+        return (None, Landed::No);
+    };
+    if tip.is_some_and(|tip| tip.criteria.signature() == record.criteria.signature()) {
+        return (None, Landed::No);
+    }
+    let judgement = judging.judge(record);
+    let recovered = match (&judgement.criteria, tip) {
+        (super::landing::Authority::Held(kept), None) => Some(kept.as_ref().clone()),
+        _ => None,
+    };
+    let landed = match (&judgement.landing, judgement.landing_unknown()) {
+        (super::landing::Landing::Landed { .. }, _) => Landed::Yes,
+        (super::landing::Landing::Planned, _) => Landed::No,
+        (_, reason) => Landed::Unknown(reason.unwrap_or_default()),
+    };
+    (recovered, landed)
+}
+
+/// Whether a completion of a task landed, for the R-119 flag.
+enum Landed {
+    No,
+    Yes,
+    Unknown(String),
+}
+
 /// What changed in one record, one line per change.
-fn changes(id: &str, before: Option<&RecordView>, after: Option<&RecordView>) -> Vec<String> {
+fn changes(
+    id: &str,
+    before: Option<&RecordView>,
+    after: Option<&RecordView>,
+    landed: &Landed,
+) -> Vec<String> {
     let (before, after) = match (before, after) {
         (None, Some(after)) => {
             return vec![format!(
@@ -203,10 +255,17 @@ fn changes(id: &str, before: Option<&RecordView>, after: Option<&RecordView>) ->
         if !delta.is_empty() {
             lines.push(format!("{id} criteria delta: {}", delta.join("; ")));
         }
-        if before.status == "complete" && after.status == "complete" {
-            lines.push(format!(
+        match landed {
+            Landed::Yes if after.status == "complete" => lines.push(format!(
                 "{id} is complete, and its acceptance block was reviewed against the earlier criteria: confirm that completion still holds, or reopen the task in its own pull request (SPC-013 R-119)"
-            ));
+            )),
+            Landed::Yes => lines.push(format!(
+                "{id} landed a completion earlier, so its next completion is held to these criteria: confirm they are what its fix must meet (SPC-013 R-119)"
+            )),
+            Landed::Unknown(reason) => lines.push(format!(
+                "{id}: whether a completion of it landed cannot be told ({reason}): confirm any completion still holds, or reopen the task in its own pull request (SPC-013 R-119)"
+            )),
+            Landed::No => {}
         }
     }
     if lines.is_empty() {

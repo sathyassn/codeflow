@@ -22,6 +22,40 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **CI checks the release digests the project pinned.** The managed CI
+  installers trusted the release's own `sha256.sum`, which anyone who can
+  replace a release asset can replace too (sathyassn/codeflow#47).
+  `codeflow update --pin <version>` now downloads a release's `sha256.sum`
+  and its Linux and macOS archives, refuses any archive that does not match,
+  and writes only `scaffold_version` and a `[scaffold_sha256]` table of
+  digests to `.codeflow/project.toml`, for review in the pull request that
+  raises the pin. Once the target pins that table, every installer (the
+  gates, candidate and enforcing jobs and the shared GitLab, Bitbucket and
+  generic script) requires the archive to match it and still checks
+  `sha256.sum`; a table left from another version, a missing platform, a
+  different digest or a table written in a form they do not read fails the
+  job closed. CodeFlow now writes the values it serializes in a form they
+  read, and `--pin` refuses, naming the line, when a line the project wrote
+  would still be refused. A project with no table is checked
+  against `sha256.sum` alone, with a warning, so a fresh `codeflow init` and
+  the upgrade that adds the table still pass. `codeflow doctor --check
+  ci-perimeter` names the check CI applies on the target and warns on a
+  table CI would refuse. The first upgrade step is now
+  `codeflow update --pin <version>`, then `codeflow update`.
+
+<!-- codeflow:release-impact minor -->
+- **A project setup hook runs before the CI test gate.** The managed gates
+  job ran `codeflow test --strict` on the runner's default toolchain, so a
+  project that needs its own either edited the managed file or ran the gate
+  twice (sathyassn/codeflow#46). The gates job and the shared script of the
+  other templates now source a project-owned `.codeflow/ci-setup.sh`, when
+  the change holds one, under `set -eu` after installing codeflow and just
+  before `codeflow test`, so what it exports reaches the gate and a failing
+  command fails the job. `codeflow update` never writes it, and `codeflow
+  doctor --check ci-perimeter` says whether it exists, whether the CI file
+  sources it and its first command.
+
+<!-- codeflow:release-impact minor -->
 - **One planning amendment can span several epics.** A planning pull
   request names every epic it changes on its one `Task:` line, such as
   `Task: EPC-002, EPC-003`, so one reviewed plan change lands as one pull
@@ -186,6 +220,30 @@ erratum below, never an edit of the section.
   stay on `main` with no maintenance branch, and the bug report template
   asks for a severity.
 
+<!-- codeflow:release-impact minor -->
+- **`codeflow estimate outcomes` derives completed tasks' timings from git
+  and compares them with the frozen forecasts.** For each complete task
+  record it reports when the task was planned (its record reached the
+  target), started (the first task-branch commit after the target, a lower
+  bound), blocked and cleared, completed (the commit that wrote its
+  acceptance block) and landed (the first target commit holding the
+  reviewed commit), from commit author times; a squash, rebase or
+  fast-forward landing gives `started: unknown` with the reason. It joins
+  each task by id to the planning scenario of the adopted home's frozen
+  forecasts, or of one `--forecast`, and prints each task's ratio and, once
+  a work type has `--minimum` ratios (default 3), the median and range with
+  the line "outcomes contradict the forecast" when the median is below
+  `--low` (0.5) or above `--high` (2). The thresholds are printed defaults,
+  not policy keys and not a gate. An adopted `.codeflow/estimate.json` whose
+  home does not exist is reported and the command exits 1. It writes
+  nothing, and `--json` emits a versioned report. `codeflow status` prints
+  one estimates line, only where `.codeflow/estimate.json` exists.
+  cf-estimate's operating reference says outcome timings come from this
+  report and adds a cold-start trigger: the first three completed outcomes,
+  or one probe, prompt a recorded recalibration (ADR-0079, GitHub issue 77).
+  Standard and full tiers receive the method text with `codeflow update`; no
+  record, key or required file changes.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -275,6 +333,56 @@ erratum below, never an edit of the section.
   enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **A pull request can no longer lower its own security review.** The
+  managed `security review` job read `git.security_review` and
+  `git.dep_audit` from the pull request's own checkout and fell back to
+  `warn`, so a pull request could set both to `off`, or delete them, and
+  skip the dependency audit that judged it (sathyassn/codeflow#81). The job
+  now reads both keys, and the `osv-scanner.toml` suppressions, from the
+  trusted commit: the pull request's base, or the pushed commit on a push.
+  A missing policy file, a missing or unreadable key, or a value other than
+  `block`, `warn` or `off` fails the job instead of warning. `codeflow ci`
+  names a change that lowers or removes either key. osv-scanner now runs
+  with `--no-ignore`, so a `.gitignore` the change edits cannot hide a
+  lockfile, and its verdict comes from its exit status, so a file path in
+  its output cannot turn an advisory into a pass and a lockfile it cannot
+  read is a scan error. The scanner is downloaded outside the checkout, so
+  a link the change commits at its download path cannot redirect the
+  write. The project setup hook cannot skip the test gate by accident: a
+  `codeflow` function, a `PATH` entry, `set +e` or an `exit` in it leaves
+  the gate running or fails the run. The hook still runs with the gate's
+  authority, like the CI file a change can edit, so `codeflow ci` names a
+  change that adds, edits or removes it for its reviewer. To adopt: if your
+  policy lacks either key, land the keys first under your current workflow
+  (`codeflow update` adds them), then the 3.1.0 workflow, since the job
+  reads the keys from the base. A first CodeFlow adoption has no policy on
+  its base, so its security review fails until the policy lands. In
+  `block` mode, a new suppression takes effect once it lands, so an
+  advisory that blocks every pull request is cleared by fixing the
+  dependency, or by an administrator merging the suppression over the
+  failing check.
+
+<!-- codeflow:release-impact patch -->
+- **A secret scan finding on one branch no longer fails every pull
+  request.** The managed secret scan read the whole history of HEAD, so a
+  finding already in the base, or on any branch merged into it, failed the
+  scan of every pull request until each target's `.gitleaksignore` carried
+  it (sathyassn/codeflow#48). A pull request now scans only the commits it
+  brings, and a push only the pushed range. The workflow also runs weekly
+  and on manual dispatch, and those runs, a push that creates the branch
+  and a push whose previous tip is gone scan the full history, so nothing on
+  the default branch goes unscanned; the gates job stays off the schedule.
+  Each run prints which history it read, and exemptions are still read only
+  from the trusted commit.
+  This changes what a pull request's scan means: a finding already on
+  another branch no longer fails it, and only a full-history scan (weekly,
+  manual or fallback) reports it.
+  The weekly schedule runs only once the workflow is on the default branch. To
+  adopt, run `codeflow update`, review the workflow it merges with your
+  edits, land it on the default branch, and check that the scheduled run
+  appears there.
 
 <!-- codeflow:release-impact patch -->
 - **The docs portal starter takes fixed dependency releases.** New
@@ -705,7 +813,7 @@ erratum below, never an edit of the section.
   completed again: `codeflow task status` and `codeflow ci` refused with
   "a reopened task keeps its criteria as the anchored target has them",
   though the target holds no criteria to keep. Such a task now completes
-  with its new criteria. A task the target already records still keeps
+  with its new criteria. A task that landed on the target still keeps
   its criteria across a reopen, also when the branch moves its record to
   another layout, renumbers it with its uid kept, or retargets it away
   from `main` or from the integration line it was planned on, and
@@ -827,6 +935,56 @@ erratum below, never an edit of the section.
   and managed files you have not edited; a portal whose ownership was
   transferred, or whose managed test file was modified, is not updated.
   The portal's runtime and its claim identity check are unchanged.
+
+<!-- codeflow:release-impact patch -->
+- **A task that never landed keeps its own criteria change across a
+  reopen.** A task the target records, but has not completed, may change
+  its criteria in its own pull request, and CI prints the change as a
+  note. When such a task completed on its branch and was then reopened to
+  take a merge of its line, its second completion was refused with "a
+  reopened task keeps its criteria as the anchored target has them", the
+  same change accepted one completion earlier
+  ([#67](https://github.com/sathyassn/codeflow/issues/67)). The freeze now
+  follows landing evidence: a reopened task keeps its criteria when any
+  version of its record in the judged target's history is complete, keeps
+  an acceptance block or records a reopen, however the target changed or
+  deleted the record later, and it keeps the criteria of the newest
+  judged version; a deleted record added back reopened is a reopen. Otherwise `codeflow task status` and `codeflow ci`
+  accept the change and CI prints it for the reviewer. A history that
+  cannot prove the task never landed (a shallow clone, grafts or replace
+  refs, a record or tree that does not read, a task file that does not
+  parse and may name the task, one id with two uids, or lines of history
+  that disagree) refuses a criteria change and nothing else. A landed task's criteria still change
+  only through a planning amendment that names its epic, which now flags
+  any landed task and reads a record the target deleted from its history;
+  a local branch or remote-tracking ref can still only make the check
+  stricter, and readiness still reads a predecessor's current status. The
+  entry on new tasks above now holds for every task whose completion never
+  landed.
+
+<!-- codeflow:release-impact patch -->
+- **A branch claimed on a reviewed predecessor head passes its own push
+  check.** `codeflow work claim <id> --on <pred>@<sha>` accepted a reviewed
+  pin, but the push it then made ran `codeflow ci` over the predecessor's
+  commits as if the successor had made them and refused on the
+  predecessor's own criteria change and on its status at the target
+  ([#69](https://github.com/sathyassn/codeflow/issues/69)). A push of a
+  task branch now honours each predecessor head it contains that a review
+  row names, through the same lookup `work claim` uses: the commits up to
+  it are judged as the predecessor's reviewed pull request, so its criteria
+  change is printed, its completion binds at the pin, its status is read
+  there, and the journey rule holds the successor only to the paths its
+  own commits change and each merge changes against the automatic remerge
+  of its parents, so a deletion of the predecessor's file counts even
+  inside a merge, and an octopus merge refuses. A head
+  no review names is not honoured, a successor that changes, reverts or
+  removes the predecessor's record as the pin has it is refused, and the
+  pull request into the target still waits for the predecessor to land.
+  A pin may now also be the predecessor's tip when the review names the
+  commit before it and the tip adds only the predecessor's status and
+  Closeout, as cf-ship records the completion after review. An acceptance
+  block may write `follow_ups: "none: <reason>"`, quoted, so the block
+  loads as YAML; the plain form stays valid.
 
 <!-- codeflow:release-impact patch -->
 - **exec-guard no longer refuses prose that only quotes a launcher word.**
