@@ -412,7 +412,7 @@
       "file": "documents/delivery-v2.json",
       "clause": "B2, B3, B5",
       "valid": true,
-      "expect": "renders five framed stages and the migrated flow figure; stage-registry names three groups, seven message arrows labelled by their sibling text and two file rectangles",
+      "expect": "renders five framed stages and the migrated flow figure; stage-registry names three groups, seven message arrows labelled by their sibling text and two file rectangles; since TSK-259 the stage-registry wrapper has no role=\"img\" and names its drawing with an svg title, so each entity is announced by its label",
       "first_passing_task": "TSK-118"
     },
     {
@@ -421,6 +421,76 @@
       "valid": true,
       "expect": "the ids, variants and labels of every entity in landing, identical in Rust and in the grammar",
       "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "check/delivery-v1.json",
+      "clause": "B11 (amended 2026-10-08)",
+      "valid": true,
+      "expect": "the operator's schema_version 1 delivery document: present check prints six framing warnings, six entities warnings and one version warning, faults 0, valid true, exit 0; open and update print the same on stderr and proceed",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "check/v2-unnamed-arrows.json",
+      "clause": "B11 (amended 2026-10-08)",
+      "valid": true,
+      "expect": "one entities warning with the count 3: the three unnamed lines; the marker path, the none subtree and the labelled group are not counted; no version line",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "check/v2-role-img-entities.json",
+      "clause": "B11 (amended 2026-10-08)",
+      "valid": true,
+      "expect": "one entities warning: named parts inside role=\"img\" are hidden from assistive technology",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "check/v1-prose.json",
+      "clause": "B11 (amended 2026-10-08)",
+      "valid": true,
+      "expect": "a schema_version 1 prose review prints nothing but the summary",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-v1-revision-1.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "the schema_version 1 stage-lifecycle stage of the delivery document, the source revision of the unnamed-part cases",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-v1-revision-2.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "the same stage with one drawn word changed",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-v1-retitled.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "the stage retitled, its old title left as drawn SVG text",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-v1-long-1.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "the stage under a title longer than its 40-character label",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-v1-long-2.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "that stage with one drawn word changed",
+      "first_passing_task": "TSK-259"
+    },
+    {
+      "file": "reanchor/unnamed-parts.json",
+      "clause": "B1 step 2 and B3 step 4 (amended 2026-10-08)",
+      "valid": true,
+      "expect": "an unnamed part with no quote, and a shape whose quote is the current or source stage label, fall back to the block; drawn text, the frame title and a text note keep their quote; an entity note whose quote is the title falls back with the entity-gone reason",
+      "first_passing_task": "TSK-259"
     }
   ]
 }

@@ -1743,12 +1743,41 @@ fn invalid(message: impl Into<String>) -> PresentError {
     PresentError::InvalidDocument(message.into())
 }
 
-/// Collect independent authoring faults without a browser or a session mutation.
+/// One `present check` line: an authoring fault, or an advisory warning
+/// that never refuses a document (TSK-259).
 #[derive(Debug, Serialize)]
 pub struct CheckFault {
     pub block_id: Option<String>,
     pub rule: &'static str,
+    /// `fault` or `warning`.
+    pub severity: &'static str,
     pub message: String,
+}
+
+impl CheckFault {
+    fn fault(block_id: Option<String>, rule: &'static str, message: String) -> Self {
+        Self {
+            block_id,
+            rule,
+            severity: "fault",
+            message,
+        }
+    }
+
+    fn warning(block_id: Option<String>, rule: &'static str, message: String) -> Self {
+        Self {
+            block_id,
+            rule,
+            severity: "warning",
+            message,
+        }
+    }
+
+    /// Whether this line is an authoring fault rather than a warning.
+    #[must_use]
+    pub fn is_fault(&self) -> bool {
+        self.severity == "fault"
+    }
 }
 
 #[must_use]
@@ -1756,11 +1785,7 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
     let document: PresentationDocument = match serde_json::from_slice(bytes) {
         Ok(document) => document,
         Err(error) => {
-            return vec![CheckFault {
-                block_id: None,
-                rule: "schema",
-                message: error.to_string(),
-            }]
+            return vec![CheckFault::fault(None, "schema", error.to_string())]
         }
     };
     let mut faults = Vec::new();
@@ -1778,15 +1803,15 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
         ) {
             let message = error.to_string();
             if !faults.iter().any(|f: &CheckFault| f.message == message) {
-                faults.push(CheckFault {
-                    block_id: Some(block.id().into()),
-                    rule: if crate::form::FormView::of(block).is_some() {
+                faults.push(CheckFault::fault(
+                    Some(block.id().into()),
+                    if crate::form::FormView::of(block).is_some() {
                         "form"
                     } else {
                         "block"
                     },
                     message,
-                });
+                ));
             }
         }
     }
@@ -1805,14 +1830,14 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
                 for segment in reference_segments(&text) {
                     if let TextSegment::Reference { kind, id } = segment {
                         if kinds.get(id) != Some(&Some(kind)) {
-                            faults.push(CheckFault {
-                                block_id: Some(block.id().into()),
-                                rule: "anchor",
-                                message: format!(
+                            faults.push(CheckFault::fault(
+                                Some(block.id().into()),
+                                "anchor",
+                                format!(
                                     "reference [{}:{id}] has no matching framed block",
                                     kind.reference_prefix()
                                 ),
-                            });
+                            ));
                         }
                     }
                 }
@@ -1822,19 +1847,149 @@ pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
     if let Err(error) = document.validate() {
         let message = error.to_string();
         if !faults.iter().any(|f| f.message == message) {
-            faults.push(CheckFault {
-                block_id: None,
-                rule: "document",
-                message,
-            });
+            faults.push(CheckFault::fault(None, "document", message));
         }
     }
+    faults.extend(review_warnings(&document));
     faults
+}
+
+/// Advisory warnings for stages a reviewer cannot comment on part by part
+/// (TSK-259): a v1 stage without its title or caption, reachable shapes no
+/// entity names, and a picture role that hides entities. They never refuse
+/// a document, so `open` and `update` print them and proceed. A missing
+/// description is never warned about.
+fn review_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
+    let mut warnings = Vec::new();
+    let mut below_contract = false;
+    let v1 = document.schema_version < 2;
+    for block in document.walk() {
+        let Block::Html {
+            id,
+            html,
+            title,
+            caption,
+            ..
+        } = block
+        else {
+            continue;
+        };
+        let blank = |field: &Option<String>| field.as_deref().is_none_or(|text| text.trim().is_empty());
+        // A v2 stage without them is already a fault.
+        if v1 {
+            let missing = match (blank(title), blank(caption)) {
+                (true, true) => Some("title or caption"),
+                (true, false) => Some("title"),
+                (false, true) => Some("caption"),
+                (false, false) => None,
+            };
+            if let Some(missing) = missing {
+                below_contract = true;
+                warnings.push(CheckFault::warning(
+                    Some(id.clone()),
+                    "framing",
+                    format!(
+                        "html block {id} has no {missing}: every stage needs a visible title and a one-sentence caption, and a stage caption needs schema_version 2"
+                    ),
+                ));
+            }
+        }
+        let naming = crate::entity::stage_naming(html);
+        if naming.unnamed_shapes > 0 {
+            below_contract |= v1;
+            let count = naming.unnamed_shapes;
+            let shapes = if count == 1 { "shape" } else { "shapes" };
+            warnings.push(CheckFault::warning(
+                Some(id.clone()),
+                "entities",
+                format!(
+                    "html block {id} has {count} {shapes} a reviewer can click that no entity names; a note on an unnamed part shows as \"Unnamed part of\" the stage and falls back to the block after a change, so name each part with data-cf-target or data-cf-group (schema_version 2)"
+                ),
+            ));
+        }
+        if naming.picture_role_hides_entities {
+            warnings.push(CheckFault::warning(
+                Some(id.clone()),
+                "entities",
+                format!(
+                    "html block {id} puts named parts inside an element with role=\"img\", which hides them from assistive technology; remove that role and name the drawing with an svg title"
+                ),
+            ));
+        }
+    }
+    if below_contract {
+        warnings.push(CheckFault::warning(
+            None,
+            "version",
+            "a version 1 document has no required framing or review entities; write schema_version 2".to_string(),
+        ));
+    }
+    warnings
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The check lines for a fixture as (block, rule, severity) triples.
+    fn check_lines(name: &str) -> Vec<(Option<String>, &'static str, &'static str)> {
+        check_document(&crate::contract_tests::fixture_bytes(name))
+            .into_iter()
+            .map(|line| (line.block_id, line.rule, line.severity))
+            .collect()
+    }
+
+    #[test]
+    fn check_warns_on_each_v1_stage_of_the_delivery_document_and_once_on_its_version() {
+        let lines = check_lines("check/delivery-v1.json");
+        let stages = [
+            "stage-guards",
+            "stage-registry",
+            "stage-lifecycle",
+            "stage-acceptance",
+            "stage-flow",
+            "stage-plan",
+        ];
+        let mut expected = Vec::new();
+        for stage in stages {
+            expected.push((Some(stage.to_string()), "framing", "warning"));
+            expected.push((Some(stage.to_string()), "entities", "warning"));
+        }
+        expected.push((None, "version", "warning"));
+        assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn check_counts_only_reachable_unnamed_shapes() {
+        let lines = check_document(&crate::contract_tests::fixture_bytes(
+            "check/v2-unnamed-arrows.json",
+        ));
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(
+            (lines[0].rule, lines[0].severity),
+            ("entities", "warning")
+        );
+        // Three arrows; the marker path, the none subtree and the labelled
+        // group are not counted, and a v2 document prints no version line.
+        assert!(lines[0].message.contains(" has 3 shapes "), "{}", lines[0].message);
+    }
+
+    #[test]
+    fn check_names_a_picture_role_that_hides_entities() {
+        assert_eq!(
+            check_lines("check/v2-role-img-entities.json"),
+            [(Some("hidden-parts".to_string()), "entities", "warning")]
+        );
+    }
+
+    #[test]
+    fn check_is_quiet_on_prose_and_never_doubles_a_v2_framing_fault() {
+        assert!(check_lines("check/v1-prose.json").is_empty());
+        assert_eq!(
+            check_lines("documents/v2-html-missing-caption.json"),
+            [(Some("answer-flow".to_string()), "block", "fault")]
+        );
+    }
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {
         PresentationDocument {

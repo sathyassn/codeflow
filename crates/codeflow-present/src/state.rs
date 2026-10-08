@@ -2913,6 +2913,12 @@ fn source_document(
     }
 }
 
+/// Tags whose element note, when its quote is the stage's name, was a part
+/// with no name of its own (SPC-014 B1 step 2, amended 2026-10-08).
+const UNNAMED_PART_TAGS: &[&str] = &[
+    "path", "line", "rect", "circle", "ellipse", "polyline", "polygon", "svg", "g",
+];
+
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
@@ -2950,7 +2956,18 @@ fn reanchor_note(
     let excerpt_text = note
         .excerpt
         .as_ref()
-        .and_then(|excerpt| excerpt.text.as_deref());
+        .and_then(|excerpt| excerpt.text.as_deref())
+        .filter(|text| !text.trim().is_empty());
+    // The block's name in this revision and in the note's own revision,
+    // which a retitled stage may still draw as text.
+    let current_label = block.review_label();
+    let source_label = source
+        .and_then(|document| find_block(&document.blocks, &note.block_id))
+        .map(crate::document::Block::review_label);
+    let names_the_block = |quote: &str| {
+        let quote = quote.trim();
+        quote == current_label || source_label.as_deref() == Some(quote)
+    };
     // Step 1: the entity, when the block still has it.
     if let Some(selector) = &note.entity_selector {
         let entities = crate::entity::block_entities(block).unwrap_or_default();
@@ -2967,8 +2984,17 @@ fn reanchor_note(
                 label_changed: entity.label != selector.label,
             };
         }
+        // The entity's own label is a name the author chose and is still
+        // searched; a quote that is only the stage's name is not (TSK-259).
+        let quote = excerpt_text.unwrap_or(&selector.label);
+        if names_the_block(quote) {
+            return FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the entity is gone and its label was not found".to_string(),
+            };
+        }
         return reanchor_by_quote(
-            excerpt_text.unwrap_or(&selector.label),
+            quote,
             block,
             &framing,
             "the entity is gone and its label was not found",
@@ -2985,8 +3011,26 @@ fn reanchor_note(
                 element_path: selector.element_path.clone(),
             };
         }
+        // B1 step 2 as amended for TSK-259: only the quote is searched,
+        // never the element label, so a part labelled "Unnamed part of
+        // <title>" cannot match its title.
+        let Some(quote) = excerpt_text else {
+            return FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the element changed and the note has no quote to search".to_string(),
+            };
+        };
+        // A drawn shape whose quote is the stage's name had no name of its
+        // own (B3 step 4 before TSK-259 stored the block label); drawn text,
+        // a frame title and prose keep their quote.
+        if UNNAMED_PART_TAGS.contains(&selector.tag_name.as_str()) && names_the_block(quote) {
+            return FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the part had no name and its stage changed".to_string(),
+            };
+        }
         return reanchor_by_quote(
-            excerpt_text.unwrap_or(&selector.label),
+            quote,
             block,
             &framing,
             "the element changed and its text was not found",
