@@ -1013,3 +1013,198 @@ fn a_trailing_slash_does_not_change_an_oversized_glob_verdict() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Grok round four. Which options name a script file is a table per tool, so
+/// an attached value (`-fa.awk`, `-f./a.awk`, `-nfs.sed`) and gawk's `-i`,
+/// `--include` and `-E` read like the spaced `-f`. sed `-i` and `-E` and a
+/// data pipe stay reads.
+#[test]
+fn attached_and_included_script_files_refuse() {
+    let f = Fixture::new();
+    let awk = "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; ";
+    let sed = "printf 'w src/.envrc\\n' > s.sed; ";
+    let mut wrong = Vec::new();
+    for command in [
+        format!("{awk}awk -fa.awk"),
+        format!("{awk}awk -f./a.awk"),
+        format!("{awk}awk -f/tmp/prog.awk"),
+        format!("{awk}gawk -fa.awk"),
+        format!("{awk}mawk -fa.awk"),
+        format!("{awk}command awk -fa.awk"),
+        format!("{awk}exec awk -fa.awk"),
+        format!("{awk}gawk -v x=1 -fa.awk"),
+        format!("{awk}gawk -i a.awk /dev/null"),
+        format!("{awk}gawk -ia.awk /dev/null"),
+        format!("{awk}gawk --include=a.awk /dev/null"),
+        format!("{awk}gawk --include a.awk /dev/null"),
+        format!("{awk}gawk -E a.awk"),
+        format!("{awk}gawk -Ea.awk"),
+        format!("{awk}gawk --exec=a.awk"),
+        format!("{sed}sed -fs.sed README.md"),
+        format!("{sed}sed -nfs.sed README.md"),
+        format!("{sed}sed -f./s.sed README.md"),
+        format!("{sed}sed -n -f ./s.sed README.md"),
+        format!("{sed}sed -Enf s.sed README.md"),
+        format!("{sed}gsed --file=s.sed README.md"),
+    ] {
+        if !refused(&f.judge(&command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "grep -c alias ~/.zshrc > b.txt; sed -i 's/a/b/' README.md",
+        "grep -c alias ~/.zshrc > b.txt; sed -i.bak 's/a/b/' README.md",
+        "grep -c alias ~/.zshrc > b.txt; sed -E 's/a/b/' README.md",
+        "grep -c alias ~/.zshrc > b.txt; sed -n -e '1p' README.md",
+        "grep -c alias ~/.zshrc > b.txt; awk -F: '{print $1}' b.txt",
+        "grep -c alias ~/.zshrc > b.txt; awk -v f=1 '{print $1}' b.txt",
+        "grep alias ~/.zshrc | sed -E 's/a/b/'",
+        "grep alias ~/.zshrc | sed -i.bak 's/a/b/'",
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "grep alias ~/.zshrc | awk -F, '{print $2}'",
+        "sed -i 's/a/b/' README.md",
+        "make test",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round four. A command behind `find -exec` or a wrapper the launcher
+/// walker does not unwrap, or inside `env -S`, is judged like the same command
+/// at the top of the line. Reads through them stay reads.
+#[test]
+fn nested_and_wrapped_commands_are_judged_like_the_command() {
+    let f = Fixture::new();
+    let awk = "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; ";
+    let sh = "echo 'echo x >> src/.envrc' > r.sh; ";
+    let mut wrong = Vec::new();
+    let mut cases = Vec::new();
+    for exec in ["-exec", "-execdir", "-ok", "-okdir"] {
+        cases.push(format!("{sh}find . {exec} sh r.sh \\;"));
+        cases.push(format!("{awk}find . {exec} awk -f a.awk \\;"));
+    }
+    cases.extend([
+        format!("{sh}find . -name '*.rs' -exec sh r.sh {{}} +"),
+        format!("{sh}find . -name x -o -exec sh r.sh \\;"),
+        format!("{sh}find . -exec nice sh r.sh \\;"),
+        format!("{sh}find . -exec find . -exec sh r.sh \\; \\;"),
+        format!("{sh}nice find . -exec sh r.sh \\;"),
+        format!("{sh}flock /tmp/l find . -exec sh r.sh \\;"),
+        format!("{sh}flock -c 'find . -exec sh r.sh \\;' /tmp/l"),
+        format!("{sh}env -S 'sh r.sh'"),
+        format!("{sh}env -Ssh r.sh"),
+        format!("{sh}env --split-string='sh r.sh'"),
+        format!("{sh}nice env -S 'sh r.sh'"),
+        format!("{awk}env -S 'awk -f a.awk'"),
+        format!("{awk}/usr/bin/env -S 'awk -f' a.awk"),
+    ]);
+    for wrapper in [
+        "flock /tmp/l",
+        "flock -n /tmp/l",
+        "flock /tmp/l -c",
+        "watch -n1",
+        "watch",
+        "unbuffer",
+        "chronic",
+        "sudo",
+        "sudo -u me",
+        "doas",
+        "setsid",
+        "taskset 1",
+        "chrt 1",
+        "arch -arm64",
+        "script -q /dev/null",
+        "systemd-run",
+        "sandbox-exec -p '(version 1)'",
+        "ssh localhost",
+        "busybox",
+        "toybox",
+        "time",
+        "nohup",
+        "nice -n 5",
+        "timeout 5",
+        "stdbuf -o0",
+        "ionice -c 3",
+        "caffeinate",
+        "xcrun",
+    ] {
+        cases.push(format!("{awk}{wrapper} awk -f a.awk"));
+        cases.push(format!("{sh}{wrapper} sh r.sh"));
+    }
+    cases.push(format!("{awk}flock /tmp/l -c 'awk -f a.awk'"));
+    cases.push(format!("{awk}watch 'awk -f a.awk'"));
+    cases.push(format!("{awk}su -c 'awk -f a.awk' me"));
+    for command in &cases {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "find . -name '*.rs' -print",
+        "grep -c alias ~/.zshrc > b.txt; find . -name '*.rs' -print",
+        "grep -c alias ~/.zshrc > b.txt; timeout 5 ls",
+        "grep -c alias ~/.zshrc > b.txt; flock lockfile ls",
+        "grep alias ~/.zshrc | env -S 'echo hi'",
+        "grep alias ~/.zshrc | watch -n1 echo hi",
+        "grep alias ~/.zshrc | flock lockfile awk '{print $2}'",
+        "grep alias ~/.zshrc | busybox awk '{print $2}'",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Grok round four. Editors, debuggers and database shells that run a script
+/// file the call wrote are rows of the same table as awk and sed.
+#[test]
+fn editor_and_debugger_script_files_refuse() {
+    let f = Fixture::new();
+    let vim = "printf 'w src/.envrc\\n' > s.vim; ";
+    let sql = "printf '.shell echo x >> src/.envrc\\n' > s.sql; ";
+    let gdb = "echo 'shell echo x >> src/.envrc' > g.gdb; ";
+    let el = "echo '(shell-command \"echo x >> src/.envrc\")' > s.el; ";
+    let mut wrong = Vec::new();
+    for command in [
+        format!("{vim}vim -Nu NONE -es -c 'so s.vim'"),
+        format!("{vim}vim -S s.vim"),
+        format!("{vim}vim -es +'so s.vim' +q"),
+        format!("{vim}vim --cmd 'so s.vim'"),
+        format!("{vim}vi -c 'so s.vim'"),
+        format!("{vim}nvim --headless -c 'so s.vim'"),
+        format!("{vim}nvim -S s.vim"),
+        format!("{vim}nvim -l s.lua"),
+        format!("{sql}sqlite3 :memory: '.read s.sql'"),
+        format!("{sql}sqlite3 -init s.sql :memory: .quit"),
+        format!("{sql}sqlite3 -cmd '.read s.sql' :memory:"),
+        "printf '.shell echo x >> src/.envrc\\n' | sqlite3 :memory:".to_string(),
+        format!("{gdb}gdb -batch -x g.gdb"),
+        format!("{gdb}gdb -batch -command=g.gdb"),
+        format!("{gdb}gdb -batch -ex 'source g.gdb'"),
+        "echo 'shell echo x >> src/.envrc' | gdb -batch".to_string(),
+        format!("{el}emacs --batch -l s.el"),
+        format!("{el}emacs --batch --load s.el"),
+        format!("{el}emacs --batch --load=s.el"),
+        format!("{el}emacs --script s.el"),
+        format!("{el}emacs --batch --eval '(load \"s.el\")'"),
+    ] {
+        if !refused(&f.judge(&command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "grep -c alias ~/.zshrc > b.txt; vim -Nu NONE README.md",
+        "grep -c alias ~/.zshrc > b.txt; emacs --version",
+        "grep alias ~/.zshrc | vim -",
+        "vim README.md",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

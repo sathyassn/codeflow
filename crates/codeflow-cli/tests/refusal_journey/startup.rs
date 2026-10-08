@@ -81,6 +81,14 @@ const REFUSED: &[&str] = &[
     "printf 'w src/.envrc\\n' | sed -f - README.md",
     "printf '%s\\n' 'w src/.envrc' 'q' | ed -s README.md",
     "printf '%s\\n' '--- a/src/.envrc' '+++ b/src/.envrc' '@@ -0,0 +1 @@' '+x' | patch -p1",
+    // Grok round four: attached script options, nested and wrapped commands.
+    "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; awk -fa.awk",
+    "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; gawk -i a.awk /dev/null",
+    "printf 'w src/.envrc\\n' > s.sed; sed -nfs.sed README.md",
+    "echo 'echo x >> src/.envrc' > r.sh; find . -exec sh r.sh \\;",
+    "echo 'BEGIN{print \"x\" > \"src/.envrc\"}' > a.awk; flock /tmp/l awk -f a.awk",
+    "echo 'echo x >> src/.envrc' > r.sh; env -S 'sh r.sh'",
+    "printf 'w src/.envrc\\n' > s.vim; vim -S s.vim",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -104,6 +112,8 @@ const ALLOWED: &[&str] = &[
     "grep alias ~/.zshrc | awk '{print $2}'",
     "sed -i 's/a/b/' README.md",
     "make test",
+    "grep -c alias ~/.zshrc > b.txt; sed -E 's/a/b/' README.md",
+    "find . -name '*.rs' -print",
     "cd ~1; cat policy.json",
 ];
 

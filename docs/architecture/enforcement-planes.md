@@ -323,13 +323,26 @@ level:
 - a staged run: a line that names a class file and has a command that can
   run or apply text the call itself produced. A shell or interpreter counts
   when that text reaches it by a heredoc, a pipe, a process or command
-  substitution, or a file the call writes. A script tool (`awk`, `sed`,
-  `make`, `ed`, `ex`, `patch`, `git apply`, `tclsh`, `m4`) counts when its
-  script comes from such text: `-f` a file the call writes or `-f -` on a
-  pipe, a `Makefile` the call writes, or standard input for `ed`, `ex` and
-  `patch`. A data pipe into `awk '{print $2}'` or `sed 's/a/b/'` does not
-  count. The line must name the file; a script written in one call and run
-  in another stays a residual;
+  substitution, or a file the call writes. A script tool counts when its
+  script comes from such text. Which options name a script file is one table
+  row per tool (`SCRIPT_TOOLS`): `awk -f`, attached as in `-fa.awk`, and
+  gawk's `-i`, `--include` and `-E`; `sed -f`, also in a cluster such as
+  `-nfs.sed`; `make -f` and the `Makefile` the call writes; `vim`, `nvim`
+  and `ex` with `-S`, `-c` or `+cmd`; `sqlite3` with `-init`, `-cmd` or a
+  dot command; `gdb` with `-x` or `-ex`; `emacs` with `-l`, `--load`,
+  `--script` or `--eval`. `ed`, `ex`, `patch`, `sqlite3`, `gdb` and
+  `git apply` also take standard input as their script, and `tclsh`,
+  `expect`, `Rscript`, `julia` and `m4` take a file operand or standard
+  input. `make` counts when the call writes any file other than
+  `/dev/null`, since it may be the `Makefile`. A data pipe into
+  `awk '{print $2}'` or `sed 's/a/b/'`, and sed `-i` and `-E`, do not
+  count. The command is found behind the launchers, `env -S`, `find
+  -exec`, `-execdir`, `-ok` and `-okdir`, and the wrappers the launcher walk
+  does not unwrap (`flock`, `watch`, `unbuffer`, `chronic`, `setsid`,
+  `taskset`, `chrt`, `arch`, `script`, `systemd-run`, `sandbox-exec`, `ssh`,
+  `busybox`, `toybox`, `sudo`, `doas` and a few more, `WRAPPERS`). The line
+  must name the file; a script written in one call and run in another stays
+  a residual;
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or

@@ -8335,7 +8335,9 @@ fn is_duration(word: &str) -> bool {
 /// --chdir[=]DIR` moves to, in order, and the first launcher word the
 /// guard cannot read with certainty: an `env` option it does not know, an
 /// `env -C` without a directory, or a `timeout` without a duration. `env
-/// -S`, which packs the command into one word, is a stated limit.
+/// -S`, which packs the command into one word, is a stated limit of this
+/// walk; the startup rule unpacks it itself for staged runs
+/// (`security/startup.rs`, `unpack_env_split`).
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
     let assignment = |t: &str| {
         t.split_once('=')
