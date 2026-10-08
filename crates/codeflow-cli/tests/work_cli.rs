@@ -928,8 +928,10 @@ fn tsk250_record_only_commits_accept_the_reviewed_ancestor() {
         );
         let out = start_stack(root, bin.path(), &tip);
         if case == "merge" {
-            // A merge after the review carries no ancestor review, as the
-            // predecessor's own acceptance binding refuses it (R-42, R-60).
+            // A merge after the review carries no ancestor review: the
+            // predecessor's binding (R-60) refuses a merge unless it is a
+            // clean re-merge of its target, which changes more than the
+            // record, so this check refuses it too (R-42).
             assert!(!out.status.success(), "accepted a merged span");
             let error = String::from_utf8_lossy(&out.stderr);
             assert!(
@@ -1928,8 +1930,9 @@ fn tsk250_record_changes_beyond_status_and_closeout_need_a_new_review() {
 /// PR 57) also honour the pin at push time, where TSK-234 judges the
 /// commits up to it as the predecessor's own pull request. A completion
 /// that arrives by a merge after the reviewed commit is refused at the
-/// claim, naming the reviewed revision, since the predecessor's own
-/// acceptance binding refuses that merge too and the push could not pass.
+/// claim, naming the reviewed revision: the predecessor's binding refuses a
+/// merge unless it is a clean re-merge of its target, which changes more
+/// than the record, so this check refuses it too.
 #[test]
 #[cfg(unix)]
 fn tsk250_prose_review_rows_honour_the_pin_at_push_and_a_merged_completion_is_refused_at_claim() {

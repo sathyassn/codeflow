@@ -342,8 +342,10 @@ A pin left out keeps the edge unmet.
   read from the pinned work graph, and in that record only its status and
   Closeout.
   Every commit is checked, so a change later reverted still needs a new
-  review, and a merge after the review is refused, as the predecessor's own
-  acceptance binding refuses it. A review may name a full revision or a uniquely resolved
+  review, and a merge after the review is refused: the predecessor's own
+  acceptance binding refuses a merge unless it is a clean re-merge of its
+  target, and that re-merge changes more than the record, so this check
+  refuses it too. A review may name a full revision or a uniquely resolved
   hexadecimal abbreviation of at least 7 characters. Repository owner,
   name and branch must match, and a cross-repository pull request is refused.
   - `claim` checks the pins and cuts the branch from the pin that contains the

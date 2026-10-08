@@ -405,8 +405,10 @@ erratum below, never an edit of the section.
   that tip or an ancestor whose later commits touch only the predecessor's
   own task record, and in it only its status and Closeout. Every
   intervening commit is checked, so a change later reverted still needs a
-  new review, and a merge after the review is refused, as the
-  predecessor's own acceptance binding refuses it. The visible Reviews table may
+  new review, and a merge after the review is refused: the predecessor's
+  own acceptance binding refuses a merge unless it is a clean re-merge of
+  its target, and that re-merge changes more than the record, so this check
+  refuses it too. The visible Reviews table may
   use a scope column or an approving prose verdict with a uniquely resolved
   abbreviated revision. A push of a stacked branch honours a predecessor
   head by the same rule. Other changes require a new review. A clone with a
