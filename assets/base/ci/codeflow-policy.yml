@@ -8,7 +8,8 @@
 # pull request targets, so the job checks out the pull request's base commit
 # explicitly. From that target checkout it installs the codeflow version the
 # target pins in .codeflow/project.toml (`scaffold_version`), verified against
-# the release's published sha256.sum (SPC-013 R-113), and reads the target's
+# the archive digests the target pins beside it ([scaffold_sha256]) and the
+# release's published sha256.sum (SPC-013 R-113), and reads the target's
 # policy. It fetches the pull request head only as git data and never runs
 # its code. The token is read-only and no secret is used. Builds and tests of
 # the head run in codeflow-ci.yml on `pull_request`.
@@ -58,18 +59,76 @@ jobs:
           PIN_REF: HEAD
         run: |
           # SPC-013 R-113: install the codeflow version the target pins in
-          # .codeflow/project.toml (scaffold_version), verified against the
-          # release's published sha256.sum. A missing checksum file, a missing
-          # entry or a mismatch fails closed; nothing unverified is installed.
+          # .codeflow/project.toml (scaffold_version). When the same file pins
+          # the release's archive digests ([scaffold_sha256], written by
+          # `codeflow update --pin`), the archive must match the digest reviewed
+          # there for that version; a table for another version, a missing entry
+          # or a mismatch fails closed. The release's published sha256.sum is
+          # checked too, and is the only check while no digest is pinned: a
+          # missing checksum file, a missing entry or a mismatch fails closed.
+          # Nothing unverified is installed.
           set -euo pipefail
-          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null) || {
+          state=$(git show "${PIN_REF}:.codeflow/project.toml" 2>/dev/null | LC_ALL=C tr '\000' '\001') || {
             echo "::error::cannot read .codeflow/project.toml at ${PIN_REF}; no pinned codeflow version"; exit 1; }
           version=$(printf '%s\n' "$state" | sed -n 's/^scaffold_version[[:space:]]*=[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
           if [ -z "$version" ]; then
             echo "::error::no scaffold_version pinned in .codeflow/project.toml at ${PIN_REF}"; exit 1
           fi
+          triple=x86_64-unknown-linux-gnu
+          asset="codeflow-cli-${triple}.tar.xz"
+          # The [scaffold_sha256] table as "<version> <digest>" for this triple,
+          # with "-" for a missing value, or nothing when no table is pinned.
+          pinned=$(printf '%s\n' "$state" | LC_ALL=C awk -v want="$triple" -v sq="'" '
+            function fail(why) { if (bad == "") bad = why }
+            /\r[^\n]/ { fail("may be hidden by a carriage return inside a line, which the CI installers do not read as a line break"); next }
+            /[\001-\010\013\014\016-\037\177]/ { fail("may be hidden by a control character, which the CI installers do not read"); next }
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
+            index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
+            /^[[:space:]]*\[/ {
+              inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+              if (inside && table) fail("is declared twice")
+              name = $0; sub(/\].*/, "", name)
+              if (!inside && name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (!inside && name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+              if (!inside && name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+              if (inside) table = 1
+              next
+            }
+            /=/ {
+              name = $0; sub(/=.*/, "", name)
+              if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+              if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+              if (name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+            }
+            inside && /[^[:space:]]/ {
+              if ($0 !~ /^[[:space:]]*"?[0-9A-Za-z_-]+"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$/) {
+                fail("holds a line other than key = \"value\", which the CI installers do not read"); next
+              }
+              key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+              if (key in seen) fail("lists " key " twice")
+              seen[key] = 1
+              value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value); sub(/".*/, "", value)
+              if (key == "version") version = value
+              if (key == want) digest = value
+            }
+            END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }')
+          digest=
+          case "$pinned" in
+            "!"*) echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin ${version}\` writes"; exit 1 ;;
+          esac
+          if [ -n "$pinned" ]; then
+            if [ "${pinned%% *}" != "$version" ]; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} pins the digests of codeflow ${pinned%% *}, not ${version}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+            digest=${pinned#* }
+            if ! printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "::error::the [scaffold_sha256] table in .codeflow/project.toml at ${PIN_REF} lists no digest for ${triple}; run \`codeflow update --pin ${version}\` and land it with the pin"; exit 1
+            fi
+          else
+            echo "::warning::no release digest is pinned in .codeflow/project.toml at ${PIN_REF}, so codeflow ${version} is checked only against its release's own sha256.sum; run \`codeflow update --pin ${version}\` and land it to pin the reviewed digest"
+          fi
           base="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v${version}"
-          asset=codeflow-cli-x86_64-unknown-linux-gnu.tar.xz
           work=$(mktemp -d)
           if ! curl -fsSL "${base}/sha256.sum" -o "${work}/sha256.sum"; then
             echo "::error::codeflow ${version} has no published checksum file (sha256.sum); refusing an unverified binary"; exit 1
@@ -86,15 +145,20 @@ jobs:
           else
             actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
           fi
+          if [ -n "$digest" ] && [ "$actual" != "$digest" ]; then
+            echo "::error::${asset} for codeflow ${version} does not match the digest pinned in .codeflow/project.toml at ${PIN_REF} (pinned ${digest}, got ${actual}); refusing it"; exit 1
+          fi
           if [ "$actual" != "$expected" ]; then
             echo "::error::checksum mismatch for ${asset} (codeflow ${version}): expected ${expected}, got ${actual}; refusing it"; exit 1
           fi
           tar -xJf "${work}/${asset}" -C "$work"
           mkdir -p "$HOME/.codeflow/bin"
-          cp "${work}/codeflow-cli-x86_64-unknown-linux-gnu/codeflow" "$HOME/.codeflow/bin/codeflow"
+          cp "${work}/codeflow-cli-${triple}/codeflow" "$HOME/.codeflow/bin/codeflow"
           chmod +x "$HOME/.codeflow/bin/codeflow"
           echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
-          echo "codeflow ${version} installed and verified against sha256.sum"
+          verified=sha256.sum
+          if [ -n "$digest" ]; then verified="the digest pinned in .codeflow/project.toml and sha256.sum"; fi
+          echo "codeflow ${version} installed and verified against ${verified}"
 
       - name: Fetch the pull request head as data
         if: github.event_name == 'pull_request_target'

@@ -10,24 +10,33 @@
 #
 # The binary is the version the merge request's target pins in
 # .codeflow/project.toml (`scaffold_version`), downloaded from its release and
-# verified against the release's published sha256.sum; a missing or wrong
-# checksum fails the job and nothing unverified is installed (SPC-013 R-113).
+# verified against the archive digests pinned beside it ([scaffold_sha256],
+# written by `codeflow update --pin`) and the release's sha256.sum; a stale or
+# partial digest table, or a missing or wrong checksum, fails the job and
+# nothing unverified is installed (SPC-013 R-113). Without a pinned table the
+# job checks sha256.sum alone and warns. A project that needs its own
+# toolchain commits .codeflow/ci-setup.sh, sourced just before `codeflow test`.
 # The target is the target branch's current commit: the one a merged results
 # pipeline names (CI_MERGE_REQUEST_TARGET_BRANCH_SHA), otherwise the branch
 # CI_MERGE_REQUEST_TARGET_BRANCH_NAME fetched from the merge request's project;
 # the job fails when it cannot establish it. A branch pipeline judges its own
 # commit. An upgrade takes
-# two merge requests, in order: first raise only `scaffold_version` (the
-# target's binary judges it and the candidate is tested alongside), then run
-# `codeflow update`. The job file itself runs from the merge request, so
+# two merge requests, in order: first raise only `scaffold_version` and its
+# digests (`codeflow update --pin <version>`; the target's binary judges it
+# and the candidate is tested alongside), then run `codeflow update`. The job file itself runs from the merge request, so
 # protect .gitlab-ci.yml and .codeflow/ with required review.
 #
 # This is a copy-in template (see this directory's README): `codeflow init`
 # scaffolds the GitHub workflow today; a platform picker is a follow-up.
 #
 # Optional external add-ons (as in the GitHub template), added as extra jobs:
-#   gitleaks detect --source . --redact --no-banner --exit-code 1   # secret scan
-#   osv-scanner scan -r .                                           # dep audit
+#   gitleaks detect --source . --redact --no-banner --exit-code 1 \
+#     --log-opts "$CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD"   # secret scan of the
+#     merge request's own commits; a scheduled pipeline drops --log-opts to
+#     scan the full history, as the GitHub workflow does weekly
+#   osv-scanner scan -r --no-ignore .                               # dep audit;
+#     read its levels and osv-scanner.toml suppressions from the target
+#     commit, not the change, as the GitHub workflow does
 
 stages: [verify]
 
@@ -107,11 +116,69 @@ codeflow:
           exit (pa < pb) ? 0 : 1
         }'
       }
-      # Install release $1 into directory $2, verified against its sha256.sum. A
-      # missing checksum file, a missing entry or a mismatch fails closed.
+      # The [scaffold_sha256] table a commit pins, as "<version> <digest>" for
+      # this triple with "-" for a missing value, or nothing without a table.
+      codeflow_digest() {
+        git show "$1:.codeflow/project.toml" 2>/dev/null | LC_ALL=C tr '\000' '\001' | LC_ALL=C awk -v want="$triple" -v sq="'" '
+          function fail(why) { if (bad == "") bad = why }
+          /\r[^\n]/ { fail("may be hidden by a carriage return inside a line, which the CI installers do not read as a line break"); next }
+          /[\001-\010\013\014\016-\037\177]/ { fail("may be hidden by a control character, which the CI installers do not read"); next }
+          /^[[:space:]]*#/ { next }
+          /^[[:space:]]*[^[:space:] -~]/ { fail("may be hidden by a line that starts with a character the CI installers do not read"); next }
+          index($0, "\"\"\"") || index($0, sq sq sq) { fail("may be hidden by a multi-line string, which the CI installers do not read") }
+          /^[[:space:]]*\[/ {
+            inside = ($0 ~ /^[[:space:]]*\[[[:space:]]*scaffold_sha256[[:space:]]*\][[:space:]]*(#.*)?$/)
+            if (inside && table) fail("is declared twice")
+            name = $0; sub(/\].*/, "", name)
+            if (!inside && name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+            if (!inside && name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+            if (!inside && name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+            if (inside) table = 1
+            next
+          }
+          /=/ {
+            name = $0; sub(/=.*/, "", name)
+            if (name ~ /scaffold_sha256/) fail("is written in a form the CI installers do not read (a quoted header, an inline or dotted table, or a sub-table)")
+            if (name ~ /\\/) fail("may be hidden behind an escaped key, which the CI installers do not read")
+            if (name ~ /[^ -~\t]/) fail("may be hidden behind a name with a character outside printable ASCII, which the CI installers do not read")
+          }
+          inside && /[^[:space:]]/ {
+            if ($0 !~ /^[[:space:]]*"?[0-9A-Za-z_-]+"?[[:space:]]*=[[:space:]]*"[^"\\]*"[[:space:]]*(#.*)?$/) {
+              fail("holds a line other than key = \"value\", which the CI installers do not read"); next
+            }
+            key = $0; sub(/^[[:space:]]*"?/, "", key); sub(/"?[[:space:]]*=.*/, "", key)
+            if (key in seen) fail("lists " key " twice")
+            seen[key] = 1
+            value = $0; sub(/^[^=]*=[[:space:]]*"/, "", value); sub(/".*/, "", value)
+            if (key == "version") version = value
+            if (key == want) digest = value
+          }
+          END { if (bad != "") print "!", bad; else if (table) print (version == "" ? "-" : version), (digest == "" ? "-" : digest) }'
+      }
+      # Install release $1, pinned at commit $3, into directory $2. When $3 pins
+      # the release's archive digests ([scaffold_sha256], written by `codeflow
+      # update --pin`), the archive must match the digest reviewed there for $1;
+      # a table for another version, a missing entry or a mismatch fails closed.
+      # The release's sha256.sum is checked too, and is the only check while no
+      # digest is pinned: a missing checksum file, a missing entry or a mismatch
+      # fails closed.
       codeflow_install() {
         url="${CODEFLOW_RELEASE_URL:-https://github.com/sathyassn/codeflow/releases/download}/v$1"
         asset="codeflow-cli-${triple}.tar.xz"
+        pinned=$(codeflow_digest "$3")
+        digest=
+        case "$pinned" in
+          "!"*) codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 ${pinned#! }, so nothing is installed; write it as the plain table \`codeflow update --pin $1\` writes" ;;
+        esac
+        if [ -n "$pinned" ]; then
+          [ "${pinned%% *}" = "$1" ] ||
+            codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 pins the digests of codeflow ${pinned%% *}, not $1; run \`codeflow update --pin $1\` and land it with the pin"
+          digest=${pinned#* }
+          printf '%s\n' "$digest" | grep -Eq '^[0-9a-f]{64}$' ||
+            codeflow_fail "the [scaffold_sha256] table in .codeflow/project.toml at $3 lists no digest for ${triple}; run \`codeflow update --pin $1\` and land it with the pin"
+        else
+          echo "codeflow: warning: no release digest is pinned in .codeflow/project.toml at $3, so codeflow $1 is checked only against its release's own sha256.sum; run \`codeflow update --pin $1\` and land it to pin the reviewed digest" >&2
+        fi
         work=$(mktemp -d)
         curl -fsSL "${url}/sha256.sum" -o "${work}/sha256.sum" ||
           codeflow_fail "codeflow $1 has no published checksum file (sha256.sum); refusing an unverified binary"
@@ -125,13 +192,19 @@ codeflow:
         else
           actual=$(shasum -a 256 "${work}/${asset}" | cut -d ' ' -f 1)
         fi
+        [ -z "$digest" ] || [ "$actual" = "$digest" ] ||
+          codeflow_fail "${asset} for codeflow $1 does not match the digest pinned in .codeflow/project.toml at $3 (pinned ${digest}, got ${actual}); refusing it"
         [ "$actual" = "$expected" ] ||
           codeflow_fail "checksum mismatch for ${asset} (codeflow $1): expected ${expected}, got ${actual}; refusing it"
         tar -xJf "${work}/${asset}" -C "$work"
         mkdir -p "$2"
         cp "${work}/codeflow-cli-${triple}/codeflow" "$2/codeflow"
         chmod +x "$2/codeflow"
-        echo "codeflow $1 installed and verified against sha256.sum"
+        if [ -n "$digest" ]; then
+          echo "codeflow $1 installed and verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+        else
+          echo "codeflow $1 installed and verified against sha256.sum"
+        fi
       }
       pin=$(codeflow_pin "$target")
       [ -n "$pin" ] || codeflow_fail "no scaffold_version pinned in .codeflow/project.toml at ${target}"
@@ -146,7 +219,7 @@ codeflow:
       done
       [ "$kept" != yes ] || head_pin="$pin"
       bin=$(mktemp -d)
-      codeflow_install "$pin" "$bin"
+      codeflow_install "$pin" "$bin" "$target"
       PATH="${bin}:${PATH}"
       export PATH
       lowered=
@@ -154,7 +227,7 @@ codeflow:
         if [ -n "$head_pin" ] && codeflow_older "$pin" "$head_pin"; then
           # Upgrade step one: test the candidate the head pins, never enforce with it.
           candidate=$(mktemp -d)
-          codeflow_install "$head_pin" "$candidate"
+          codeflow_install "$head_pin" "$candidate" "$head"
           "${candidate}/codeflow" --version
           "${candidate}/codeflow" validate --docs
         else
@@ -168,8 +241,32 @@ codeflow:
       trap 'git worktree remove --force "${judge}/target" >/dev/null 2>&1 || true' EXIT
       branch=$(git symbolic-ref --short -q HEAD || true)
       (cd "${judge}/target" && codeflow ci --base "$target" --head "$head" ${branch:+--branch "$branch"})
-      codeflow test --strict
-      codeflow validate --docs
+      # Refuse a lowered pin before the project's own code runs, so nothing the
+      # head brings can clear the refusal.
       [ -z "$lowered" ] ||
         codeflow_fail "the head lowers scaffold_version from ${pin} to ${lowered}; the pin only rises, one pull request at a time, then \`codeflow update\` in the next"
+      # Project setup (optional): a change that holds .codeflow/ci-setup.sh has it
+      # sourced here, after the install and before the test gate, under set -eu,
+      # so the toolchain it installs and the variables it exports reach the gate
+      # and a failing command fails the run. The project owns the file; `codeflow
+      # update` never writes it.
+      # The hook runs with the gate's authority, like this file, so it is
+      # reviewed as this file is. These lines keep it from skipping the gate
+      # by accident: the shell variables naming the binary and folder are
+      # read-only (the binary itself is not), set -eu holds again once it
+      # returns, and a run it ends (an `exit`) fails.
+      codeflow_bin=$(command -v codeflow)
+      codeflow_root=$(pwd)
+      readonly codeflow_bin codeflow_root
+      codeflow_gated=
+      trap 'codeflow_status=$?; git -C "$codeflow_root" worktree remove --force "${judge}/target" >/dev/null 2>&1 || true; [ -n "$codeflow_gated" ] || { echo "codeflow: error: the run ended before codeflow test ran; a project setup hook must not exit" >&2; exit 1; }; exit "$codeflow_status"' EXIT
+      if [ -f .codeflow/ci-setup.sh ]; then
+        echo "codeflow: sourcing the project setup hook .codeflow/ci-setup.sh"
+        . ./.codeflow/ci-setup.sh
+        set -eu
+        cd "$codeflow_root"
+      fi
+      codeflow_gated=1
+      "$codeflow_bin" test --strict
+      "$codeflow_bin" validate --docs
       # <<< codeflow pinned run
