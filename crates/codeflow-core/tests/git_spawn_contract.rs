@@ -461,9 +461,14 @@ fn hidden_spawns(file: &str, toks: &[Token]) -> Vec<String> {
 /// Whether a program name runs git: its last path part, without an
 /// extension, is `git`.
 fn names_git(program: &str) -> bool {
-    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let stem = name.split('.').next().unwrap_or(name);
-    stem.eq_ignore_ascii_case("git")
+    names_program(program, "git")
+}
+
+/// Whether `program`'s last path part, without an extension, is `name`.
+fn names_program(program: &str, name: &str) -> bool {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let stem = file.split('.').next().unwrap_or(file);
+    stem.eq_ignore_ascii_case(name)
 }
 
 /// Why `text`, read as the file `file`, breaks the contract.
@@ -665,7 +670,9 @@ fn call_span(toks: &[Token], index: usize) -> (usize, usize) {
 /// commands it could hold: in one command (text between line ends, `;`,
 /// `&`, `|`, backticks or parentheses), whose words are split at blanks and
 /// commas and stripped of quotes and brackets, the word `clone` comes first
-/// or after an option (`-C`, `--no-pager`) or a word that names git. An
+/// or after an option (`-C`, `--no-pager`) or a word that names git, or a
+/// word names the `git-clone` program itself (`git-clone`, a path to it in
+/// git's exec path, `git-clone.exe`). An
 /// argument vector element (`"clone"`), a shell line (`"git -C dir clone a
 /// b"`), an argument list without the program (`"-C dir clone a b"`) and a
 /// split command (`"clone --bare a b"`) each match; prose that says "this
@@ -686,11 +693,12 @@ fn clone_invocation(value: &str) -> bool {
                     .is_some_and(|c| c == '-' || c.is_ascii_alphanumeric())
             };
             words.iter().enumerate().any(|(at, word)| {
-                *word == "clone"
-                    && (at == 0
-                        || words[..at]
-                            .iter()
-                            .any(|before| option(before) || names_git(before)))
+                names_program(word, "git-clone")
+                    || (*word == "clone"
+                        && (at == 0
+                            || words[..at]
+                                .iter()
+                                .any(|before| option(before) || names_git(before))))
             })
         })
 }
@@ -848,6 +856,8 @@ fn clone_literals_refuse_every_invocation_form() {
         r#"cmd.args(["sh", "-c", "set -e\ngit clone a b"]);"#,
         r#"let js = "spawnSync(\"git\",[\"clone\",a,b])";"#,
         r#"cmd.args("-C dir clone --depth 2 a b".split(' '));"#,
+        r#"Command::new("git-clone").args([src, dst]);"#,
+        r#"cmd.args(["sh", "-c", "git-clone src dst"]);"#,
     ] {
         assert!(!clone_spans(source).is_empty(), "{source}");
     }
