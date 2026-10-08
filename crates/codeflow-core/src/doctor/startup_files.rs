@@ -453,7 +453,20 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             "an agent could plant a definition in a sourced file that no rule or sandbox entry protects"
                 .to_string(),
         );
-        remedy.get_or_insert(remedy::DOCTOR_STARTUP_SOURCED.remedy());
+        // The startup files that hold the named lines, each once.
+        let mut files: Vec<&str> = sourced
+            .unprotected
+            .iter()
+            .chain(&sourced.unresolved)
+            .map(|entry| {
+                entry
+                    .split_once(": ")
+                    .map_or(entry.as_str(), |(file, _)| file)
+            })
+            .collect();
+        files.sort_unstable();
+        files.dedup();
+        remedy.get_or_insert(remedy::DOCTOR_STARTUP_SOURCED.with(&[("path", &files.join(", "))]));
     }
     let (status, message) = match remedy {
         Some(remedy) => (Status::Warn(remedy), parts.join("; ")),

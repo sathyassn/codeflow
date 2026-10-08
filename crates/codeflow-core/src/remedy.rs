@@ -629,10 +629,11 @@ catalog! {
         "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
     /// Files the home's startup files source from outside the class.
     DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
-        "move what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inline it, so the guards and sandboxes protect it";
+        "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
     /// `ZDOTDIR` or `XDG_CONFIG_HOME` moved away from where the denies point.
-    DOCTOR_STARTUP_RELOCATED = Step::Edit(".claude/settings.json"),
-        "add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the relocated startup files to .claude/settings.json and read entries to the Codex profile, or set ZDOTDIR and XDG_CONFIG_HOME back to their defaults; the generated rules cover only the default locations";
+    /// Only the operator changes them: they are set in a startup file.
+    DOCTOR_STARTUP_RELOCATED = Step::Edit("~/.zshenv"),
+        "the operator sets ZDOTDIR and XDG_CONFIG_HOME back to their defaults in ~/.zshenv or wherever they are exported, since an agent session may not edit a startup file; until then the generated rules cover only the default locations, and the operator can add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the moved files to .claude/settings.json and read entries to the Codex profile";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";
