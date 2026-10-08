@@ -321,12 +321,11 @@ task serves is deferred there instead, as `deferred | owner: <who>; window:
 <when>; follow-up: TSK-NNN`, with the follow-up a serving task that is still
 open and listed in `follow_ups`. File that follow-up outside the epic, which
 closes only when its own tasks are terminal. A complete serving task's
-`verified` or `waived` result still decides, and a follow-up that does not serve the
-criterion, or is complete or cancelled, defers nothing. That block binds as
-a task's does: it
-names the reviewed commit, after which only the epic's status and Closeout
-change, and a waiver names the planning amendment of that criterion that
-the reviewed commit contains. When it does not bind, correct the block and
+`verified` or `waived` result still decides, and a follow-up that does not
+serve the criterion, or is complete or cancelled, defers nothing. That block
+binds as a task's does: it names the reviewed commit, after which only the
+epic's status and Closeout change, and a waiver names the planning amendment
+of that criterion that the reviewed commit contains. When it does not bind, correct the block and
 have it reviewed: an open epic reruns `codeflow epic status EPC-NNN complete
 --acceptance <file>`, and an epic the pull request already completes gets
 the corrected block in its Closeout in that pull request, since an epic is

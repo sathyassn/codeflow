@@ -467,8 +467,9 @@ the adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a
 listed follow-up; at epic close that line also closes the criterion when its
-follow-up is a serving task that is still open. A tag opens or closes its criterion, trailing sentence
-punctuation included; a tag inside the text does not count.
+follow-up is a serving task that is still open. A tag opens or closes its
+criterion, trailing sentence punctuation included; a tag inside the text does
+not count.
 `git.work_records` sets the binding and journey rules; the frozen criteria of
 other records always block.
 
