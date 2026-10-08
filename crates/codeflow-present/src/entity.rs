@@ -664,59 +664,81 @@ pub struct StageNaming {
 }
 
 /// Count the unnamed parts of a stage and find a picture role that hides
-/// its entities.
+/// its entities, in one depth-first pass that reads each element once.
+///
+/// Each element hands its children two facts about its ancestors: whether
+/// one names or hides every shape inside it, and whether one has a picture
+/// role. A stage of deeply nested groups therefore costs a walk of its
+/// elements, never a walk of the ancestors of every shape.
 #[must_use]
 pub fn stage_naming(html: &str) -> StageNaming {
     let fragment = Html::parse_fragment(html);
     let mut naming = StageNaming::default();
-    for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {
-        let value = element.value();
-        if BASIC_SHAPES.contains(&value.name()) && !named_or_unreachable(element) {
-            naming.unnamed_shapes += 1;
-        }
-        let picture = value.attr("role").is_some_and(|role| {
-            role.split_whitespace()
-                .next()
-                .is_some_and(|first| first.eq_ignore_ascii_case("img"))
-        });
-        if picture
-            && element
-                .descendants()
-                .skip(1)
-                .filter_map(ElementRef::wrap)
-                .any(|inner| entity_id_of(inner).is_some())
-        {
-            naming.picture_role_hides_entities = true;
-        }
+    // A node with whether an ancestor names or hides it and whether an
+    // ancestor has `role="img"`. An explicit stack keeps deep nesting off
+    // the call stack. Every parentless node starts a walk, the root and
+    // any node the parser left detached (its context element), so each
+    // element the tree holds is read, as before.
+    let mut pending: Vec<_> = fragment
+        .tree
+        .nodes()
+        .filter(|node| node.parent().is_none())
+        .map(|node| (node, false, false))
+        .collect();
+    while let Some((node, covered, in_picture)) = pending.pop() {
+        let (covered, in_picture) = match ElementRef::wrap(node) {
+            Some(element) => {
+                #[cfg(test)]
+                tests::NAMING_VISITS.with(|visits| visits.set(visits.get() + 1));
+                let covers = names_or_hides_its_parts(element);
+                if BASIC_SHAPES.contains(&element.value().name())
+                    && !covered
+                    && !covers
+                    && !labelled(element, "aria-label")
+                {
+                    naming.unnamed_shapes += 1;
+                }
+                if in_picture && entity_id_of(element).is_some() {
+                    naming.picture_role_hides_entities = true;
+                }
+                (covered || covers, in_picture || has_picture_role(element))
+            }
+            None => (covered, in_picture),
+        };
+        pending.extend(node.children().map(|child| (child, covered, in_picture)));
     }
     naming
 }
 
-/// Whether a shape is out of reach of a gesture or named: inside a
-/// non-rendering element, a `none` subtree or an entity, inside a `g` with
-/// a label, or labelled itself.
-fn named_or_unreachable(shape: ElementRef<'_>) -> bool {
-    let labelled = |element: ElementRef<'_>, name: &str| {
-        element
-            .value()
-            .attr(name)
-            .is_some_and(|label| !label.trim().is_empty())
-    };
-    if labelled(shape, "aria-label") {
-        return true;
-    }
-    std::iter::once(shape)
-        .chain(shape.ancestors().filter_map(ElementRef::wrap))
-        .any(|element| {
-            let value = element.value();
-            UNREACHABLE
-                .iter()
-                .any(|name| value.name().eq_ignore_ascii_case(name))
-                || value.attr("data-cf-target").is_some()
-                || value.attr("data-cf-group").is_some()
-                || (value.name() == "g"
-                    && (labelled(element, "data-cf-label") || labelled(element, "aria-label")))
-        })
+/// Whether an element carries a non-blank value for an attribute.
+fn labelled(element: ElementRef<'_>, name: &str) -> bool {
+    element
+        .value()
+        .attr(name)
+        .is_some_and(|label| !label.trim().is_empty())
+}
+
+/// Whether an element names or hides every shape inside it: a
+/// non-rendering element, an entity or `none` subtree, or a `g` with a
+/// label.
+fn names_or_hides_its_parts(element: ElementRef<'_>) -> bool {
+    let value = element.value();
+    UNREACHABLE
+        .iter()
+        .any(|name| value.name().eq_ignore_ascii_case(name))
+        || value.attr("data-cf-target").is_some()
+        || value.attr("data-cf-group").is_some()
+        || (value.name() == "g"
+            && (labelled(element, "data-cf-label") || labelled(element, "aria-label")))
+}
+
+/// Whether an element's first role is `img`.
+fn has_picture_role(element: ElementRef<'_>) -> bool {
+    element.value().attr("role").is_some_and(|role| {
+        role.split_whitespace()
+            .next()
+            .is_some_and(|first| first.eq_ignore_ascii_case("img"))
+    })
 }
 
 /// Ids of every entity a stage declares, for vocabulary checks.
@@ -1214,6 +1236,119 @@ mod tests {
             !stage_naming("<svg><rect data-cf-target='a' role='img'/></svg>")
                 .picture_role_hides_entities
         );
+    }
+
+    thread_local! {
+        pub(super) static NAMING_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// A stage of `depth` nested picture-role groups around one entity and
+    /// `depth` bare shapes: the shape that cost a walk per ancestor.
+    fn nested_stage(depth: usize) -> String {
+        format!(
+            "<svg>{}<rect data-cf-target='a'/>{}{}</svg>",
+            "<g role='img'>".repeat(depth),
+            "<rect/>".repeat(depth),
+            "</g>".repeat(depth)
+        )
+    }
+
+    /// The check reads each element of a stage once, so a deep stage near
+    /// the size limit costs a walk of its elements, never one per ancestor.
+    #[test]
+    fn stage_naming_reads_each_element_once() {
+        let depth = 2_000;
+        let html = nested_stage(depth);
+        let elements = Html::parse_fragment(&html)
+            .tree
+            .nodes()
+            .filter_map(ElementRef::wrap)
+            .count();
+        NAMING_VISITS.with(|visits| visits.set(0));
+        assert_eq!(
+            stage_naming(&html),
+            StageNaming {
+                unnamed_shapes: depth,
+                picture_role_hides_entities: true
+            }
+        );
+        let visits = NAMING_VISITS.with(std::cell::Cell::get);
+        assert_eq!(
+            visits, elements,
+            "{visits} element reads for {elements} elements"
+        );
+    }
+
+    /// The pass before the one-walk rewrite: each shape walked its
+    /// ancestors and each picture role its descendants.
+    fn stage_naming_by_ancestor_walk(html: &str) -> StageNaming {
+        fn named_or_unreachable(shape: ElementRef<'_>) -> bool {
+            if labelled(shape, "aria-label") {
+                return true;
+            }
+            std::iter::once(shape)
+                .chain(shape.ancestors().filter_map(ElementRef::wrap))
+                .any(names_or_hides_its_parts)
+        }
+        let fragment = Html::parse_fragment(html);
+        let mut naming = StageNaming::default();
+        for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {
+            if BASIC_SHAPES.contains(&element.value().name()) && !named_or_unreachable(element) {
+                naming.unnamed_shapes += 1;
+            }
+            if has_picture_role(element)
+                && element
+                    .descendants()
+                    .skip(1)
+                    .filter_map(ElementRef::wrap)
+                    .any(|inner| entity_id_of(inner).is_some())
+            {
+                naming.picture_role_hides_entities = true;
+            }
+        }
+        naming
+    }
+
+    /// Every stage in every fixture, and the nested stage, gives the same
+    /// count and the same picture-role finding as the ancestor walk.
+    #[test]
+    fn stage_naming_matches_the_ancestor_walk_on_every_fixture() {
+        fn strings(value: &serde_json::Value, out: &mut Vec<String>) {
+            match value {
+                serde_json::Value::String(text) if text.contains('<') => out.push(text.clone()),
+                serde_json::Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+                serde_json::Value::Object(map) => map.values().for_each(|item| strings(item, out)),
+                _ => {}
+            }
+        }
+        let mut files = Vec::new();
+        let mut dirs =
+            vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "json") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut stages = Vec::new();
+        for file in &files {
+            if let Ok(value) = serde_json::from_slice(&std::fs::read(file).unwrap()) {
+                strings(&value, &mut stages);
+            }
+        }
+        assert!(stages.len() > 40, "only {} stages found", stages.len());
+        stages.push(nested_stage(40));
+        let mut warned = 0;
+        for stage in &stages {
+            let naming = stage_naming(stage);
+            assert_eq!(naming, stage_naming_by_ancestor_walk(stage), "{stage}");
+            warned += usize::from(naming != StageNaming::default());
+        }
+        assert!(warned > 5, "only {warned} stages warn");
     }
 
     #[test]
