@@ -177,8 +177,10 @@ block's `title` now shows as a visible title line.
   the drawing with an SVG `<title>`, never a `role="img"` wrapper, which
   hides its named parts from assistive technology.
 - **Unnamed parts.** A reviewer can still click a part nothing names. Its
-  note reads `Unnamed part of <stage title>` and falls back to the block
-  once the stage changes, so name parts for notes to survive revisions.
+  note reads `Unnamed part of <block label>`, where the block label is the
+  stage title (the block id when it has none) cut to 40 characters, and
+  falls back to the block once the stage changes, so name parts for notes
+  to survive revisions.
   `codeflow present check` warns about a stage with unnamed parts, a
   version 1 stage without its title or caption, and named parts inside
   `role="img"`; it reads the authored HTML, so a shape a style sheet hides
