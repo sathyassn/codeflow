@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "scaffold_version": "3.1.0",
+  "scaffold_version": "4.0.0",
   "files": {
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",

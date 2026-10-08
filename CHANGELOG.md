@@ -17,7 +17,7 @@ erratum below, never an edit of the section.
   the tag stays where it is. See "Public version baseline" in
   `docs/releasing.md`.
 
-## [3.1.0]
+## [4.0.0]
 
 ### Added
 
