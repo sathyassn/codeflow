@@ -343,6 +343,16 @@ level:
   line must name the file; a script written in one call and run in another
   stays a residual. This replaces a list of programs that run text, which an
   unlisted spelling always escaped;
+- a command-valued setting that names a class file, on any line, with or
+  without produced text: a global `git -c` or `--config-env` (git with one
+  is not a reader), and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`,
+  `LESSOPEN`, `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`,
+  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `GIT_CONFIG_VALUE_n` and similar
+  variables, set on the call or exported (`GIT_EDITOR='echo x >> ~/.zshrc'
+  git commit`);
+- quoting is decoded before any of these checks reads a word: ANSI-C
+  `$'\x2ezshrc'` (hex, octal, `\u`, `\U`, `\c` and the letter escapes),
+  locale `$"..."`, and adjacent quoted pieces (`'.zs''hrc'`, `.z"s"hrc`);
 - `ZDOTDIR`, `HOME`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND` or
   `XDG_CONFIG_HOME` set for a shell that reads them, and `direnv allow`; a
   zsh launch counts as reading them unless it turns them off with `-f` or
