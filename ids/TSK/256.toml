@@ -1,0 +1,11 @@
+id = "TSK-256"
+uid = "ec5f71c5-c9ca-49e4-96fd-a3bba4e6c50b"
+kind = "TSK"
+title = "The quick gate runs the repository update replay"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T01:56:40Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
