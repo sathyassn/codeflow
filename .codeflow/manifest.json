@@ -803,7 +803,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "5d2b718e41821a9af54191ebc17bcca9ecdce935ad4342de72f7a881183d7299",
+      "sha256": "87340d1491de5f7e3cd152a6a00c4ebcccea13d92f5541c5f96c5290d9af14bc",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-integration.md": {
@@ -1643,7 +1643,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "5d2b718e41821a9af54191ebc17bcca9ecdce935ad4342de72f7a881183d7299",
+      "sha256": "87340d1491de5f7e3cd152a6a00c4ebcccea13d92f5541c5f96c5290d9af14bc",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-integration.md": {
@@ -1829,7 +1829,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "337db6610741de501116d6050444b20ab13f32c87b8d79c5714021dbd561c8e1",
+      "sha256": "2051ba0b778486ffedbb505aaba283b878431dd40b171c89c860e8db4150bdb5",
       "exec": false
     },
     "CLAUDE.md": {
