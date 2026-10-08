@@ -57,9 +57,44 @@ pub fn slashed(path: &Path) -> String {
     }
 }
 
+/// The user's home directory as the guards and doctor read it: `HOME`,
+/// else `USERPROFILE`, the first that is set to an absolute path. Git Bash
+/// can leave `HOME` unset or spelled `/c/Users/u`, which is not an absolute
+/// Windows path, so `USERPROFILE` then names the home.
+#[must_use]
+pub fn user_home() -> Option<PathBuf> {
+    home_from(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+}
+
+/// [`user_home`] from given values, so the order is testable without
+/// changing this process's environment.
+#[must_use]
+pub fn home_from(
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    [home, profile]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::from)
+        .find(|path| path.is_absolute())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_home_is_home_else_userprofile_when_absolute() {
+        let a = std::env::temp_dir().join("a");
+        let b = std::env::temp_dir().join("b");
+        let os = |p: &Path| Some(p.as_os_str().to_os_string());
+        assert_eq!(home_from(os(&a), os(&b)), Some(a.clone()));
+        assert_eq!(home_from(None, os(&b)), Some(b.clone()));
+        assert_eq!(home_from(Some("".into()), os(&b)), Some(b.clone()));
+        assert_eq!(home_from(Some("relative".into()), os(&b)), Some(b));
+        assert_eq!(home_from(Some("relative".into()), None), None);
+    }
 
     #[test]
     fn a_canonical_path_names_an_existing_directory_without_a_verbatim_prefix() {

@@ -34,6 +34,7 @@ impl Fixture {
             home: Some(self.home.clone()),
             zdotdir: None,
             xdg_config: None,
+            etc_roots: Vec::new(),
         }
     }
 
@@ -254,6 +255,119 @@ fn pattern_characters_outside_the_word_are_literal() {
     }
 }
 
+/// `cd ~` moves a later command to the guard's home, the one the class is
+/// built from, so a placing program after it is judged there.
+#[test]
+fn a_directory_change_to_the_home_is_judged_from_the_class_home() {
+    let f = Fixture::new();
+    for command in [
+        "cd ~ && tar -xf dots.tar",
+        "cd ~/.config && tar -xf fish.tar",
+        "pushd ~ && unzip dots.zip",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    assert!(!refused(&f.judge("cd ~/work && tar -xf src.tar")));
+    // With `HOME` unset and `USERPROFILE` set, as on the Windows runner,
+    // the guard still reads the home, and `cd ~` lands in it.
+    let profile = f.home.clone().into_os_string();
+    let env = StartupEnv::from_vars(
+        &|name: &str| (name == "USERPROFILE").then(|| profile.clone()),
+        &f.project,
+    );
+    assert_eq!(env.home.as_deref(), Some(f.home.as_path()));
+    let found = evaluate("cd ~ && tar -xf dots.tar", &f.project, &env);
+    assert!(refused(&found), "{found:?}");
+}
+
+/// A Unix-like shell installed on Windows reads its own `etc` folder as
+/// `/etc`, so the class covers that folder: through a root the guard
+/// resolves from the environment, and through an install it did not
+/// resolve. The comparison runs on every platform here; the Windows guard
+/// applies the unresolved rule to every path it judges.
+#[test]
+fn a_windows_shell_install_etc_reads_as_the_etc_class() {
+    let f = Fixture::new();
+    let lay_out = |root: &Path, bash: Option<&str>| {
+        std::fs::create_dir_all(root.join("etc/profile.d")).unwrap();
+        if let Some(bash) = bash {
+            let bash = root.join(bash);
+            std::fs::create_dir_all(bash.parent().unwrap()).unwrap();
+            std::fs::write(bash, "").unwrap();
+        }
+    };
+    // Found on `PATH`, through `EXEPATH` and at a standard location.
+    let git = f.home.join("Programs/Git");
+    lay_out(&git, Some("usr/bin/bash.exe"));
+    std::fs::create_dir_all(git.join("cmd")).unwrap();
+    std::fs::write(git.join("cmd/git.exe"), "").unwrap();
+    let path = std::env::join_paths([f.project.clone(), git.join("cmd")]).unwrap();
+    let from_path = shell_roots(&|name: &str| (name == "PATH").then(|| path.clone()));
+    assert_eq!(from_path, std::slice::from_ref(&git));
+    let exe = git.clone().into_os_string();
+    let from_exe = shell_roots(&|name: &str| (name == "EXEPATH").then(|| exe.clone()));
+    assert_eq!(from_exe, std::slice::from_ref(&git));
+    let program_files = f.home.join("Program Files");
+    lay_out(&program_files.join("Git"), Some("bin/bash.exe"));
+    let pf = program_files.clone().into_os_string();
+    let standard = shell_roots(&|name: &str| (name == "ProgramFiles").then(|| pf.clone()));
+    assert_eq!(standard, [program_files.join("Git")]);
+    // A folder without a shell is no root.
+    let plain = f.home.join("tools");
+    lay_out(&plain, None);
+    let plain_os = plain.clone().into_os_string();
+    assert!(shell_roots(&|name: &str| (name == "EXEPATH").then(|| plain_os.clone())).is_empty());
+    // A resolved root's `etc` is the `/etc` class.
+    let env = StartupEnv {
+        etc_roots: from_path,
+        ..f.env()
+    };
+    for (rest, label) in [
+        ("etc/profile", "/etc/profile"),
+        ("etc/profile.d/x.sh", "/etc/profile.d"),
+        ("etc/bash.bashrc", "/etc/bash.bashrc"),
+        ("ETC/Profile", "/etc/profile"),
+    ] {
+        assert_eq!(
+            class_target(&git.join(rest), &env).as_deref(),
+            Some(label),
+            "{rest}"
+        );
+    }
+    assert!(class_target(&git.join("etc/gitconfig"), &env).is_none());
+    let command = format!("echo x >> '{}/etc/bash.bashrc'", slashed(&git));
+    assert!(refused(&evaluate(&command, &f.project, &env)), "{command}");
+    // An install no variable names: read by the shell it holds, or by a
+    // standard install folder name when the shell cannot be seen.
+    let class = Class::new(&f.env());
+    let unnamed = f.home.join("opt/shell");
+    lay_out(&unnamed, Some("bin/bash.exe"));
+    let msys = f.home.join("D/msys64");
+    lay_out(&msys, None);
+    for (path, label) in [
+        (unnamed.join("etc/profile.d/x.sh"), "/etc/profile.d"),
+        (msys.join("etc/bash.bashrc"), "/etc/bash.bashrc"),
+        (f.home.join("PortableGit/etc/profile"), "/etc/profile"),
+    ] {
+        assert_eq!(
+            class.shell_etc_entry(&path).as_deref(),
+            Some(label),
+            "{path:?}"
+        );
+    }
+    // A project's own `etc` is not a shell's, and a shell's other files
+    // are not the class.
+    lay_out(&f.project, None);
+    for path in [
+        f.project.join("etc/profile"),
+        plain.join("etc/profile"),
+        unnamed.join("etc/gitconfig"),
+        unnamed.join("profile"),
+    ] {
+        assert!(class.shell_etc_entry(&path).is_none(), "{path:?}");
+    }
+}
+
 /// On Windows the class compares paths without a drive, so `/etc/zshenv`
 /// joined from `C:\work` and the Git Bash spelling `/c/Users/u/.zshrc`
 /// reach the class entries spelled from the root and the home.
@@ -290,9 +404,15 @@ fn windows_drive_spellings_reach_the_class() {
         format!("echo x > {home}/.config/fish/conf.d/x.fish"),
         "echo x > /etc/profile.d/x.sh".to_string(),
         "R=/etc; tar -xf a.tar -C \"$R\"".to_string(),
+        // Git Bash's own `/etc`, at the standard Git for Windows location.
+        "echo x > 'C:/Program Files/Git/etc/profile.d/x.sh'".to_string(),
+        "tar -xf a.tar -C 'C:/Program Files/Git/etc'".to_string(),
     ] {
         assert!(refused(&f.judge(&command)), "{command}");
     }
+    assert!(class_target(Path::new(r"C:\Program Files\Git\etc\profile"), &f.env()).is_some());
+    let notes = f.project.join("etc").join("profile");
+    assert!(class_target(&notes, &f.env()).is_none());
 }
 
 #[test]

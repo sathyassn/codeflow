@@ -23,13 +23,14 @@
 //! A sandbox that denies the writes is the containment for those.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 use super::actions;
 use super::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::hooks::git_guard::{
     basename, command_argv, expand_commands, has_glob, is_shell, launcher_effects, redirect_writes,
-    run_dirs, shell_tokens, startup_glob_paths, strip_launchers, strip_reserved_words,
+    run_dirs_from_home, shell_tokens, startup_glob_paths, strip_launchers, strip_reserved_words,
     unresolved_word, word_readings,
 };
 use crate::hooks::Violation;
@@ -57,6 +58,10 @@ pub struct StartupEnv {
     /// `XDG_CONFIG_HOME`, when set: fish, `PowerShell`, tmux and direnv read
     /// their configuration there.
     pub xdg_config: Option<PathBuf>,
+    /// On Windows, the install roots of Unix-like shells (Git for Windows,
+    /// MSYS2, Cygwin) whose `etc` folder the shell reads as `/etc`, from
+    /// `shell_roots`; empty elsewhere.
+    pub etc_roots: Vec<PathBuf>,
 }
 
 impl StartupEnv {
@@ -75,16 +80,19 @@ impl StartupEnv {
     /// directory the command runs in (security review F-5).
     #[must_use]
     pub fn from_process_at(base: &Path) -> Self {
-        let var = |name: &str| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        let absolute = |name: &str| var(name).filter(|p| p.is_absolute());
+        Self::from_vars(&|name| std::env::var_os(name), base)
+    }
+
+    /// The same, from the variables `var` reads, so a test can give them
+    /// without changing this process's environment. The home is
+    /// [`crate::portable_path::home_from`]: `HOME`, else `USERPROFILE`.
+    #[must_use]
+    pub fn from_vars(var: &dyn Fn(&str) -> Option<OsString>, base: &Path) -> Self {
+        let set = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         Self {
-            home: absolute("HOME").or_else(|| absolute("USERPROFILE")),
-            zdotdir: var("ZDOTDIR"),
-            xdg_config: var("XDG_CONFIG_HOME").map(
+            home: crate::portable_path::home_from(var("HOME"), var("USERPROFILE")),
+            zdotdir: set("ZDOTDIR"),
+            xdg_config: set("XDG_CONFIG_HOME").map(
                 |x| {
                     if x.is_absolute() {
                         x
@@ -93,6 +101,11 @@ impl StartupEnv {
                     }
                 },
             ),
+            etc_roots: if cfg!(windows) {
+                shell_roots(var)
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -105,6 +118,83 @@ impl StartupEnv {
             ..Self::from_process_at(base)
         }
     }
+}
+
+/// Folder names of the standard Unix-like shell installs on Windows: Git
+/// for Windows (`C:\Program Files\Git`, a portable `PortableGit`), MSYS2
+/// (`C:\msys64`) and Cygwin (`C:\cygwin64`). An `etc` folder directly in
+/// one is read as the shell's `/etc` even when the guard cannot see the
+/// shell there, so a root it cannot resolve fails closed.
+const SHELL_ROOT_NAMES: &[&str] = &[
+    "git",
+    "portablegit",
+    "msys64",
+    "msys32",
+    "cygwin",
+    "cygwin64",
+];
+
+/// The install roots of Unix-like shells on a Windows machine, from the
+/// variables `var` reads: Git Bash's own root (`EXEPATH`), each `PATH`
+/// folder holding `git.exe` or `bash.exe` and up to two folders above it
+/// (`cmd`, `bin`, `mingw64\bin`, `usr\bin`), and the standard Git for
+/// Windows locations (`%ProgramFiles%\Git`, `%ProgramW6432%\Git`,
+/// `%ProgramFiles(x86)%\Git`, `%LOCALAPPDATA%\Programs\Git`). A
+/// candidate counts only where [`shell_root`] finds the shell. A root none
+/// of these names is still refused by [`Class::shell_etc_entry`].
+#[must_use]
+pub(crate) fn shell_roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = var("EXEPATH").map(PathBuf::from).into_iter().collect();
+    if let Some(path) = var("PATH") {
+        candidates.extend(std::env::split_paths(&path).filter(|dir| {
+            ["git.exe", "bash.exe"]
+                .iter()
+                .any(|n| dir.join(n).is_file())
+        }));
+    }
+    for (name, below) in [
+        ("ProgramFiles", "Git"),
+        ("ProgramW6432", "Git"),
+        ("ProgramFiles(x86)", "Git"),
+        ("LOCALAPPDATA", "Programs/Git"),
+    ] {
+        if let Some(base) = var(name).filter(|v| !v.is_empty()) {
+            candidates.push(PathBuf::from(base).join(below));
+        }
+    }
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for candidate in candidates {
+        if let Some(root) = candidate.ancestors().take(3).find(|dir| shell_root(dir)) {
+            if !roots.iter().any(|r| r == root) {
+                roots.push(root.to_path_buf());
+            }
+        }
+    }
+    roots
+}
+
+/// Whether `dir` is the root of a Unix-like shell install: an `etc` folder
+/// beside a `bin\bash.exe` or `usr\bin\bash.exe`, as Git for Windows,
+/// MSYS2 and Cygwin lay it out.
+fn shell_root(dir: &Path) -> bool {
+    dir.join("etc").is_dir()
+        && ["bin/bash.exe", "usr/bin/bash.exe"]
+            .iter()
+            .any(|bash| dir.join(bash).is_file())
+}
+
+/// Whether `dir` is a shell install's `etc` folder: named `etc`, in a
+/// [`shell_root`] or a folder named as a standard install.
+fn shell_etc(dir: &Path) -> bool {
+    let named = |p: &Path, names: &[&str]| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| names.iter().any(|name| n.eq_ignore_ascii_case(name)))
+    };
+    named(dir, &["etc"])
+        && dir
+            .parent()
+            .is_some_and(|root| named(root, SHELL_ROOT_NAMES) || shell_root(root))
 }
 
 /// One protected location: a file, a directory and everything below it,
@@ -180,6 +270,14 @@ impl Class {
             let path = entry.trim_end_matches('/');
             needles.push(path.to_lowercase());
             add(path.to_string(), PathBuf::from(path), dir);
+            // A Windows shell install reads its own `etc` as `/etc`.
+            for root in &env.etc_roots {
+                add(
+                    path.to_string(),
+                    root.join(path.trim_start_matches('/')),
+                    dir,
+                );
+            }
         }
         entries.extend(anywhere_zsh.into_iter().map(Entry::Name));
         for name in &table.anywhere {
@@ -205,10 +303,36 @@ impl Class {
     #[must_use]
     pub(crate) fn target(&self, path: &Path) -> Option<String> {
         let mut readings = vec![key(&lexical(path))];
-        if let Some(real) = resolve(path) {
-            readings.push(key(&real));
+        let real = resolve(path);
+        if let Some(real) = &real {
+            readings.push(key(real));
         }
-        readings.iter().find_map(|reading| self.entry_of(reading))
+        readings
+            .iter()
+            .find_map(|reading| self.entry_of(reading))
+            .or_else(|| {
+                if !cfg!(windows) {
+                    return None;
+                }
+                self.shell_etc_entry(&lexical(path))
+                    .or_else(|| real.as_deref().and_then(|r| self.shell_etc_entry(r)))
+            })
+    }
+
+    /// The system class entry `path` names inside a Windows shell install's
+    /// `etc` folder ([`shell_etc`]), read as the same path below `/etc`:
+    /// `C:\Program Files\Git\etc\profile` is `/etc/profile`. It covers an
+    /// install [`shell_roots`] did not resolve.
+    fn shell_etc_entry(&self, path: &Path) -> Option<String> {
+        path.ancestors()
+            .skip(1)
+            .find(|dir| shell_etc(dir))
+            .and_then(|etc| {
+                let rest = path.strip_prefix(etc).ok()?;
+                let reading = format!("/etc/{}", key(rest));
+                self.entry_of(reading.trim_end_matches('/'))
+                    .filter(|label| label.starts_with("/etc"))
+            })
     }
 
     fn entry_of(&self, reading: &str) -> Option<String> {
@@ -241,6 +365,9 @@ impl Class {
         let mut readings = vec![key(&lexical(path))];
         if let Some(real) = resolve(path) {
             readings.push(key(&real));
+        }
+        if cfg!(windows) && shell_etc(&lexical(path)) {
+            return Some(shown(path));
         }
         readings.iter().find_map(|reading| {
             let reading = reading.trim_end_matches('/');
@@ -1031,7 +1158,8 @@ fn finding(message: String) -> Violation {
 pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
     let class = Class::new(env);
     let segments = expand_commands(command);
-    let run = run_dirs(&segments, cwd);
+    // `cd ~` lands in the home the class is built from.
+    let run = run_dirs_from_home(&segments, cwd, env.home.clone());
     let mut line = Line {
         class: &class,
         env,

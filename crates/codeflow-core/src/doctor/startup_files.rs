@@ -511,6 +511,7 @@ mod tests {
             home: Some(home.clone()),
             zdotdir: None,
             xdg_config: None,
+            etc_roots: Vec::new(),
         };
         let found = sourced_files(&env);
         assert_eq!(
@@ -632,12 +633,14 @@ mod tests {
             home: Some(home.clone()),
             zdotdir: Some(home.clone()),
             xdg_config: Some(home.join(".config")),
+            etc_roots: Vec::new(),
         };
         assert!(relocated(&at_defaults).is_empty());
         let moved = StartupEnv {
             home: Some(home),
             zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
             xdg_config: Some(PathBuf::from("/fixture/xdg")),
+            etc_roots: Vec::new(),
         };
         assert_eq!(relocated(&moved).len(), 2);
     }

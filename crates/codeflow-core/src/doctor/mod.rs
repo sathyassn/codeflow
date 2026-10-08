@@ -71,9 +71,7 @@ mod duration_millis {
 /// The user's home directory (`HOME`, else `USERPROFILE`), or the current
 /// directory when neither is set.
 fn user_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    crate::portable_path::user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Callback to locate an executable by name.

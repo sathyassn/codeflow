@@ -2192,6 +2192,8 @@ pub(crate) struct RunDirs {
     /// program that can move the shell untracked, a move that repeats, or
     /// a rotation that can reach a `pushd -n` directory.
     pub(crate) unknown: Option<String>,
+    /// The home `~` and `$HOME` name.
+    home: Option<PathBuf>,
 }
 
 /// The directories the commands in `segments` can run in, starting from
@@ -2204,9 +2206,20 @@ pub(crate) struct RunDirs {
 /// unknown (TSK-216 round 10). It over-approximates: a command is judged
 /// from each listed directory.
 pub(crate) fn run_dirs(segments: &[String], start: &Path) -> RunDirs {
+    run_dirs_from_home(segments, start, crate::portable_path::user_home())
+}
+
+/// [`run_dirs`] with `~` read as `home`: the startup guard passes the home
+/// its class is built from, so a `cd ~` lands where the class lives.
+pub(crate) fn run_dirs_from_home(
+    segments: &[String],
+    start: &Path,
+    home: Option<PathBuf>,
+) -> RunDirs {
     let mut run = RunDirs {
         dirs: vec![start.to_path_buf()],
         unknown: None,
+        home,
     };
     let mut stacked = false;
     let mut repeats = false;
@@ -2311,9 +2324,9 @@ fn reach_dirs(target: &str, run: &mut RunDirs) -> Vec<PathBuf> {
     let mut reached = Vec::new();
     for dir in &run.dirs {
         let path = if target == "~" {
-            std::env::var_os("HOME").map_or_else(|| dir.clone(), PathBuf::from)
+            run.home.clone().unwrap_or_else(|| dir.clone())
         } else {
-            integrity_shell_path(target, dir)
+            shell_path_with_home(target, dir, run.home.as_deref())
         };
         if target.contains(['*', '?', '[']) {
             match WordGlob::new(target, dir).expand() {
@@ -2427,9 +2440,14 @@ fn integrity_write_in_run(
 }
 
 fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
+    shell_path_with_home(token, cwd, crate::portable_path::user_home().as_deref())
+}
+
+/// [`integrity_shell_path`] with `~` and `$HOME` read as `home`.
+fn shell_path_with_home(token: &str, cwd: &Path, home: Option<&Path>) -> PathBuf {
     if token == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = home {
+            return home.to_path_buf();
         }
     }
     // `~+` is the directory the command runs in.
@@ -2440,8 +2458,8 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
         return cwd.join(relative);
     }
     if let Some(relative) = token.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(relative);
+        if let Some(home) = home {
+            return home.join(relative);
         }
     }
     for name in ["HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL"] {
@@ -2449,7 +2467,12 @@ fn integrity_shell_path(token: &str, cwd: &Path) -> PathBuf {
             .strip_prefix(&format!("${name}"))
             .or_else(|| token.strip_prefix(&format!("${{{name}}}")));
         if let Some(relative) = relative.filter(|s| s.is_empty() || s.starts_with('/')) {
-            if let Some(value) = std::env::var_os(name) {
+            let value = if name == "HOME" {
+                home.map(|h| h.as_os_str().to_os_string())
+            } else {
+                std::env::var_os(name)
+            };
+            if let Some(value) = value {
                 return cwd.join(value).join(relative.trim_start_matches('/'));
             }
         }
@@ -6691,9 +6714,7 @@ enum FileScope {
 /// three); an empty `dirs` means the directory is unknown.
 fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
     let file = file.replace('\\', "/");
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
+    let home = crate::portable_path::user_home();
     let expanded = match &home {
         Some(home) => {
             let home = home.to_string_lossy();
@@ -10483,10 +10504,7 @@ mod tests {
         // Review round three: a relative `--file` is read from the directory
         // git runs in. Nothing is written; only the verdict is read. The
         // home is the one the guard reads: `HOME`, else `USERPROFILE`.
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap();
+        let home = crate::portable_path::user_home().unwrap();
         let user_dir = home.join(".config/git");
         let elsewhere = tempfile::tempdir().unwrap();
         let at =

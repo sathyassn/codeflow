@@ -488,9 +488,7 @@ pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuratio
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
 pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
+    let home = crate::portable_path::user_home();
     let mut paths = Vec::new();
     if let Some(home) = &home {
         paths.push(home.join(".gitconfig"));

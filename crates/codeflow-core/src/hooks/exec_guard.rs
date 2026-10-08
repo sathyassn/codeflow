@@ -156,9 +156,7 @@ pub fn evaluate_in(
             violations.push(violation);
         }
     }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from);
+    let home = crate::portable_path::user_home();
     for finding in crate::security::interpreter::evaluate(
         command,
         levels,
