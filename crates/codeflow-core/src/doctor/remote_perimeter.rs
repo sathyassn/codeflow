@@ -11,9 +11,10 @@
 //! with `git.required_checks`. Bypass lists belong to one rule each, so a
 //! policy check, or the up-to-date requirement, counts only when a rule that
 //! binds everyone requires it. It warns, never blocks; when `gh`, the
-//! network or a GitHub `origin` is missing, or a bypass list that decides
-//! the answer cannot be read (the host omits it without write access), it
-//! says so in a note rather than passing.
+//! network or a GitHub `origin` is missing, or the rules, the classic
+//! protection or a bypass list that decides the answer cannot be read (the
+//! host omits a bypass list without write access), it says so in a note
+//! rather than passing or warning. Only a 404 means no classic protection.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -104,38 +105,42 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             ))
         }
     };
-    let mut unread = Vec::new();
     let mut bypass_unread = Vec::new();
-    let classic = match gh(&["api", &format!("repos/{nwo}/branches/{branch}/protection")]) {
-        Ok(text) => Some(parse(&text)),
-        Err(error) if error.contains("404") || error.contains("not protected") => None,
-        Err(error) => {
-            unread.push(format!(
-                "classic branch protection not readable ({})",
-                super::first_line(&error)
-            ));
-            None
-        }
-    };
+    let (classic, classic_unread) = classic_protection(&gh, &nwo, &branch);
 
     let sources = sources(&rules, classic.as_ref());
     let required: Vec<String> = crate::hooks::policy::Policy::load(root).git.required_checks;
     let problems = problems(opts, &nwo, &branch, &sources, &required, &mut bypass_unread);
+    let mut unread: Vec<String> = classic_unread.iter().cloned().collect();
     unread.extend(bypass_unread.iter().cloned());
 
+    if let (Some(why), false) = (&classic_unread, problems.is_empty()) {
+        // Classic protection can add checks, the up-to-date rule or an
+        // administrator binding, so what the rulesets lack alone is not a
+        // gap doctor can report.
+        let rest = if bypass_unread.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", bypass_unread.join("; "))
+        };
+        return note(format!(
+            "doctor cannot judge {nwo} {branch}: {why}, and the rulesets alone do not require every name in git.required_checks on an up-to-date branch for everyone{rest}"
+        ));
+    }
+    if problems.is_empty() && !bypass_unread.is_empty() {
+        // The rules look right, but a bypass list that cannot be read could
+        // hold an actor who skips them, so this is not a pass.
+        return note(format!(
+            "{nwo} {branch} requires up-to-date checks, but doctor cannot confirm nobody can bypass them: {}",
+            unread.join("; ")
+        ));
+    }
     let unread = if unread.is_empty() {
         String::new()
     } else {
         format!("; {}", unread.join("; "))
     };
-    if problems.is_empty() && !bypass_unread.is_empty() {
-        // The rules look right, but a bypass list that cannot be read could
-        // hold an actor who skips them, so this is not a pass.
-        note(format!(
-            "{nwo} {branch} requires up-to-date checks, but doctor cannot confirm nobody can bypass them: {}",
-            bypass_unread.join("; ")
-        ))
-    } else if problems.is_empty() {
+    if problems.is_empty() {
         let checks: Vec<String> = sources
             .iter()
             .flat_map(|s| s.contexts.iter().cloned())
@@ -170,14 +175,43 @@ fn branch_rules(
         let url =
             format!("repos/{nwo}/rules/branches/{branch}?per_page={RULES_PAGE_SIZE}&page={page}");
         let text = gh(&["api", &url])?;
-        let rows = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-        let rows = rows.as_array().map_or(&[][..], Vec::as_slice);
-        rules.extend_from_slice(rows);
+        // A page that is not a list was not read; it is never an empty one.
+        let Ok(Value::Array(rows)) = serde_json::from_str::<Value>(&text) else {
+            return Err(format!("page {page} of the rules is not a JSON list"));
+        };
+        rules.extend_from_slice(&rows);
         if rows.len() < RULES_PAGE_SIZE {
             break;
         }
     }
     Ok(Value::Array(rules))
+}
+
+/// The classic protection of `branch`, or why it could not be read. Only
+/// a 404 means the branch has none; any other failure, or a body that is
+/// not an object, leaves it unknown.
+fn classic_protection(
+    gh: &dyn Fn(&[&str]) -> Result<String, String>,
+    nwo: &str,
+    branch: &str,
+) -> (Option<Value>, Option<String>) {
+    match gh(&["api", &format!("repos/{nwo}/branches/{branch}/protection")]) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(body @ Value::Object(_)) => (Some(body), None),
+            _ => (
+                None,
+                Some("classic branch protection not readable (not a JSON object)".to_string()),
+            ),
+        },
+        Err(error) if error.contains("404") || error.contains("not protected") => (None, None),
+        Err(error) => (
+            None,
+            Some(format!(
+                "classic branch protection not readable ({})",
+                super::first_line(&error)
+            )),
+        ),
+    }
 }
 
 /// What lets a pull request merge on checks that did not run on the
@@ -784,6 +818,106 @@ mod tests {
         let dir = project();
         let result = check(&opts(dir.path(), exec));
         assert_eq!(result.status, Status::Pass, "{}", result.message);
+    }
+
+    /// Round 4 of the PR 127 review: a classic protection read that fails
+    /// for a reason other than "not protected" is unknown, so it never
+    /// becomes "requires no status checks".
+    #[test]
+    fn an_unreadable_classic_protection_is_a_note_not_a_warning() {
+        fn denied(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r/branches/main/protection"] => {
+                    Err("gh: Resource not accessible (HTTP 403)".into())
+                }
+                _ => host(args, "[]", None, "[]"),
+            }
+        }
+        fn garbled(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r/branches/main/protection"] => Ok("<html>".into()),
+                _ => host(args, "[]", None, "[]"),
+            }
+        }
+        fn unprotected(_: &str, args: &[&str]) -> Result<String, String> {
+            host(args, "[]", None, "[]")
+        }
+        let dir = project();
+        for exec in [denied as fn(&str, &[&str]) -> _, garbled] {
+            let result = check(&opts(dir.path(), exec));
+            assert!(
+                matches!(result.status, Status::Note(_)),
+                "{:?}: {}",
+                result.status,
+                result.message
+            );
+            assert!(
+                result
+                    .message
+                    .contains("classic branch protection not readable"),
+                "{}",
+                result.message
+            );
+            assert!(
+                !result.message.contains("requires no status checks"),
+                "{}",
+                result.message
+            );
+        }
+        // A real 404 is a branch without classic protection, and warns.
+        let text = warn_text(&check(&opts(dir.path(), unprotected)));
+        assert!(text.contains("main requires no status checks"), "{text}");
+    }
+
+    /// Classic protection cannot remove a ruleset requirement, so rulesets
+    /// that meet the policy on their own still pass, naming the gap.
+    #[test]
+    fn rulesets_that_meet_the_policy_pass_with_classic_unread() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", "repos/o/r/branches/main/protection"] => {
+                    Err("gh: Resource not accessible (HTTP 403)".into())
+                }
+                _ => host(args, &ruleset(true), None, "[]"),
+            }
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), exec));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(
+            result
+                .message
+                .contains("classic branch protection not readable"),
+            "{}",
+            result.message
+        );
+    }
+
+    /// A rules page that is not a JSON array was not read, so it is a note,
+    /// never an empty rule list.
+    #[test]
+    fn a_rules_page_that_is_not_a_list_is_a_note() {
+        fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            match args {
+                ["api", url] if url.starts_with("repos/o/r/rules/branches/main") => {
+                    Ok(r#"{"message":"Bad credentials"}"#.into())
+                }
+                _ => host(args, "[]", None, "[]"),
+            }
+        }
+        let dir = project();
+        let result = check(&opts(dir.path(), exec));
+        assert!(
+            matches!(result.status, Status::Note(_)),
+            "{:?}: {}",
+            result.status,
+            result.message
+        );
+        assert!(
+            result.message.contains("could not read the rules"),
+            "{}",
+            result.message
+        );
     }
 
     #[test]

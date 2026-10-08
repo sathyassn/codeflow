@@ -389,7 +389,8 @@ another provider prints the manual checklist. It requires the checks in
 is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
 the live rules first: every active repository ruleset that already targets the
 branch is updated in place, never duplicated, and a classic protection update keeps the
-settings it does not own, such as conversation resolution. `codeflow doctor
+settings it does not own, such as conversation resolution. A live read that
+fails or does not parse writes nothing for that branch. `codeflow doctor
 --check remote-perimeter` reads the default branch's live rules back.
 
 ### Verify notes

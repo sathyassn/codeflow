@@ -503,9 +503,12 @@ impl GithubProvider {
                 ],
                 None,
             )?;
-            let list: Value = serde_json::from_str(&list).unwrap_or(Value::Null);
-            let summaries = list.as_array().map_or(&[][..], Vec::as_slice);
-            for summary in summaries {
+            // A page that is not a list was not read; taking it as empty
+            // would add a second ruleset beside one already there.
+            let Ok(Value::Array(summaries)) = serde_json::from_str::<Value>(&list) else {
+                return Err(format!("page {page} of the rulesets is not a JSON list"));
+            };
+            for summary in &summaries {
                 let ours = summary.get("target").and_then(Value::as_str) == Some("branch")
                     && summary
                         .get("source_type")
@@ -542,7 +545,14 @@ impl GithubProvider {
             &["api", &format!("repos/{nwo}/branches/{branch}/protection")],
             None,
         ) {
-            Ok(out) => Ok(Some(serde_json::from_str(&out).unwrap_or(Value::Null))),
+            // A body that does not parse was not read; a PUT built without
+            // it would drop every setting it could not see.
+            Ok(out) => match serde_json::from_str::<Value>(&out) {
+                Ok(body @ Value::Object(_)) => Ok(Some(body)),
+                _ => Err(format!(
+                    "the classic protection of {branch} is not a JSON object"
+                )),
+            },
             Err(e) if e.contains("404") || e.contains("Branch not protected") => Ok(None),
             Err(e) => Err(e),
         }
@@ -1220,7 +1230,12 @@ mod tests {
     #[test]
     fn test_github_applies_when_gh_succeeds() {
         let dir = tempfile::tempdir().unwrap();
-        let gh = write_shim(dir.path(), "printf '%s' '{}'\nexit 0");
+        // The rulesets list is a JSON array on GitHub; every other call
+        // answers an empty object.
+        let gh = write_shim(
+            dir.path(),
+            "case \"$2\" in *rulesets\\?*) printf '%s' '[]' ;; *) printf '%s' '{}' ;; esac\nexit 0",
+        );
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
         let plan = ProtectionPlan::from_policy_file(&path);
 
@@ -1555,6 +1570,33 @@ esac
             serde_json::json!({ "users": ["bob"], "teams": [], "apps": ["release-bot"] }),
             "{reviews}"
         );
+    }
+
+    /// A live read that answers with a body that does not parse was not
+    /// read: protect writes nothing rather than add a second ruleset or a
+    /// classic PUT that drops the settings it could not see.
+    #[cfg(unix)]
+    #[test]
+    fn an_unparsable_live_read_writes_nothing() {
+        let list = Host::new("<html>", &[], None);
+        let report = list.apply(r#"["release/*"]"#);
+        assert_eq!(
+            report.status,
+            ProtectStatus::Degraded,
+            "{}",
+            report.render()
+        );
+        assert!(list.writes().is_empty(), "{:?}", list.writes());
+
+        let protection = Host::new("[]", &[], Some("<html>"));
+        let report = protection.apply(r#"["main"]"#);
+        assert_eq!(
+            report.status,
+            ProtectStatus::Degraded,
+            "{}",
+            report.render()
+        );
+        assert!(protection.writes().is_empty(), "{:?}", protection.writes());
     }
 
     #[cfg(unix)]
