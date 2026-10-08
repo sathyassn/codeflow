@@ -12258,8 +12258,10 @@ mod tests {
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| None;
         for session in ["feat/x", "main"] {
+            // Quoted, as a shell reads `\` in an unquoted word as an escape
+            // and a Windows path would lose its separators.
             let v = evaluate(
-                &format!("git -C {} commit -m x", target.display()),
+                &format!("git -C '{}' commit -m x", target.display()),
                 &ctx_with_dir_branch(&p, session, &resolver),
             );
             let commit = v

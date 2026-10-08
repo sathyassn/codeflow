@@ -953,7 +953,8 @@ created: 2026-06-11
 
         let error = store.list_epics(EpicFilter::default()).unwrap_err();
         assert!(
-            matches!(error, StoreError::Yaml { path, .. } if path.ends_with("epics/notes.md")),
+            matches!(error, StoreError::Yaml { path, .. }
+                if Path::new(&path).ends_with(Path::new("epics").join("notes.md"))),
             "a candidate record parse failure must refuse the inventory"
         );
     }

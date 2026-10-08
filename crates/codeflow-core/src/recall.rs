@@ -768,10 +768,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join(".git"), "gitdir: /x/meta\nother\n").unwrap();
+        // An absolute folder on this host: `/x` has no drive on Windows.
+        let folder = dir.path().join("meta\nother");
+        fs::write(repo.join(".git"), format!("gitdir: {}\n", folder.display())).unwrap();
         assert_eq!(
             runtime_state_dir(&repo).unwrap(),
-            Some(PathBuf::from("/x/meta\nother/codeflow"))
+            Some(folder.join("codeflow"))
         );
     }
 

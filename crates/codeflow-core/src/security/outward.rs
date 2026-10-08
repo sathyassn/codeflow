@@ -909,14 +909,27 @@ mod tests {
             b"[alias]\n conditional = push origin caf\xff\n",
         )
         .unwrap();
-        writeln!(config, "[include]\n path = {}", included.display()).unwrap();
+        // Paths are written with `/`: git reads `\` in a config value as an
+        // escape, so a Windows path would make the whole file unreadable.
+        // The condition names the temporary folder alone, which git matches
+        // at any depth, so a Windows short name (`RUNNER~1`) or a linked
+        // temporary root on macOS reads the same.
+        let slashed = crate::portable_path::slashed;
+        writeln!(config, "[include]\n path = {}", slashed(&included)).unwrap();
         writeln!(
             config,
-            "[includeIf \"gitdir:{}\"]\n path = {}",
-            temp.path().join(".git").canonicalize().unwrap().display(),
-            conditional.display()
+            "[includeIf \"gitdir:{}/.git\"]\n path = {}",
+            temp.path().file_name().unwrap().to_str().unwrap(),
+            slashed(&conditional)
         )
         .unwrap();
+        drop(config);
+        let loaded = crate::git::command()
+            .current_dir(temp.path())
+            .args(["config", "--get", "alias.conditional"])
+            .output()
+            .unwrap();
+        assert!(loaded.status.success(), "the conditional source applies");
         for command in [
             "git bad".to_string(),
             "git nested".into(),
@@ -925,7 +938,7 @@ mod tests {
             "git included".into(),
             "git -c alias.outer=bad outer".into(),
             "git -c 'alias.outer=!sh -c git\\ bad' outer".into(),
-            format!("git -c include.path={} cli", cli_included.display()),
+            format!("git -c include.path={} cli", slashed(&cli_included)),
             "git -c include.path=cli-aliases cli".into(),
             "git conditional".into(),
         ] {
