@@ -509,6 +509,7 @@ mod tests {
         .unwrap();
         let env = StartupEnv {
             home: Some(home.clone()),
+            other_homes: Vec::new(),
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
@@ -631,6 +632,7 @@ mod tests {
         let home = PathBuf::from("/fixture/home");
         let at_defaults = StartupEnv {
             home: Some(home.clone()),
+            other_homes: Vec::new(),
             zdotdir: Some(home.clone()),
             xdg_config: Some(home.join(".config")),
             etc_roots: Vec::new(),
@@ -638,6 +640,7 @@ mod tests {
         assert!(relocated(&at_defaults).is_empty());
         let moved = StartupEnv {
             home: Some(home),
+            other_homes: Vec::new(),
             zdotdir: Some(PathBuf::from("/fixture/work/zdir")),
             xdg_config: Some(PathBuf::from("/fixture/xdg")),
             etc_roots: Vec::new(),

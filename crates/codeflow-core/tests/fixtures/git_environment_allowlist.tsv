@@ -86,8 +86,6 @@ crates/codeflow-core/src/security/startup_tests.rs	"GIT_CONFIG_COUNT=1 GIT_CONFI
 crates/codeflow-core/src/security/startup_tests.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/x git log -p -- .envrc | head"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/security/startup_tests.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=mystery.key GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-core/src/security/startup_tests.rs	"GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
-crates/codeflow-core/src/security/startup_tests.rs	env(&self)	1	The startup-class fixture's StartupEnv accessor; builds no process environment.
-crates/codeflow-core/src/security/startup_tests.rs	env()	25	The startup-class fixture's StartupEnv accessor; builds no process environment.
 crates/codeflow-core/src/testing/runner/mod.rs	env(GATE_HELPER_DIR,dir.path())	1	Passes validated target environment or the Windows helper fixture directory; workspace targets do not override maintenance settings.
 crates/codeflow-core/src/testing/runner/mod.rs	env(key,val)	1	Passes validated target environment or the Windows helper fixture directory; workspace targets do not override maintenance settings.
 crates/codeflow-core/src/validate/portal.rs	env_clear()	1	Hardened read-only Git subprocesses disable lazy fetch and optional locks; configuration literals are inert environment-filter test input.

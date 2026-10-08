@@ -7060,3 +7060,77 @@ fn epic_line_adoption_pre_push_refuses_a_tip_that_drops_tracking() {
     let direct = f.direct();
     blocks(&f.push(ZERO), &direct[..9]);
 }
+
+/// TSK-242 review round 13: git reads `GIT_DIR`, `GIT_COMMON_DIR` and
+/// `GIT_WORK_TREE` from the environment it inherits, so the hook reads them
+/// from its own. A scopeless `git config` that sets a code-running key
+/// refuses when that environment leaves the repository's configuration
+/// unplaced, or names a git directory whose `config` links elsewhere; a
+/// known-safe key still passes.
+#[test]
+fn git_guard_reads_git_locations_from_its_own_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let common = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_COMMON_DIR", &elsewhere);
+        cmd
+    };
+    let work_tree = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_WORK_TREE", &elsewhere);
+        cmd
+    };
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config core.fsmonitor ./m");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{name}: {err}");
+        assert!(err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config user.name Ada");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    #[cfg(unix)]
+    {
+        // A git directory whose `config` is a link to a file every
+        // repository may read.
+        let evil = dir.path().join("evil");
+        std::fs::create_dir_all(evil.join("objects")).unwrap();
+        std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        let stand_in = dir.path().join("stand-in.gitconfig");
+        std::fs::write(&stand_in, "").unwrap();
+        std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+        let git_dir = || {
+            let mut cmd = codeflow();
+            cmd.env("GIT_DIR", &evil);
+            cmd
+        };
+        for command in [
+            "git config core.fsmonitor ./m",
+            "git config alias.x '!id'",
+            "git config core.fsmonitor 08",
+        ] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+            assert!(err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+        for command in ["git config user.name Ada", "git config core.fsmonitor true"] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+    }
+}

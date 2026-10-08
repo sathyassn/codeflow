@@ -201,16 +201,57 @@ fn config_name_matches(key: &str, pattern: &str) -> bool {
     }
 }
 
-/// Whether git reads the lower-case `value` as a boolean: `true`, `false`,
-/// `yes`, `no`, `on`, `off`, the empty value, or an integer with an
-/// optional `k`, `m` or `g` unit (`pager.log=2` turns the pager on).
+/// Whether git reads the lower-case `value` as a boolean, as
+/// `git_parse_maybe_bool` does: `true`, `false`, `yes`, `no`, `on`, `off`,
+/// the empty value, or an `int` that [`git_int`] reads (`pager.log=2`
+/// turns the pager on). Anything else is a string: `core.fsmonitor=08` is
+/// a program git runs (TSK-242 review round 13).
 fn git_boolean(value: &str) -> bool {
-    if matches!(value, "" | "true" | "false" | "yes" | "no" | "on" | "off") {
-        return true;
+    matches!(value, "" | "true" | "false" | "yes" | "no" | "on" | "off") || git_int(value).is_some()
+}
+
+/// The `int` git reads from `value`, as `git_parse_int` does: `strtoimax`
+/// with base 0 after leading white space (`0x` is hexadecimal, a leading
+/// `0` octal), then nothing or one `k`, `m` or `g` unit, the product in
+/// the range of a C `int`. `08` is `0` followed by `8`, so it is no number.
+fn git_int(value: &str) -> Option<i64> {
+    const MAX: i64 = i32::MAX as i64;
+    const MIN: i64 = i32::MIN as i64;
+    let text = value.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']);
+    let (negative, unsigned) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    let hex = unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))
+        .filter(|rest| rest.starts_with(|c: char| c.is_ascii_hexdigit()));
+    let (radix, digits) = match hex {
+        Some(rest) => (16, rest),
+        None if unsigned.starts_with('0') => (8, unsigned),
+        None => (10, unsigned),
+    };
+    let count = digits.chars().take_while(|c| c.is_digit(radix)).count();
+    if count == 0 {
+        return None;
     }
-    let digits = value.strip_prefix(['-', '+']).unwrap_or(value);
-    let digits = digits.strip_suffix(['k', 'm', 'g']).unwrap_or(digits);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    let factor: i64 = match digits[count..].to_ascii_lowercase().as_str() {
+        "" => 1,
+        "k" => 1 << 10,
+        "m" => 1 << 20,
+        "g" => 1 << 30,
+        _ => return None,
+    };
+    // Past `intmax_t`, `strtoimax` reports a range error and git refuses.
+    let magnitude = i128::from_str_radix(&digits[..count], radix).ok()?;
+    let parsed = i64::try_from(if negative { -magnitude } else { magnitude }).ok()?;
+    let fits = if parsed < 0 {
+        parsed >= MIN / factor
+    } else {
+        parsed <= MAX / factor
+    };
+    fits.then(|| parsed * factor)
 }
 
 /// What the git setting `key` set to `value` can do. A key on
@@ -333,6 +374,87 @@ mod tests {
                 config_kind(key, value),
                 ConfigKind::Unknown,
                 "{key}={value}"
+            );
+        }
+    }
+
+    /// git 2.53.0's own reading, from `git -c probe.v=VALUE config
+    /// --type=bool probe.v`: a value git rejects as a boolean is a program
+    /// to `core.fsmonitor` and `pager.<command>` (TSK-242 review round 13,
+    /// where `core.fsmonitor=08` ran a program named `08`).
+    #[test]
+    fn booleans_are_what_git_parses_as_booleans() {
+        let booleans = [
+            "true",
+            "false",
+            "yes",
+            "no",
+            "on",
+            "off",
+            "",
+            "1",
+            "0",
+            "+1",
+            "-1",
+            "1k",
+            "1K",
+            "2",
+            "0x10",
+            "0X1F",
+            "00",
+            "07",
+            "010",
+            " 1",
+            "2147483647",
+            "-2147483647",
+            "-2147483648",
+            "2097151k",
+            "-2097152k",
+            "2047m",
+            "1g",
+        ];
+        let programs = [
+            "08",
+            "+08",
+            "-08",
+            "008",
+            "08k",
+            "0x",
+            "1 ",
+            "-",
+            "2147483648",
+            "2097152k",
+            "2048m",
+            "2g",
+            "9g",
+            "-2097153k",
+            "0xffffffff",
+            "99999999999999999999999",
+            "1kb",
+            "./hook",
+        ];
+        for value in booleans {
+            assert!(git_boolean(&value.to_lowercase()), "[{value}] is a boolean");
+            assert_eq!(
+                config_kind("core.fsmonitor", value),
+                ConfigKind::Safe,
+                "[{value}]"
+            );
+        }
+        for value in programs {
+            assert!(
+                !git_boolean(&value.to_lowercase()),
+                "[{value}] is a program"
+            );
+            assert_eq!(
+                config_kind("core.fsmonitor", value),
+                ConfigKind::Command,
+                "[{value}]"
+            );
+            assert_eq!(
+                config_kind("pager.log", value),
+                ConfigKind::Command,
+                "[{value}]"
             );
         }
     }

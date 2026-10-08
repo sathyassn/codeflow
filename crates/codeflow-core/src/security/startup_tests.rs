@@ -29,9 +29,13 @@ impl Fixture {
         }
     }
 
-    fn env(&self) -> StartupEnv {
+    /// The class locations for this fixture. Named for what it builds, so
+    /// the git environment scan (`git_spawn_contract`) does not read it as
+    /// a process `env()` call.
+    fn startup_env(&self) -> StartupEnv {
         StartupEnv {
             home: Some(self.home.clone()),
+            other_homes: Vec::new(),
             zdotdir: None,
             xdg_config: None,
             etc_roots: Vec::new(),
@@ -49,7 +53,7 @@ impl Fixture {
     }
 
     fn judge(&self, command: &str) -> Vec<Violation> {
-        self.judge_in(command, &self.project, &self.env())
+        self.judge_in(command, &self.project, &self.startup_env())
     }
 }
 
@@ -187,7 +191,7 @@ fn reads_and_ordinary_writes_pass() {
         "git clean -fd",
         "git worktree add ../wt -b x",
     ] {
-        let found = f.judge_in(command, &f.home, &f.env());
+        let found = f.judge_in(command, &f.home, &f.startup_env());
         if refused(&found) {
             wrong.push(format!("{command} from the home: {}", found[0].message));
         }
@@ -207,7 +211,7 @@ fn reads_and_ordinary_writes_pass() {
         "git worktree add .zsh",
         "git checkout -- .",
     ] {
-        let found = f.judge_in(command, &f.home, &f.env());
+        let found = f.judge_in(command, &f.home, &f.startup_env());
         assert!(refused(&found), "{command} from the home");
     }
 }
@@ -230,17 +234,17 @@ fn pattern_characters_outside_the_word_are_literal() {
             "cp evil .envrc",
             "echo x > ~/.zl?gin",
         ] {
-            let found = f.judge_in(command, &cwd, &f.env());
+            let found = f.judge_in(command, &cwd, &f.startup_env());
             assert!(refused(&found), "{command} in {name}");
         }
-        let found = f.judge_in("echo x > notes.txt", &cwd, &f.env());
+        let found = f.judge_in("echo x > notes.txt", &cwd, &f.startup_env());
         assert!(!refused(&found), "notes.txt in {name}: {found:?}");
     }
     let home = f.home.join("work").join("home (1)");
     std::fs::create_dir_all(home.join(".config/fish")).unwrap();
     let env = StartupEnv {
         home: Some(home.clone()),
-        ..f.env()
+        ..f.startup_env()
     };
     for command in [
         "echo x > ~/.config/fish/conf.d/x.fish",
@@ -278,6 +282,42 @@ fn a_directory_change_to_the_home_is_judged_from_the_class_home() {
     assert_eq!(env.home.as_deref(), Some(f.home.as_path()));
     let found = evaluate("cd ~ && tar -xf dots.tar", &f.project, &env);
     assert!(refused(&found), "{found:?}");
+}
+
+/// Where `HOME` and `USERPROFILE` name two directories, as a Git Bash
+/// `HOME` can on Windows, both are homes: bash reads one and native
+/// programs the other (TSK-242 review round 13).
+#[test]
+fn both_homes_are_protected_when_they_differ() {
+    let f = Fixture::new();
+    let other = f.home.parent().unwrap().join("profile");
+    std::fs::create_dir_all(&other).unwrap();
+    let (home, profile) = (
+        f.home.clone().into_os_string(),
+        other.clone().into_os_string(),
+    );
+    let env = StartupEnv::from_vars(
+        &|name: &str| match name {
+            "HOME" => Some(home.clone()),
+            "USERPROFILE" => Some(profile.clone()),
+            _ => None,
+        },
+        &f.project,
+    );
+    assert_eq!(env.home.as_deref(), Some(f.home.as_path()));
+    for path in [
+        f.home.join(".bashrc"),
+        other.join(".bashrc"),
+        other.join(".config/fish/config.fish"),
+    ] {
+        assert!(class_target(&path, &env).is_some(), "{path:?}");
+    }
+    for command in [
+        format!("echo x >> {}/.bashrc", slashed(&other)),
+        format!("tar -xf dots.tar -C {}", slashed(&other)),
+    ] {
+        assert!(refused(&evaluate(&command, &f.project, &env)), "{command}");
+    }
 }
 
 /// A Unix-like shell installed on Windows reads its own `etc` folder as
@@ -320,7 +360,7 @@ fn a_windows_shell_install_etc_reads_as_the_etc_class() {
     // A resolved root's `etc` is the `/etc` class.
     let env = StartupEnv {
         etc_roots: from_path,
-        ..f.env()
+        ..f.startup_env()
     };
     for (rest, label) in [
         ("etc/profile", "/etc/profile"),
@@ -339,7 +379,7 @@ fn a_windows_shell_install_etc_reads_as_the_etc_class() {
     assert!(refused(&evaluate(&command, &f.project, &env)), "{command}");
     // An install no variable names: read by the shell it holds, or by a
     // standard install folder name when the shell cannot be seen.
-    let class = Class::new(&f.env());
+    let class = Class::new(&f.startup_env());
     let unnamed = f.home.join("opt/shell");
     lay_out(&unnamed, Some("bin/bash.exe"));
     let msys = f.home.join("D/msys64");
@@ -394,8 +434,8 @@ fn drives_are_dropped_from_compared_windows_paths() {
 #[test]
 fn windows_drive_spellings_reach_the_class() {
     let f = Fixture::new();
-    assert!(class_target(Path::new(r"C:\etc\profile.d\x.sh"), &f.env()).is_some());
-    assert!(class_target(Path::new(r"\\?\C:\etc\zshenv"), &f.env()).is_some());
+    assert!(class_target(Path::new(r"C:\etc\profile.d\x.sh"), &f.startup_env()).is_some());
+    assert!(class_target(Path::new(r"\\?\C:\etc\zshenv"), &f.startup_env()).is_some());
     let home = slashed(&f.home);
     let (drive, rest) = home.split_once(':').unwrap();
     let msys = format!("/{}{rest}", drive.to_lowercase());
@@ -410,9 +450,13 @@ fn windows_drive_spellings_reach_the_class() {
     ] {
         assert!(refused(&f.judge(&command)), "{command}");
     }
-    assert!(class_target(Path::new(r"C:\Program Files\Git\etc\profile"), &f.env()).is_some());
+    assert!(class_target(
+        Path::new(r"C:\Program Files\Git\etc\profile"),
+        &f.startup_env()
+    )
+    .is_some());
     let notes = f.project.join("etc").join("profile");
-    assert!(class_target(&notes, &f.env()).is_none());
+    assert!(class_target(&notes, &f.startup_env()).is_none());
 }
 
 #[test]
@@ -463,11 +507,11 @@ fn placing_into_the_home_refuses() {
     ] {
         assert!(refused(&f.judge(command)), "{command}");
     }
-    let found = f.judge_in("tar -xf bundle.tar", &f.home, &f.env());
+    let found = f.judge_in("tar -xf bundle.tar", &f.home, &f.startup_env());
     assert!(refused(&found), "tar in the home");
-    let found = f.judge_in("git checkout -- .", &f.home, &f.env());
+    let found = f.judge_in("git checkout -- .", &f.home, &f.startup_env());
     assert!(refused(&found), "git in the home");
-    let found = f.judge_in("git status", &f.home, &f.env());
+    let found = f.judge_in("git status", &f.home, &f.startup_env());
     assert!(!refused(&found), "a git read in the home");
     // Git judged where it runs: its `-C` directory, and only for a
     // subcommand that can write the working tree.
@@ -481,7 +525,7 @@ fn placing_into_the_home_refuses() {
         format!("git -C '{project}' checkout -- .").as_str(),
         format!("git -C {project} pull").as_str(),
     ] {
-        let found = f.judge_in(command, &f.home, &f.env());
+        let found = f.judge_in(command, &f.home, &f.startup_env());
         assert!(!refused(&found), "{command} from the home: {found:?}");
     }
     for command in [
@@ -490,7 +534,7 @@ fn placing_into_the_home_refuses() {
         "git -C $UNSET_DIR checkout -- . && ls ~",
         "git config -f ~/.zshrc a.b c",
     ] {
-        let found = f.judge_in(command, &f.home, &f.env());
+        let found = f.judge_in(command, &f.home, &f.startup_env());
         assert!(refused(&found), "{command} from the home");
     }
     let found = f.judge(&format!("git -C {} merge main", slashed(&f.home)));
@@ -566,9 +610,9 @@ fn symbolic_links_are_followed() {
     ] {
         assert!(refused(&f.judge(command)), "{command}");
     }
-    assert!(class_target(&links.join("a"), &f.env()).is_some());
-    assert!(class_target(&f.project.join("homelink/.zshrc"), &f.env()).is_some());
-    assert!(class_target(&f.project.join("notes.md"), &f.env()).is_none());
+    assert!(class_target(&links.join("a"), &f.startup_env()).is_some());
+    assert!(class_target(&f.project.join("homelink/.zshrc"), &f.startup_env()).is_some());
+    assert!(class_target(&f.project.join("notes.md"), &f.startup_env()).is_none());
 }
 
 /// `ZDOTDIR` and `XDG_CONFIG_HOME` move the class with them.
@@ -580,7 +624,7 @@ fn effective_locations_follow_the_environment() {
     let env = StartupEnv {
         zdotdir: Some(zdot.clone()),
         xdg_config: Some(xdg.clone()),
-        ..f.env()
+        ..f.startup_env()
     };
     assert_eq!(
         class_target(&zdot.join(".zshrc"), &env).as_deref(),
@@ -602,28 +646,31 @@ fn every_table_entry_is_a_class_target() {
     let table = &actions::table().startup_paths;
     for entry in &table.home {
         let path = f.home.join(entry.trim_end_matches('/'));
-        assert!(class_target(&path, &f.env()).is_some(), "{entry}");
+        assert!(class_target(&path, &f.startup_env()).is_some(), "{entry}");
         let upper = f.home.join(entry.trim_end_matches('/').to_uppercase());
-        assert!(class_target(&upper, &f.env()).is_some(), "{entry} upper");
+        assert!(
+            class_target(&upper, &f.startup_env()).is_some(),
+            "{entry} upper"
+        );
         if entry.ends_with('/') {
             assert!(
-                class_target(&path.join("x"), &f.env()).is_some(),
+                class_target(&path.join("x"), &f.startup_env()).is_some(),
                 "{entry}x"
             );
         }
     }
     for entry in &table.absolute {
         let path = PathBuf::from(entry.trim_end_matches('/'));
-        assert!(class_target(&path, &f.env()).is_some(), "{entry}");
+        assert!(class_target(&path, &f.startup_env()).is_some(), "{entry}");
     }
     for name in &table.anywhere {
         assert!(
-            class_target(&f.project.join(name), &f.env()).is_some(),
+            class_target(&f.project.join(name), &f.startup_env()).is_some(),
             "{name}"
         );
     }
-    assert!(class_target(&f.home.join(".zshrc.d.notes"), &f.env()).is_none());
-    assert!(class_target(&f.home.join(".config/other"), &f.env()).is_none());
+    assert!(class_target(&f.home.join(".zshrc.d.notes"), &f.startup_env()).is_none());
+    assert!(class_target(&f.home.join(".config/other"), &f.startup_env()).is_none());
 }
 
 /// The text floor finds a startup file as a path or a name, and not
@@ -631,7 +678,7 @@ fn every_table_entry_is_a_class_target() {
 #[test]
 fn the_text_floor_reads_names_not_substrings() {
     let f = Fixture::new();
-    let class = Class::new(&f.env());
+    let class = Class::new(&f.startup_env());
     for text in [
         "open('/home/u/.zshrc')",
         "\".bashrc\"",
@@ -683,7 +730,7 @@ fn review_round_one_forms_refuse() {
             wrong.push(format!("allowed: {command}"));
         }
     }
-    if !refused(&f.judge_in("echo x > \"$DEST\"", &f.home, &f.env())) {
+    if !refused(&f.judge_in("echo x > \"$DEST\"", &f.home, &f.startup_env())) {
         wrong.push("allowed from the home: echo x > \"$DEST\"".to_string());
     }
     for command in [
@@ -737,7 +784,7 @@ fn review_round_two_forms_refuse() {
             wrong.push(format!("allowed: {command}"));
         }
     }
-    if !refused(&f.judge_in("echo x > \"$p\"; p=notes", &f.home, &f.env())) {
+    if !refused(&f.judge_in("echo x > \"$p\"; p=notes", &f.home, &f.startup_env())) {
         wrong.push("allowed from the home: echo x > \"$p\"; p=notes".to_string());
     }
     for command in [
@@ -796,7 +843,7 @@ fn review_round_three_forms_refuse() {
     // A relative `ZDOTDIR` protects the zsh file names in every directory.
     let env = StartupEnv {
         zdotdir: Some(PathBuf::from("zdir")),
-        ..f.env()
+        ..f.startup_env()
     };
     if !refused(&f.judge_in("echo x > zdir/.zshenv", &f.project, &env)) {
         wrong.push("allowed with ZDOTDIR=zdir: echo x > zdir/.zshenv".to_string());
@@ -891,7 +938,7 @@ fn declarations_keep_their_write_checks() {
         "declare -x EDITOR=vim",
     ] {
         assert!(
-            !refused(&f.judge_in(command, &f.home, &f.env())),
+            !refused(&f.judge_in(command, &f.home, &f.startup_env())),
             "refused: {command}"
         );
     }
@@ -1129,7 +1176,7 @@ fn an_oversized_glob_ending_in_a_plain_name_is_judged_by_its_directory() {
     for n in 0..4200 {
         std::fs::write(f.home.join(format!("g{n}")), "").unwrap();
     }
-    if !refused(&f.judge_in("rm -rf **/node_modules", &f.home, &f.env())) {
+    if !refused(&f.judge_in("rm -rf **/node_modules", &f.home, &f.startup_env())) {
         wrong.push("allowed from the home: rm -rf **/node_modules".to_string());
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

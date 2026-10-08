@@ -209,7 +209,11 @@ such as `safe.directory` or `init.templateDir`. The known-safe keys
 `push.autoSetupRemote`, `core.autocrlf`, `commit.gpgsign` and the others in
 `security/git.rs`) pass, and so do the switches beside the tool programs
 (`difftool.prompt`, `mergetool.keepBackup`, `pager.<command>`) and
-`core.fsmonitor`, whose boolean starts git's own monitor, set to a boolean;
+`core.fsmonitor`, whose boolean starts git's own monitor, set to a boolean
+as git parses one: `true`, `false`, `yes`, `no`, `on`, `off`, empty, or a
+number git's base-0 reading takes whole with at most one `k`, `m` or `g`.
+Any other value is a program git runs, so `core.fsmonitor 08` refuses
+(`08` is no octal number) while `true` and `0x10` pass (review round 13);
 keys match by exact name. Repository-scope settings, unsets and
 reads pass. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
@@ -230,9 +234,11 @@ with the user's own files.
 
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
-`--git-dir`, `GIT_DIR`, a worktree's or submodule's `.git` file, and the
-payload's working directory), and with `--worktree` also that worktree's
-`config.worktree`. git follows a symbolic link there, so a key not known to
+`--git-dir`, `GIT_DIR` on the line or in the environment the hook runs in,
+a worktree's or submodule's `.git` file, and the payload's working
+directory), and with `--worktree` also that worktree's `config.worktree`.
+A `GIT_COMMON_DIR` or `GIT_WORK_TREE` on the line or in the hook's
+environment leaves that file unplaced, so such a key refuses. git follows a symbolic link there, so a key not known to
 run nothing refuses when that file, through its links, is not a
 repository's own configuration (review round twelve): a submodule's
 `.git/modules/<name>/config`, a bare git directory's `config` or an
@@ -244,8 +250,12 @@ repository lookup on that hook call. As a second layer, `ln`, `cp`, `mv` and `rs
 a file in place of the `config` or `config.worktree` of any git directory,
 so a link made on the same line as the write is refused before git follows
 it. A link made by an interpreter or another program on the same line
-stays outside the text guard; the write it serves is caught on any later
-call.
+stays outside the text guard; the write it serves is caught on a later
+call whose git directory the hook can see. A git directory exported in an
+earlier tool call (`export GIT_DIR=...`) lives only in that tool shell,
+which the hook does not inherit, so a later plain `git config` there is
+judged against the repository the hook sees and stays outside the text
+guard (review round 13).
 
 Every guard that reads a git command line skips the same global options
 that take the next word as their value (`-C`, `-c`, `--git-dir`,
@@ -260,8 +270,9 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   exact names. Everything built at run time remains outside it, including
   a path assembled by a program, a path an interpreter reads from its
   environment at run time (`export p=~/.zshrc; python3 -c
-  'open(os.environ["p"])'`) and a script written in one call and run in
-  another. It does not read archive contents. The sandboxes on all three
+  'open(os.environ["p"])'`), a script written in one call and run in
+  another, and a git location (`GIT_DIR`, `GIT_COMMON_DIR`) exported in an
+  earlier tool call, which the hook never sees. It does not read archive contents. The sandboxes on all three
   harnesses hold writes into the unwritable home; an unsandboxed seat stays
   open. Relocated startup files and writable workspace paths have the
   limits listed below. An interpreter call whose code names a startup file

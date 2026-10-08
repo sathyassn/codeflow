@@ -57,27 +57,88 @@ pub fn slashed(path: &Path) -> String {
     }
 }
 
-/// The user's home directory as the guards and doctor read it: `HOME`,
-/// else `USERPROFILE`, the first that is set to an absolute path. Git Bash
-/// can leave `HOME` unset or spelled `/c/Users/u`, which is not an absolute
-/// Windows path, so `USERPROFILE` then names the home.
+/// The user's home directory as the guards and doctor read it: the first
+/// of [`user_homes`].
 #[must_use]
 pub fn user_home() -> Option<PathBuf> {
-    home_from(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+    user_homes().into_iter().next()
 }
 
-/// [`user_home`] from given values, so the order is testable without
-/// changing this process's environment.
+/// Every home a shell of this user may read: `HOME`, then `USERPROFILE`
+/// when it names another directory, each kept only as an absolute path. On
+/// Windows a Git Bash `HOME` spelled `/c/Users/u` reads as `C:\Users\u`,
+/// and where it differs from `USERPROFILE` both are homes: bash reads
+/// `HOME`, native programs the profile (TSK-242 review round 13).
+#[must_use]
+pub fn user_homes() -> Vec<PathBuf> {
+    homes_from(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        cfg!(windows),
+    )
+}
+
+/// The first of [`homes_from`] for this platform, so the order is testable
+/// without changing this process's environment.
 #[must_use]
 pub fn home_from(
     home: Option<std::ffi::OsString>,
     profile: Option<std::ffi::OsString>,
 ) -> Option<PathBuf> {
-    [home, profile]
-        .into_iter()
-        .flatten()
-        .map(PathBuf::from)
-        .find(|path| path.is_absolute())
+    homes_from(home, profile, cfg!(windows)).into_iter().next()
+}
+
+/// [`user_homes`] from given values, with `windows` choosing whether a
+/// `/<letter>/...` value is a Git Bash drive path.
+#[must_use]
+pub fn homes_from(
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+    windows: bool,
+) -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = Vec::new();
+    for value in [home, profile].into_iter().flatten() {
+        let text = value.to_string_lossy();
+        let path = match git_bash_drive_path(&text).filter(|_| windows) {
+            Some(path) => path,
+            None if Path::new(&value).is_absolute() => PathBuf::from(&value),
+            None => continue,
+        };
+        let same = |other: &PathBuf| {
+            let fold = |p: &Path| {
+                let text = p.to_string_lossy().replace('\\', "/");
+                let text = text.trim_end_matches('/');
+                if windows {
+                    text.to_lowercase()
+                } else {
+                    text.to_string()
+                }
+            };
+            fold(other) == fold(&path)
+        };
+        if !homes.iter().any(same) {
+            homes.push(path);
+        }
+    }
+    homes
+}
+
+/// The Windows path a Git Bash drive path names: `/c/Users/u` is
+/// `C:\Users\u` and `/c` is `C:\`. `None` for any other text.
+#[must_use]
+pub fn git_bash_drive_path(text: &str) -> Option<PathBuf> {
+    let rest = text.strip_prefix('/')?;
+    let mut chars = rest.chars();
+    let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+    let tail = chars.as_str();
+    if !(tail.is_empty() || tail.starts_with('/')) {
+        return None;
+    }
+    let below = tail.trim_start_matches('/').replace('/', "\\");
+    Some(PathBuf::from(format!(
+        "{}:\\{below}",
+        letter.to_ascii_uppercase()
+    )))
 }
 
 #[cfg(test)]
@@ -92,8 +153,47 @@ mod tests {
         assert_eq!(home_from(os(&a), os(&b)), Some(a.clone()));
         assert_eq!(home_from(None, os(&b)), Some(b.clone()));
         assert_eq!(home_from(Some("".into()), os(&b)), Some(b.clone()));
-        assert_eq!(home_from(Some("relative".into()), os(&b)), Some(b));
+        assert_eq!(home_from(Some("relative".into()), os(&b)), Some(b.clone()));
         assert_eq!(home_from(Some("relative".into()), None), None);
+        // Two names for two directories are both homes; one name twice is one.
+        for windows in [false, true] {
+            assert_eq!(homes_from(os(&a), os(&b), windows), [a.clone(), b.clone()]);
+            assert_eq!(
+                homes_from(os(&a), os(&a), windows),
+                std::slice::from_ref(&a)
+            );
+        }
+    }
+
+    /// A Git Bash `HOME` is a Windows drive path, read the same way on
+    /// every platform when `windows` says the values came from Windows.
+    #[test]
+    fn a_git_bash_home_reads_as_its_drive_path() {
+        assert_eq!(
+            git_bash_drive_path("/c/Users/u"),
+            Some(PathBuf::from("C:\\Users\\u"))
+        );
+        assert_eq!(git_bash_drive_path("/d"), Some(PathBuf::from("D:\\")));
+        for other in ["/cd/x", "/", "c/Users", "/1/x", "C:\\Users\\u"] {
+            assert_eq!(git_bash_drive_path(other), None, "{other}");
+        }
+        let profile = std::env::temp_dir().join("profile");
+        let msys = || Some(std::ffi::OsString::from("/c/Users/u"));
+        let os = Some(profile.as_os_str().to_os_string());
+        assert_eq!(
+            homes_from(msys(), os.clone(), true),
+            [PathBuf::from("C:\\Users\\u"), profile.clone()]
+        );
+        // Elsewhere `/c/Users/u` is a plain absolute path.
+        assert_eq!(
+            homes_from(msys(), os, false),
+            [PathBuf::from("/c/Users/u"), profile]
+        );
+        // On Windows one directory in two letter cases is one home.
+        let upper = std::env::temp_dir().join("Home");
+        let lower = std::env::temp_dir().join("home");
+        let os = |p: &Path| Some(p.as_os_str().to_os_string());
+        assert_eq!(homes_from(os(&upper), os(&lower), true), [upper]);
     }
 
     #[test]

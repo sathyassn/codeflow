@@ -5511,10 +5511,15 @@ fn check_git(
             .unwrap_or_default();
         let variable = git_config_variable(moved, std::env::var("GIT_CONFIG").ok());
         // The file a repository-scope write opens, read only for a write
-        // that sets a key not known to run nothing.
+        // that sets a key not known to run nothing. Git takes the git
+        // directory from the environment it inherits too, as it takes
+        // `GIT_CONFIG` (review round 13); a relative `--file` above is still
+        // read from the directories git runs in, which that does not move.
+        let inherited = inherited_locations(|name| std::env::var(name).ok());
+        let located = compose_targets_with(args, moved, &inherited);
         let worktree = parse_options(rest, &GIT_CONFIG_OPTIONS).has_long("--worktree");
         let local = || {
-            targets
+            located
                 .as_ref()
                 .map(|specs| local_config_files(specs, cwd, worktree))
                 .map_err(Clone::clone)
@@ -6320,6 +6325,31 @@ struct TargetSpec {
 /// reads relative to the `-C` directory. `None` in the result is the session's
 /// own working directory. `Err` names what could not be resolved.
 fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
+    compose_targets_with(args, moved, &[])
+}
+
+/// The git location variables set in the environment git inherits, here
+/// the hook's own, as `(name, value)` pairs, read through `var`.
+fn inherited_locations(var: impl Fn(&str) -> Option<String>) -> Vec<(&'static str, String)> {
+    GIT_LOCATION_VARS
+        .iter()
+        .filter_map(|name| {
+            var(name)
+                .filter(|value| !value.is_empty())
+                .map(|value| (*name, value))
+        })
+        .collect()
+}
+
+/// [`compose_targets`] for git that also inherits `inherited`: an inherited
+/// `GIT_DIR` is the git dir unless the op names one, and an inherited
+/// `GIT_COMMON_DIR` or `GIT_WORK_TREE` leaves the location unresolved, as
+/// it does on the command (TSK-242 review round 13).
+fn compose_targets_with(
+    args: &[String],
+    moved: &Moves<'_>,
+    inherited: &[(&str, String)],
+) -> Result<Vec<Option<TargetSpec>>, String> {
     let no_vars = HashMap::new();
     let vars = moved.vars.unwrap_or(&no_vars);
     if moved.location_unknown {
@@ -6331,6 +6361,13 @@ fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<Targ
         return Err(format!("`{name}` set earlier in the line"));
     }
     let mut git_dir: Option<String> = None;
+    for (name, value) in inherited {
+        if *name == "GIT_DIR" {
+            git_dir = Some(value.clone());
+        } else {
+            return Err(format!("`{name}` in the environment the hook runs in"));
+        }
+    }
     for (name, value) in launcher_env(moved.tokens)? {
         match name.as_str() {
             "GIT_DIR" => git_dir = Some(expand_word(&value, vars)?),
@@ -10429,6 +10466,33 @@ mod tests {
             "git config --global core.autocrlf input",
             "git config --global color.ui auto",
             "git config --global commit.gpgsign true",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn numeric_values_git_runs_as_programs_refuse() {
+        // Review round thirteen: git reads `08` as no number, so to
+        // `core.fsmonitor` and `pager.<command>` it is the program `08`; so
+        // are `+08`, `008` and `08k`. `0x10` and `00` are numbers to git.
+        let p = default_policy();
+        for cmd in [
+            "git config --global core.fsmonitor 08",
+            "git config --global core.fsmonitor +08",
+            "git config --global core.fsmonitor 008",
+            "git config --global core.fsmonitor 08k",
+            "git config --global pager.log 08",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "git config --global core.fsmonitor true",
+            "git config --global core.fsmonitor 0x10",
+            "git config --global core.fsmonitor 00",
+            "git config --global pager.log 2",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");

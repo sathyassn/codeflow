@@ -51,8 +51,13 @@ const ZSH_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlog
 /// environment moves startup files to.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StartupEnv {
-    /// The home directory (`HOME`, else `USERPROFILE`).
+    /// The home directory (`HOME`, else `USERPROFILE`), the one `~` and
+    /// `$HOME` name.
     pub home: Option<PathBuf>,
+    /// Other homes a shell of this user may read: on Windows, the profile
+    /// when a Git Bash `HOME` names another directory. Their startup files
+    /// are the class too.
+    pub other_homes: Vec<PathBuf>,
     /// `ZDOTDIR`, when set: zsh reads its startup files there.
     pub zdotdir: Option<PathBuf>,
     /// `XDG_CONFIG_HOME`, when set: fish, `PowerShell`, tmux and direnv read
@@ -89,8 +94,12 @@ impl StartupEnv {
     #[must_use]
     pub fn from_vars(var: &dyn Fn(&str) -> Option<OsString>, base: &Path) -> Self {
         let set = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let mut homes =
+            crate::portable_path::homes_from(var("HOME"), var("USERPROFILE"), cfg!(windows))
+                .into_iter();
         Self {
-            home: crate::portable_path::home_from(var("HOME"), var("USERPROFILE")),
+            home: homes.next(),
+            other_homes: homes.collect(),
             zdotdir: set("ZDOTDIR"),
             xdg_config: set("XDG_CONFIG_HOME").map(
                 |x| {
@@ -113,9 +122,18 @@ impl StartupEnv {
     /// read from `base`.
     #[must_use]
     pub fn with_home_at(home: &Path, base: &Path) -> Self {
+        let process = Self::from_process_at(base);
+        let other_homes = process
+            .home
+            .iter()
+            .chain(&process.other_homes)
+            .filter(|other| key(&lexical(other)) != key(&lexical(home)))
+            .cloned()
+            .collect();
         Self {
             home: Some(home.to_path_buf()),
-            ..Self::from_process_at(base)
+            other_homes,
+            ..process
         }
     }
 }
@@ -215,7 +233,8 @@ enum Entry {
 /// The class, resolved once for one evaluation.
 pub(crate) struct Class {
     entries: Vec<Entry>,
-    home: Option<String>,
+    /// Every home, keyed.
+    homes: Vec<String>,
     /// The text floor's needles: each entry's spelling below its anchor.
     needles: Vec<String>,
 }
@@ -246,7 +265,7 @@ impl Class {
             let dir = entry.ends_with('/');
             let rel = entry.trim_end_matches('/');
             needles.push(rel.to_lowercase());
-            if let Some(home) = &env.home {
+            for home in env.home.iter().chain(&env.other_homes) {
                 add(format!("~/{rel}"), home.join(rel), dir);
             }
             let zsh = ZSH_FILES
@@ -292,7 +311,12 @@ impl Class {
         );
         Self {
             entries,
-            home: env.home.as_deref().map(|h| key(&lexical(h))),
+            homes: env
+                .home
+                .iter()
+                .chain(&env.other_homes)
+                .map(|h| key(&lexical(h)))
+                .collect(),
             needles,
         }
     }
@@ -371,7 +395,7 @@ impl Class {
         }
         readings.iter().find_map(|reading| {
             let reading = reading.trim_end_matches('/');
-            if reading.is_empty() || self.home.as_deref() == Some(reading) || reading == "/etc" {
+            if reading.is_empty() || self.homes.iter().any(|h| h == reading) || reading == "/etc" {
                 return Some(shown(path));
             }
             let below = format!("{reading}/");
