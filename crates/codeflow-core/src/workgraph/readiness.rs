@@ -820,8 +820,10 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     claim_on(repo_root, task_id, &[])
 }
 
-/// A review answer's cache key: task id, branch and revision.
-type ReviewKey = (String, String, String);
+/// A review answer's cache key: branch and revision. A branch name carries
+/// one task id (`PinBranches::read`), so the pair fixes the record path the
+/// answer judges.
+type ReviewKey = (String, String);
 
 /// The reads behind `work next`'s reviewed-stack hints, made once per
 /// invocation and shared by every waiting task: the branches by the task id
@@ -879,7 +881,7 @@ impl StackHints {
 
     /// A prospective reviewed stack for a waiting task, without mutating
     /// refs: the `TSK-NNN@<sha>` pins that would start it. `lookup` is asked
-    /// once per task, branch and revision.
+    /// once per branch and revision.
     ///
     /// # Errors
     /// Refuses missing review evidence, ambiguous tips or ordinary readiness failures.
@@ -919,8 +921,8 @@ impl StackHints {
         }
         // Only whether every pin holds matters here, so review evidence is
         // checked before the pinned tree is read. The answer is cached per
-        // task, branch and revision: `covers` judges the pin's own record
-        // path, so two records on one branch tip can have different answers.
+        // branch and revision: a branch name carries one task id, so the
+        // pair fixes the record path `covers` judges.
         let mut pins = Vec::new();
         for value in &values {
             let task = value.split_once('@').map_or("", |(task, _)| task);
@@ -928,7 +930,7 @@ impl StackHints {
                 |branch: &str, sha: &str, covers: &super::work_start::ReviewCovers<'_>| {
                     self.reviews
                         .borrow_mut()
-                        .entry((task.to_string(), branch.to_string(), sha.to_string()))
+                        .entry((branch.to_string(), sha.to_string()))
                         .or_insert_with(|| lookup(branch, sha, covers))
                         .clone()
                 };

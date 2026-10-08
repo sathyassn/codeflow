@@ -1067,12 +1067,12 @@ fn tsk250_a_graft_cannot_hide_a_reverted_change_from_the_pin_review() {
     }
 }
 
-/// Two incomplete code dependencies whose branches share one tip, a review of
-/// an ancestor, and one later commit that changes only TSK-001's record. The
-/// span covers TSK-001's pin and not TSK-002's, because each pin judges its
-/// own record path. `work next` shares its review answers across waiting
-/// tasks, so the first pin's answer must not stand for the second, and
-/// `work start --on` must refuse the second pin as well.
+/// Two incomplete code dependencies whose two branch names share one tip, a
+/// review of an ancestor, and one later commit that changes only TSK-001's
+/// record. The span covers TSK-001's pin and not TSK-002's, because each pin
+/// judges its own record path. `work next` shares its review answers across
+/// waiting tasks, so the answer for the first branch must not stand for the
+/// second, and `work start --on` must refuse the second pin as well.
 #[test]
 #[cfg(unix)]
 fn tsk250_next_judges_each_pins_own_record_on_a_shared_tip() {
