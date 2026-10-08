@@ -344,7 +344,7 @@ level:
   stays a residual. This replaces a list of programs that run text, which an
   unlisted spelling always escaped;
 - a command-valued setting that names a class file, on any line, with or
-  without produced text: a global `git -c`, `--config-env` or `--exec-path`
+  without produced text: a global `git -c`, `--config-env` or `--exec-path=`
   whose value names a class file or, on a line that names one, cannot be
   read, and `EDITOR`, `VISUAL`, `PAGER`, `MANPAGER`, `BROWSER`, `LESSOPEN`,
   `GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`,
@@ -355,19 +355,25 @@ level:
   assigned name (`F=$HOME/.zshrc GIT_EDITOR='echo x >> $F'`). An innocent
   value (`-c color.ui=never`, `EDITOR=vim`) changes nothing. On a staged line
   a git setting is judged by its key, for `-c`, `--config-env` (`=` or a
-  separate word) and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` alike: a key
-  known to run nothing (`color.*`, `user.name`, `diff.renames`,
-  `core.commentChar`, `clean.requireForce`, `core.fsmonitorHookVersion`, a
-  `pager.<command>` boolean, and similar) passes; a key known to run a
-  command (`core.pager`, `core.fsmonitor`, `core.gitProxy`, `alias.*`,
-  `remote.<name>.uploadpack`, and `include.path`, which pulls in any key) must
-  hold an ordinary viewer or tool; any other key refuses. A command-valued
-  variable on a staged line must start with a viewer, editor, ssh or diff
-  tool (`vim`, `less`, `code`, `ssh`, `diff`) followed only by plain flags
-  that name no class file, no shell character and nothing that runs code
-  (`code -w`, `vim -R`, `ssh -o BatchMode=yes`); `vim -S x`, `sh r.sh` and
-  `ssh -o ProxyCommand=sh` refuse. `--exec-path` is read in either spelling,
-  and an empty or unknown directory refuses on a staged line. The variables
+  separate word) and `GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` alike, with the
+  one key classification git-guard also uses: a key known to run nothing
+  (`color.*`, `user.*`, `diff.renames`, `log.date`, `core.commentChar`,
+  `clean.requireForce`, a `pager.<command>` boolean, a
+  `submodule.<name>.update` set to one of git's own modes, and similar)
+  passes; a key known to run a command (`core.pager`, `core.fsmonitor`,
+  `core.gitProxy`, `alias.*`, `remote.<name>.uploadpack`, and
+  `include.path`, which pulls in any key) must hold an ordinary viewer or
+  tool; any other key refuses. A command-valued variable on a staged line
+  must start with a viewer, editor, ssh or diff tool (`vim`, `less`, `code`,
+  `ssh`, `diff`) followed only by plain flags that name no class file, no
+  shell character and nothing that runs code (`code -w`, `vim -R`,
+  `ssh -o BatchMode=yes`). `less` and `diff` take their own letters that
+  need no value, run together (`less -RF`, `diff -u`), and never less's
+  `-o`, `-k` or `+command` or diff's `-l`; other tools take one letter per
+  word, and `vim -S x`, `vim -u x`, `vim -c cmd`, `vim +cmd`, `sh r.sh` and
+  `ssh -o ProxyCommand=sh` refuse. `--exec-path=DIR` with an empty or
+  unknown directory refuses on a staged line; without `=`, `--exec-path`
+  takes no value, so the next word is read as the subcommand. The variables
   that pick the program itself (`PATH`, `SHELL`, `LD_*`,
   `DYLD_*`, `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`) refuse
@@ -392,8 +398,20 @@ level:
 The backstop reads text, not a parse of copier behavior. For reviewers, a
 new copier option is a residual, not a new member of the startup class.
 
-git-guard refuses a user- or system-scope git key that runs a program, such
-as an alias, `core.pager` or `credential.helper`, under `git.hook_integrity`.
+git-guard refuses a user- or system-scope git setting that is not known to
+run nothing, under `git.hook_integrity`: a key that runs a program, such as
+an alias, `core.pager`, `credential.helper`, `difftool.<tool>.path` or
+`gpg.ssh.defaultKeyCommand`, and any key the classification does not know,
+such as `safe.directory` or `imap.tunnel`. The known-safe keys (`user.*`,
+`color.*`, `init.defaultBranch`, `pull.rebase`, `push.autoSetupRemote`,
+`core.autocrlf`, `commit.gpgsign` and the others in `security/git.rs`)
+pass, as do repository-scope settings, unsets and reads. git has many keys
+that run a program and adds more, so a list of them always missed one
+(review round ten); an unknown key costs a refusal the operator can clear by
+setting it by hand. Every guard that reads a git command line skips the same
+global options that take the next word as their value (`-C`, `-c`,
+`--git-dir`, `--work-tree`, `--namespace`, `--config-env`, `--attr-source`,
+`--shallow-file`), so a value is never read as the subcommand (issue 120).
 
 What stays open, by harness and platform:
 

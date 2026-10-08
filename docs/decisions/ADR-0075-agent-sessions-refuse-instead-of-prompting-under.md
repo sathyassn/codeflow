@@ -528,7 +528,8 @@ while the guards judge each command by the name it spells.
    which has no policy key and holds at every integrity level: the operator
    edits their own startup files. Named sources and destinations of `ln`,
    `cp -s` and `cp -l` use the ordinary path check. git-guard refuses user-
-   and system-scope git keys that run a program. The guard does not inspect
+   and system-scope git keys not known to run nothing, so an unknown key
+   refuses with the ones that run a program. The guard does not inspect
    a link inside a copied or moved tree, judge link text from where it
    lands, emulate dereference and preserve option semantics, or recognize
    long-option prefixes beyond exact names. Everything built at run time

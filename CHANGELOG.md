@@ -398,7 +398,11 @@ erratum below, never an edit of the section.
   profile and the launch text in. exec-guard and edit-guard refuse the
   visible writes to the class under `security.shell_startup`, a rule with no
   key and no relief, and git-guard refuses user- and system-scope git keys
-  that run a program. A new doctor check, `startup-files`, reports a
+  not known to run nothing, so a key that runs a program refuses even when
+  no list names it. Every guard now skips the git global options that take
+  the next word as a value, so `git --config-env color.ui=C log` is read as
+  `git log` and a push behind `--attr-source` or `--shallow-file` is judged
+  (issue 120). A new doctor check, `startup-files`, reports a
   project whose settings lack the class and the files the home's startup
   files source from outside it, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`,
   and a Codex config that selects another profile. The text backstop does
