@@ -548,6 +548,33 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f`.\n"),
             ("a diff filter outside a span", "Run git diff --diff-filter=A "
              "97ede7aa1...c5f54046f\n"),
+            # Grok round 5: globs, magic pathspecs, fences and bare names.
+            ("a glob after the pair", "Run git diff 97ede7aa1...c5f54046f "
+             "*.rs and reply.\n"),
+            ("a bang pathspec after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f :!docs and reply.\n"),
+            ("an exclude pathspec after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f :(exclude)docs and reply.\n"),
+            ("a quoted glob after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f '*.rs' and reply.\n"),
+            ("a glob after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` *.rs.\n"),
+            ("a pathspec magic after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` :!docs.\n"),
+            ("a glob in a fenced block", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f *.rs\n```\n"),
+            ("a magic pathspec in a fenced block", "Run:\n```sh\ngit diff "
+             "97ede7aa1...c5f54046f :!docs\n```\n"),
+            ("a bare file name in a fenced block", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f Makefile\n```\n"),
+            ("a glob on the next line", "Run git diff 97ede7aa1...c5f54046f\n"
+             "*.rs\n"),
+            ("a magic pathspec on the next line", "Run git diff "
+             "97ede7aa1...c5f54046f\n:!docs\n"),
+            ("a glob before the pair", "Run git diff *.rs "
+             "97ede7aa1...c5f54046f and reply.\n"),
+            ("a bare file name after the pair", "Run git diff "
+             "97ede7aa1...c5f54046f Makefile and reply.\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 6, f"{name}: {done.stdout}{done.stderr}")
@@ -600,6 +627,16 @@ class StubDeliveryTests(unittest.TestCase):
              "-w 97ede7aa1...c5f54046f`.\n"),
             ("display options", "Run git diff --name-status --no-color "
              "97ede7aa1...c5f54046f and reply.\n"),
+            ("a fenced block with the pair", "Run:\n```\ngit diff --stat "
+             "97ede7aa1...c5f54046f\n```\nthen read docs/delivery.md.\n"),
+            ("a bullet on the line after the command", "Run git diff "
+             "97ede7aa1...c5f54046f\n* read docs/delivery.md\n"),
+            ("bold text on the line after a code span", "Review "
+             "`git diff 97ede7aa1...c5f54046f`\n**Scope:** the whole unit.\n"),
+            ("a link on the line after the command", "Run git diff "
+             "97ede7aa1...c5f54046f\n[the rule](docs) says why.\n"),
+            ("prose words after the pair", "Run git diff 97ede7aa1...c5f54046f "
+             "from the worktree to see the unit, then reply.\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
