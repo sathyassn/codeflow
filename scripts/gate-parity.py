@@ -473,7 +473,11 @@ def gate_binary_problems(cfg: dict) -> list[str]:
 # here. Only a local workflow under `.github/workflows/` can be opened and
 # checked; a remote or out-of-tree callee cannot, so its caller is refused.
 TIMEOUT_KEY = re.compile(r"^ {4}timeout-minutes:")
-TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: [1-9][0-9]*$")
+TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: ([1-9][0-9]*)$")
+# TSK-254 AC-1: a hung job frees its runner inside 45 minutes. GitHub's own
+# default is 360, the six-hour hold this task exists to stop, so a value
+# above this bound is refused even though it is a plain whole number.
+MAX_TIMEOUT_MINUTES = 45
 CALLER_LINE = re.compile(r"^ {4}uses:", re.M)
 CALLER_TARGET = re.compile(r"^ {4}uses:[ \t]*(?:\"([^\"]*)\"|'([^']*)'|([^\s#]*))[ \t]*(?:#.*)?$", re.M)
 WORKFLOW_DIRS = (Path(".github/workflows"), Path("assets/base/ci"))
@@ -531,9 +535,14 @@ def timeout_problems(workflow: str, label: str = "", exempt: dict[str, str] | No
             problems += caller_problems(name, text, where, seen)
             continue
         own = [line.rstrip() for line in text.splitlines() if TIMEOUT_KEY.match(line)]
-        if len(own) != 1 or not TIMEOUT_LINE.match(own[0]):
+        value = TIMEOUT_LINE.match(own[0]) if len(own) == 1 else None
+        if value is None:
             problems.append(f"job '{name}'{where} must carry exactly one `timeout-minutes: <whole minutes>` "
                             f"of its own, so a stalled step cannot hold its runner for six hours; found {own}")
+        elif int(value.group(1)) > MAX_TIMEOUT_MINUTES:
+            problems.append(f"job '{name}'{where} has `timeout-minutes: {value.group(1)}`, above {MAX_TIMEOUT_MINUTES} "
+                            f"minutes (TSK-254 AC-1: a hung job must free its runner inside {MAX_TIMEOUT_MINUTES} "
+                            "minutes; GitHub's default is 360, six hours); size it from the observed runs")
     return problems
 
 
@@ -570,7 +579,9 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
     if not release.exists() or not config_path.exists():
         return []
     allowed = tomllib.loads(config_path.read_text()).get("dist", {}).get("allow-dirty", [])
-    if "ci" in allowed:
+    # cargo-dist reads a list; `in` on a string is a substring test, so
+    # "ci" or "preci" as a string must not pass.
+    if isinstance(allowed, list) and "ci" in allowed:
         return []
     return ["dist-workspace.toml must set `allow-dirty = [\"ci\"]` while release.yml carries hand-added job "
             "timeouts; otherwise `dist plan` rejects the file and `dist generate` rewrites it without them"]
@@ -582,8 +593,22 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
 # timeout. `--with-deps` is refused because it hides that download inside
 # the browser install, where the root apt-get cannot be stopped.
 PRESENT_ONLY = "        if: matrix.part == 'present'"
-STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: [1-9][0-9]*$", re.M)
-BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ \S+ .*install-deps")
+STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: ([1-9][0-9]*)$", re.M)
+BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ (\S+) .*install-deps")
+# TSK-254 AC-2: each install attempt is bounded at 10 minutes.
+ATTEMPT_LIMIT = re.compile(r"^([1-9][0-9]*)([sm])$")
+MAX_ATTEMPT_SECONDS = 600
+
+
+def deps_bounded(step: str, body: str) -> bool:
+    """The install step carries its own timeout inside the job bound and runs
+    `install-deps` under a `timeout` of at most 10 minutes."""
+    step_limit = STEP_TIMEOUT.search(step)
+    deps = BOUNDED_DEPS.search(body)
+    if not step_limit or not deps or int(step_limit.group(1)) > MAX_TIMEOUT_MINUTES:
+        return False
+    limit = ATTEMPT_LIMIT.match(deps.group(1))
+    return bool(limit) and int(limit.group(1)) * (60 if limit.group(2) == "m" else 1) <= MAX_ATTEMPT_SECONDS
 
 
 def playwright_problems(workflow: str) -> list[str]:
@@ -604,11 +629,11 @@ def playwright_problems(workflow: str) -> list[str]:
             if "--with-deps" in body:
                 problems.append(f"the gates step `{first}` installs with --with-deps; install the "
                                 "browsers and run `install-deps` as root under its own timeout")
-            if "install-deps" in body and not (STEP_TIMEOUT.search(step) and BOUNDED_DEPS.search(body)
-                                               and "for attempt in 1 2; do" in body):
-                problems.append(f"the gates step `{first}` must carry its own `timeout-minutes`, run "
-                                "`install-deps` under `sudo timeout --kill-after=<s> <limit>` and try it "
-                                "twice (`for attempt in 1 2; do`)")
+            if "install-deps" in body and not (deps_bounded(step, body) and "for attempt in 1 2; do" in body):
+                problems.append(f"the gates step `{first}` must carry its own `timeout-minutes` (at most "
+                                f"{MAX_TIMEOUT_MINUTES}), run `install-deps` under `sudo timeout "
+                                "--kill-after=<s> <limit>` with a limit of at most 10 minutes (`10m` or `600s`) "
+                                "and try it twice (`for attempt in 1 2; do`)")
     return problems
 
 

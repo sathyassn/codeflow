@@ -516,6 +516,40 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assert_problem(WORKFLOW.replace(journeys, journeys + "    timeout-minutes: 15\n"),
                             "job 'windows-journeys'", "exactly one")
 
+    def test_a_timeout_above_the_ac1_bound_is_refused(self):
+        """AC-1: a hung job frees its runner inside 45 minutes, so GitHub's
+        six-hour default of 360 must not pass as a "positive whole number"."""
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        self.assertEqual(parity.MAX_TIMEOUT_MINUTES, 45)
+        for value in ("360", "46", "100"):
+            with self.subTest(value=value):
+                workflow = WORKFLOW.replace(journeys, f"    runs-on: windows-latest\n    timeout-minutes: {value}\n")
+                self.assert_problem(workflow, "job 'windows-journeys'", "45 minutes")
+        at_bound = WORKFLOW.replace(journeys, "    runs-on: windows-latest\n    timeout-minutes: 45\n")
+        self.assertNotEqual(at_bound, WORKFLOW)
+        self.assertEqual(self.problems(at_bound), [], "45 itself is allowed")
+
+    def test_every_committed_workflow_and_template_is_within_the_bound(self):
+        self.assertEqual(parity.all_timeout_problems(), [])
+        values = []
+        for relative in parity.workflow_files():
+            text = (ROOT / relative).read_text()
+            values += [int(v) for v in re.findall(r"^ {4}timeout-minutes: (\d+)$", text, re.M)]
+        self.assertTrue(values)
+        self.assertLessEqual(max(values), parity.MAX_TIMEOUT_MINUTES)
+
+    def test_a_playwright_step_timeout_or_install_limit_above_the_bound_is_refused(self):
+        self.assertEqual(WORKFLOW.count(self.INSTALL_TIMEOUT), 1)
+        self.assertEqual(WORKFLOW.count(self.BOUNDED), 1)
+        self.assert_problem(WORKFLOW.replace(self.INSTALL_TIMEOUT, self.INSTALL_TIMEOUT.replace("25", "360")),
+                            "install-deps", "twice")
+        for limit in ("11m", "3h", "601s", "600", "1h", "0m"):
+            with self.subTest(limit=limit):
+                self.assert_problem(WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("10m", limit)),
+                                    "install-deps", "10 minutes")
+        within = WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("10m", "600s"))
+        self.assertEqual(self.problems(within), [], "600 seconds is 10 minutes")
+
     def test_a_playwright_step_on_every_part_is_refused(self):
         cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
         self.assertEqual(WORKFLOW.count(cache), 1)
@@ -674,7 +708,16 @@ class EveryWorkflowTimeoutControls(unittest.TestCase):
             for body in ('[dist]\nci = "github"\n', '[dist]\nallow-dirty = ["msi"]\n'):
                 config.write_text(body)
                 self.assertTrue(any("allow-dirty" in p for p in parity.dist_problems(config)), body)
+            # A string is not the list cargo-dist honors, and `in` on a string
+            # is a substring test.
+            for body in ('[dist]\nallow-dirty = "ci"\n', '[dist]\nallow-dirty = "preci"\n',
+                         '[dist]\nallow-dirty = ["preci"]\n', '[dist]\nallow-dirty = 5\n',
+                         '[dist]\nallow-dirty = []\n'):
+                config.write_text(body)
+                self.assertTrue(any("allow-dirty" in p for p in parity.dist_problems(config)), body)
             config.write_text('[dist]\nallow-dirty = ["ci"]\n')
+            self.assertEqual(parity.dist_problems(config), [])
+            config.write_text('[dist]\nallow-dirty = ["msi", "ci"]\n')
             self.assertEqual(parity.dist_problems(config), [])
 
 
