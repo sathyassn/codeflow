@@ -33,6 +33,7 @@ crates/codeflow-cli/tests/refusal_journey/landed.rs	format!("GIT_CONFIG_COUNT=1 
 crates/codeflow-cli/tests/refusal_journey/startup.rs	"GIT_CONFIG=/opt/homebrew/etc/gitconfig git config alias.x '!id'"	1	Command text passed to guard evaluation, not an executed command or environment mutation.
 crates/codeflow-cli/tests/release_line_cli.rs	envs(env)	1	Adds replace-ref test controls to inherited environment; no maintenance overrides.
 crates/codeflow-cli/tests/release_line_cli.rs	envs(env.iter().copied())	2	Adds replace-ref test controls to inherited environment; no maintenance overrides.
+crates/codeflow-cli/tests/support/line_adoption.rs	env_remove(key)	1	Clears a fixed list of caller repository pointers, CI platform fields and CodeFlow override controls so the line fixture runs the same under a hook or on CI; removes no Git configuration key.
 crates/codeflow-cli/tests/tier_floor_e2e.rs	envs(envs.iter().copied())	1	Adds hook policy fixture controls to inherited environment; no maintenance overrides.
 crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_COUNT","3")	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
 crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_KEY_2",key)	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
