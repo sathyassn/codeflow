@@ -1016,7 +1016,7 @@ fn cross_family_transport_is_stated_once_and_cited_everywhere() {
             "tmux, the last fallback, only when no Herdr server is reachable",
             "Never `codex exec`, `claude -p` / `--print`, `grok -p` / `--single`",
             "| Claude | `--permission-mode bypassPermissions` | `--permission-mode auto` |",
-            "| Codex | `--ask-for-approval never -c default_permissions=\"cf-builder\"`, no `--sandbox` flag, launched from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |",
+            "| Codex | `--ask-for-approval never -c default_permissions=\"cf-builder\"`, no `--sandbox` flag, from the main checkout root | `--ask-for-approval never`, no `--sandbox` flag, so the project's `cf-guard` profile applies |",
             "| Grok | Not qualified; no Grok seat builds (ADR-0075 D3, below) | `--permission-mode auto`, launched in its own task worktree |",
             "The Codex builder posture is ADR-0075 D1 as amended on 2026-10-05",
             "a sandbox that cannot write shell startup files",
