@@ -22,6 +22,40 @@ erratum below, never an edit of the section.
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **CI checks the release digests the project pinned.** The managed CI
+  installers trusted the release's own `sha256.sum`, which anyone who can
+  replace a release asset can replace too (sathyassn/codeflow#47).
+  `codeflow update --pin <version>` now downloads a release's `sha256.sum`
+  and its Linux and macOS archives, refuses any archive that does not match,
+  and writes only `scaffold_version` and a `[scaffold_sha256]` table of
+  digests to `.codeflow/project.toml`, for review in the pull request that
+  raises the pin. Once the target pins that table, every installer (the
+  gates, candidate and enforcing jobs and the shared GitLab, Bitbucket and
+  generic script) requires the archive to match it and still checks
+  `sha256.sum`; a table left from another version, a missing platform, a
+  different digest or a table written in a form they do not read fails the
+  job closed. CodeFlow now writes the values it serializes in a form they
+  read, and `--pin` refuses, naming the line, when a line the project wrote
+  would still be refused. A project with no table is checked
+  against `sha256.sum` alone, with a warning, so a fresh `codeflow init` and
+  the upgrade that adds the table still pass. `codeflow doctor --check
+  ci-perimeter` names the check CI applies on the target and warns on a
+  table CI would refuse. The first upgrade step is now
+  `codeflow update --pin <version>`, then `codeflow update`.
+
+<!-- codeflow:release-impact minor -->
+- **A project setup hook runs before the CI test gate.** The managed gates
+  job ran `codeflow test --strict` on the runner's default toolchain, so a
+  project that needs its own either edited the managed file or ran the gate
+  twice (sathyassn/codeflow#46). The gates job and the shared script of the
+  other templates now source a project-owned `.codeflow/ci-setup.sh`, when
+  the change holds one, under `set -eu` after installing codeflow and just
+  before `codeflow test`, so what it exports reaches the gate and a failing
+  command fails the job. `codeflow update` never writes it, and `codeflow
+  doctor --check ci-perimeter` says whether it exists, whether the CI file
+  sources it and its first command.
+
+<!-- codeflow:release-impact minor -->
 - **One planning amendment can span several epics.** A planning pull
   request names every epic it changes on its one `Task:` line, such as
   `Task: EPC-002, EPC-003`, so one reviewed plan change lands as one pull
@@ -275,6 +309,56 @@ erratum below, never an edit of the section.
   enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **A pull request can no longer lower its own security review.** The
+  managed `security review` job read `git.security_review` and
+  `git.dep_audit` from the pull request's own checkout and fell back to
+  `warn`, so a pull request could set both to `off`, or delete them, and
+  skip the dependency audit that judged it (sathyassn/codeflow#81). The job
+  now reads both keys, and the `osv-scanner.toml` suppressions, from the
+  trusted commit: the pull request's base, or the pushed commit on a push.
+  A missing policy file, a missing or unreadable key, or a value other than
+  `block`, `warn` or `off` fails the job instead of warning. `codeflow ci`
+  names a change that lowers or removes either key. osv-scanner now runs
+  with `--no-ignore`, so a `.gitignore` the change edits cannot hide a
+  lockfile, and its verdict comes from its exit status, so a file path in
+  its output cannot turn an advisory into a pass and a lockfile it cannot
+  read is a scan error. The scanner is downloaded outside the checkout, so
+  a link the change commits at its download path cannot redirect the
+  write. The project setup hook cannot skip the test gate by accident: a
+  `codeflow` function, a `PATH` entry, `set +e` or an `exit` in it leaves
+  the gate running or fails the run. The hook still runs with the gate's
+  authority, like the CI file a change can edit, so `codeflow ci` names a
+  change that adds, edits or removes it for its reviewer. To adopt: if your
+  policy lacks either key, land the keys first under your current workflow
+  (`codeflow update` adds them), then the 3.1.0 workflow, since the job
+  reads the keys from the base. A first CodeFlow adoption has no policy on
+  its base, so its security review fails until the policy lands. In
+  `block` mode, a new suppression takes effect once it lands, so an
+  advisory that blocks every pull request is cleared by fixing the
+  dependency, or by an administrator merging the suppression over the
+  failing check.
+
+<!-- codeflow:release-impact patch -->
+- **A secret scan finding on one branch no longer fails every pull
+  request.** The managed secret scan read the whole history of HEAD, so a
+  finding already in the base, or on any branch merged into it, failed the
+  scan of every pull request until each target's `.gitleaksignore` carried
+  it (sathyassn/codeflow#48). A pull request now scans only the commits it
+  brings, and a push only the pushed range. The workflow also runs weekly
+  and on manual dispatch, and those runs, a push that creates the branch
+  and a push whose previous tip is gone scan the full history, so nothing on
+  the default branch goes unscanned; the gates job stays off the schedule.
+  Each run prints which history it read, and exemptions are still read only
+  from the trusted commit.
+  This changes what a pull request's scan means: a finding already on
+  another branch no longer fails it, and only a full-history scan (weekly,
+  manual or fallback) reports it.
+  The weekly schedule runs only once the workflow is on the default branch. To
+  adopt, run `codeflow update`, review the workflow it merges with your
+  edits, land it on the default branch, and check that the scheduled run
+  appears there.
 
 <!-- codeflow:release-impact patch -->
 - **The docs portal starter takes fixed dependency releases.** New
