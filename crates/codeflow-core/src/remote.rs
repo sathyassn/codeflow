@@ -11,9 +11,11 @@
 //! requests each green on an older base cannot both land untested together
 //! (TSK-261). The check names come from `git.required_checks`, defaulting to
 //! the shipped CI job names. The live rules are read before anything is
-//! written: a repository ruleset that already targets the branch is updated
-//! in place, never duplicated, and a classic protection PUT carries the
-//! settings this command does not own.
+//! written: every active repository ruleset that already targets the branch
+//! is updated in place, never duplicated, and a classic protection PUT
+//! carries the settings this command does not own. Ruleset ref patterns are
+//! matched as GitHub matches them (the `fnmatch` submodule); a ruleset whose pattern
+//! cannot be read blocks the new ruleset or classic write for that branch.
 //!
 //! Legible degradation is the contract here (charter principle 8, AC #4):
 //! anything the provider plan cannot apply — the canonical case being a
@@ -32,6 +34,8 @@ use std::process::{Command, Stdio};
 use serde_json::{json, Value};
 
 use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
+
+mod fnmatch;
 
 /// The GitHub App id of GitHub Actions. Ruleset status checks pin it, so a
 /// required check passes only when GitHub Actions reported it, as the
@@ -297,7 +301,7 @@ impl ProtectionPlan {
             }
         }
         lines.push(
-            "where an active repository ruleset already targets a branch, that ruleset is updated in place and no second ruleset or branch protection is added"
+            "every active repository ruleset that already targets a branch is updated in place, and then no second ruleset or branch protection is added"
                 .to_string(),
         );
         ProtectReport {
@@ -477,18 +481,19 @@ impl GithubProvider {
 
     /// Every repository ruleset that is active and already targets
     /// `pattern`, read in full (the list does not carry `enforcement`):
-    /// see [`ruleset_targets`]. Empty when there is none. A ruleset that is
-    /// `disabled` or only `evaluate`s enforces nothing, so it neither counts
-    /// as the branch's ruleset nor stops the search.
+    /// see [`ruleset_targets`]. A ruleset that is `disabled` or only
+    /// `evaluate`s enforces nothing, so it neither counts as the branch's
+    /// ruleset nor stops the search. An active ruleset whose ref pattern
+    /// cannot be read is returned apart, described.
     fn rulesets_for(
         &self,
         nwo: &str,
         pattern: &str,
         default_branch: Option<&str>,
-    ) -> Result<Vec<Value>, String> {
+    ) -> Result<LiveRulesets, String> {
         // Page until a short page, so a repository with more rulesets than
         // one page holds is still searched in full.
-        let mut found = Vec::new();
+        let mut found = LiveRulesets::default();
         let mut page = 1;
         loop {
             let list = self.run_gh(
@@ -512,10 +517,15 @@ impl GithubProvider {
                 let full = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
                 let full: Value =
                     serde_json::from_str(&full).map_err(|e| format!("ruleset {id} parse: {e}"))?;
-                if full.get("enforcement").and_then(Value::as_str) == Some("active")
-                    && ruleset_targets(&full, pattern, default_branch)
-                {
-                    found.push(full);
+                if full.get("enforcement").and_then(Value::as_str) != Some("active") {
+                    continue;
+                }
+                match ruleset_targets(&full, pattern, default_branch) {
+                    Targeting::Targets => found.targeting.push(full),
+                    Targeting::Misses => {}
+                    Targeting::Unexplained(why) => found
+                        .unexplained
+                        .push(format!("ruleset {}: {why}", ruleset_label(&full))),
                 }
             }
             if summaries.len() < RULESET_PAGE_SIZE {
@@ -774,23 +784,42 @@ impl GithubProvider {
         json!({ "rules": rules }).to_string()
     }
 
-    /// Apply one rule: update the ruleset that already targets it, else
-    /// create a ruleset (glob or data profile) or PUT classic protection.
-    /// Returns the mechanism applied.
-    fn apply_rule(&self, repo: &RepoInfo, rule: &BranchRule) -> Result<String, String> {
+    /// Apply one rule: update every active ruleset that already targets
+    /// it, else create a ruleset (glob or data profile) or PUT classic
+    /// protection. Returns the mechanism applied and a note for each
+    /// ruleset whose ref pattern could not be read. While such a ruleset
+    /// is the only candidate, nothing is written: it may already target
+    /// the branch.
+    fn apply_rule(
+        &self,
+        repo: &RepoInfo,
+        rule: &BranchRule,
+    ) -> Result<(String, Vec<String>), String> {
         let nwo = &repo.nwo;
-        let existing = self.rulesets_for(nwo, &rule.pattern, repo.default_branch.as_deref())?;
-        if !existing.is_empty() {
+        let live = self.rulesets_for(nwo, &rule.pattern, repo.default_branch.as_deref())?;
+        let notes: Vec<String> = live
+            .unexplained
+            .iter()
+            .map(|why| {
+                format!(
+                    "{why}; it was not updated, so check by hand whether it targets {}",
+                    rule.pattern
+                )
+            })
+            .collect();
+        if live.targeting.is_empty() && !live.unexplained.is_empty() {
+            return Err(format!(
+                "{}; it may already target this branch, so no ruleset or branch protection was added",
+                live.unexplained.join("; ")
+            ));
+        }
+        if !live.targeting.is_empty() {
             let mut updated = Vec::new();
-            for ruleset in &existing {
+            for ruleset in &live.targeting {
                 let id = ruleset
                     .get("id")
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "ruleset without an id".to_string())?;
-                let name = ruleset
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unnamed");
                 self.run_gh(
                     &[
                         "api",
@@ -802,9 +831,12 @@ impl GithubProvider {
                     ],
                     Some(&Self::ruleset_update_body(ruleset, rule)),
                 )?;
-                updated.push(format!("'{name}' ({id})"));
+                updated.push(ruleset_label(ruleset));
             }
-            return Ok(format!("updated ruleset {} in place", updated.join(", ")));
+            return Ok((
+                format!("updated ruleset {} in place", updated.join(", ")),
+                notes,
+            ));
         }
         if rule.uses_ruleset() {
             self.run_gh(
@@ -818,9 +850,9 @@ impl GithubProvider {
                 ],
                 Some(&Self::ruleset_body(rule)),
             )?;
-            return Ok("applied ruleset".to_string());
+            return Ok(("applied ruleset".to_string(), notes));
         }
-        let live = self.live_protection(nwo, &rule.pattern)?;
+        let protection = self.live_protection(nwo, &rule.pattern)?;
         self.run_gh(
             &[
                 "api",
@@ -830,9 +862,9 @@ impl GithubProvider {
                 "--input",
                 "-",
             ],
-            Some(&Self::branch_protection_body(rule, live.as_ref())),
+            Some(&Self::branch_protection_body(rule, protection.as_ref())),
         )?;
-        Ok("applied branch protection".to_string())
+        Ok(("applied branch protection".to_string(), notes))
     }
 
     /// Classify a failed gh call into a precise limitation message.
@@ -865,12 +897,44 @@ struct RepoInfo {
     default_branch: Option<String>,
 }
 
+/// The active repository rulesets read for one policy branch.
+#[derive(Default)]
+struct LiveRulesets {
+    /// Those that target the branch, read in full.
+    targeting: Vec<Value>,
+    /// One line for each whose ref pattern could not be read.
+    unexplained: Vec<String>,
+}
+
+/// How a full ruleset relates to a policy branch.
+#[derive(Debug, PartialEq, Eq)]
+enum Targeting {
+    Targets,
+    Misses,
+    /// A ref pattern it depends on could not be read, with why.
+    Unexplained(String),
+}
+
+/// `'name' (id)` for a full ruleset.
+fn ruleset_label(ruleset: &Value) -> String {
+    let name = ruleset
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unnamed");
+    let id = ruleset
+        .get("id")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    format!("'{name}' ({id})")
+}
+
 /// Whether a full ruleset targets `pattern`: one of its includes matches
 /// the branch and none of its excludes does. An entry matches when it is
 /// `~ALL`, `~DEFAULT_BRANCH` with `pattern` the default branch, the branch
-/// ref itself, or an fnmatch pattern the ref `refs/heads/<pattern>` fits
-/// (`*` stops at `/`, as GitHub's pathname matching does).
-fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>) -> bool {
+/// ref itself, or an fnmatch pattern the ref `refs/heads/<pattern>` fits,
+/// matched as GitHub matches it ([`fnmatch`]). When the answer depends on
+/// an entry that cannot be read, it is unexplained, never a miss.
+fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>) -> Targeting {
     let names = |list: &str| -> Vec<&str> {
         ruleset
             .pointer(&format!("/conditions/ref_name/{list}"))
@@ -881,21 +945,35 @@ fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>)
             .collect()
     };
     let reference = format!("refs/heads/{pattern}");
-    let options = glob::MatchOptions {
-        case_sensitive: true,
-        require_literal_separator: true,
-        require_literal_leading_dot: false,
-    };
-    let matches = |entry: &&str| match *entry {
-        "~ALL" => true,
-        "~DEFAULT_BRANCH" => default_branch == Some(pattern),
-        entry => {
-            entry == reference
-                || glob::Pattern::new(entry)
-                    .is_ok_and(|fnmatch| fnmatch.matches_with(&reference, options))
+    let entry_matches = |entry: &str| -> Result<bool, String> {
+        match entry {
+            "~ALL" => Ok(true),
+            "~DEFAULT_BRANCH" => Ok(default_branch == Some(pattern)),
+            entry if entry == reference => Ok(true),
+            entry => fnmatch::matches(entry, &reference)
+                .map_err(|why| format!("its ref pattern '{entry}' {why}")),
         }
     };
-    names("include").iter().any(matches) && !names("exclude").iter().any(matches)
+    // Any entry that matches settles the list; else an unreadable one
+    // leaves it open.
+    let any = |list: &str| -> Result<bool, String> {
+        let mut unreadable = None;
+        for entry in names(list) {
+            match entry_matches(entry) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(why) => {
+                    unreadable.get_or_insert(why);
+                }
+            }
+        }
+        unreadable.map_or(Ok(false), Err)
+    };
+    match (any("include"), any("exclude")) {
+        (Ok(false), _) | (_, Ok(true)) => Targeting::Misses,
+        (Ok(true), Ok(false)) => Targeting::Targets,
+        (Err(why), _) | (_, Err(why)) => Targeting::Unexplained(why),
+    }
 }
 
 impl RemoteProvider for GithubProvider {
@@ -928,7 +1006,7 @@ impl RemoteProvider for GithubProvider {
 
         for rule in &plan.rules {
             match self.apply_rule(&repo, rule) {
-                Ok(mechanism) => {
+                Ok((mechanism, notes)) => {
                     lines.push(format!(
                         "{mechanism} for {}: {}",
                         rule.pattern,
@@ -941,6 +1019,9 @@ impl RemoteProvider for GithubProvider {
                             rule.pattern,
                             rule.required_checks.join(", ")
                         ));
+                    }
+                    for note in notes {
+                        lines.push(format!("  note: {note}"));
                     }
                 }
                 Err(e) => {
@@ -1560,6 +1641,19 @@ esac
     /// the write calls.
     #[cfg(unix)]
     fn writes_against(rulesets: &[(u64, &str, &[&str], &[&str])]) -> Vec<String> {
+        let (report, writes) = apply_against(r#"["main"]"#, rulesets);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        writes
+    }
+
+    /// Apply the policy `branches` against branch rulesets of the
+    /// repository, each `(id, enforcement, include, exclude)`, with no
+    /// classic protection. Returns the report and the write calls.
+    #[cfg(unix)]
+    fn apply_against(
+        branches: &str,
+        rulesets: &[(u64, &str, &[&str], &[&str])],
+    ) -> (ProtectReport, Vec<String>) {
         let bodies: Vec<(u64, String)> = rulesets
             .iter()
             .map(|(id, enforcement, include, exclude)| {
@@ -1577,9 +1671,73 @@ esac
             .collect();
         let by_id: Vec<(u64, &str)> = bodies.iter().map(|(id, b)| (*id, b.as_str())).collect();
         let host = Host::new(&serde_json::to_string(&list).unwrap(), &by_id, None);
-        let report = host.apply(r#"["main"]"#);
-        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
-        host.writes().into_iter().map(|(call, _)| call).collect()
+        let report = host.apply(branches);
+        let writes = host.writes().into_iter().map(|(call, _)| call).collect();
+        (report, writes)
+    }
+
+    /// Round 3 of the PR 127 review: GitHub matches `refs/heads/**` as one
+    /// segment, so it does not cover `release/*`. That ruleset is left
+    /// alone and the policy branch gets its own ruleset.
+    #[cfg(unix)]
+    #[test]
+    fn a_trailing_double_star_does_not_cover_a_nested_policy_branch() {
+        for branches in [r#"["release/*"]"#, r#"["feature/foo"]"#] {
+            let (report, writes) =
+                apply_against(branches, &[(8, "active", &["refs/heads/**"], &[])]);
+            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            let expected = if branches.contains('*') {
+                "POST repos/o/r/rulesets"
+            } else {
+                "PUT repos/o/r/branches/feature/foo/protection"
+            };
+            assert_eq!(writes, [expected], "{branches}");
+        }
+        // One segment below refs/heads/ is covered and updated in place.
+        let (_, writes) = apply_against(r#"["main"]"#, &[(8, "active", &["refs/heads/**"], &[])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/8"]);
+    }
+
+    /// GitHub's documented form for crossing slashes, `qa**/**/*`, targets
+    /// `qa/foo` and `qa/foo/bar`, so that ruleset is updated in place.
+    #[cfg(unix)]
+    #[test]
+    fn the_glued_double_star_form_is_updated_in_place() {
+        for branches in [r#"["qa/foo"]"#, r#"["qa/foo/bar"]"#] {
+            let (report, writes) =
+                apply_against(branches, &[(9, "active", &["refs/heads/qa**/**/*"], &[])]);
+            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            assert_eq!(writes, ["PUT repos/o/r/rulesets/9"], "{branches}");
+        }
+    }
+
+    /// A ref pattern this matcher cannot read leaves the ruleset
+    /// unexplained: it may target the branch, so nothing is written and
+    /// the report names the ruleset and its pattern.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_ref_pattern_blocks_the_fall_through_write() {
+        for include in ["refs/heads/[^m]*", "refs/heads/[ma"] {
+            let (report, writes) = apply_against(r#"["main"]"#, &[(10, "active", &[include], &[])]);
+            let text = report.render();
+            assert_eq!(report.status, ProtectStatus::Degraded, "{text}");
+            assert!(writes.is_empty(), "{include}: {writes:?}");
+            assert!(text.contains("ruleset 10"), "{text}");
+            assert!(text.contains(include), "{text}");
+        }
+        // A readable ruleset that targets the branch is still updated, and
+        // the unreadable one is reported beside it.
+        let (report, writes) = apply_against(
+            r#"["main"]"#,
+            &[
+                (10, "active", &["refs/heads/[^m]*"], &[]),
+                (11, "active", &["~DEFAULT_BRANCH"], &[]),
+            ],
+        );
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/11"]);
+        assert!(text.contains("refs/heads/[^m]*"), "{text}");
     }
 
     #[cfg(unix)]
