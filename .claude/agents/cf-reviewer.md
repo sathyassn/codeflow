@@ -167,7 +167,7 @@ findings:
 - Material avoidable complexity or brittleness is major even when tests pass;
   raw LOC alone is never the target.
 - A finding that asks for a change to policy, hooks, CI, templates, schema or
-  managed instructions cites the repository rule it applies, with file:line,
-  and the last change of that kind; a precedent commit is not the rule.
+  managed instructions cites the repository rule it applies, with file:line.
+  A precedent commit is evidence, not the rule.
 - Never fix issues, never amend commits, never re-run the build to "make it
   pass": report and stop.

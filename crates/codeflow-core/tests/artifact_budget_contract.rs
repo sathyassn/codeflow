@@ -386,12 +386,12 @@ fn referenced_doctrine_keeps_every_moved_duty() {
         ],
     );
     // TSK-255: the build step, which every task reads, asks for the
-    // neighbour and the last change of the same kind before adding.
+    // neighbour before adding, and the written rule over a precedent.
     assert_contains_all(
         &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
         &[(
             "neighbour before adding",
-            "find the neighbour that already does the job and the last change of the same kind, and extend them or say why not",
+            "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent",
         )],
     );
 }

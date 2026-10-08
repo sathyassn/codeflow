@@ -235,7 +235,7 @@ fn reviewer_cites_the_rule_for_an_enforcement_surface_finding() {
     assert_contains(
         "assets/base/claude/agents/cf-reviewer.md",
         &[
-            "A finding that asks for a change to policy, hooks, CI, templates, schema or managed instructions cites the repository rule it applies, with file:line, and the last change of that kind; a precedent commit is not the rule.",
+            "A finding that asks for a change to policy, hooks, CI, templates, schema or managed instructions cites the repository rule it applies, with file:line. A precedent commit is evidence, not the rule.",
         ],
     );
 }

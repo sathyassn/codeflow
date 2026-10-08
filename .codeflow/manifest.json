@@ -95,7 +95,7 @@
     ".agents/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "d78fe46d422e004952af1b34fc8f5ec4894c18f3e90990b0a25d94a84ea1c0a3",
+      "sha256": "62f72b454da6c33b43c6dc17e335baf58f59afd69e3f52c045131e68df5d0036",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/SKILL.md": {
@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6309d5224584d9de480cbc844c811848129d49f12696d6d13a99a39abb2eac27",
+      "sha256": "403e39275f8e767153d22365bfac692a2d28ffd3cd2ba9f5a02ad2298040f52f",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -827,7 +827,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "96865179456021f4057c49e8764a187299b4de8636610a7688318d3e5afae880",
+      "sha256": "509e331530ae75ce4c99521d2a1ac6d7f4404c4baa197b6c9c3e2800eefcf1c4",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -935,7 +935,7 @@
     ".claude/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "d78fe46d422e004952af1b34fc8f5ec4894c18f3e90990b0a25d94a84ea1c0a3",
+      "sha256": "62f72b454da6c33b43c6dc17e335baf58f59afd69e3f52c045131e68df5d0036",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/SKILL.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6309d5224584d9de480cbc844c811848129d49f12696d6d13a99a39abb2eac27",
+      "sha256": "403e39275f8e767153d22365bfac692a2d28ffd3cd2ba9f5a02ad2298040f52f",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {

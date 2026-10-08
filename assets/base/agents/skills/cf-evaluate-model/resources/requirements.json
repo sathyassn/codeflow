@@ -2053,7 +2053,7 @@
         {
           "path": ".agents/skills/cf-develop/SKILL.md",
           "markers": [
-            "find the neighbour that already does the job and the last change of the same kind"
+            "find the neighbour that already does the job and extend it or say why not; the written rule wins over a precedent"
           ]
         },
         {
