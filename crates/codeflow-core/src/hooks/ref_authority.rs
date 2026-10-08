@@ -127,7 +127,7 @@ fn push(root: &Path, rest: &[String]) -> Option<String> {
             || destination.starts_with("../")
             || destination.starts_with("file:")
             || (destination.contains('/') && !destination.contains(':'))
-            || !crate::absence::proven_absent(&root.join(destination)).is_ok_and(|absent| absent))
+            || !crate::absence::cannot_exist(&root.join(destination)).is_ok_and(|absent| absent))
     {
         Some("pushing to a local path can rewrite policy or branch refs; push through the configured remote".into())
     } else {
@@ -626,6 +626,26 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("destination"))
             .unwrap();
         let args = ["push", "destination"].map(str::to_string);
+        assert!(check(dir.path(), &args).is_some());
+    }
+
+    /// A push URL is not a local path because it cannot name one: Windows
+    /// refuses `https:` as a file name (os error 123), and Unix refuses a
+    /// name past its length limit with the same error kind. A nameable local
+    /// destination is still refused (PR 84 Windows run).
+    #[test]
+    fn a_push_url_that_cannot_name_a_local_path_is_not_a_local_push() {
+        let dir = repository_with_config(b"");
+        let long = "x".repeat(4096);
+        for destination in [
+            "https://user@example.invalid/o/r.git".to_string(),
+            format!("example.invalid:{long}/r.git"),
+        ] {
+            let args = ["push".to_string(), destination.clone(), "main".into()];
+            assert_eq!(check(dir.path(), &args), None, "{destination:.40}");
+        }
+        std::fs::create_dir(dir.path().join("mirror")).unwrap();
+        let args = ["push", "mirror", "main"].map(str::to_string);
         assert!(check(dir.path(), &args).is_some());
     }
 

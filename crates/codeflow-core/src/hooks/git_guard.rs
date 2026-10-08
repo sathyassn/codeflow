@@ -1369,7 +1369,7 @@ fn token_integrity_path_spelled(
 /// `.github`, `.codex`, `.grok`), where any entry may be an enforcement
 /// file.
 fn in_enforcement_dir(dir: &Path) -> Result<bool, String> {
-    if crate::absence::proven_absent(dir).map_err(|error| error.to_string())? {
+    if crate::absence::cannot_exist(dir).map_err(|error| error.to_string())? {
         return Ok(false);
     }
     let real = std::fs::canonicalize(dir).map_err(|error| error.to_string())?;
@@ -1979,10 +1979,10 @@ impl WordGlob {
     }
 }
 
-/// Missing paths and known non-directories have no children; unreadable paths
-/// cannot certify an empty glob expansion.
+/// Missing paths, paths that cannot exist and known non-directories have no
+/// children; unreadable paths cannot certify an empty glob expansion.
 fn glob_directory(dir: &Path) -> Result<Option<std::fs::ReadDir>, GlobStop> {
-    if crate::absence::proven_absent(dir).map_err(|_| GlobStop::Unreadable)? {
+    if crate::absence::cannot_exist(dir).map_err(|_| GlobStop::Unreadable)? {
         return Ok(None);
     }
     let metadata = std::fs::metadata(dir).map_err(|_| GlobStop::Unreadable)?;
@@ -2554,7 +2554,7 @@ fn root_dot_pattern_target(path: &Path) -> Option<&'static str> {
         return None;
     }
     let parent = path.parent()?;
-    match crate::absence::proven_absent(parent) {
+    match crate::absence::cannot_exist(parent) {
         Ok(true) => return None,
         Ok(false) => {}
         Err(_) => return Some("repository root pattern (cannot read directory)"),
@@ -2608,7 +2608,7 @@ fn integrity_disk_case(path: &Path) -> Result<PathBuf, String> {
     for component in path.components() {
         real.push(component);
         if let Some(metadata) =
-            crate::absence::symlink_metadata_optional(&real).map_err(|error| error.to_string())?
+            crate::absence::existing_metadata(&real).map_err(|error| error.to_string())?
         {
             super::edit_guard::normalize_case(&mut real, &metadata)?;
         }
@@ -11050,6 +11050,55 @@ mod tests {
             );
             assert!(token_integrity_path("(.codeflow|x)/policy.json", &root, &root).is_some());
         }
+    }
+
+    /// A word that cannot name an existing path names no enforcement file,
+    /// as on main: a path beneath a file (how Windows reads the word
+    /// `README.md\n`, with `\` as a separator) and a name the platform
+    /// refuses (Windows refuses `"$d"` and `*` with os error 123; Unix
+    /// refuses a name past its length limit with the same error kind). A
+    /// nameable word still reaches the policy file (PR 84 Windows run).
+    #[test]
+    fn test_a_word_that_cannot_name_a_path_is_no_enforcement_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::create_dir_all(root.join("build")).unwrap();
+        git2::Repository::init(&root).unwrap();
+        std::fs::write(root.join(".codeflow/policy.json"), "{}").unwrap();
+        std::fs::write(root.join("README.md"), "x").unwrap();
+        let refused = if cfg!(windows) {
+            "a*b".to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        let policy = default_policy();
+        for command in [
+            "printf 'README.md/n' | xargs sort".to_string(),
+            "printf 'README.md/n' | xargs -I{} uniq {}".into(),
+            "rm -f README.md/child".into(),
+            format!("rm -f {refused}"),
+            format!("rm -f {refused}/child"),
+            format!("rm -f build/{refused}"),
+        ] {
+            let report = evaluate_report_at(&command, &ctx(&policy, "feat/x"), &root);
+            assert!(
+                !has_rule(&report.violations, "git.hook_integrity"),
+                "{command:.60}: {:?}",
+                report.violations
+            );
+        }
+        assert_eq!(token_integrity_path("README.md/n", &root, &root), None);
+        assert_eq!(
+            token_integrity_path(&format!("build/{refused}"), &root, &root),
+            None
+        );
+        let report = evaluate_report_at(
+            "rm -f .codeflow/policy.json",
+            &ctx(&policy, "feat/x"),
+            &root,
+        );
+        assert!(has_rule(&report.violations, "git.hook_integrity"));
     }
 
     /// Glob expansion reads the file system as the shell does: a leading

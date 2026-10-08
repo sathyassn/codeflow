@@ -468,8 +468,10 @@ pub(crate) fn normalize_case(
 // Resolve one component at a time. Lexically deleting `alias/..` before
 // following `alias` is wrong when alias is a symlink into another directory.
 // Missing suffixes are kept, so adding a new file beneath an existing symlink
-// is judged against that symlink's destination. Broken links and permissions
-// are errors, not an implicit allow.
+// is judged against that symlink's destination. A suffix that cannot exist
+// (beneath a file, or a name the platform refuses, such as Windows `*` or
+// `"`) is kept the same way. Broken links and permissions are errors, not an
+// implicit allow.
 fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
     let mut result = PathBuf::new();
     for component in path.components() {
@@ -483,7 +485,7 @@ fn normalized(path: &Path, resolve: bool) -> Result<PathBuf, EditError> {
             Component::Normal(part) => {
                 result.push(part);
                 if resolve {
-                    if crate::absence::proven_absent(&result).map_err(|e| {
+                    if crate::absence::cannot_exist(&result).map_err(|e| {
                         EditError(format!("cannot inspect {}: {e}", result.display()))
                     })? {
                         continue;
