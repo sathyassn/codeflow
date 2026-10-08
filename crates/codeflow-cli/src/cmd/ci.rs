@@ -1627,8 +1627,20 @@ fn note_lowered_security_levels(
     judging: &Result<Option<serde_json::Value>, String>,
     head: &str,
 ) {
+    for line in security_level_notes(root, judging, head) {
+        println!("{line}");
+    }
+}
+
+/// The notes [`note_lowered_security_levels`] prints.
+fn security_level_notes(
+    root: &Path,
+    judging: &Result<Option<serde_json::Value>, String>,
+    head: &str,
+) -> Vec<String> {
+    let mut notes = Vec::new();
     let Ok(Some(base)) = judging else {
-        return;
+        return notes;
     };
     // A head without the policy file removes every key it held; one that
     // cannot be read or parsed leaves each key's change unknown, which is
@@ -1669,44 +1681,28 @@ fn note_lowered_security_levels(
             text,
             codeflow_core::remedy::CI_SECURITY_LEVEL_LOWERED.with(&[("key", key), ("was", was)]),
         );
-        println!("{}", finding.line("codeflow ci", "note"));
+        notes.push(finding.line("codeflow ci", "note"));
     }
+    notes
 }
 
-/// The blob id of `path` at `rev`: `None` when the commit lacks it, which
-/// `rev-parse --verify --quiet` answers with exit 1 and no output; any other
-/// failure is the error.
+/// The blob id of `path` at `rev`, or `None` when the commit lacks it; a
+/// tree that cannot be read is the error ([`codeflow_core::git::blob_id_at`]).
 fn blob_at(root: &Path, rev: &str, path: &str) -> Result<Option<String>, String> {
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--verify", "--quiet"])
-        .arg(format!("{rev}:{path}"))
-        .output()
-        .map_err(|error| format!("cannot run git rev-parse: {error}"))?;
-    if !out.status.success() {
-        return if out.status.code() == Some(1) && out.stdout.is_empty() {
-            Ok(None)
-        } else {
-            Err(format!(
-                "git rev-parse {rev}:{path} failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ))
-        };
-    }
-    let id = std::str::from_utf8(&out.stdout)
-        .map_err(|_| format!("git rev-parse {rev}:{path} printed an id that is not UTF-8"))?
-        .trim_end_matches('\n');
-    if id.is_empty() {
-        return Err(format!("git rev-parse {rev}:{path} printed no id"));
-    }
-    Ok(Some(id.to_string()))
+    codeflow_core::git::blob_id_at(root, rev, path)
 }
 
 /// sathyassn/codeflow#81: name a change that adds, edits or removes the
 /// project setup hook. The hook runs in the gates job with the gate's
 /// authority, as the CI file does, so its reviewer is the boundary.
 fn note_changed_setup_hook(root: &Path, base: &str, head: &str) {
+    if let Some(line) = setup_hook_note(root, base, head) {
+        println!("{line}");
+    }
+}
+
+/// The note [`note_changed_setup_hook`] prints, if any.
+fn setup_hook_note(root: &Path, base: &str, head: &str) -> Option<String> {
     const HOOK: &str = ".codeflow/ci-setup.sh";
     let (was, now) = match (blob_at(root, base, HOOK), blob_at(root, head, HOOK)) {
         (Ok(was), Ok(now)) => (was, now),
@@ -1715,21 +1711,20 @@ fn note_changed_setup_hook(root: &Path, base: &str, head: &str) {
                 format!("whether this change edits {HOOK}, which runs in the gates job before `codeflow test`, cannot be told: {error}"),
                 codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
             );
-            println!("{}", finding.line("codeflow ci", "note"));
-            return;
+            return Some(finding.line("codeflow ci", "note"));
         }
     };
     let verb = match (&was, &now) {
         (None, Some(_)) => "adds",
         (Some(_), None) => "removes",
         (Some(a), Some(b)) if a != b => "edits",
-        _ => return,
+        _ => return None,
     };
     let finding = codeflow_core::remedy::Finding::new(
         format!("this change {verb} {HOOK}, which runs in the gates job before `codeflow test` with the gate's authority; review it as you would the CI file"),
         codeflow_core::remedy::CI_SETUP_HOOK_CHANGED.remedy(),
     );
-    println!("{}", finding.line("codeflow ci", "note"));
+    Some(finding.line("codeflow ci", "note"))
 }
 
 /// Report the policy source. Loading refuses malformed or unreadable policy;
@@ -2882,6 +2877,122 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// A repository whose `main` holds `base` and whose `HEAD` (`feat/x`)
+    /// then commits `head`, each a list of (path, text).
+    fn r24_range(base: &[(&str, &str)], head: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        let write = |files: &[(&str, &str)]| {
+            for (path, text) in files {
+                let path = root.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+        };
+        git(&["init", "-q", "-b", "main"]);
+        write(base);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "chore: base"]);
+        git(&["switch", "-q", "-c", "feat/x"]);
+        write(head);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "chore: head"]);
+        dir
+    }
+
+    /// Delete the loose object `spec` names, as a damaged clone lacks it.
+    fn r24_remove(root: &std::path::Path, spec: &str) {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", spec])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let id = String::from_utf8(out.stdout).unwrap().trim().to_string();
+        std::fs::remove_file(root.join(".git/objects").join(&id[..2]).join(&id[2..])).unwrap();
+    }
+
+    const R24_POLICY: &str = ".codeflow/policy.json";
+    const R24_BASE: &str = r#"{"git": {"security_review": "block", "dep_audit": "warn"}}"#;
+
+    fn r24_base_levels() -> serde_json::Value {
+        serde_json::from_str(R24_BASE).unwrap()
+    }
+
+    /// Issue 79: a head policy that does not parse leaves each level's
+    /// change unknown; it is named so, never read as both keys removed.
+    #[test]
+    fn r24_a_head_policy_that_does_not_parse_is_named_unknown() {
+        let dir = r24_range(&[(R24_POLICY, R24_BASE)], &[(R24_POLICY, "{ not json")]);
+        let notes = super::security_level_notes(dir.path(), &Ok(Some(r24_base_levels())), "HEAD")
+            .join("\n");
+        for (key, was) in [("security_review", "block"), ("dep_audit", "warn")] {
+            assert!(
+                notes.contains(&format!(
+                    "whether this change lowers git.{key} ({was} on the target) cannot be told: the head's .codeflow/policy.json does not parse"
+                )),
+                "{notes}"
+            );
+        }
+        assert!(!notes.contains("this change removes"), "{notes}");
+    }
+
+    /// Issue 79: a head policy that cannot be read is named, never passed
+    /// over as a change that keeps every level.
+    #[test]
+    fn r24_a_head_policy_that_cannot_be_read_is_named_unknown() {
+        let dir = r24_range(
+            &[(R24_POLICY, R24_BASE)],
+            &[(
+                R24_POLICY,
+                r#"{"git": {"security_review": "off", "dep_audit": "warn"}}"#,
+            )],
+        );
+        r24_remove(dir.path(), &format!("HEAD:{R24_POLICY}"));
+        let notes = super::security_level_notes(dir.path(), &Ok(Some(r24_base_levels())), "HEAD")
+            .join("\n");
+        assert!(
+            notes.contains(
+                "whether this change lowers git.security_review (block on the target) cannot be told: the head's .codeflow/policy.json cannot be read"
+            ),
+            "{notes}"
+        );
+    }
+
+    /// Issue 79: a head tree that cannot be read leaves the setup hook's
+    /// change unknown, never read as the hook removed.
+    #[test]
+    fn r24_a_setup_hook_that_cannot_be_read_is_named_unknown() {
+        let dir = r24_range(
+            &[(".codeflow/ci-setup.sh", "export X=1\n")],
+            &[(".codeflow/ci-setup.sh", "export X=2\n")],
+        );
+        assert!(super::setup_hook_note(dir.path(), "main", "HEAD")
+            .is_some_and(|note| note.contains("this change edits .codeflow/ci-setup.sh")));
+        r24_remove(dir.path(), "HEAD:.codeflow");
+        let note = super::setup_hook_note(dir.path(), "main", "HEAD").unwrap_or_default();
+        assert!(
+            note.contains("whether this change edits .codeflow/ci-setup.sh, which runs in the gates job before `codeflow test`, cannot be told"),
+            "{note}"
+        );
+    }
     #[cfg(unix)]
     #[test]
     fn r22_own_preflight_reader_failures_block_with_planning_off() {

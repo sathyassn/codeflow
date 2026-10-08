@@ -973,3 +973,34 @@ fn an_unreadable_forecast_directory_is_reported() {
     assert_eq!(out.status.code(), Some(1), "{text}");
     assert!(text.contains("cannot be read"), "{text}");
 }
+
+/// Issue 79: a reviewed commit this clone holds but cannot read refuses the
+/// report, instead of reading as a commit the clone lacks, which would
+/// place the landing at the completion.
+#[test]
+fn an_unreadable_reviewed_commit_is_reported() {
+    let fx = Fixture::new();
+    fx.plan("TSK-001", T0 + 200);
+    fx.git(&["checkout", "-q", "-b", "side", "main"], T0 + 300);
+    let reviewed = fx.code("side.txt", T0 + 400);
+    fx.git(&["checkout", "-q", "main"], T0 + 500);
+    fx.record("TSK-001", "complete", Some(&reviewed));
+    fx.commit("docs: complete TSK-001", T0 + 600);
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    let object = fx
+        .root
+        .join(".git/objects")
+        .join(&reviewed[..2])
+        .join(&reviewed[2..]);
+    std::fs::remove_file(&object).unwrap();
+    std::fs::write(&object, b"not zlib data").unwrap();
+    let (code, report) = fx.report(&[]);
+    assert_eq!(code, Some(1), "{report:#}");
+    assert!(
+        report["findings"]
+            .to_string()
+            .contains("history_unreadable"),
+        "{report:#}"
+    );
+}

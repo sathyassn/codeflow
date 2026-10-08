@@ -568,8 +568,12 @@ pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Res
             return Ok(true);
         }
     }
-    let Ok(entry) = tree.get_path(Path::new("project-management")) else {
-        return Ok(false);
+    // Only a tree without the directory has no records; a read failure is
+    // the error, never tracking off (issue 79).
+    let entry = match tree.get_path(Path::new("project-management")) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(error) => return Err(format!("{revision}: {}", error.message())),
     };
     let home = repo
         .find_tree(entry.id())
@@ -2173,6 +2177,25 @@ fn pinned_dependency(
     }
 }
 
+/// Why an object id does not resolve to a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommitLookup {
+    /// It is not an object id, names no object here, is ambiguous, or names
+    /// an object that is not a commit.
+    Unresolved(String),
+    /// The object is here but cannot be read (issue 79): no answer about it.
+    Unreadable(String),
+}
+
+impl CommitLookup {
+    /// The reason, as the lookup's callers show it.
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::Unresolved(reason) | Self::Unreadable(reason) => reason,
+        }
+    }
+}
+
 /// Resolve a pin through the object database, never through refs: a tag or
 /// branch named like the pin cannot redirect it. An abbreviated id must be
 /// unambiguous and name a commit.
@@ -2180,19 +2203,57 @@ pub(crate) fn commit_by_object_id<'repo>(
     repo: &'repo Repository,
     pin: &str,
 ) -> Result<git2::Commit<'repo>, String> {
-    let prefix = git2::Oid::from_str(pin).map_err(|_| "not an object id".to_string())?;
+    lookup_commit_by_object_id(repo, pin).map_err(CommitLookup::reason)
+}
+
+/// [`commit_by_object_id`], telling an id that names no commit here from an
+/// object that cannot be read, which git reports alike when only the
+/// commit lookup is asked.
+pub(crate) fn lookup_commit_by_object_id<'repo>(
+    repo: &'repo Repository,
+    pin: &str,
+) -> Result<git2::Commit<'repo>, CommitLookup> {
+    let unreadable = |error: git2::Error| {
+        CommitLookup::Unreadable(format!("cannot read object {pin}: {}", error.message()))
+    };
+    let prefix = git2::Oid::from_str(pin)
+        .map_err(|_| CommitLookup::Unresolved("not an object id".to_string()))?;
+    let odb = repo.odb().map_err(unreadable)?;
     let full = if pin.len() == 40 {
         prefix
     } else {
-        repo.odb()
-            .and_then(|odb| odb.exists_prefix(prefix, pin.len()))
-            .map_err(|error| match error.code() {
-                git2::ErrorCode::Ambiguous => "an ambiguous abbreviated object id".to_string(),
-                _ => "not an object in this repository".to_string(),
-            })?
+        match odb.exists_prefix(prefix, pin.len()) {
+            Ok(full) => full,
+            Err(error) if error.code() == git2::ErrorCode::Ambiguous => {
+                return Err(CommitLookup::Unresolved(
+                    "an ambiguous abbreviated object id".to_string(),
+                ))
+            }
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                return Err(CommitLookup::Unresolved(
+                    "not an object in this repository".to_string(),
+                ))
+            }
+            Err(error) => return Err(unreadable(error)),
+        }
     };
-    repo.find_commit(full)
-        .map_err(|_| "not a commit in this repository".to_string())
+    // Only an object the database proves absent is unresolved; one it
+    // holds but cannot read is no answer.
+    let kind = match odb.read_header(full) {
+        Ok((_, kind)) => kind,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Err(CommitLookup::Unresolved(
+                "not a commit in this repository".to_string(),
+            ))
+        }
+        Err(error) => return Err(unreadable(error)),
+    };
+    if kind != git2::ObjectType::Commit {
+        return Err(CommitLookup::Unresolved(
+            "not a commit in this repository".to_string(),
+        ));
+    }
+    repo.find_commit(full).map_err(unreadable)
 }
 
 pub(crate) fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
@@ -2634,6 +2695,47 @@ fn hosted_remote(repo: &Repository, remote_name: &str) -> Result<String, String>
 
 #[cfg(test)]
 mod tests {
+    /// Issue 79: an object id that names no commit is told apart from a
+    /// commit object that cannot be read, which the lookup used to report
+    /// alike as "not a commit in this repository".
+    #[test]
+    fn r24_an_unreadable_commit_is_not_reported_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, head) = crate::git::repo_with_tree(dir.path(), &[(b"a.txt", b"a\n")]);
+        let blob = repo.blob(b"not a commit").unwrap();
+        let id = head.to_string();
+        assert!(super::commit_by_object_id(&repo, &id).is_ok());
+        assert!(super::commit_by_object_id(&repo, &id[..12]).is_ok());
+        assert_eq!(
+            super::commit_by_object_id(&repo, &blob.to_string())
+                .err()
+                .as_deref(),
+            Some("not a commit in this repository")
+        );
+        assert_eq!(
+            super::commit_by_object_id(&repo, &"1".repeat(40))
+                .err()
+                .as_deref(),
+            Some("not a commit in this repository")
+        );
+        assert_eq!(
+            super::commit_by_object_id(&repo, &"1".repeat(12))
+                .err()
+                .as_deref(),
+            Some("not an object in this repository")
+        );
+        let object = repo.path().join("objects").join(&id[..2]).join(&id[2..]);
+        std::fs::remove_file(&object).unwrap();
+        std::fs::write(&object, b"not zlib data").unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        for pin in [id.as_str(), &id[..12]] {
+            let error = super::commit_by_object_id(&repo, pin)
+                .err()
+                .unwrap_or_default();
+            assert!(error.starts_with("cannot read object"), "{pin}: {error}");
+        }
+    }
+
     use super::*;
 
     /// Round 23: only git's "not found" from the merge-base walk is a

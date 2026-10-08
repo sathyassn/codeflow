@@ -893,6 +893,39 @@ mod tests {
         assert!(!note.chars().any(char::is_control), "{note}");
     }
 
+    /// Issue 79: a state that does not parse, or cannot be read, fails the
+    /// check on the checkout and on the target; it is never read as a state
+    /// that pins nothing.
+    #[test]
+    fn r24_a_state_that_cannot_be_read_fails_instead_of_reading_as_unpinned() {
+        const BROKEN: &str = "schema_version = 1\nscaffold_version = \"1.2.3\"\nbroken = [\n";
+        let dir = project("1.2.3");
+        write(dir.path(), STATE, BROKEN);
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Fail, "{}", found.message);
+        assert!(
+            found.message.contains("cannot parse state"),
+            "{}",
+            found.message
+        );
+
+        #[cfg(unix)]
+        {
+            let dir = project("1.2.3");
+            std::fs::remove_file(dir.path().join(STATE)).unwrap();
+            std::os::unix::fs::symlink("gone", dir.path().join(STATE)).unwrap();
+            let found = report(dir.path());
+            assert_eq!(found.status, Status::Fail, "{}", found.message);
+        }
+
+        let dir = project("1.2.3");
+        commit_on_main(dir.path(), BROKEN);
+        write(dir.path(), STATE, &state("1.2.3"));
+        let found = report(dir.path());
+        assert_eq!(found.status, Status::Fail, "{}", found.message);
+        assert!(found.message.contains("on main"), "{}", found.message);
+    }
+
     /// Issue 79: a setup hook that cannot be read is named as such, never
     /// reported as no hook, since CI still sources whatever it holds.
     #[cfg(unix)]

@@ -86,6 +86,7 @@ const OBTAIN: &[&str] = &[
     "head",
     "graph_descendant_of",
     "merge_base",
+    "get_path",
     "into_string",
 ];
 /// Obtaining calls named with their type, since the bare name is too common
@@ -671,14 +672,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "from_utf8_lossy",
         1,
         "schema-reject-only",
-    ),
-    // git's stderr after a failed rev-parse, shown in the note's reason only; the blob id itself is read with from_utf8 and refuses when it is not UTF-8
-    (
-        "codeflow-cli/src/cmd/ci.rs",
-        "blob_at",
-        "from_utf8_lossy",
-        1,
-        "display",
     ),
     // curl's stderr after a failed download, shown in the refusal only; the downloaded bytes are returned unchanged
     (
@@ -4945,22 +4938,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "trim",
         1,
         "schema-reject-only",
-    ),
-    // Trims git's stderr after a failed rev-parse for the note's reason; the id is cut at its line feed only.
-    (
-        "crates/codeflow-cli/src/cmd/ci.rs",
-        "blob_at",
-        "trim",
-        1,
-        "display",
-    ),
-    // rev-parse --verify prints one object id and a line feed; only that line feed is removed, and an empty id refuses.
-    (
-        "crates/codeflow-cli/src/cmd/ci.rs",
-        "blob_at",
-        "trim_end_matches",
-        1,
-        "format-contract",
     ),
     // Finds the setup hook's first command to show doctor's reader; nothing is decided from it, and control characters are escaped.
     (

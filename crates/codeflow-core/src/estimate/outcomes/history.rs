@@ -374,14 +374,20 @@ impl<'r> History<'r> {
             .map(|(_, oid)| oid)
             .or_else(|| completions.last().copied());
         timings.completed = completion.map(|oid| self.point(oid)).transpose()?;
-        let reviewed = record.reviewed.as_deref().and_then(|value| {
-            crate::workgraph::work_start::commit_by_object_id(
+        // A reviewed commit this clone does not have is no landing evidence;
+        // one it has but cannot read refuses the report (issue 79).
+        let reviewed = match record.reviewed.as_deref().map(|value| {
+            crate::workgraph::work_start::lookup_commit_by_object_id(
                 self.repo,
                 value.trim_matches([' ', '\t']),
             )
-            .ok()
-            .map(|commit| commit.id())
-        });
+        }) {
+            None | Some(Err(crate::workgraph::work_start::CommitLookup::Unresolved(_))) => None,
+            Some(Ok(commit)) => Some(commit.id()),
+            Some(Err(crate::workgraph::work_start::CommitLookup::Unreadable(reason))) => {
+                return Err(format!("{}: {reason}", record.path));
+            }
+        };
         // Where on the target's first-parent line the reviewed commit and the
         // completion first arrive, by ancestry. The code lands with the
         // reviewed commit; a completion that arrives later was written by a

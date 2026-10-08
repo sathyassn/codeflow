@@ -268,6 +268,34 @@ pub(crate) fn repo_with_refs(dir: &std::path::Path, names: &[&[u8]]) -> git2::Re
     git2::Repository::open(dir).unwrap()
 }
 
+/// The blob id of `path` in the tree of `revision` in the repository at
+/// `root`: `None` only when the tree has no such path. A revision, tree or
+/// directory object that cannot be read is the error (issue 79), never a
+/// path that is not there.
+///
+/// # Errors
+///
+/// The repository, the revision or a tree on the path cannot be read.
+pub fn blob_id_at(
+    root: &std::path::Path,
+    revision: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let repo = git2::Repository::discover(root).map_err(|error| error.message().to_string())?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| format!("cannot read {revision}: {}", error.message()))?;
+    match tree.get_path(std::path::Path::new(path)) {
+        Ok(entry) => Ok(Some(entry.id().to_string())),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "cannot read {path} at {revision}: {}",
+            error.message()
+        )),
+    }
+}
+
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
 pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
