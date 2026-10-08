@@ -1,0 +1,11 @@
+id = "TSK-258"
+uid = "dfba0a80-7971-4150-a7e5-ef61fa2962c4"
+kind = "TSK"
+title = "The installed manifest records no file digests"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T14:56:08Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
