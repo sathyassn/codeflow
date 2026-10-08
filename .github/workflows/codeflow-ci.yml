@@ -156,6 +156,9 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix crates/codeflow-present/web
           node=$(command -v node)
+          printf '#!/bin/sh\ncase "$2" in install-deps) sleep 3600 ;; esac\nexec %s "$@"\n' "$node" > "$RUNNER_TEMP/stall-node"
+          chmod +x "$RUNNER_TEMP/stall-node"
+          node="$RUNNER_TEMP/stall-node"
           cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
           archives="$HOME/.cache/playwright-apt"
           mkdir -p "$archives/partial"
