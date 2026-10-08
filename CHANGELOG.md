@@ -244,6 +244,27 @@ erratum below, never an edit of the section.
   Standard and full tiers receive the method text with `codeflow update`; no
   record, key or required file changes.
 
+<!-- codeflow:release-impact minor -->
+- **A completed standalone task's criteria wording can be corrected.**
+  `work.criteria_frozen` refused every change to a completed standalone
+  task's criteria, on any branch, and the one route for a completed task,
+  the planning amendment that names its epic, does not exist without an
+  epic, so a typo or a person's name stayed in the record
+  (sathyassn/codeflow#103). A pull request whose range changes planning
+  records only may now change the text of that task's existing criteria
+  when its `Task:` line names the task, or a follow-up whose
+  `follow_up_of` is that task (ADR-0080). `codeflow ci` prints the delta
+  as a `work.criteria_frozen` note for the reviewer, who confirms that the
+  meaning is unchanged; the task stays `complete`, its acceptance block
+  stays bound, and the anchored work-start preflight does not apply to
+  such a range. An added, removed, renumbered or reordered criterion, a
+  changed `(journey)`, `(after release)` or `(serves ...)` tag, or a
+  changed checkbox form is still refused, and so is the same change on the
+  task's own `task/` branch, in a range that reopens it, in a range that
+  also changes a path outside the planning records, or for an epic task,
+  whose route stays its epic's amendment. CodeFlow 3.0.0 still
+  refuses the correction, so the CI that judges it needs 3.1.0.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
@@ -333,27 +354,6 @@ erratum below, never an edit of the section.
   enables Pages; the portal `base` is now `/codeflow/`.
 
 ### Fixed
-
-<!-- codeflow:release-impact patch -->
-- **A completed standalone task's criteria wording can be corrected.**
-  `work.criteria_frozen` refused every change to a completed standalone
-  task's criteria, on any branch, and the one route for a completed task,
-  the planning amendment that names its epic, does not exist without an
-  epic, so a typo or a person's name stayed in the record
-  (sathyassn/codeflow#103). A pull request whose range changes planning
-  records only may now change the text of that task's existing criteria
-  when its `Task:` line names the task, or a follow-up whose
-  `follow_up_of` is that task (ADR-0080). `codeflow ci` prints the delta
-  as a `work.criteria_frozen` note for the reviewer, who confirms that the
-  meaning is unchanged; the task stays `complete`, its acceptance block
-  stays bound, and the anchored work-start preflight does not apply to
-  such a range. An added, removed, renumbered or reordered criterion, a
-  changed `(journey)`, `(after release)` or `(serves ...)` tag, or a
-  changed checkbox form is still refused, and so is the same change on the
-  task's own `task/` branch, in a range that reopens it, in a range that
-  also changes a path outside the planning records, or for an epic task,
-  whose route stays its epic's amendment. CodeFlow 3.0.0 still
-  refuses the correction, so the CI that judges it needs 3.1.0.
 
 <!-- codeflow:release-impact patch -->
 - **A pull request can no longer lower its own security review.** The
