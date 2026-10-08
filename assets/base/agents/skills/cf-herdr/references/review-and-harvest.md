@@ -37,8 +37,10 @@ A cross-family review or consult in Herdr runs this way, and only this way:
 4. The brief follows the review brief contract in the orchestrator's
    `resources/quality/findings.md` and is delivered with
    `deliver.py --review <base>...<head>`, which refuses a brief that asks for
-   a narrower range. It reads a command only in a code span or fenced block;
-   text after a closing backtick is prose and is not scanned.
+   a narrower range. It reads a command only in a code span or fenced block.
+   A path after a closing backtick is not part of the command; a git diff,
+   difftool, log or show mention outside a span or fence, or any other dotted
+   range, still refuses.
 5. The reply is harvested as above, once the status leaves `working`; a
    verdict that names another head, a narrower range, or carries an earlier
    approval forward is not the unit's verdict: re-brief the same seat for

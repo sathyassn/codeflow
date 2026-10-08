@@ -713,7 +713,7 @@ fn delegate_prompts_narrow_authority_and_data_without_reasking_safe_handoffs() {
         DELEGATE_SKILL,
         &[
             "Every delegate prompt narrows authority and data",
-            "actions/files/resources/data/processors/destinations/effects",
+            "Name purpose, permitted edits, data, processors, destinations, effects and a step budget on edits and run time",
             "ambiguity blocks; never guess",
             "Send only necessary minimized data to an approved processor",
             "route qualification is not data authority",

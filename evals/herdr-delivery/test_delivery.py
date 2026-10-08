@@ -584,6 +584,30 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f\n*.rs\n```\n"),
             ("a magic pathspec on the next fence line", "Run:\n```\ngit diff "
              "97ede7aa1...c5f54046f\n:(exclude)docs\n```\n"),
+            # Review of PR 126, round 7: a later fence line that is not itself
+            # a whole-unit git command, whatever its words.
+            ("two names on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\nsrc tests\n```\n"),
+            ("two file names on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\nMakefile README\n```\n"),
+            ("a path and a comment on the next fence line", "Run:\n```\ngit "
+             "diff 97ede7aa1...c5f54046f\ncrates/foo.rs # only this file\n```\n"),
+            ("--relative and a name on the next fence line", "Run:\n```\ngit "
+             "diff 97ede7aa1...c5f54046f\n--relative crates\n```\n"),
+            ("a glob and a comment on the next fence line", "Run:\n```\ngit "
+             "diff 97ede7aa1...c5f54046f\n*.rs # the crate\n```\n"),
+            ("an exclude pathspec and a name on the next fence line",
+             "Run:\n```\ngit diff 97ede7aa1...c5f54046f\n:(exclude)docs other\n"
+             "```\n"),
+            ("words on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\nsrc and tests\n```\n"),
+            ("a bare EOF on the next fence line", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\nEOF\n```\n"),
+            ("a name after a blank line and a comment", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n\n# the unit\nsrc tests\n```\n"),
+            ("a name after a second clean command", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\ngit log --oneline 97ede7aa1..c5f54046f\n"
+             "src tests\n```\n"),
             ("a path on the next line of an sh fence", "Run:\n```sh\ngit diff "
              "97ede7aa1...c5f54046f\ncrates/foo.rs\n```\n"),
             ("a path after a comment in a fence", "Run:\n```\ngit log "
@@ -667,7 +691,10 @@ class StubDeliveryTests(unittest.TestCase):
             self.assertIn("whole", done.stderr, name)
 
     def test_review_sends_a_fence_that_stays_whole(self) -> None:
-        # Review of PR 126, round 6: only a path line after a git line refuses.
+        # After a git command in a fence, a later line sends only when it is
+        # blank, a comment or itself a whole-unit git command. A path before
+        # the command, in the next fence or after the closing backtick is not
+        # part of the command (the decision, TSK-260 scanner).
         unit = "97ede7aa1...c5f54046f"
         for name, brief in (
             ("a clean fence", "Run:\n```\ngit diff 97ede7aa1...c5f54046f\n```\n"),
