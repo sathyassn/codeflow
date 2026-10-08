@@ -612,10 +612,15 @@ fn announce(class: &Class, line: Option<&EpicLineResult>) {
             println!();
             if let Some(report) = adoptions {
                 for entry in &report.outside_range {
-                    println!(
-                        "codeflow ci: note: the {epic} line_adoptions entry for {} names a commit outside the range, so it adopts nothing here",
-                        entry.commit
+                    let note = codeflow_core::remedy::Finding::new(
+                        format!(
+                            "the {epic} line_adoptions entry for {} names a commit outside the range, so it adopts nothing here",
+                            entry.commit
+                        ),
+                        codeflow_core::remedy::LINE_ADOPTION_OUTSIDE_RANGE
+                            .with(&[("epic", epic.as_str())]),
                     );
+                    println!("{}", note.line("codeflow ci", "note"));
                 }
             }
         }

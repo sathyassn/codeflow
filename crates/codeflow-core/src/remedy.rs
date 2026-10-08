@@ -264,6 +264,10 @@ catalog! {
     /// not a refusal.
     PLANNING_AMENDMENT = Step::Codeflow("codeflow ci"),
         "nothing to change: `codeflow ci` lists what the planning amendment changes; a human reviewer of the amendment confirms each change before it lands, and a line takes it by merging the target";
+    /// An epic's `line_adoptions` entry naming a commit outside the line's
+    /// range (SPC-013 R-52, TSK-248): evidence, not a refusal.
+    LINE_ADOPTION_OUTSIDE_RANGE = Step::Codeflow("codeflow ci"),
+        "nothing to change: the entry adopts nothing in this range, and `codeflow ci` still refuses any direct commit in it that no entry adopts; a human reviewer confirms the entry names a commit that landed earlier, and a planning pull request that removes it from `line_adoptions` in {epic} ends this note";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";

@@ -51,6 +51,14 @@ fn epic_line_adoption_outside_range_is_a_note() {
         "{}",
         output(&result)
     );
+    // The note carries its remedy (SPC-013 R-80).
+    assert!(
+        output(&result).contains(
+            "outside the range, so it adopts nothing here\n  clear it: nothing to change"
+        ),
+        "{}",
+        output(&result)
+    );
 }
 
 /// TSK-248 AC-1: an entry counts only when it first arrived by a merge or
