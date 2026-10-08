@@ -1,0 +1,11 @@
+id = "ADR-0081"
+uid = "8336ca3b-7fed-4415-a2d0-d4155b7145b9"
+kind = "ADR"
+title = "Main requires branches to be up to date before merging"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-08T15:51:19Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
