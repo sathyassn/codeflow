@@ -2429,10 +2429,14 @@ pub(super) fn reopened_message(id: &str) -> String {
 
 /// The tasks complete at `base` whose criteria differ at `head` and which
 /// the range reopened: no longer complete, a block superseded, or a commit
-/// of the range moving them from complete. A task `base` no longer holds is
-/// judged against the newest version in its history, so deleting a landed
-/// record and adding it again reopened is still a reopen; when that
-/// history cannot tell, such a task counts as reopened too.
+/// of the range moving them from complete. The range is its own diff, the
+/// merge-base of `base` and `head` through `head`: a task whose record the
+/// range leaves as the merge-base holds it, or whose record is not complete
+/// there, is not reopened by it, so a target that moved on after the
+/// merge-base reopens nothing for a branch behind it. A task `base` no
+/// longer holds is judged against the newest version in its history, so
+/// deleting a landed record and adding it again reopened is still a reopen;
+/// when that history cannot tell, such a task counts as reopened too.
 ///
 /// # Errors
 /// Returns an error if the range cannot be read.
@@ -2469,6 +2473,16 @@ fn reopened_judged(
             .map_err(|e| e.to_string())
     };
     let base_oid = oid(base)?;
+    // A reopen is the range's own change, so a task is a candidate only
+    // when the range's own diff (the merge-base through the head) changes
+    // its record from a complete one. A task the target changed after the
+    // merge-base, which the range does not touch, is not reopened by this
+    // range, whatever the target tip holds (R-119, as `records_correction`
+    // judges a correction). Without a merge-base nothing is excluded.
+    let at_anchor = match repo.merge_base(base_oid, oid(head)?) {
+        Ok(anchor) => Some(Graph::from_revision(repo, &anchor.to_string())?),
+        Err(_) => None,
+    };
     let mut store = super::landing::RecordStore::new(repo);
     let mut unknown = std::collections::BTreeMap::new();
     let mut candidates: Vec<(&RecordView, RecordView)> = Vec::new();
@@ -2477,6 +2491,15 @@ fn reopened_judged(
         .values()
         .filter(|record| record.kind == RecordKind::Task)
     {
+        if let Some(before) = at_anchor
+            .as_ref()
+            .and_then(|graph| graph.records.get(&record.id))
+        {
+            let changed = before.content != record.content || before.path != record.path;
+            if !changed || before.status != "complete" {
+                continue;
+            }
+        }
         let old = match target.records.get(&record.id) {
             Some(old) => old.clone(),
             None => match store.recovered(&super::landing::Identity::of(record), &[base_oid]) {

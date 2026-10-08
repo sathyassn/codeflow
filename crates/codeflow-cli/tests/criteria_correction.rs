@@ -947,3 +947,107 @@ fn the_own_branch_and_a_reopen_stay_frozen() {
         &["work.criteria_frozen", "a reopened task keeps its criteria"],
     );
 }
+
+/// On `main`, complete the open task TSK-006 with changed criteria, as a
+/// task pull request landing after a branch point does.
+fn complete_other_task_on_main(root: &Path) {
+    git(root, &["switch", "main"]);
+    let reviewed = git_out(root, &["rev-parse", "HEAD"]);
+    let changed = "- AC-1 When run, the system shall work as the owner asked.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n";
+    write(
+        root,
+        &record_path("TSK-006"),
+        &task(
+            "TSK-006",
+            None,
+            None,
+            "complete",
+            changed,
+            &block(&reviewed),
+        ),
+    );
+    commit(root, "docs(records): complete another task");
+}
+
+/// A reopen the range itself makes is judged on the range's own diff, as a
+/// correction is (R-119, R-52). Hosted CI passes the target tip as
+/// `--base`. A branch cut before `main` completed TSK-006 with changed
+/// criteria does not touch TSK-006, so it does not reopen it: the
+/// correction passes and TSK-006 is not named as reopened.
+#[test]
+fn a_correction_behind_main_that_completed_another_task_is_not_a_reopen() {
+    let dir = repo();
+    let root = dir.path();
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    complete_other_task_on_main(root);
+    git(root, &["switch", PLAN]);
+    let result = ci(root, PLAN, "Task: TSK-003");
+    assert_passes(
+        &result,
+        "a correction behind a main that completed another task",
+        &[DELTA],
+    );
+    for absent in [
+        FROZEN,
+        "TSK-006: a reopened task keeps its criteria",
+        "TSK-006: the target does not hold",
+    ] {
+        assert!(!result.1.contains(absent), "{}", result.1);
+    }
+}
+
+/// The same lag on the push route, where no pull request body is given.
+#[test]
+fn a_branch_behind_main_that_completed_another_task_names_no_reopen_on_push() {
+    let dir = repo();
+    let root = dir.path();
+    correct(root, PLAN, "TSK-003", CORRECTED);
+    complete_other_task_on_main(root);
+    git(root, &["switch", PLAN]);
+    let result = ci_on(root, PLAN, None);
+    assert!(
+        !result
+            .1
+            .contains("TSK-006: a reopened task keeps its criteria"),
+        "{}",
+        result.1
+    );
+}
+
+/// A range that reopens its own completed task and changes its criteria is
+/// still refused when the branch lags `main`, and only that task is named:
+/// the TSK-006 that `main` completed after the branch point is not.
+#[test]
+fn a_reopen_behind_main_stays_frozen_and_names_only_its_own_task() {
+    let dir = repo();
+    let root = dir.path();
+    git(root, &["switch", "-C", PLAN, "main"]);
+    let path = root.join(record_path("TSK-003"));
+    let current = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        current
+            .replace(CRITERIA, CORRECTED)
+            .replace("status: complete", "status: todo"),
+    )
+    .unwrap();
+    commit(root, "docs(records): reopen and correct");
+    complete_other_task_on_main(root);
+    git(root, &["switch", PLAN]);
+    let result = ci(root, PLAN, "Task: TSK-003");
+    assert_blocks(
+        &result,
+        "a reopen behind main",
+        &[
+            "work.criteria_frozen",
+            "TSK-003: a reopened task keeps its criteria",
+        ],
+    );
+    assert!(
+        !result
+            .1
+            .contains("TSK-006: a reopened task keeps its criteria"),
+        "{}",
+        result.1
+    );
+}

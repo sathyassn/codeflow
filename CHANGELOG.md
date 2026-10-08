@@ -264,7 +264,10 @@ erratum below, never an edit of the section.
   still refused, and so is the same change on the
   task's own `task/` branch, in a range that reopens it, in a range that
   also changes a path outside the planning records, or for an epic task,
-  whose route stays its epic's amendment. CodeFlow 3.0.0 still
+  whose route stays its epic's amendment. A reopen is judged on the
+  range's own diff, so a branch behind its target is not refused for a
+  task the target completed after the branch point and the range leaves
+  alone. CodeFlow 3.0.0 still
   refuses the correction, so the CI that judges it needs 3.1.0.
 
 <!-- codeflow:release-impact minor -->
