@@ -3331,7 +3331,9 @@ fn tsk193_check_names_faults_and_accepts_a_clean_session() {
 }
 
 fn repository_file(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
 }
 
 /// The JSON lines a command printed, without its summary line.
@@ -3347,7 +3349,9 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
     let fixture = setup_project();
     let delivery = fixture.project.join("delivery.json");
     fs::copy(
-        repository_file("crates/codeflow-present/tests/fixtures/contract-v2/check/delivery-v1.json"),
+        repository_file(
+            "crates/codeflow-present/tests/fixtures/contract-v2/check/delivery-v1.json",
+        ),
         &delivery,
     )
     .unwrap();
@@ -3369,8 +3373,7 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
     assert_eq!(rules(&lines, "framing"), 6, "{stdout}");
     assert_eq!(rules(&lines, "entities"), 6, "{stdout}");
     assert_eq!(rules(&lines, "version"), 1, "{stdout}");
-    let summary: serde_json::Value =
-        serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let summary: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
     assert_eq!(
         summary,
         serde_json::json!({"faults": 0, "valid": true, "warnings": 13})
@@ -3384,7 +3387,10 @@ fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
     );
     let stdout = require_success(&opened);
     let id = stdout.split_whitespace().nth(1).unwrap().to_string();
-    assert!(stdout.starts_with(&format!("session {id} ready")), "{stdout}");
+    assert!(
+        stdout.starts_with(&format!("session {id} ready")),
+        "{stdout}"
+    );
     assert!(!stdout.contains("\"severity\""), "{stdout}");
     let stderr = String::from_utf8(opened.stderr).unwrap();
     assert_eq!(check_lines(&stderr), lines, "{stderr}");

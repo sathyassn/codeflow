@@ -1784,9 +1784,7 @@ impl CheckFault {
 pub fn check_document(bytes: &[u8]) -> Vec<CheckFault> {
     let document: PresentationDocument = match serde_json::from_slice(bytes) {
         Ok(document) => document,
-        Err(error) => {
-            return vec![CheckFault::fault(None, "schema", error.to_string())]
-        }
+        Err(error) => return vec![CheckFault::fault(None, "schema", error.to_string())],
     };
     let mut faults = Vec::new();
     // Visit children first so every independent fault names its own block.
@@ -1874,7 +1872,8 @@ fn review_warnings(document: &PresentationDocument) -> Vec<CheckFault> {
         else {
             continue;
         };
-        let blank = |field: &Option<String>| field.as_deref().is_none_or(|text| text.trim().is_empty());
+        let blank =
+            |field: &Option<String>| field.as_deref().is_none_or(|text| text.trim().is_empty());
         // A v2 stage without them is already a fault.
         if v1 {
             let missing = match (blank(title), blank(caption)) {
@@ -1965,13 +1964,14 @@ mod tests {
             "check/v2-unnamed-arrows.json",
         ));
         assert_eq!(lines.len(), 1, "{lines:?}");
-        assert_eq!(
-            (lines[0].rule, lines[0].severity),
-            ("entities", "warning")
-        );
+        assert_eq!((lines[0].rule, lines[0].severity), ("entities", "warning"));
         // Three arrows; the marker path, the none subtree and the labelled
         // group are not counted, and a v2 document prints no version line.
-        assert!(lines[0].message.contains(" has 3 shapes "), "{}", lines[0].message);
+        assert!(
+            lines[0].message.contains(" has 3 shapes "),
+            "{}",
+            lines[0].message
+        );
     }
 
     #[test]

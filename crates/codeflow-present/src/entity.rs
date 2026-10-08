@@ -1170,7 +1170,10 @@ mod tests {
             attributes("box"),
             (Some("Author name".to_string()), Some("button".to_string()))
         );
-        assert_eq!(attributes("edge"), (Some("submit & wait".to_string()), None));
+        assert_eq!(
+            attributes("edge"),
+            (Some("submit & wait".to_string()), None)
+        );
         assert_eq!(
             attributes("service"),
             (Some("Service".to_string()), Some("img".to_string()))
