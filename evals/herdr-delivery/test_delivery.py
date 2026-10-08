@@ -619,6 +619,16 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f \\\n  -- crates/foo.rs\n```\n"),
             ("an unclosed fence with a path", "Run:\n```\ngit diff "
              "97ede7aa1...c5f54046f crates/foo.rs\n"),
+            # Review of PR 126, round 5: a command on a fence delimiter line.
+            ("a path on the fence opener", "Run:\n```git diff "
+             "97ede7aa1...c5f54046f -- crates/foo.rs\n```\n"),
+            ("a path on the fence closer", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n``` git diff 97ede7aa1...c5f54046f -- "
+             "crates/foo.rs\n"),
+            ("an escaped space between git and diff in a span", "Review "
+             "`git\\ diff 97ede7aa1...c5f54046f -- crates/foo.rs`\n"),
+            ("a backslash and a space between git and diff in a span", "Review "
+             "`git \\ diff 97ede7aa1...c5f54046f -- crates/foo.rs`\n"),
             # The tokenizer's contract, flipped: a command outside a span.
             ("an unquoted command", "Run git diff 97ede7aa1...c5f54046f and "
              "read docs/delivery.md.\n"),
@@ -693,6 +703,10 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f\n```\nthen read docs/delivery.md.\n"),
             ("a fenced command with a prompt", "Run:\n```\n$ git diff -w -U5 "
              "97ede7aa1...c5f54046f\n```\n"),
+            ("a whole command on the fence opener", "Run:\n```git diff --stat "
+             "97ede7aa1...c5f54046f\n```\n"),
+            ("a whole command on the fence closer", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f\n``` git diff --stat 97ede7aa1...c5f54046f\n"),
             ("a fence line continued with the whole pair", "Run:\n```\ngit "
              "diff \\\n  --stat 97ede7aa1...c5f54046f\n```\n"),
             ("an uppercase pair in a span", "The unit is 97ede7aa1...c5f54046f. "
@@ -731,14 +745,6 @@ class StubDeliveryTests(unittest.TestCase):
             self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
             [text] = seat.sent("send-text")
             self.assertEqual(text[3], brief, name)
-
-    def test_review_sends_a_count_in_parentheses_after_the_pair(self) -> None:
-        # Review of PR 126: the TSK-238 brief line, a file count after the span.
-        brief = ("Review `git diff 4f8cdd3aa...390a50bb8` (189 files) and "
-                 "say whether it holds.\n")
-        seat, done = self.review(brief, "--review", "4f8cdd3aa...390a50bb8")
-        self.assertEqual(done.returncode, 0, f"{done.stdout}{done.stderr}")
-        self.assertEqual(seat.sent("send-text")[0][3], brief)
 
     def test_review_sends_a_count_in_parentheses_after_the_pair(self) -> None:
         # Review of PR 126: the TSK-238 brief line, a file count after the span.

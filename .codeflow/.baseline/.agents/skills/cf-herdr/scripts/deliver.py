@@ -30,9 +30,9 @@ fenced block as exactly `git <verb> [display options] <base>...<head>` (the
 pair dotted or as two tokens, any case; a path, `--`, a glob, a magic
 pathspec, another revision or any other option is refused). A command
 outside a span is refused with the span form named; text outside a span or
-fence is prose and is never read as part of a command. A backslash joins the
-next line before anything is read. A review is one holistic pass over the
-whole unit at one head.
+fence is prose and is never read as part of a command. A backslash before a
+newline, a space or a tab is folded to one space before anything is read. A
+review is one holistic pass over the whole unit at one head.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
 3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown;
@@ -136,15 +136,17 @@ def narrower(shown: str, unit: str) -> Stop:
 def carve(text: str) -> tuple[list[str], str]:
     """Split a brief into command texts and prose. A fenced block (a line
     starting with three backticks to the next such line) is cut out and each
-    of its lines is a command line; a code span (backticks paired in document
-    order, newlines allowed) is cut out and is a command span; what remains
-    is prose."""
+    of its lines is a command line, the opening and closing lines included
+    (their text after the backticks); a code span (backticks paired in
+    document order, newlines allowed) is cut out and is a command span; what
+    remains is prose."""
     commands: list[str] = []
     prose: list[str] = []
     fenced = False
     for line in text.split("\n"):
         if line.lstrip().startswith(FENCE) and (fenced or line.count(FENCE) == 1):
             fenced = not fenced
+            commands.append(line.lstrip().lstrip("`"))
             if not fenced:
                 prose.append(CUT)
         elif fenced:
@@ -181,6 +183,7 @@ def fits(tokens: list[str], base: str, head: str, verb: str, unit: str) -> bool:
 def check_review(brief: str, unit: str, path: str) -> None:
     base, head = PAIR.match(unit).groups()
     text = re.sub(r"\\[ \t]*\n[ \t]*", " ", brief.replace("\r\n", "\n"))
+    text = re.sub(r"\\[ \t]+", " ", text)
     named = any(same(m.group(1), base) and same(m.group(3), head)
                 for m in DOTTED.finditer(text) if m.group(2) == "...")
     if not named:

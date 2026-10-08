@@ -395,13 +395,13 @@
     ".agents/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "b7b9825088af4fe2208e863bb1449cb6d388ba2736097dfb2bb1b8efc3db4d9b",
+      "sha256": "24e500b4e47d519a48ece870fc53db499c6b104af10273b173e5a3caf9af094e",
       "exec": false
     },
     ".agents/skills/cf-herdr/scripts/deliver.py": {
       "src": "agents/skills/cf-herdr/scripts/deliver.py",
       "ownership": "managed",
-      "sha256": "46a5bf89623c21613b7566d34cad48a9c54734b44fdf954ac712357e45f8b946",
+      "sha256": "19320af34bae79a86db7162b8642ab13e9ca09d1d016036c9324716306e560d8",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -1235,13 +1235,13 @@
     ".claude/skills/cf-herdr/references/review-and-harvest.md": {
       "src": "agents/skills/cf-herdr/references/review-and-harvest.md",
       "ownership": "managed",
-      "sha256": "b7b9825088af4fe2208e863bb1449cb6d388ba2736097dfb2bb1b8efc3db4d9b",
+      "sha256": "24e500b4e47d519a48ece870fc53db499c6b104af10273b173e5a3caf9af094e",
       "exec": false
     },
     ".claude/skills/cf-herdr/scripts/deliver.py": {
       "src": "agents/skills/cf-herdr/scripts/deliver.py",
       "ownership": "managed",
-      "sha256": "46a5bf89623c21613b7566d34cad48a9c54734b44fdf954ac712357e45f8b946",
+      "sha256": "19320af34bae79a86db7162b8642ab13e9ca09d1d016036c9324716306e560d8",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
