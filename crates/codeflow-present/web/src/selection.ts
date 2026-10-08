@@ -40,6 +40,8 @@ export interface Resolution {
   readonly via: ResolvedVia;
   readonly label: string;
   readonly entityId?: string;
+  /** Nothing names this part: its label is "Unnamed part of <block>" and the note stores no quote. */
+  readonly unnamed?: true;
 }
 
 /** Every keyboard stop in document order: entities and annotatable elements that show. */
@@ -107,12 +109,14 @@ function resolveFrom(block: HTMLElement, element: Element): Resolution {
     if (named) return { block, element: group, via: "shape", label: named };
   }
   // Other ancestors lend only an explicit label: the text of a whole drawing
-  // or frame would name everything in it.
+  // or frame would name everything in it, and a picture's own label (its
+  // figure or svg) names the picture, never a part of it.
   for (let ancestor = shape.parentElement; ancestor && ancestor !== block; ancestor = ancestor.parentElement) {
+    if (ancestor.localName === "figure" || ancestor.localName === "svg") continue;
     const named = ownLabel(block, ancestor, false);
     if (named) return { block, element: shape, via: "shape", label: named };
   }
-  return { block, element: shape, via: "shape", label: blockLabel(block) };
+  return { block, element: shape, via: "shape", label: `Unnamed part of ${blockLabel(block)}`, unnamed: true };
 }
 
 function entityResolution(block: HTMLElement, entity: Element): Resolution {
@@ -396,7 +400,9 @@ export function captureResolution(resolution: Resolution): CapturedTarget | null
       },
     } : {}),
     summary: `Element: ${label}`,
-    excerptText: label,
+    // An unnamed part has no quote of its own: searching its label after a
+    // change would find the stage title (SPC-014 B1 step 2). Its crop stays.
+    ...(resolution.unnamed ? {} : { excerptText: label }),
   };
 }
 

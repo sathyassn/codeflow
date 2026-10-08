@@ -304,15 +304,29 @@ fn check(
             }
         }
     };
-    let faults = codeflow_present::document::check_document(&bytes);
-    for fault in &faults {
-        println!("{}", serde_json::to_string(fault)?);
+    let lines = codeflow_present::document::check_document(&bytes);
+    for line in &lines {
+        println!("{}", serde_json::to_string(line)?);
     }
+    // `faults` and `valid` keep their meaning; warnings never fail the check.
+    let faults = lines.iter().filter(|line| line.is_fault()).count();
     println!(
         "{}",
-        serde_json::json!({"faults":faults.len(),"valid":faults.is_empty()})
+        serde_json::json!({"faults":faults,"valid":faults == 0,"warnings":lines.len() - faults})
     );
-    Ok(if faults.is_empty() { 0 } else { 9 })
+    Ok(if faults == 0 { 0 } else { 9 })
+}
+
+/// Print the advisory `present check` warnings for a document that parsed,
+/// one JSON line each on stderr, so `open` and `update` proceed and their
+/// stdout handoff stays unchanged (TSK-259).
+fn print_review_warnings(bytes: &[u8]) -> codeflow_present::Result<()> {
+    for line in codeflow_present::document::check_document(bytes) {
+        if !line.is_fault() {
+            eprintln!("{}", serde_json::to_string(&line)?);
+        }
+    }
+    Ok(())
 }
 
 fn run_command(
@@ -365,9 +379,11 @@ fn run_command(
             expected_revision,
         } => {
             let bytes = read_document(document)?;
+            let parsed = parse_document(&bytes)?;
+            print_review_warnings(&bytes)?;
             let revision = store.update_document_expecting(
                 parse_id(session_id)?,
-                parse_document(&bytes)?,
+                parsed,
                 *expected_revision,
             )?;
             println!("updated {session_id} to revision {revision}");
@@ -518,6 +534,7 @@ fn serve(project: PathBuf, session_id: &str) -> codeflow_present::Result<()> {
 fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_present::Result<()> {
     let bytes = read_document(document)?;
     let parsed = parse_document(&bytes)?;
+    print_review_warnings(&bytes)?;
     let session = store.create(parsed)?;
     let ready = start_service(store, session.id)?;
     if no_launch {

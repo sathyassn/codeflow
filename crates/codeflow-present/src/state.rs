@@ -2915,6 +2915,72 @@ fn source_document(
     }
 }
 
+/// A block's name in the current revision and in the note's own revision,
+/// which a retitled stage may still draw as text.
+struct BlockNames {
+    current: String,
+    source: Option<String>,
+}
+
+impl BlockNames {
+    fn of(
+        block: &crate::document::Block,
+        source: Option<&PresentationDocument>,
+        block_id: &str,
+    ) -> Self {
+        Self {
+            current: block.review_label(),
+            source: source
+                .and_then(|document| find_block(&document.blocks, block_id))
+                .map(crate::document::Block::review_label),
+        }
+    }
+
+    fn named_by(&self, quote: &str) -> bool {
+        let quote = quote.trim();
+        quote == self.current || self.source.as_deref() == Some(quote)
+    }
+}
+
+/// B1 step 2 for an element note whose block changed, as TSK-259 changed
+/// it: only the quote is searched, never the element label, so a part
+/// labelled `Unnamed part of <title>` cannot match its title. A drawn shape
+/// whose quote is the stage's name had no name of its own (B3 step 4 before
+/// TSK-259 stored the block label); drawn text, a frame title and prose keep
+/// their quote.
+fn reanchor_element_quote(
+    selector: &ElementSelector,
+    excerpt_text: Option<&str>,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+    names: &BlockNames,
+) -> FeedbackAnchor {
+    let Some(quote) = excerpt_text else {
+        return FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: "the element changed and the note has no quote to search".to_string(),
+        };
+    };
+    if UNNAMED_PART_TAGS.contains(&selector.tag_name.as_str()) && names.named_by(quote) {
+        return FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: "the part had no name and its stage changed".to_string(),
+        };
+    }
+    reanchor_by_quote(
+        quote,
+        block,
+        framing,
+        "the element changed and its text was not found",
+    )
+}
+
+/// Tags whose element note, when its quote is the stage's name, was a part
+/// with no name of its own (TSK-259; `docs/architecture/present.md`).
+const UNNAMED_PART_TAGS: &[&str] = &[
+    "path", "line", "rect", "circle", "ellipse", "polyline", "polygon", "svg", "g",
+];
+
 fn reanchor_note(
     note: &FeedbackNote,
     source_revision: u64,
@@ -2952,7 +3018,9 @@ fn reanchor_note(
     let excerpt_text = note
         .excerpt
         .as_ref()
-        .and_then(|excerpt| excerpt.text.as_deref());
+        .and_then(|excerpt| excerpt.text.as_deref())
+        .filter(|text| !text.trim().is_empty());
+    let names = BlockNames::of(block, source, &note.block_id);
     // Step 1: the entity, when the block still has it.
     if let Some(selector) = &note.entity_selector {
         let entities = crate::entity::block_entities(block).unwrap_or_default();
@@ -2969,8 +3037,17 @@ fn reanchor_note(
                 label_changed: entity.label != selector.label,
             };
         }
+        // The entity's own label is a name the author chose and is still
+        // searched; a quote that is only the stage's name is not (TSK-259).
+        let quote = excerpt_text.unwrap_or(&selector.label);
+        if names.named_by(quote) {
+            return FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the entity is gone and its label was not found".to_string(),
+            };
+        }
         return reanchor_by_quote(
-            excerpt_text.unwrap_or(&selector.label),
+            quote,
             block,
             &framing,
             "the entity is gone and its label was not found",
@@ -2987,12 +3064,7 @@ fn reanchor_note(
                 element_path: selector.element_path.clone(),
             };
         }
-        return reanchor_by_quote(
-            excerpt_text.unwrap_or(&selector.label),
-            block,
-            &framing,
-            "the element changed and its text was not found",
-        );
+        return reanchor_element_quote(selector, excerpt_text, block, &framing, &names);
     }
     if let Some(selector) = &note.region_selector {
         if let Some(anchor) = reanchor_region(selector, source_revision, current_revision, block) {
