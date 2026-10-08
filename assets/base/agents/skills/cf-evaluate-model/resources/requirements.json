@@ -2051,6 +2051,12 @@
           ]
         },
         {
+          "path": ".agents/skills/cf-develop/SKILL.md",
+          "markers": [
+            "find the neighbour that already does the job and the last change of the same kind"
+          ]
+        },
+        {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
           "markers": [
             "The smallest coherent solution",

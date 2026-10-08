@@ -385,6 +385,15 @@ fn referenced_doctrine_keeps_every_moved_duty() {
             ),
         ],
     );
+    // TSK-255: the build step, which every task reads, asks for the
+    // neighbour and the last change of the same kind before adding.
+    assert_contains_all(
+        &root.join("assets/base/agents/skills/cf-develop/SKILL.md"),
+        &[(
+            "neighbour before adding",
+            "find the neighbour that already does the job and the last change of the same kind, and extend them or say why not",
+        )],
+    );
 }
 
 #[test]
@@ -1901,6 +1910,7 @@ fn issue_handling_keeps_its_steps_and_the_reviewer_checks_them() {
         &[
             ("intake reproduces", "reproduces the report with a failing test or one bounded probe"),
             ("intake severity", "says which one holds, or that none does"),
+            ("intake record home", "go in the PR Summary or the design note"),
             ("cause and class", "Name the mechanism with file:line and the defect class"),
             ("sibling sweep", "Search the tree for the class and list every site"),
             ("deferred sites tracked now", "each deferred site gets its own issue now, naming the class"),
