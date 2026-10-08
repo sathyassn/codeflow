@@ -45,6 +45,7 @@ libc.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+codeflow-fixture = { path = "../codeflow-fixture" }
 tempfile.workspace = true
 # The source scan in tests/stdin_pipe_rule.rs parses Rust; a test-only dependency.
 syn.workspace = true

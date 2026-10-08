@@ -78,12 +78,8 @@ a new ADR that supersedes it.
 ## Execute and integrate
 
 Follow the approved responsible-primary, executor, and cross-lineage reviewer
-assignment. The actual executor implements the smallest clear, idiomatic,
-durable change that satisfies the accepted behavior in both directions:
-unnecessary structure is rejected, and justified reuse, interfaces, failure
-behavior, and accepted edge cases are preserved. Apply the quality contract's
-typed-interface and runtime trust-boundary rule without forcing a new language,
-validator, wrapper layer, or stack migration.
+assignment. Build to the workflow discipline rules, "Write only what earns its
+keep".
 
 Each task owns its branch and worktree, and the work-start check in the
 worktree rules runs before the first mutation. For multiple tasks, load the
