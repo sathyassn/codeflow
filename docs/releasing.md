@@ -377,10 +377,10 @@ refused until the repair lands.
 
 | Typed repair rule | Detail |
 |---|---|
-| Coupled files | `Cargo.toml`, `Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`, `AGENTS.md`, `CLAUDE.md`, and the managed baselines of the last two with their manifest hashes, which `sync` writes together |
+| Coupled files | `Cargo.toml`, `Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`, `AGENTS.md`, `CLAUDE.md`, and the managed baselines of the last two, which `sync` writes together |
 | Configuration | Comes from the base, so a repair that changes `.release/config.json` is refused. The output names the invariant repaired |
 | Pending entries | A repair keeps every existing pending entry byte for byte. An edit waits for its own PR |
-| Baselines and manifest | When a repair touches a managed baseline or the manifest, each baseline carries the one managed stamp of the release version and the manifest records its exact hash |
+| Baselines and manifest | When a repair touches a managed baseline or the manifest, each baseline carries the one managed stamp of the release version. The manifest records no digest of it |
 | Still enforced | Published sections are held to their exact public source. Version non-reuse and the impact floors still apply |
 | Authority for history | The base is always judged by the configuration it carries. A PR never supplies the authority for the history it is judged against |
 | Older shape | One older shape is read: a bootstrap record without its comparison tree, as `main` carries |

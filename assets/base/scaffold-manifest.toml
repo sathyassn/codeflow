@@ -10,12 +10,13 @@
 #   src        Path of the shipped asset, relative to assets/base/.
 #   dest       Path written into the consumer project, relative to project root.
 #   ownership  File-ownership class (charter §4.3):
-#                "managed"        — fully managed. sha256 recorded in
+#                "managed"        — fully managed. Recorded in
 #                                   .codeflow/manifest.json, pristine copy kept
-#                                   under .codeflow/.baseline/<dest>. Unmodified
-#                                   files are replaced on update; user-modified
-#                                   files get a 3-way merge (base = baseline),
-#                                   conflicts produce <dest>.new + report.
+#                                   under .codeflow/.baseline/<dest>. Files
+#                                   equal to it are replaced on update;
+#                                   user-modified files get a 3-way merge
+#                                   (base = baseline), conflicts produce
+#                                   <dest>.new + report.
 #                "managed-region" — only a marked region (or a known key set for
 #                                   JSON) is codeflow's; everything else in the
 #                                   file is project-owned and never touched.
@@ -48,8 +49,9 @@
 #
 #   .codeflow/project.toml   — tier, scaffold_version, stack, areas, policy_armed,
 #                              git_hooks, permission_preset (user-owned, schema-versioned)
-#   .codeflow/manifest.json  — installed-file record: dest → {src, ownership, sha256}
-#   .codeflow/.baseline/     — pristine rendered copies (3-way merge bases)
+#   .codeflow/manifest.json  — installed-file record (schema 2): dest → {src, ownership, exec}
+#   .codeflow/.baseline/     — pristine rendered copies: what update compares with
+#                              and the 3-way merge bases
 #
 # ## Tier policy — enforcement is the floor; tiers scale project-management
 #

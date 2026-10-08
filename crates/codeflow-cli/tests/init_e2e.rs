@@ -1028,8 +1028,7 @@ fn rewind_to_whole_files(root: &Path) {
             }
             std::fs::write(root.join(&whole), &text).unwrap();
             std::fs::write(root.join(".codeflow/.baseline").join(&whole), &text).unwrap();
-            files.get_mut(&whole).expect("whole file record")["sha256"] =
-                serde_json::json!(codeflow_core::scaffold::sha256_hex(text.as_bytes()));
+            assert!(files.contains_key(&whole), "{whole} has a manifest record");
         }
         for rel in &added {
             std::fs::remove_file(root.join(rel)).unwrap();
@@ -1243,8 +1242,8 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
 const SPEC_TEMPLATE: &str = "project-management/templates/spec.md";
 
 /// Put the spec template back to how a release before TSK-135 shipped it,
-/// recorded as unmodified (file, baseline and manifest hash agree), and
-/// return the current shipped text.
+/// recorded as unmodified (the file and its baseline agree), and return the
+/// current shipped text.
 fn record_an_older_spec_template(root: &Path) -> String {
     let current = read(root, SPEC_TEMPLATE);
     let line = current
@@ -1254,15 +1253,6 @@ fn record_an_older_spec_template(root: &Path) -> String {
     let older = current.replace(&format!("{line}\n"), "");
     std::fs::write(root.join(SPEC_TEMPLATE), &older).unwrap();
     std::fs::write(root.join(".codeflow/.baseline").join(SPEC_TEMPLATE), &older).unwrap();
-    let mut manifest: serde_json::Value =
-        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
-    manifest["files"][SPEC_TEMPLATE]["sha256"] =
-        codeflow_core::scaffold::sha256_hex(older.as_bytes()).into();
-    std::fs::write(
-        root.join(".codeflow/manifest.json"),
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
     current
 }
 
@@ -1458,10 +1448,9 @@ fn tsk131_installed() -> Vec<(String, String)> {
     files
 }
 
-/// Record `older` as the unmodified install of `rel`: the file, its
-/// baseline and its manifest hash agree, as a release before TSK-131 left
-/// them. `None` removes the file and its records, as for a file that release
-/// did not ship.
+/// Record `older` as the unmodified install of `rel`: the file and its
+/// baseline agree, as a release before TSK-131 left them. `None` removes the
+/// file and its records, as for a file that release did not ship.
 fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     let mut manifest: serde_json::Value =
         serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
@@ -1470,8 +1459,7 @@ fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
     if let Some(text) = older {
         std::fs::write(root.join(rel), text).unwrap();
         std::fs::write(&baseline, text).unwrap();
-        files.get_mut(rel).expect("manifest record")["sha256"] =
-            codeflow_core::scaffold::sha256_hex(text.as_bytes()).into();
+        assert!(files.contains_key(rel), "{rel} has a manifest record");
     } else {
         std::fs::remove_file(root.join(rel)).unwrap();
         let _ = std::fs::remove_file(&baseline);
@@ -2590,15 +2578,6 @@ fn init_and_update_bring_the_plain_writing_rule_at_every_tier() {
             .expect("managed block")
             .to_string();
         std::fs::write(root.join(".codeflow/.baseline/AGENTS.md"), &block).unwrap();
-        let mut manifest: serde_json::Value =
-            serde_json::from_str(&read(&root, ".codeflow/manifest.json")).unwrap();
-        manifest["files"]["AGENTS.md"]["sha256"] =
-            codeflow_core::scaffold::sha256_hex(block.as_bytes()).into();
-        std::fs::write(
-            root.join(".codeflow/manifest.json"),
-            format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
-        )
-        .unwrap();
         let (head, tail) = writing.split_at(lead);
         let rest = &tail[tail.find("\n## ").unwrap() + 1..];
         record_as_installed(

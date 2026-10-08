@@ -621,6 +621,9 @@ catalog! {
     /// Managed regions edited by hand.
     DOCTOR_MANAGED_DRIFT = Step::Codeflow("codeflow update"),
         "move the hand edits outside the codeflow markers (or accept losing them), then `codeflow update` rewrites the blocks";
+    /// An installed manifest that does not read, so drift goes unchecked.
+    DOCTOR_MANIFEST_UNREADABLE = Step::Edit(".codeflow/manifest.json"),
+        "restore .codeflow/manifest.json from version control or repair its JSON; a schema_version newer than this binary reads needs a newer codeflow";
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";

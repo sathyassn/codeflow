@@ -18,6 +18,9 @@ pub const CODEFLOW_DIR: &str = ".codeflow";
 pub const PROJECT_TOML: &str = ".codeflow/project.toml";
 pub const INSTALLED_MANIFEST: &str = ".codeflow/manifest.json";
 pub const BASELINE_DIR: &str = ".codeflow/.baseline";
+/// The `.codeflow/manifest.json` schema this binary writes. Schema 2 drops
+/// the per-file `sha256`; schema 1 still reads.
+pub const INSTALLED_MANIFEST_SCHEMA: u32 = 2;
 
 /// How git hooks ended up wired at init.
 pub const GIT_HOOKS_WIRED: &str = "wired";
@@ -377,21 +380,39 @@ impl FeedbackConfig {
 
 /// One record in `.codeflow/manifest.json`.
 ///
-/// `sha256` semantics by ownership class:
-/// - `managed`: hash of the pristine shipped version (== the `.baseline/`
-///   copy), NOT of the on-disk file when it carries user edits from a 3-way
-///   merge — "file hash == recorded hash" means the user has not modified it;
-/// - `managed-region` (markdown/hash): hash of the codeflow block only;
-/// - `managed-region` (json): hash of the rendered shipped preset;
-/// - `user-owned`: hash of the rendered shipped default (the user file is
-///   never compared — only the defaults are diffed for new keys).
+/// The record names the shipped source, the ownership class and the exec
+/// bit. What `CodeFlow` installed is the pristine copy under
+/// `.codeflow/.baseline/<dest>`, and every decision compares bytes with it.
+///
+/// `sha256` is read only from a schema 1 manifest, where it hashed that
+/// pristine copy (for a markdown or hash region, the codeflow block). It is
+/// consulted only for an entry whose baseline is missing, and
+/// [`InstalledManifest::store`] drops it once that baseline exists (issue
+/// 119: two branches that change one managed file conflicted on it).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledFile {
     pub src: String,
     pub ownership: Ownership,
-    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     #[serde(default)]
     pub exec: bool,
+}
+
+impl InstalledFile {
+    /// Whether `current` is the pristine installed version: equal to the
+    /// baseline when there is one, else to the legacy schema 1 digest.
+    /// `None` when neither exists, so nothing proves the file unmodified.
+    #[must_use]
+    pub fn matches_pristine(&self, base: Option<&str>, current: &str) -> Option<bool> {
+        match base {
+            Some(base) => Some(base == current),
+            None => self
+                .sha256
+                .as_deref()
+                .map(|digest| digest == super::hash::sha256_hex(current.as_bytes())),
+        }
+    }
 }
 
 /// `.codeflow/manifest.json` — what codeflow installed and at which version.
@@ -407,7 +428,7 @@ impl InstalledManifest {
     #[must_use]
     pub fn new(scaffold_version: &str) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: INSTALLED_MANIFEST_SCHEMA,
             scaffold_version: scaffold_version.to_string(),
             files: std::collections::BTreeMap::new(),
         }
@@ -418,25 +439,51 @@ impl InstalledManifest {
         root.join(INSTALLED_MANIFEST)
     }
 
-    /// Loads the record, or an empty one when absent.
+    /// Loads the record, or an empty one when absent. A schema 1 record
+    /// reads as it is, its digests kept for the entries they still serve.
     ///
     /// # Errors
     ///
-    /// IO failures other than not-found, or invalid JSON.
+    /// IO failures other than not-found, invalid JSON, or a schema newer
+    /// than [`INSTALLED_MANIFEST_SCHEMA`].
     pub fn load_or_default(root: &Path, scaffold_version: &str) -> Result<Self, ScaffoldError> {
         let path = Self::path(root);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).map_err(ScaffoldError::from),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::new(scaffold_version)),
-            Err(e) => Err(ScaffoldError::io(&path, e)),
+        let manifest: Self = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str(&text)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::new(scaffold_version))
+            }
+            Err(e) => return Err(ScaffoldError::io(&path, e)),
+        };
+        if manifest.schema_version > INSTALLED_MANIFEST_SCHEMA {
+            return Err(ScaffoldError::InvalidState {
+                what: INSTALLED_MANIFEST.to_string(),
+                detail: format!(
+                    "schema_version {} is newer than this binary reads ({INSTALLED_MANIFEST_SCHEMA}); upgrade codeflow",
+                    manifest.schema_version
+                ),
+            });
         }
+        Ok(manifest)
     }
 
+    /// Writes the record as schema 2. A legacy digest is kept only while
+    /// its entry's baseline is missing, because it is then the one input
+    /// that can prove the file unmodified; once the baseline exists the
+    /// digest is dropped.
+    ///
     /// # Errors
     ///
     /// IO or serialization failures.
     pub fn store(&self, root: &Path) -> Result<(), ScaffoldError> {
-        let mut text = serde_json::to_string_pretty(self)?;
+        let mut stored = self.clone();
+        stored.schema_version = INSTALLED_MANIFEST_SCHEMA;
+        for (dest, file) in &mut stored.files {
+            if file.sha256.is_some() && Baseline::read(root, dest).is_some() {
+                file.sha256 = None;
+            }
+        }
+        let mut text = serde_json::to_string_pretty(&stored)?;
         text.push('\n');
         write_record(root, INSTALLED_MANIFEST, text.as_bytes())
     }

@@ -44,7 +44,7 @@ Five classes cover every managed path.
 | Managed-region | `AGENTS.md` / `CLAUDE.md` markers; `.gitignore` markers; `.claude/settings.json` codeflow keys | Only the marked region or codeflow-owned keys are rewritten; everything else is yours |
 | User-owned, schema-versioned | `.codeflow/policy.json`, `.codeflow/project.toml` | Only *new* keys are added with their defaults and reported; values you set are never mutated |
 | User-owned docs (write-once seeds) | all of `docs/`: product, architecture, capabilities, ADRs | Seeded once at init; `update` never mutates them, so they are yours to edit and own |
-| Engine-generated | `.codeflow/manifest.json`, `.codeflow/.baseline/`, `status` / `orient` views | Rewritten by the binary; never hand-edit |
+| Engine-generated | `.codeflow/manifest.json` (each installed file's source, ownership and exec bit), `.codeflow/.baseline/` (the pristine copy `update` compares with), `status` / `orient` views | Rewritten by the binary; never hand-edit. Commit the manifest and the baselines together: without its baseline, `update` proposes a `.new` file instead of replacing an unmodified one |
 
 Where project facts live:
 

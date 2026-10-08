@@ -1,7 +1,7 @@
 //! This repository is its own first consumer: `codeflow update` on it
 //! must be a no-op. When a shipped asset changes without a resync, update
-//! rewrites the committed `.codeflow/.baseline/` copy and the manifest hash
-//! (and, for a managed file, the live copy), and nothing else notices.
+//! rewrites the committed `.codeflow/.baseline/` copy (and, for a managed
+//! file, the live copy), and nothing else notices.
 //!
 //! This test replays update against a scratch copy of the files update reads
 //! and writes (`.codeflow/` plus every manifest destination), using the
@@ -145,14 +145,14 @@ fn codeflow_update_is_a_no_op_on_this_repository() {
     );
 }
 
-/// The installed-manifest invariant (TSK-135 review R4), checked apart from
-/// the no-op replay: every recorded digest is the digest of the committed
-/// pristine baseline for that path, never of a live copy the repository
-/// customized. The replay alone misses a stale digest when the live copy
-/// already differs from its baseline, because update then leaves the record
-/// as it is.
+/// The installed-manifest invariant (TSK-135 review R4, issue 119), checked
+/// apart from the no-op replay: every installed entry has a committed
+/// pristine baseline, which is what update compares a file with, and no
+/// record carries a digest. The replay alone misses a missing baseline when
+/// the live copy already differs from the shipped one, because update then
+/// proposes `<path>.new` beside it instead of failing.
 #[test]
-fn every_recorded_digest_is_its_pristine_baseline() {
+fn every_installed_entry_has_its_committed_baseline() {
     let root = repo_root();
     let manifest: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(root.join(".codeflow/manifest.json"))
@@ -162,21 +162,19 @@ fn every_recorded_digest_is_its_pristine_baseline() {
     let files = manifest["files"]
         .as_object()
         .expect("installed manifest lists its files");
+    let tracked: BTreeSet<String> = tracked_codeflow_paths(&root).into_iter().collect();
     let mut wrong = Vec::new();
     for (dest, record) in files {
-        let baseline = root.join(".codeflow/.baseline").join(dest);
-        let Ok(bytes) = std::fs::read(&baseline) else {
-            wrong.push(format!("{dest}: no committed baseline"));
-            continue;
-        };
-        let recorded = record["sha256"].as_str().unwrap_or_default();
-        let actual = codeflow_core::scaffold::sha256_hex(&bytes);
-        if recorded != actual {
-            wrong.push(format!("{dest}: recorded {recorded}, baseline {actual}"));
+        if record.get("sha256").is_some() {
+            wrong.push(format!("{dest}: the record carries a digest"));
+        }
+        let baseline = format!(".codeflow/.baseline/{dest}");
+        if !tracked.contains(&baseline) {
+            wrong.push(format!("{dest}: no committed baseline at {baseline}"));
         }
     }
     assert!(
         wrong.is_empty(),
-        "manifest digests that are not their baseline: {wrong:#?}"
+        "installed entries without a committed baseline: {wrong:#?}"
     );
 }

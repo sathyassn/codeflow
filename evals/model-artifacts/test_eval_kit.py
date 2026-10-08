@@ -3788,6 +3788,23 @@ class CleanupSafetyTests(unittest.TestCase):
                 manifest["files"]["AGENTS.md"]["sha256"],
             )
 
+    def test_scrub_never_adds_a_digest_to_a_schema_2_record(self) -> None:
+        # Issue 119: a schema 2 manifest records no digest; the scrub keeps it so.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / ".codeflow/.baseline").mkdir(parents=True)
+            agents = "| Intent | Use |\n| Mechanics | codeflow |\n"
+            (root / "AGENTS.md").write_text(agents, encoding="utf-8")
+            (root / ".codeflow/.baseline/AGENTS.md").write_text(agents, encoding="utf-8")
+            record = {"src": "AGENTS.md.tmpl", "ownership": "managed-region"}
+            eval_kit.write_json(
+                root / ".codeflow/manifest.json",
+                {"schema_version": 2, "files": {"AGENTS.md": dict(record)}},
+            )
+            eval_kit.remove_grader_material(root)
+            manifest = eval_kit.load_json(root / ".codeflow/manifest.json")
+            self.assertEqual(record, manifest["files"]["AGENTS.md"])
+
     def test_cleanup_requires_marker_and_exact_run_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             unmarked = Path(temp) / "unmarked"
