@@ -115,7 +115,7 @@ fn restore_paths(
         let rel = local_path(prefix, path)?;
         let text = portable(&rel)?;
         let absolute = root.join(&rel);
-        let absent = crate::absence::proven_absent(&absolute).map_err(|e| e.to_string())?;
+        let absent = crate::absence::cannot_exist(&absolute).map_err(|e| e.to_string())?;
         let directory = rel.as_os_str().is_empty()
             || (!absent
                 && absolute
@@ -366,6 +366,27 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    /// A restore path that cannot exist (beneath a file, or a name the
+    /// platform refuses) is no directory, so it reads as a file restore
+    /// instead of failing the check (PR 84 Windows run).
+    #[test]
+    fn a_restore_path_that_cannot_exist_is_no_directory() {
+        let (dir, _repo) = fixture();
+        std::fs::write(dir.path().join("src/a"), "local\n").unwrap();
+        let refused = if cfg!(windows) {
+            "a|b".to_string()
+        } else {
+            "x".repeat(4096)
+        };
+        for path in ["src/a/child".to_string(), refused] {
+            let intent = Intent::RestorePaths(vec![path.clone()]);
+            assert!(
+                inspect(dir.path(), None, &intent).unwrap().is_none(),
+                "{path:.20}"
+            );
+        }
     }
 
     #[test]
