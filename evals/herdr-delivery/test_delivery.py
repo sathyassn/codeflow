@@ -489,7 +489,9 @@ class StubDeliveryTests(unittest.TestCase):
         return seat, seat.deliver(*extra)
 
     def test_review_refuses_a_brief_narrower_than_the_unit(self) -> None:
-        # Issue 121: the 2026-10-08 round briefs, each sent for a unit review.
+        # Issue 121: the 2026-10-08 round briefs, each sent for a unit review;
+        # then every shape review rounds 2 to 4 found (TSK-260). A command is
+        # read only in a code span or fence; one outside them is refused.
         unit = "97ede7aa1...c5f54046f"
         for name, brief in (
             ("TSK-254 round 2", "Head is now f74718e25 (pushed, PR 114 draft). "
@@ -524,12 +526,6 @@ class StubDeliveryTests(unittest.TestCase):
             ("a log of another range", "Review `git diff 97ede7aa1...c5f54046f` "
              "and `git log f74718e25 c5f54046f`.\n"),
             # Grok round 4: narrowed briefs that still sent.
-            ("a pathspec after the closing backtick", "Review "
-             "`git diff 97ede7aa1...c5f54046f` -- crates/foo.rs.\n"),
-            ("a path after the closing backtick", "Review "
-             "`git diff 97ede7aa1...c5f54046f` crates/foo.rs.\n"),
-            ("a pathspec on the line after a code span", "Review "
-             "`git diff 97ede7aa1...c5f54046f`\n-- crates/foo.rs\n"),
             ("a bare directory after the pair", "Run git diff "
              "97ede7aa1...c5f54046f crates and reply.\n"),
             ("a bare docs directory after the pair", "Run git diff "
@@ -557,10 +553,6 @@ class StubDeliveryTests(unittest.TestCase):
              "97ede7aa1...c5f54046f :(exclude)docs and reply.\n"),
             ("a quoted glob after the pair", "Run git diff "
              "97ede7aa1...c5f54046f '*.rs' and reply.\n"),
-            ("a glob after the closing backtick", "Review "
-             "`git diff 97ede7aa1...c5f54046f` *.rs.\n"),
-            ("a pathspec magic after the closing backtick", "Review "
-             "`git diff 97ede7aa1...c5f54046f` :!docs.\n"),
             ("a glob in a fenced block", "Run:\n```\ngit diff "
              "97ede7aa1...c5f54046f *.rs\n```\n"),
             ("a magic pathspec in a fenced block", "Run:\n```sh\ngit diff "
@@ -578,6 +570,69 @@ class StubDeliveryTests(unittest.TestCase):
             # Review of PR 126: a continuation between git and the verb.
             ("a backslash between git and diff", "Run git \\\ndiff "
              "97ede7aa1...c5f54046f -- crates/foo.rs\n"),
+            # Grok round 6: a command is read only inside a span or fence.
+            ("two backslash lines between git and diff", "Run git \\\n\\\ndiff "
+             "97ede7aa1...c5f54046f -- crates/foo.rs\n"),
+            ("two backslash lines in a fence", "Run:\n```\ngit \\\n\\\ndiff "
+             "97ede7aa1...c5f54046f -- crates/foo.rs\n```\n"),
+            ("uppercase ids and a path in prose", "The unit is "
+             "97ede7aa1...c5f54046f. Run git diff 97EDE7AA1 C5F54046F -- "
+             "crates/foo.rs\n"),
+            ("uppercase ids and a path in a span", "The unit is "
+             "97ede7aa1...c5f54046f. Run `git diff 97EDE7AA1 C5F54046F -- "
+             "crates/foo.rs`\n"),
+            ("a count then a path in prose", "Run git diff "
+             "97ede7aa1...c5f54046f (189 files) -- crates/foo.rs\n"),
+            ("a count then a path in a span", "Review `git diff "
+             "97ede7aa1...c5f54046f (189 files) -- crates/foo.rs`\n"),
+            ("a count then a path on the next line", "Run git diff "
+             "97ede7aa1...c5f54046f (189 files)\n-- crates/foo.rs\n"),
+            ("a count then a glob on the next line", "Run git diff "
+             "97ede7aa1...c5f54046f (189 files)\n*.rs\n"),
+            ("git -C before diff in prose", "Review 97ede7aa1...c5f54046f with "
+             "git -C . diff in the worktree.\n"),
+            ("a log in prose", "Review 97ede7aa1...c5f54046f and read the git "
+             "log of that range.\n"),
+            ("a show in prose", "Review 97ede7aa1...c5f54046f; git show "
+             "c5f54046f has the last commit.\n"),
+            ("a difftool in prose", "Review 97ede7aa1...c5f54046f with git "
+             "difftool.\n"),
+            ("a global option and a display option in a span", "Review `git "
+             "--no-pager diff --stat 97ede7aa1...c5f54046f`.\n"),
+            ("-C in a span", "Review `git -C . diff 97ede7aa1...c5f54046f`.\n"),
+            ("a sha and a path in a show span", "Review "
+             "97ede7aa1...c5f54046f. Run `git show c5f54046f -- crates/foo.rs`\n"),
+            ("a sha in a show span", "Review 97ede7aa1...c5f54046f. Run "
+             "`git show c5f54046f`\n"),
+            ("remerge-diff with a sha", "Review 97ede7aa1...c5f54046f. Run "
+             "`git show --remerge-diff c5f54046f`\n"),
+            ("two commands joined by &&", "Review `git diff "
+             "97ede7aa1...c5f54046f && git diff HEAD -- crates/foo.rs`\n"),
+            ("a pipe", "Review `git diff 97ede7aa1...c5f54046f | grep foo`\n"),
+            ("a span split across lines", "Review `git diff "
+             "97ede7aa1...c5f54046f\n-- crates/foo.rs`\n"),
+            ("other commits in a span", "Review 97ede7aa1...c5f54046f. Run "
+             "`git diff f6f402804 f74718e25`\n"),
+            ("other commits in a fence", "Review 97ede7aa1...c5f54046f.\n```\n"
+             "git log f6f402804 f74718e25\n```\n"),
+            ("a fence line continued onto a path", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f \\\n  -- crates/foo.rs\n```\n"),
+            ("an unclosed fence with a path", "Run:\n```\ngit diff "
+             "97ede7aa1...c5f54046f crates/foo.rs\n"),
+            # The tokenizer's contract, flipped: a command outside a span.
+            ("an unquoted command", "Run git diff 97ede7aa1...c5f54046f and "
+             "read docs/delivery.md.\n"),
+            ("unquoted display options", "Run git diff --name-status "
+             "--no-color 97ede7aa1...c5f54046f and reply.\n"),
+            ("a bullet after an unquoted command", "Run git diff "
+             "97ede7aa1...c5f54046f\n* read docs/delivery.md\n"),
+            ("a link after an unquoted command", "Run git diff "
+             "97ede7aa1...c5f54046f\n[the rule](docs) says why.\n"),
+            ("prose words after an unquoted command", "Run git diff "
+             "97ede7aa1...c5f54046f from the worktree to see the unit, then "
+             "reply.\n"),
+            ("an unquoted backslash continuation", "Run git \\\ndiff --stat "
+             "97ede7aa1...c5f54046f\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 6, f"{name}: {done.stdout}{done.stderr}")
@@ -616,8 +671,6 @@ class StubDeliveryTests(unittest.TestCase):
              "whether a simpler shape exists.\n"),
             ("two shas in prose", "Review `git diff 97ede7aa1...c5f54046f`. "
              "Round 1 approved f6f402804; the head is now c5f54046f.\n"),
-            ("prose after the command", "Run git diff 97ede7aa1...c5f54046f and "
-             "read crates/codeflow-cli/src/cmd/ci.rs.\n"),
             ("prose after the closing backtick", "Review "
              "`git diff 97ede7aa1...c5f54046f` and read docs/delivery.md.\n"),
             ("punctuation after the closing backtick", "Review "
@@ -625,23 +678,54 @@ class StubDeliveryTests(unittest.TestCase):
             ("prose on the line after a code span", "Review "
              "`git diff 97ede7aa1...c5f54046f`\n\ndocs/delivery.md has the "
              "context.\n"),
-            ("a global option with the whole pair", "Review `git --no-pager "
-             "diff --stat 97ede7aa1...c5f54046f`, then `git -C . diff "
-             "-w 97ede7aa1...c5f54046f`.\n"),
-            ("display options", "Run git diff --name-status --no-color "
-             "97ede7aa1...c5f54046f and reply.\n"),
             ("a fenced block with the pair", "Run:\n```\ngit diff --stat "
              "97ede7aa1...c5f54046f\n```\nthen read docs/delivery.md.\n"),
-            ("a bullet on the line after the command", "Run git diff "
-             "97ede7aa1...c5f54046f\n* read docs/delivery.md\n"),
             ("bold text on the line after a code span", "Review "
              "`git diff 97ede7aa1...c5f54046f`\n**Scope:** the whole unit.\n"),
-            ("a link on the line after the command", "Run git diff "
-             "97ede7aa1...c5f54046f\n[the rule](docs) says why.\n"),
-            ("prose words after the pair", "Run git diff 97ede7aa1...c5f54046f "
-             "from the worktree to see the unit, then reply.\n"),
-            ("a backslash continuation with the whole pair", "Run git \\\ndiff "
-             "--stat 97ede7aa1...c5f54046f\n"),
+            ("extra files and questions", "Review `git diff "
+             "97ede7aa1...c5f54046f`. Is docs/delivery.md still true? Read "
+             "crates/codeflow-cli/src/cmd/ci.rs and say whether it holds.\n"),
+            ("a count after the closing backtick", "Review `git diff "
+             "97ede7aa1...c5f54046f` (189 files) and say whether it holds.\n"),
+            ("bold after the closing backtick", "Review `git diff "
+             "97ede7aa1...c5f54046f` **whole unit** and reply.\n"),
+            ("a fenced command", "Run:\n```sh\ngit diff --stat "
+             "97ede7aa1...c5f54046f\n```\nthen read docs/delivery.md.\n"),
+            ("a fenced command with a prompt", "Run:\n```\n$ git diff -w -U5 "
+             "97ede7aa1...c5f54046f\n```\n"),
+            ("a fence line continued with the whole pair", "Run:\n```\ngit "
+             "diff \\\n  --stat 97ede7aa1...c5f54046f\n```\n"),
+            ("an uppercase pair in a span", "The unit is 97ede7aa1...c5f54046f. "
+             "Review `git diff 97EDE7AA1...C5F54046F`.\n"),
+            ("two ids in a span beside the pair", "The unit is "
+             "97ede7aa1...c5f54046f. Review `git diff 97ede7aa1 c5f54046f` "
+             "and `git diff --stat 97EDE7AA1 C5F54046F`.\n"),
+            ("a two-dot log and a display log", "Review `git diff "
+             "97ede7aa1...c5f54046f`, `git log 97ede7aa1..c5f54046f` and "
+             "`git log --oneline 97ede7aa1...c5f54046f`.\n"),
+            ("remerge-diff", "Review `git diff 97ede7aa1...c5f54046f` and "
+             "`git show --remerge-diff` for the merge commit c5f54046f.\n"),
+            ("a bare diff", "The unit is 97ede7aa1...c5f54046f; `git diff` "
+             "with no arguments is the wrong command here.\n"),
+            ("a bare log", "The unit is 97ede7aa1...c5f54046f; read `git log` "
+             "for f6f402804.\n"),
+            ("a bare log with an option", "The unit is 97ede7aa1...c5f54046f; "
+             "`git log --oneline` lists it, and f74718e25 was approved.\n"),
+            ("a bare show with an option", "The unit is 97ede7aa1...c5f54046f; "
+             "`git show --remerge-diff` shows a merge. Round 1 approved "
+             "f6f402804.\n"),
+            ("git in prose that is no command", "The unit is "
+             "97ede7aa1...c5f54046f. Use git -C the worktree, and keep the "
+             "git history in mind.\n"),
+            ("the house form", "# TSK-260: whole-unit review at c5f54046f\n\n"
+             "Head is c5f54046f (pushed, PR 126 draft), base origin/main "
+             "97ede7aa1. Read-only.\n\nWhat to look at:\n"
+             "- the PR's full diff (`git diff 97ede7aa1...c5f54046f`), read in "
+             "full;\n- the matcher in assets/base/agents/skills/cf-herdr/"
+             "scripts/deliver.py: the joiner's rule (it joins only when the "
+             "merge completes a `git diff` or `git log` the line alone does "
+             "not);\n- the real briefs under .worktrees/*/target/"
+             "review-*-brief.md.\n\nVerdict: approved or changes requested.\n"),
         ):
             seat, done = self.review(brief, "--review", unit)
             self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
@@ -655,6 +739,58 @@ class StubDeliveryTests(unittest.TestCase):
         seat, done = self.review(brief, "--review", "4f8cdd3aa...390a50bb8")
         self.assertEqual(done.returncode, 0, f"{done.stdout}{done.stderr}")
         self.assertEqual(seat.sent("send-text")[0][3], brief)
+
+    def test_review_sends_a_count_in_parentheses_after_the_pair(self) -> None:
+        # Review of PR 126: the TSK-238 brief line, a file count after the span.
+        brief = ("Review `git diff 4f8cdd3aa...390a50bb8` (189 files) and "
+                 "say whether it holds.\n")
+        seat, done = self.review(brief, "--review", "4f8cdd3aa...390a50bb8")
+        self.assertEqual(done.returncode, 0, f"{done.stdout}{done.stderr}")
+        self.assertEqual(seat.sent("send-text")[0][3], brief)
+
+    def test_review_pins_what_prose_outside_a_span_can_still_say(self) -> None:
+        # Out of scope by decision (TSK-260, scanner decision of 2026-10-08):
+        # a command is what sits in backticks or a fence. Text outside them is
+        # prose and is never read as part of a command, so a path written after
+        # a closing backtick sends. The seat reads those words as words, and
+        # the discipline file, the `head:` and `widened:` lines and the harvest
+        # step govern them. These cases keep the next reviewer measuring
+        # against that line; changing one is a decision, not a fix.
+        unit = "97ede7aa1...c5f54046f"
+        for name, brief in (
+            ("a pathspec after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` -- crates/foo.rs.\n"),
+            ("a pathspec after a count", "Review "
+             "`git diff 97ede7aa1...c5f54046f` (189 files) -- crates/foo.rs.\n"),
+            ("a pathspec on the line after the span", "Review "
+             "`git diff 97ede7aa1...c5f54046f`\n-- crates/foo.rs\n"),
+            ("a path after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` crates/foo.rs.\n"),
+            ("a glob after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` *.rs.\n"),
+            ("a magic pathspec after the closing backtick", "Review "
+             "`git diff 97ede7aa1...c5f54046f` :!docs.\n"),
+        ):
+            seat, done = self.review(brief, "--review", unit)
+            self.assertEqual(done.returncode, 0, f"{name}: {done.stdout}{done.stderr}")
+            self.assertEqual(seat.sent("send-text")[0][3], brief, name)
+
+    def test_review_refusals_name_the_span_form(self) -> None:
+        unit = "97ede7aa1...c5f54046f"
+        _, done = self.review("Run git diff 97ede7aa1...c5f54046f -- crates/foo.rs\n",
+                              "--review", unit)
+        self.assertEqual(done.returncode, 6, done.stderr)
+        self.assertIn("writes a git diff outside a code span", done.stderr)
+        self.assertIn("git diff <base>...<head> with display options only",
+                      done.stderr)
+        self.assertIn(".codeflow/rules/workflow-discipline.md", done.stderr)
+        _, done = self.review("Run `git diff 97ede7aa1...c5f54046f -- crates/foo.rs`\n",
+                              "--review", unit)
+        self.assertEqual(done.returncode, 6, done.stderr)
+        self.assertIn("exactly git <verb> [display options] <base>...<head>",
+                      done.stderr)
+        self.assertIn("re-brief for 97ede7aa1...c5f54046f", done.stderr)
+        self.assertIn(".codeflow/rules/workflow-discipline.md", done.stderr)
 
     def test_review_flag_takes_a_full_range(self) -> None:
         for bad in ("97ede7aa1..c5f54046f", "main...HEAD", "97ede7a"):

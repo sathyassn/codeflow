@@ -24,21 +24,15 @@ fold to the screen, Enter; the lifecycle's `accepted` wait stays the
 caller's next step.
 
 --review <base>...<head> (a unit review): before anything is sent, the
-brief must name that full range, and every commit range it names (`git
-diff` or `git log` with two commits, or a dotted pair) must be that pair.
-A `git diff` or `git log` narrowed in any other way is refused too: a path,
-a glob (`*.rs`), a magic pathspec (`:!docs`, `:(exclude)docs`), `--` or a
-bare name before or after the pair (after the closing backtick, in a fenced
-block, on the next line, or after a backslash continuation), git global
-options before the verb, and any dash option outside the display set
-(`--stat`, `--name-only`, `-U`, `-w` and the like). A blank line ends the
-command, except that a `--` after a blank line is still refused. A trailing
-backslash joins the next line, including one between `git` and the verb.
-Outside a code span or fence, any word after the pair is read as a path
-unless sentence punctuation, a bare number (a count such as "(189 files)")
-or a plain prose word (`and`, `then`, `read`, `reply`) ends the command
-first, so "and read <file>" still sends. A review is one holistic pass over
-the whole unit at one head.
+brief must name that full range, every dotted pair it names must be that
+pair, and every git diff, difftool, log or show must sit in a code span or
+fenced block as exactly `git <verb> [display options] <base>...<head>` (the
+pair dotted or as two tokens, any case; a path, `--`, a glob, a magic
+pathspec, another revision or any other option is refused). A command
+outside a span is refused with the span form named; text outside a span or
+fence is prose and is never read as part of a command. A backslash joins the
+next line before anything is read. A review is one holistic pass over the
+whole unit at one head.
 
 Exit codes: 0 started or sent; 1 herdr error; 2 usage or oversize;
 3 seat folder missing; 4 turn not confirmed; 5 seat busy or unknown;
@@ -62,11 +56,23 @@ STARTED = {"working", "blocked"}
 BUSY = STARTED | {"unknown"}
 SHA = r"[0-9a-f]{7,40}"
 PAIR = re.compile(rf"^({SHA})\.\.\.({SHA})$")
-DOTTED = re.compile(rf"(?<![0-9A-Za-z])({SHA})(\.\.\.?)({SHA})(?![0-9A-Za-z])")
-COMMAND = re.compile(
-    r"\bgit(?:\s+(?:-[Cc]\s+\S+"
-    r"|--(?:git-dir|work-tree|namespace|super-prefix|config-env|exec-path)\s+\S+"
-    r"|--[\w-]+(?:=\S+)?|-[A-Za-z]))*\s+(?P<verb>diff|log)\b")
+HEX = r"[0-9a-fA-F]{7,40}"
+DOTTED = re.compile(rf"(?<![0-9A-Za-z])({HEX})(\.\.\.?)({HEX})(?![0-9A-Za-z])")
+ONE_PAIR = re.compile(rf"({HEX})(\.\.\.?)({HEX})")
+ONE_REV = re.compile(HEX)
+# A git command that shows a diff, a log or a commit, with any global options
+# between `git` and the verb.
+MENTION = re.compile(
+    r"\bgit(?:\s+-\S*(?:\s+[^-\s]\S*)?)*\s+(diff|difftool|log|show)\b", re.I)
+# Options that change how a diff, log or show is shown and select no commits or
+# paths; every other dash option can narrow the unit and is refused.
+DISPLAY = re.compile(
+    r"-U\d*|--unified=\d+|-w|-b|--ignore-all-space|--ignore-space-change|-p|--patch"
+    r"|--stat(=\S*)?|--shortstat|--numstat|--name-only|--name-status|--summary"
+    r"|--no-color|--color(=\S*)?|--oneline|--minimal|--patience|--histogram"
+    r"|--no-ext-diff|--no-pager|--remerge-diff|-M\d*%?|--find-renames(=\S*)?")
+FENCE = "```"
+CUT = "\0"  # stands where a span or fence was cut out, so prose cannot join across it
 DISCIPLINE = ".codeflow/rules/workflow-discipline.md, Review verdicts"
 
 
@@ -113,194 +119,10 @@ def started(pane: str, seq: int, bound: float) -> str | None:
 
 
 def same(a: str, b: str) -> bool:
-    """Two abbreviations of one commit: either is a prefix of the other."""
+    """Two abbreviations of one commit: either is a prefix of the other, in
+    any case."""
+    a, b = a.lower(), b.lower()
     return a.startswith(b) or b.startswith(a)
-
-
-def is_path(token: str) -> bool:
-    return "/" in token or bool(re.fullmatch(r"[\w-]+\.[\w.-]+", token))
-
-
-def is_pathspec(token: str) -> bool:
-    """A path, a glob (`*.rs`) or a magic pathspec (`:!docs`, `:(exclude)x`),
-    with one layer of matching quotes removed."""
-    if len(token) > 1 and token[0] == token[-1] and token[0] in "'\"":
-        token = token[1:-1]
-    return (is_path(token) or bool(re.search(r"[*?\[]", token))
-            or bool(re.match(r":[!^/(]", token)))
-
-
-def starts_pathspec(token: str) -> bool:
-    """`is_pathspec` for the first word of a line, where a markdown bullet,
-    emphasis or link is not a glob."""
-    token = token.rstrip(TRAILING)
-    if re.fullmatch(r"[*_]+(\w[\w:'-]*[*_]*)?|\[.*", token) and not is_path(token):
-        return False
-    return is_pathspec(token)
-
-
-REVISION = re.compile(
-    rf"{SHA}|(?:HEAD|@|FETCH_HEAD|ORIG_HEAD)(?:[~^][0-9]*)*|{SHA}(?:[~^][0-9]*)+|\S+\.\.\.?\S+")
-TRAILING = ".,;:)"
-# Options that change how a diff or log is shown and select no commits or
-# paths; every other dash option can narrow the unit and is refused.
-DISPLAY = re.compile(
-    r"-U\d*|--unified=\d+|-w|-b|--ignore-all-space|--ignore-space-change|-p|--patch"
-    r"|--stat(=\S*)?|--shortstat|--numstat|--name-only|--name-status|--summary"
-    r"|--no-color|--color(=\S*)?|--oneline|--minimal|--patience|--histogram"
-    r"|--no-ext-diff|--no-pager|-M\d*%?|--find-renames(=\S*)?")
-OPTION = re.compile(r"-{1,2}[A-Za-z0-9]")
-# After the revisions, a word outside this list is read as a path (`Makefile`,
-# `LICENSE`): a pathspec can be any name, so only these end the command.
-PROSE = frozenset("""
-    a about after again against all also an and any are as at be because before
-    but by can carefully check compare completely confirm consider could do
-    does each either end every examine find finally first for from fully get
-    give has have here how if in include including inspect into is it its just
-    keep last list look make may mention must name next no nor not note now of
-    on once only open or our plus post read record reply report return review
-    run say see send shows show since skip so start state stop summarise
-    summarize take tell than that the their then there these they this those
-    thoroughly through to treat until up use using verify wait was we what when
-    where whether which while whole will with without would write yet you your
-""".split())
-# Top-level names a bare word can mean when the brief runs from outside the
-# repository; a word that exists in the working folder counts too.
-DIRECTORIES = {"src", "crates", "docs", "assets", "lib", "tests", "test", "evals",
-               "scripts", "app", "apps", "packages", "bin", "cmd", "internal",
-               "pkg", "include", "config", "examples", "tools", "vendor"}
-
-
-def is_bare_path(token: str) -> bool:
-    return token in DIRECTORIES or (bool(re.fullmatch(r"[\w.-]+", token))
-                                    and os.path.exists(token))
-
-
-def invocation(tokens: list[str], in_span: bool,
-               seen: bool = False) -> tuple[list[str], bool, bool]:
-    """The revisions one `git diff` or `git log` names, whether a path, a
-    glob, a magic pathspec, `--`, `--relative`, a bare name or an option
-    outside the display set narrows it, and whether it ran to the end of its
-    text. In a code span or fence every extra token narrows. Outside one,
-    once a revision is named (`seen`, or one here), the command ends only at
-    sentence punctuation or a word in PROSE."""
-    revisions: list[str] = []
-    narrowed = False
-    for raw in tokens:
-        token = raw if in_span else raw.rstrip(TRAILING)
-        if token == "\\":
-            continue
-        if token == "":
-            if in_span or not raw:
-                continue
-            return revisions, narrowed, False
-        if token == "--" or token.startswith("--relative"):
-            return revisions, True, False
-        if token.startswith("-") and OPTION.match(token):
-            if not DISPLAY.fullmatch(token):
-                narrowed = True
-        elif token.startswith("-"):
-            if not in_span:
-                return revisions, narrowed, False
-        elif REVISION.fullmatch(token):
-            revisions.append(token)
-        elif in_span or is_pathspec(token) or is_bare_path(token):
-            narrowed = True
-        elif re.fullmatch(r"\(*\d+\)*", token):
-            return revisions, narrowed, False
-        elif (seen or revisions) and token.lower().lstrip("(\"'") not in PROSE:
-            narrowed = True
-        else:
-            return revisions, narrowed, False
-        if not in_span and raw != token:
-            return revisions, narrowed, False
-    return revisions, narrowed, True
-
-
-def joined(lines: list[str]) -> list[str]:
-    """The lines with a trailing backslash joined onto the next line when the
-    join completes a `git diff` or `git log` that the line alone does not
-    (`git \\` then `diff A...B -- path`)."""
-    out: list[str] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        index += 1
-        while line.rstrip().endswith("\\") and index < len(lines):
-            merged = line.rstrip()[:-1] + " " + lines[index]
-            if len(list(COMMAND.finditer(merged))) <= len(list(COMMAND.finditer(line))):
-                break
-            line = merged
-            index += 1
-        out.append(line)
-    return out
-
-
-def commands(brief: str) -> list[tuple[str, list[str], bool]]:
-    """Every `git diff` or `git log` the brief names, as its verb, its
-    revisions and whether it is narrowed. A line in a fenced block is read
-    like a code span. Text after a closing backtick, a backslash
-    continuation, and a `--` pathspec on a later line (past blank lines)
-    belong to the command; so does a path, glob or magic pathspec at the
-    start of the next line."""
-    found = []
-    lines = joined(brief.splitlines())
-    fenced = False
-    for number, line in enumerate(lines):
-        if line.lstrip().startswith("```") and line.count("```") == 1:
-            fenced = not fenced
-            continue
-        spans = [] if fenced else [(m.start(), m.end())
-                                   for m in re.finditer(r"`[^`]*`", line)]
-        for command in COMMAND.finditer(line):
-            close = next((end - 1 for start, end in spans
-                          if start < command.start() < end), None)
-            in_span = fenced or close is not None
-            tokens = line[command.end():close].split()
-            revisions, narrowed, ran_out = invocation(tokens, in_span)
-            if close is not None:
-                rest = line[close + 1:]
-                tokens = []
-                if rest.strip() and rest[:1].isspace():
-                    tokens = rest.split()
-                    more, cut, ran_out = invocation(tokens, False, bool(revisions))
-                    revisions += more
-                    narrowed = narrowed or cut
-                elif rest.strip():
-                    ran_out = False
-            cursor, skipped = number, False
-            while ran_out and not narrowed:
-                cursor += 1
-                if cursor >= len(lines):
-                    break
-                following = lines[cursor].split()
-                if not following or following == ["\\"]:
-                    skipped = True
-                    tokens = following or tokens
-                    continue
-                if tokens and tokens[-1].endswith("\\"):
-                    more, narrowed, ran_out = invocation(following, fenced,
-                                                         bool(revisions))
-                    revisions += more
-                    tokens, skipped = following, False
-                    continue
-                first = following[0]
-                narrowed = (first == "--" or first.startswith("--relative")
-                            or (not skipped and starts_pathspec(first)))
-                break
-            found.append((command.group("verb"), revisions, narrowed))
-    return found
-
-
-def the_pair(revisions: list[str], base: str, head: str) -> bool:
-    if len(revisions) == 1:
-        dotted = DOTTED.fullmatch(revisions[0])
-        ends = (dotted.group(1), dotted.group(3)) if dotted else None
-    elif len(revisions) == 2 and all(re.fullmatch(SHA, r) for r in revisions):
-        ends = (revisions[0], revisions[1])
-    else:
-        ends = None
-    return ends is not None and same(ends[0], base) and same(ends[1], head)
 
 
 def narrower(shown: str, unit: str) -> Stop:
@@ -311,26 +133,92 @@ def narrower(shown: str, unit: str) -> Stop:
                    f"re-brief for {unit}; nothing was sent")
 
 
+def carve(text: str) -> tuple[list[str], str]:
+    """Split a brief into command texts and prose. A fenced block (a line
+    starting with three backticks to the next such line) is cut out and each
+    of its lines is a command line; a code span (backticks paired in document
+    order, newlines allowed) is cut out and is a command span; what remains
+    is prose."""
+    commands: list[str] = []
+    prose: list[str] = []
+    fenced = False
+    for line in text.split("\n"):
+        if line.lstrip().startswith(FENCE) and (fenced or line.count(FENCE) == 1):
+            fenced = not fenced
+            if not fenced:
+                prose.append(CUT)
+        elif fenced:
+            commands.append(line)
+        else:
+            prose.append(line)
+    rest = "\n".join(prose)
+    commands += re.findall(r"`([^`]*)`", rest)
+    return commands, re.sub(r"`[^`]*`", CUT, rest)
+
+
+def fits(tokens: list[str], base: str, head: str, verb: str, unit: str) -> bool:
+    """Whether the tokens after `git VERB` are `DISPLAY* (PAIR DISPLAY*)?`,
+    PAIR being `X...Y`, `X..Y` or two tokens `X Y`. A pair of other commits is
+    refused as narrower than the unit."""
+    def display(index: int) -> int:
+        while index < len(tokens) and DISPLAY.fullmatch(tokens[index]):
+            index += 1
+        return index
+
+    index = display(0)
+    one = ONE_PAIR.fullmatch(tokens[index]) if index < len(tokens) else None
+    two = (index + 1 < len(tokens) and ONE_REV.fullmatch(tokens[index])
+           and ONE_REV.fullmatch(tokens[index + 1]))
+    if one or two:
+        first, second = ((one.group(1), one.group(3)) if one
+                         else (tokens[index], tokens[index + 1]))
+        if not (same(first, base) and same(second, head)):
+            raise narrower(f"{first}..{second} in a git {verb}", unit)
+        index = display(index + (1 if one else 2))
+    return index == len(tokens)
+
+
 def check_review(brief: str, unit: str, path: str) -> None:
     base, head = PAIR.match(unit).groups()
+    text = re.sub(r"\\[ \t]*\n[ \t]*", " ", brief.replace("\r\n", "\n"))
     named = any(same(m.group(1), base) and same(m.group(3), head)
-                for m in DOTTED.finditer(brief) if m.group(2) == "...")
+                for m in DOTTED.finditer(text) if m.group(2) == "...")
     if not named:
         raise Stop(6, f"review brief {path} does not name its full range "
                       f"{unit}; a review is one holistic pass over the whole "
                       f"unit at one head ({DISCIPLINE}); nothing was sent")
-    for dotted in DOTTED.finditer(brief):
+    for dotted in DOTTED.finditer(text):
         if not (same(dotted.group(1), base) and same(dotted.group(3), head)):
             raise narrower(f"{dotted.group(1)}..{dotted.group(3)}", unit)
-    for verb, revisions, narrowed in commands(brief):
-        if narrowed:
-            raise narrower(f"a git {verb} restricted by a path or an option "
-                           "(a word after the revisions that is not plain "
-                           "prose counts as a path)", unit)
-        if revisions and not the_pair(revisions, base, head):
-            shown = ("..".join(revisions) if len(revisions) == 2
-                     else " ".join(revisions))
-            raise narrower(f"{shown} in a git {verb}", unit)
+    commands, prose = carve(text)
+    outside = MENTION.search(prose)
+    if outside:
+        verb = outside.group(1).lower()
+        shown = " ".join(prose[outside.start():outside.start() + 60]
+                         .split(CUT)[0].split())
+        raise Stop(6, f"review brief {path} writes a git {verb} outside a code "
+                      f"span ({shown}); a command is read only in a code span "
+                      f"or fenced block, as git {verb} <base>...<head> with "
+                      "display options only; a review is one holistic pass "
+                      f"over the whole unit at one head ({DISCIPLINE}); "
+                      "nothing was sent")
+    for command in commands:
+        found = MENTION.search(command)
+        if found is None:
+            continue
+        verb = found.group(1).lower()
+        tokens = command[found.start():].split()
+        if tokens[1].lower() != verb or not fits(tokens[2:], base, head, verb, unit):
+            span = " ".join(tokens)
+            span = span if len(span) <= 80 else span[:77] + "..."
+            raise Stop(6, f"review brief {path} writes `{span}`; a git diff, "
+                          "difftool, log or show in a code span or fence is "
+                          "exactly git <verb> [display options] "
+                          "<base>...<head>, so a path, --, a glob, a magic "
+                          "pathspec, another revision, a global or a "
+                          "non-display option is refused; a review is one "
+                          "holistic pass over the whole unit at one head "
+                          f"({DISCIPLINE}); re-brief for {unit}; nothing was sent")
 
 
 def deliver(args: argparse.Namespace) -> str:
