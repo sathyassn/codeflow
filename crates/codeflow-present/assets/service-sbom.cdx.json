@@ -27,23 +27,23 @@
     },
     {
       "type": "file",
-      "bom-ref": "service/app-SLDKUQGB.js.br",
-      "name": "service/app-SLDKUQGB.js.br",
+      "bom-ref": "service/app-XSOKGUIO.js.br",
+      "name": "service/app-XSOKGUIO.js.br",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "2bf6147b602cbece5af253ba8c56d6b3260f360feae55cccdbbf80a21aa86987"
+          "content": "9efc6adba3255e166f99b749bd153edfc1b45423095b6f4620559884ef72b28d"
         }
       ]
     },
     {
       "type": "file",
-      "bom-ref": "service/app-SLDKUQGB.js.gz",
-      "name": "service/app-SLDKUQGB.js.gz",
+      "bom-ref": "service/app-XSOKGUIO.js.gz",
+      "name": "service/app-XSOKGUIO.js.gz",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "b1cc4d2d657d9bb9a1ecaa017f6ae1b6097adf3f098eb93f649b1aeaa36213fd"
+          "content": "9425455d79d17548eb4dca3e883beafa7c2ed736070ae66f382b6a5605170611"
         }
       ]
     },

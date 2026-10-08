@@ -453,6 +453,123 @@ fn reanchor_cases_reach_their_pinned_states() {
     );
 }
 
+#[test]
+fn every_tsk259_document_fixture_opens() {
+    let entries = index_entries("TSK-259");
+    assert_eq!(entries.len(), 10);
+    for entry in entries {
+        let file = entry["file"].as_str().unwrap();
+        if file.ends_with("unnamed-parts.json") {
+            continue;
+        }
+        assert_eq!(entry["valid"], true, "{file}");
+        assert!(
+            matches!(
+                parse_document(&fixture_bytes(file)),
+                Ok(ParsedDocument::Supported(_))
+            ),
+            "{file}"
+        );
+    }
+}
+
+/// A note from `reanchor/unnamed-parts.json`, built against its source
+/// revision: an element or entity note carries the block digest the store
+/// computes, a text note its selector.
+fn unnamed_part_note(source: &PresentationDocument, fixture: &Value) -> FeedbackNote {
+    let block_id = fixture["block_id"].as_str().unwrap();
+    let block = find(source, block_id);
+    let digest = block_digest(block);
+    let mut built = note(block_id, &block.review_label());
+    let label = fixture["label"].as_str().unwrap_or_default().to_string();
+    if let Some(selector) = fixture.get("selector") {
+        built.selector = Some(serde_json::from_value(selector.clone()).unwrap());
+    } else if let Some(entity_id) = fixture["entity_id"].as_str() {
+        built.element_selector = Some(crate::state::ElementSelector {
+            element_path: "svg:nth-of-type(1) > g:nth-of-type(2)".to_string(),
+            tag_name: "g".to_string(),
+            label: label.clone(),
+            block_digest: digest.clone(),
+        });
+        built.entity_selector = Some(crate::state::EntitySelector {
+            entity_id: entity_id.to_string(),
+            label,
+            block_digest: digest,
+            variant: None,
+            crop_box: None,
+            crop_check: None,
+        });
+    } else {
+        built.element_selector = Some(crate::state::ElementSelector {
+            element_path: "figure:nth-of-type(1) > svg:nth-of-type(1) > path:nth-of-type(4)"
+                .to_string(),
+            tag_name: fixture["tag_name"].as_str().unwrap().to_string(),
+            label,
+            block_digest: digest,
+        });
+    }
+    built.excerpt = fixture["excerpt_text"]
+        .as_str()
+        .map(|text| crate::state::FeedbackExcerpt {
+            text: Some(text.to_string()),
+            image: None,
+        });
+    built
+}
+
+/// SPC-014 B1 step 2 as TSK-259 changed it (`docs/architecture/present.md`):
+/// an unnamed part is never re-anchored onto its stage title, while drawn
+/// text, a frame title and a text note that quote the title still are.
+#[test]
+fn an_unnamed_part_falls_back_to_the_block_and_never_onto_the_title() {
+    let cases = fixture_json("reanchor/unnamed-parts.json");
+    let mut failures = Vec::new();
+    for case in cases["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let source = supported(case["source"].as_str().unwrap());
+        let target = supported(case["target"].as_str().unwrap());
+        let (_temp, store) = store();
+        let session = store
+            .create(ParsedDocument::Supported(source.clone()))
+            .unwrap();
+        store
+            .append_feedback(FeedbackEnvelope {
+                event_id: Uuid::new_v4(),
+                session_id: session.id,
+                revision: 1,
+                actor: "operator".to_string(),
+                verdict: FeedbackVerdict::ApproveWithNotes,
+                instruction: None,
+                notes: vec![unnamed_part_note(&source, &case["note"])],
+                created_at_unix: 0,
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        store
+            .update_document(session.id, ParsedDocument::Supported(target))
+            .unwrap();
+        let anchor = store.feedback_snapshot(session.id).unwrap().items[0].notes[0]
+            .anchor
+            .clone();
+        let expect = &case["expect"];
+        let wanted = match expect["state"].as_str().unwrap() {
+            "block_fallback" => FeedbackAnchor::BlockFallback {
+                block_id: case["note"]["block_id"].as_str().unwrap().to_string(),
+                reason: expect["reason"].as_str().unwrap().to_string(),
+            },
+            "reanchored" => FeedbackAnchor::Reanchored {
+                start_utf16: u32::try_from(expect["start_utf16"].as_u64().unwrap()).unwrap(),
+                end_utf16: u32::try_from(expect["end_utf16"].as_u64().unwrap()).unwrap(),
+                changed: expect["changed"].as_bool().unwrap(),
+            },
+            other => panic!("{name}: unknown state {other}"),
+        };
+        if anchor != wanted {
+            failures.push(format!("{name}: {anchor:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// Property: entity ids and labels come from the declaration's content and
 /// role, never from draw order (SPC-014 B2), over every rotation and the
 /// reversal of each composition's draw list.
