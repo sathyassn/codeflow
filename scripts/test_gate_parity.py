@@ -379,8 +379,8 @@ class GatePartControls(unittest.TestCase):
             "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
                                   self.GATE_STEP_EXACT),
             "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step), self.GATE_STEP_EXACT),
-            "job continue-on-error": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                       "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
+            "job continue-on-error": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                       "    timeout-minutes: 45\n    continue-on-error: true\n    strategy:\n"),
                                       self.OWN_KEYS),
         })
 
@@ -392,8 +392,8 @@ class GatePartControls(unittest.TestCase):
             "spaced if": (WORKFLOW.replace(step, step + "        if : false\n"), self.GATE_STEP_EXACT),
             "quoted continue-on-error": (WORKFLOW.replace(step, step + "        'continue-on-error': true\n"),
                                          self.GATE_STEP_EXACT),
-            "quoted job key": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                "    runs-on: ubuntu-24.04\n    'continue-on-error': true\n    strategy:\n"),
+            "quoted job key": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                "    timeout-minutes: 45\n    'continue-on-error': true\n    strategy:\n"),
                                self.OWN_KEYS),
             "escaped BASH_ENV": (WORKFLOW.replace("\njobs:\n", "\nenv:\n  \"BASH\\u005fENV\": ./skip.sh\n\njobs:\n"),
                                  self.TOP_LEVEL),
@@ -435,8 +435,8 @@ class GatePartControls(unittest.TestCase):
             "workflow defaults": (WORKFLOW.replace(top, "\ndefaults:\n  run:\n    shell: bash -n {0}\n" + top),
                                   self.TOP_LEVEL),
             "workflow env": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), self.TOP_LEVEL),
-            "gates job defaults": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                    "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n"
+            "gates job defaults": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                    "    timeout-minutes: 45\n    defaults:\n      run:\n"
                                                     "        shell: bash -n {0}\n    strategy:\n"),
                                    self.OWN_KEYS),
             "merge key": (WORKFLOW.replace("        shell: bash\n        env:\n          LLVM",
@@ -480,6 +480,70 @@ class SharedInstallControls(unittest.TestCase):
         problems = parity.shared_install_problems(mutated(unordered))
         self.assertTrue(any("'docs-portal'" in p and "does not require 'docs-portal-deps'" in p for p in problems),
                         problems)
+
+
+class TimeoutAndPlaywrightControls(unittest.TestCase):
+    """TSK-254: every job has its own timeout, and only the present part
+    installs Playwright, with a bounded, retried system-library install."""
+
+    INSTALL_TIMEOUT = "        if: matrix.part == 'present'\n        timeout-minutes: 25\n"
+    BOUNDED = 'sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit'
+
+    def problems(self, workflow: str) -> list[str]:
+        return parity.timeout_problems(workflow) + parity.playwright_problems(workflow)
+
+    def assert_problem(self, workflow: str, *needles: str) -> None:
+        self.assertNotEqual(workflow, WORKFLOW, "the control must change the workflow")
+        problems = self.problems(workflow)
+        self.assertTrue(any(all(n in p for n in needles) for p in problems),
+                        f"{needles} not in {problems}")
+
+    def test_the_committed_workflow_bounds_every_job_and_confines_playwright(self):
+        self.assertEqual(self.problems(WORKFLOW), [])
+        jobs = parity.jobs_section(WORKFLOW)
+        self.assertIn("gates", jobs)
+        self.assertNotIn("pull_request", jobs, "trigger keys are not jobs")
+
+    def test_a_job_without_its_own_whole_minute_timeout_is_refused(self):
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        self.assertEqual(WORKFLOW.count(journeys), 1)
+        self.assert_problem(WORKFLOW.replace(journeys, "    runs-on: windows-latest\n"),
+                            "job 'windows-journeys'", "timeout-minutes")
+        for value in ("0", "${{ 360 }}", "'30'", "30.5"):
+            with self.subTest(value=value):
+                self.assert_problem(WORKFLOW.replace(journeys, f"    runs-on: windows-latest\n    timeout-minutes: {value}\n"),
+                                    "job 'windows-journeys'")
+        self.assert_problem(WORKFLOW.replace(journeys, journeys + "    timeout-minutes: 15\n"),
+                            "job 'windows-journeys'", "exactly one")
+
+    def test_a_playwright_step_on_every_part_is_refused(self):
+        cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
+        self.assertEqual(WORKFLOW.count(cache), 1)
+        self.assert_problem(WORKFLOW.replace(cache, cache.replace("        if: matrix.part == 'present'\n", "")),
+                            "touches Playwright on every part")
+        self.assertEqual(WORKFLOW.count(self.INSTALL_TIMEOUT), 1)
+        self.assert_problem(WORKFLOW.replace(self.INSTALL_TIMEOUT, "        timeout-minutes: 25\n"),
+                            "touches Playwright on every part")
+
+    def test_an_unbounded_or_single_attempt_install_is_refused(self):
+        self.assertEqual(WORKFLOW.count(self.BOUNDED), 1)
+        for name, workflow in {
+            "no step timeout": WORKFLOW.replace(self.INSTALL_TIMEOUT, "        if: matrix.part == 'present'\n"),
+            "apt-get outside a timeout": WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("sudo timeout --kill-after=30s 10m ", "sudo ")),
+            "one attempt": WORKFLOW.replace("for attempt in 1 2; do", "for attempt in 1; do"),
+        }.items():
+            with self.subTest(name=name):
+                self.assert_problem(workflow, "install-deps", "twice")
+
+    def test_with_deps_is_refused(self):
+        self.assert_problem(WORKFLOW.replace('"$cli" install chromium', '"$cli" install --with-deps chromium'),
+                            "--with-deps")
+
+    def test_playwright_outside_the_gates_job_is_refused(self):
+        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        self.assertEqual(WORKFLOW.count(windows), 1)
+        self.assert_problem(WORKFLOW.replace(windows, "      - name: Install Playwright\n        run: npx playwright-core install\n" + windows),
+                            "job 'windows-tests'", "Playwright step")
 
 
 if __name__ == "__main__":

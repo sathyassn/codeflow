@@ -183,6 +183,7 @@ VERDICT_JOB = """\
     name: codeflow gates
     needs: gates
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Every part of the full gate passed
         shell: bash
@@ -215,7 +216,7 @@ def norm_job(text: str) -> list[str]:
 # reviewed edit; it is not a boundary against someone who also edits this
 # script in the same change.
 TOP_KEYS = ("name", "on", "concurrency", "permissions", "jobs")
-GATES_KEYS = ("if", "name", "runs-on", "strategy", "steps")
+GATES_KEYS = ("if", "name", "runs-on", "timeout-minutes", "strategy", "steps")
 STRATEGY_HEAD = ["    strategy:", "      fail-fast: false", "      matrix:", "        include:"]
 PART_LINE = re.compile(r"^          - part: [a-z0-9-]+$")
 ONLY_LINE = re.compile(r"^            only: [a-z0-9-]+(?:,[a-z0-9-]+)*$")
@@ -461,11 +462,73 @@ def gate_binary_problems(cfg: dict) -> list[str]:
     return problems
 
 
+# TSK-254: a job with no timeout holds a runner for GitHub's default six
+# hours when a step stalls, and its verdict waits as long. Every job names
+# its own `timeout-minutes`, a plain whole number, so a stall frees the slot
+# and fails the verdict.
+TIMEOUT_KEY = re.compile(r"^ {4}timeout-minutes:")
+TIMEOUT_LINE = re.compile(r"^ {4}timeout-minutes: [1-9][0-9]*$")
+
+
+def jobs_section(workflow: str) -> dict[str, str]:
+    """Each job under the top-level `jobs:` key, keyed by job id."""
+    parts = re.split(r"^jobs:[ \t]*$", workflow, maxsplit=1, flags=re.M)
+    return workflow_jobs("jobs:" + parts[1]) if len(parts) == 2 else {}
+
+
+def timeout_problems(workflow: str) -> list[str]:
+    jobs = jobs_section(workflow)
+    problems = [] if jobs else ["the workflow has no `jobs:` section to check for timeouts"]
+    for name, text in jobs.items():
+        own = [line.rstrip() for line in text.splitlines() if TIMEOUT_KEY.match(line)]
+        if len(own) != 1 or not TIMEOUT_LINE.match(own[0]):
+            problems.append(f"job '{name}' must carry exactly one `timeout-minutes: <whole minutes>` "
+                            f"of its own, so a stalled step cannot hold its runner for six hours; found {own}")
+    return problems
+
+
+# TSK-254: only the present part launches a browser, so only it touches
+# Playwright, and its install is bounded and retried: the apt download of
+# the browsers' system libraries stalled for up to three hours with no
+# timeout. `--with-deps` is refused because it hides that download inside
+# the browser install, where the root apt-get cannot be stopped.
+PRESENT_ONLY = "        if: matrix.part == 'present'"
+STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: [1-9][0-9]*$", re.M)
+BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ \S+ .*install-deps")
+
+
+def playwright_problems(workflow: str) -> list[str]:
+    problems = []
+    for name, text in jobs_section(workflow).items():
+        for step in re.split(r"\n(?= {6}- )", text):
+            body = "\n".join(norm_job(step))
+            if "playwright" not in body.lower():
+                continue
+            first = body.splitlines()[0].strip() if body else ""
+            if name != "gates":
+                problems.append(f"job '{name}' has a Playwright step ({first}); only the gates job's "
+                                "present part launches a browser")
+                continue
+            if PRESENT_ONLY not in body.splitlines():
+                problems.append(f"the gates step `{first}` touches Playwright on every part; give it "
+                                f"`{PRESENT_ONLY.strip()}`")
+            if "--with-deps" in body:
+                problems.append(f"the gates step `{first}` installs with --with-deps; install the "
+                                "browsers and run `install-deps` as root under its own timeout")
+            if "install-deps" in body and not (STEP_TIMEOUT.search(step) and BOUNDED_DEPS.search(body)
+                                               and "for attempt in 1 2; do" in body):
+                problems.append(f"the gates step `{first}` must carry its own `timeout-minutes`, run "
+                                "`install-deps` under `sudo timeout --kill-after=<s> <limit>` and try it "
+                                "twice (`for attempt in 1 2; do`)")
+    return problems
+
+
 def main() -> int:
     cfg = json.loads(CONFIG.read_text())
     workflow = WORKFLOW.read_text()
     pins = (node_pin_problems(cfg, workflow) + gate_binary_problems(cfg)
-            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg))
+            + gate_part_problems(cfg, workflow) + shared_install_problems(cfg)
+            + timeout_problems(workflow) + playwright_problems(workflow))
     for problem in pins:
         print(f"GATE PARITY DRIFT: {problem}", file=sys.stderr)
     status = rust_parity()
@@ -473,8 +536,9 @@ def main() -> int:
         return 1
     if status == 0:
         print("gate-parity OK: Node targets run on their CI pins, the "
-              "real-browser check runs the gate's binary, and the gate parts "
-              "run every full-mode target")
+              "real-browser check runs the gate's binary, the gate parts "
+              "run every full-mode target, every job has a timeout, and only "
+              "the present part installs Playwright, bounded and retried")
     return status
 
 
