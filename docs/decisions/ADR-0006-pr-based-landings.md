@@ -60,5 +60,7 @@ for the merge method; the PR-based-landings decision here otherwise stands.
 
 The Decision's "Revisit if the repo goes public" line is settled by
 ADR-0081: the repository is public, and `main` requires branches to be up
-to date before merging. Auto-merge stays off. (Append-only note; the
-decision body above is unchanged.)
+to date before merging. Auto-merge stays off. The Context sentence that this
+repo is private on GitHub Free with no remote branch protection described the
+repository at the time and is no longer the case. (Append-only note; the
+Context and Decision above are unchanged.)

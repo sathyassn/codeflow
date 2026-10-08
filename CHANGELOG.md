@@ -277,8 +277,8 @@ erratum below, never an edit of the section.
   that is up to date with its base on both host paths: the ruleset rule
   pins each check to GitHub Actions with
   `strict_required_status_checks_policy`, as classic protection already did
-  with `strict`. It reads the live rules first, updates a ruleset that
-  already targets the branch in place instead of adding a second one, and
+  with `strict`. It reads the live rules first, updates every active ruleset
+  that already targets the branch in place instead of adding another, and
   keeps the classic settings it does not own, such as conversation
   resolution. The check names come from a new optional
   `git.required_checks` key whose default is the four shipped CI job names;
@@ -286,7 +286,8 @@ erratum below, never an edit of the section.
   the key. `codeflow doctor --check remote-perimeter` reads the default
   branch's live rules through `gh` and warns when they require no checks,
   do not require an up-to-date branch, miss a listed check or can be
-  bypassed; without `gh`, the network or a GitHub `origin` it is a note.
+  bypassed; without `gh`, the network or a GitHub `origin`, or when it
+  cannot read a bypass list, it is a note.
   Nothing changes on a host until you run `codeflow remote protect` or turn
   the setting on yourself (ADR-0081). The git rules say a pull request is
   ready when its checks ran on the current target tip; `codeflow update`

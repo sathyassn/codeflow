@@ -39,9 +39,10 @@ before it can merge. The operator turns the setting on; nobody runs `codeflow
 remote protect` on this repository, whose rules were made by hand. CodeFlow
 ships the same protection to adopters: `codeflow remote protect` requires the
 checks in `git.required_checks` (default: the shipped CI job names) on an
-up-to-date branch on both host paths, updates a ruleset that already targets
-the branch in place, and `codeflow doctor --check remote-perimeter` reads the
-live rules back and warns when they are not strict. This supersedes the
+up-to-date branch on both host paths, updates every active ruleset that
+already targets the branch in place, and `codeflow doctor --check
+remote-perimeter` reads the live rules back and warns when they are not
+strict. This supersedes the
 "Revisit if the repo goes public" line of ADR-0006; the rest of ADR-0006
 stands. Integration lines keep `codeflow integrate` and the batch candidate.
 

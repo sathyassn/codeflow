@@ -387,8 +387,8 @@ change to a record of an epic the line does not name (ADR-0078).
 another provider prints the manual checklist. It requires the checks in
 `git.required_checks` (by default the shipped CI job names) on a branch that
 is up to date with its base, pinned to GitHub Actions on a ruleset. It reads
-the live rules first: a repository ruleset that already targets the branch is
-updated in place, never duplicated, and a classic protection update keeps the
+the live rules first: every active repository ruleset that already targets the
+branch is updated in place, never duplicated, and a classic protection update keeps the
 settings it does not own, such as conversation resolution. `codeflow doctor
 --check remote-perimeter` reads the default branch's live rules back.
 
