@@ -514,7 +514,7 @@ fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldE
             detail: e.to_string(),
         })?;
     table.insert(BASELINE_KEY.to_string(), toml::Value::String(head.clone()));
-    let next = toml::to_string_pretty(&table).map_err(|e| ScaffoldError::InvalidState {
+    let next = super::state::state_text(&table).map_err(|e| ScaffoldError::InvalidState {
         what: path.display().to_string(),
         detail: e.to_string(),
     })?;
