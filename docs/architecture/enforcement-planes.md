@@ -326,16 +326,20 @@ level:
   `cat`, `grep`, `ls`, `jq`, `find` without `-exec` and the other read-only
   programs of the module, the filters `sort`, `uniq`, `cut`, `tr`, `paste`,
   `column`, `fold`, `nl`, `tac`, `rev`, `comm`, `join`, `xxd`, `base64` and
-  `tee`, `git` other than `apply`, `am`, a command-running `-c` and a
-  repository `config` write, `awk` with an inline program, and `sed` with
-  print-only commands. A reader with a write or exec path of its own is
+  `tee`, `git` other than `apply`, `am`, a command-running `-c`, a
+  repository `config` write and a path list read from input
+  (`--pathspec-from-file`, `--stdin`, `-p`), `awk` with an inline program,
+  and `sed` by a flag scan. A reader with a write or exec path of its own is
   refused in that use: `awk` with `-f`, `-i`, `-E`, `-e`, `system`, a pipe,
-  `>>`, a `>` after `print` or an `@`; `sed` with `-f` or an `e`, `w`, `r`
-  command; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
+  `>>`, a `>` after `print` or an `@`; `sed` with `-f`, an `e`, `w` or `r` command,
+  or a `w` or `e` flag on `s///`; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
   Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, an
   `env -S` string, a variable that picks the program (`PATH`, `GIT_*`,
   `PAGER`) and any program or option the guard does not know are refused.
   The refusal names the program: read the class file in its own call. The
+  rule also refuses ordinary lines that only read, such as `cp b.txt
+  docs/a.txt` or `cargo test` after a redirect of a class file, `| vim -`,
+  `awk '/a|b/ {print}'` and `sed 's|a|b|'`; the task record lists them. The
   line must name the file; a script written in one call and run in another
   stays a residual. This replaces a list of programs that run text, which an
   unlisted spelling always escaped;

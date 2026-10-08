@@ -96,6 +96,8 @@ const REFUSED: &[&str] = &[
     "printf 'echo x >> src/.envrc\\n' | sed e",
     "printf 'w src/.envrc\\n' > s.vim; vim -s s.vim",
     "echo 'BEGIN{print 1 > \"src/.envrc\"}' > a.awk; env -C /tmp -S 'awk -f a.awk'",
+    "printf 'sub/.envrc\\n' | git checkout --pathspec-from-file=-",
+    "printf 'sub/.envrc\\n' | git rm -q --pathspec-from-file=-",
 ];
 
 /// Reads and ordinary work stay allowed.

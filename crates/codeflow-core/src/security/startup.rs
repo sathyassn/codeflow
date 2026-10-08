@@ -1345,7 +1345,8 @@ const GIT_PLAIN: &[&str] = &[
 
 /// git used as a data reader: a built-in subcommand other than `apply` and
 /// `am`, with no `-c` or `--config-env` before it (a `-c alias.x=!cmd` runs a
-/// shell), no `--exec`, pager, external diff or output option.
+/// shell), no `--exec`, pager, external diff or output option, and no path
+/// list read from standard input or a file.
 fn git_reads(args: &[String]) -> bool {
     let Some((sub, rest)) = git_subcommand(args) else {
         return false;
@@ -1373,6 +1374,42 @@ fn git_reads(args: &[String]) -> bool {
         return false;
     }
     if args.iter().any(|a| a.contains("ext::")) {
+        return false;
+    }
+    // A path or object list read from standard input or a file the call
+    // wrote (`checkout --pathspec-from-file=-`, `rm`, `restore`, `reset`,
+    // `update-index --stdin`, `checkout-index --stdin`) lets produced text
+    // pick the files git rewrites or deletes. Interactive modes read their
+    // answers from standard input the same way.
+    // `hash-object` without `-w` only prints the hash.
+    let hash_only = sub == "hash-object"
+        && !rest.iter().any(|a| {
+            a == "--write" || (a.starts_with('-') && !a.starts_with("--") && a.contains('w'))
+        });
+    if !hash_only
+        && rest.iter().any(|a| {
+            [
+                "--pathspec-from-file",
+                "--stdin",
+                "--stdin-paths",
+                "--index-info",
+                "--index-filter",
+                "--tree-filter",
+                "--batch-command",
+            ]
+            .iter()
+            .any(|opt| a == opt || a.strip_prefix(opt).is_some_and(|r| r.starts_with('=')))
+        })
+    {
+        return false;
+    }
+    if matches!(
+        sub,
+        "checkout" | "restore" | "reset" | "stash" | "clean" | "add" | "commit"
+    ) && rest.iter().any(|a| {
+        matches!(a.as_str(), "--patch" | "--interactive")
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains(['p', 'i']))
+    }) {
         return false;
     }
     !rest.iter().any(|a| {

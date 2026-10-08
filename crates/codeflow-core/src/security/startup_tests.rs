@@ -1331,3 +1331,95 @@ fn only_data_readers_may_run_on_a_line_that_names_a_class_file_and_produces_text
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Grok design check. A git subcommand that takes its path list from produced
+/// text (`--pathspec-from-file=-`, `--stdin`, an interactive `-p`) lets that
+/// text pick the files git rewrites or deletes, so it is not a data reader.
+/// Plain git commands that only name their files stay allowed.
+#[test]
+fn git_reading_paths_from_produced_text_is_not_a_reader() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "printf 'sub/.envrc\\n' | git checkout --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' | git checkout HEAD --pathspec-from-file -",
+        "printf 'sub/.envrc\\n' | git restore --source=HEAD --worktree --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' | git rm -q --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' | git reset --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' | git add --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' | git stash push --pathspec-from-file=-",
+        "printf 'sub/.envrc\\n' > list; git checkout --pathspec-from-file=list",
+        "printf 'sub/.envrc\\n' | git checkout-index --stdin",
+        "printf 'sub/.envrc\\n' | git update-index --stdin",
+        "printf 'sub/.envrc\\n' | git update-index --index-info",
+        "printf 'sub/.envrc\\n' | git hash-object -w --stdin",
+        "printf 'sub/.envrc\\n' | git hash-object -w --stdin-paths",
+        "printf 'create refs/heads/x HEAD # .envrc\\n' | git update-ref --stdin",
+        "printf 'sub/.envrc\\n' | git rev-list --stdin",
+        "printf 'sub/.envrc\\n' | git filter-branch --index-filter cat",
+        "echo .envrc > /dev/null; printf 'y\\n' | git checkout -p",
+        "echo .envrc > /dev/null; printf 'y\\n' | git restore --patch",
+        "echo .envrc > /dev/null; printf 'y\\n' | git clean -fdi",
+        "printf 'sub/.envrc\\n' | git stash -p",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "git commit -F - <<'EOF'\nfix: handle .envrc\nEOF",
+        "git diff -- .envrc | head",
+        "git log -p --oneline | head",
+        "git log -i --grep envrc | head",
+        "git grep -i envrc | head",
+        "git status; git log --oneline | head",
+        "grep -c alias ~/.zshrc > b.txt; git add README.md",
+        "grep -c alias ~/.zshrc > b.txt; git checkout -b feature",
+        "grep -c alias ~/.zshrc > b.txt; git restore --staged README.md",
+        "grep -c alias ~/.zshrc > b.txt; git commit -am wip",
+        "grep alias ~/.zshrc | sort | uniq | head",
+        "diff <(cat ~/.zshrc) <(cat ~/.bashrc)",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The false refusals the allowlist admits, named in the AC-7 clause: lines
+/// that only read still refuse when they name a class file, produce text and
+/// run a program that is not a listed data reader, and the refusal says to
+/// read the file in its own call.
+#[test]
+fn ordinary_lines_with_a_non_reader_refuse_by_design() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "grep alias ~/.zshrc > b.txt; cp b.txt docs/a.txt",
+        "grep alias ~/.zshrc > b.txt; cargo test",
+        "grep alias ~/.zshrc | vim -",
+        "grep alias ~/.zshrc | awk '/a|b/ {print}'",
+        "grep alias ~/.zshrc | sed 's|a|b|'",
+        "grep alias ~/.zshrc | busybox awk '{print $1}'",
+    ] {
+        let verdict = f.judge(command);
+        if !refused(&verdict)
+            || !verdict
+                .iter()
+                .any(|v| v.message.contains("read the file in its own call"))
+        {
+            wrong.push(format!("not refused with the rewrite: {command}"));
+        }
+    }
+    for command in [
+        "grep alias ~/.zshrc",
+        "grep alias ~/.zshrc | awk '{print $2}'",
+        "grep alias ~/.zshrc | sed 's/a/b/'",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
