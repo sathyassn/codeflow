@@ -2893,6 +2893,37 @@ class FragmentPathTests(unittest.TestCase):
             outside.rmdir()
 
 
+class SplitWriteTests(unittest.TestCase):
+    """PR 129 Windows CI: changelog_split.py writes LF bytes, never through a
+    text-mode write that turns LF into CRLF on Windows."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("written")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_split_and_only_new_write_lf_bytes(self) -> None:
+        spec = importlib.util.spec_from_file_location("changelog_split", SCRIPT.with_name("changelog_split.py"))
+        assert spec and spec.loader
+        split = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(split)
+        self.repo.write("CHANGELOG.md", PUBLISHED_CHANGELOG.replace(
+            "## [2.0.0]",
+            "## [2.1.0]\n\n### Added\n\n<!-- codeflow:release-impact minor -->\n- **Add a flag.** now\n\n## [2.0.0]",
+        ))
+        self.repo.write_stamps("2.1.0")
+        source = self.repo.commit("feat: a flag")
+        with mock.patch.object(Path, "write_text", side_effect=AssertionError("text-mode write")):
+            moved = split.only_new(self.repo.root, self.repo.target, "TSK-001", source)
+            self.assertEqual(moved["added"], ["Add a flag."])
+            (self.repo.root / "changelog.d/TSK-001.md").unlink()
+            self.assertEqual(split.split(self.repo.root)["fragments"], 1)
+        written = [self.repo.root / "CHANGELOG.md", *sorted((self.repo.root / "changelog.d").glob("*.md"))]
+        for path in written:
+            self.assertNotIn(b"\r", path.read_bytes(), path)
+
+
 class FragmentCarrierTests(unittest.TestCase):
     """TSK-264 AC-4: a tree holds pending entries in one carrier."""
 
@@ -2985,6 +3016,7 @@ class FragmentPublicationTests(unittest.TestCase):
         self.assertEqual((result["status"], result["version"]), ("assembled", "2.1.0"))
         self.assertEqual(result["fragments"], ["changelog.d/TSK-001.md", "changelog.d/TSK-002.md"])
         self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), composed.text)
+        self.assertNotIn(b"\r", (self.repo.root / "CHANGELOG.md").read_bytes())
         self.assertFalse((self.repo.root / "changelog.d").exists())
         head = self.repo.commit("chore(release): assemble the pending section")
         verdict = check_pr_json(self.repo, self.base, head, self.repo.body("none"))
@@ -2997,6 +3029,20 @@ class FragmentPublicationTests(unittest.TestCase):
         before = (self.repo.root / "CHANGELOG.md").read_text()
         self.assertEqual(self.assemble()["status"], "nothing to assemble")
         self.assertEqual((self.repo.root / "CHANGELOG.md").read_text(), before)
+
+    def test_assemble_keeps_every_byte_it_does_not_insert(self) -> None:
+        # Windows CI (PR 129): text-mode writes turned every LF into CRLF, and
+        # text-mode reads turn CRLF into LF on every platform. The writer and
+        # the reader now go byte for byte, which this checks on any platform.
+        preamble = b"# Changelog\r\n\r\nNotes kept with their CRLF line ends.\r\n\r\n"
+        path = self.repo.root / "CHANGELOG.md"
+        published = path.read_bytes().removeprefix(b"# Changelog\n\n")
+        path.write_bytes(preamble + published)
+        with mock.patch.object(Path, "write_text", side_effect=AssertionError("text-mode write")):
+            self.assemble()
+        assembled = path.read_bytes()
+        self.assertTrue(assembled.startswith(preamble + b"## [2.1.0]\n\n### Added\n"), assembled[:120])
+        self.assertTrue(assembled.endswith(published), assembled[-120:])
 
     def test_release_notes_refuse_a_source_that_holds_a_fragment(self) -> None:
         with self.assertRaisesRegex(release.ReleaseError, r"still holds changelog fragments \(changelog\.d/TSK-001\.md"):

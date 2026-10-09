@@ -69,7 +69,7 @@ def split(root: Path) -> dict[str, Any]:
     if release.read_fragments(root, cwd=root):
         release.fail(f"{release.FRAGMENT_DIR} already holds fragments; split only a written section")
     path = root / "CHANGELOG.md"
-    original = path.read_text(encoding="utf-8")
+    original = release.read_source(path)
     section = release.pending_section(original, base, repair=False)
     if section is None:
         return {"status": "no pending section", "fragments": 0}
@@ -83,8 +83,8 @@ def split(root: Path) -> dict[str, Any]:
         names[slug(entry.label)] = entry.label
         destination = root / release.FRAGMENT_DIR / name
         destination.parent.mkdir(exist_ok=True)
-        destination.write_text(fragment_text([entry]), encoding="utf-8")
-    path.write_text(original[: section.start] + original[section.end :], encoding="utf-8")
+        release.write_source(destination, fragment_text([entry]))
+    release.write_source(path, original[: section.start] + original[section.end :])
     composed = release.pending_text(root, base.version, cwd=root)
     heading = original[section.start : section.body_start]
     bumped = heading.replace(f"[{section.version}]", f"[{composed.version}]", 1)
@@ -113,7 +113,7 @@ def only_new(root: Path, target: str, name: str, source: str | None) -> dict[str
     text = (
         release.file_at_ref(source, "CHANGELOG.md", cwd=root).decode()
         if source
-        else (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        else release.read_source(root / "CHANGELOG.md")
     )
     composed = release.pending_text(target, base.version, cwd=root)
     section = release.pending_section(composed.text, base, repair=False)
@@ -131,7 +131,7 @@ def only_new(root: Path, target: str, name: str, source: str | None) -> dict[str
             edited.append({"label": entry.label, "carried_in": holder.get(key, "CHANGELOG.md")})
     if added:
         destination.parent.mkdir(exist_ok=True)
-        destination.write_text(fragment_text(added), encoding="utf-8")
+        release.write_source(destination, fragment_text(added))
     return {
         "status": "moved",
         "written": str(destination.relative_to(root)) if added else None,

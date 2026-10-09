@@ -81,6 +81,19 @@ def git(*args: str, cwd: Path = ROOT, check: bool = True) -> str:
     return run(["git", *args], cwd=cwd, check=check).stdout.strip()
 
 
+def read_source(path: Path) -> str:
+    """A tracked text file's exact bytes as UTF-8. Text mode would turn CRLF
+    into LF on every platform, so a rewrite would change bytes git compares."""
+    return path.read_bytes().decode("utf-8")
+
+
+def write_source(path: Path, text: str) -> None:
+    """Write `text` byte for byte. Text mode on Windows writes every LF as
+    CRLF, which would rewrite every line of CHANGELOG.md, published sections
+    included."""
+    path.write_bytes(text.encode("utf-8"))
+
+
 def load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -1015,7 +1028,7 @@ def pending_text(
     section must equal the composed one. `lenient` reads a broken tree as
     far as it can, for judging a typed repair or a warning."""
     if isinstance(source, Path):
-        written = (source / "CHANGELOG.md").read_text(encoding="utf-8")
+        written = read_source(source / "CHANGELOG.md")
     else:
         written = file_at_ref(source, "CHANGELOG.md", cwd=cwd).decode()
     try:
@@ -1610,7 +1623,7 @@ def stamp_neutral(path: str, data: bytes | None) -> Any:
 
 
 def replace_workspace_version(path: Path, version: str) -> None:
-    text = path.read_text(encoding="utf-8")
+    text = read_source(path)
     section = re.search(r"(?ms)^\[workspace\.package\]\s*$.*?(?=^\[|\Z)", text)
     if not section:
         fail("Cargo.toml lacks [workspace.package]")
@@ -1619,7 +1632,7 @@ def replace_workspace_version(path: Path, version: str) -> None:
     )
     if count != 1:
         fail("workspace package must contain exactly one version")
-    path.write_text(text[: section.start()] + replacement + text[section.end() :], encoding="utf-8")
+    write_source(path, text[: section.start()] + replacement + text[section.end() :])
 
 
 def validate_metadata_paths(root: Path) -> None:
@@ -1656,7 +1669,7 @@ def synchronize(args: argparse.Namespace) -> dict[str, str]:
     baseline = resolve_baseline(config, state, cwd=args.root)
     validate_metadata_paths(args.root)
     changelog = args.root / "CHANGELOG.md"
-    text = changelog.read_text(encoding="utf-8")
+    text = read_source(changelog)
     validate_published_sections(text, baseline, config, cwd=args.root)
     # The target comes from the worktree's fragments and any written section
     # through the one reader; a section is never written here (ADR-0082).
@@ -1675,7 +1688,7 @@ def synchronize(args: argparse.Namespace) -> dict[str, str]:
             + text[pending.body_start :]
         )
     if synced_text != text:
-        changelog.write_text(synced_text, encoding="utf-8")
+        write_source(changelog, synced_text)
     if current != version:
         replace_workspace_version(args.root / "Cargo.toml", version)
         run([args.cargo, "check", "--workspace"], cwd=args.root)
@@ -1705,7 +1718,7 @@ def assemble(args: argparse.Namespace) -> None:
     if not composed.fragments:
         print(json.dumps({"status": "nothing to assemble", "fragments": []}, sort_keys=True))
         return
-    (args.root / "CHANGELOG.md").write_text(composed.text, encoding="utf-8")
+    write_source(args.root / "CHANGELOG.md", composed.text)
     for path in composed.fragments:
         (args.root / path).unlink()
     directory = args.root / FRAGMENT_DIR
