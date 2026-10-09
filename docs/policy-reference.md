@@ -106,8 +106,12 @@ startup files outside the agent session.
 
 ### What security.shell_startup refuses
 
-The guards refuse under `security.shell_startup`, whatever the integrity
-level:
+The guards read a line as the commands it runs: the body of a shell `-c`,
+an `eval` and the string `env -S` splits (`--split-string`, `-S'cmd'`) are
+judged like the same commands at the top of the line, each nested body in
+turn, up to eight levels; deeper text refuses the line (review round 14).
+git-guard reads them the same way. The guards refuse under
+`security.shell_startup`, whatever the integrity level:
 
 - a redirect, copy, link, move, in-place edit, `tee`, `dd` or interpreter
   call that names a file of the class, in any spelling the guard expands
@@ -230,7 +234,9 @@ list of user and system files always missed one (review round eleven).
 `GIT_CONFIG` names are judged this way. The cost is a refusal for a project
 fixture or scratch file given a key not known to run nothing. A shell
 write or native edit of a `gitconfig` in any `etc` directory is refused
-with the user's own files.
+with the user's own files, which include the `.gitconfig` of every home a
+shell of this user may read: `HOME`, and `USERPROFILE` where it names
+another directory.
 
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
@@ -243,8 +249,12 @@ run nothing refuses when that file, through its links, is not a
 repository's own configuration (review round twelve): a submodule's
 `.git/modules/<name>/config`, a bare git directory's `config` or an
 existing `.git/config` that links to the user's file. A git directory the
-call names that does not exist yet is judged by its path, and a call whose
-repository the guard cannot locate (`cd "$D"`) refuses such a key. The file
+call names that the guard cannot open is not shown to be a repository's
+own by a `.git` in its name, so such a key refuses, as it does for a call
+whose repository the guard cannot locate (`cd "$D"`). A drive path
+(`C:\repo`), a UNC path (`\\server\share`) and, on Windows, a Git Bash
+drive path (`/c/repo`) given as the git directory, to `-C` or to `cd` is
+absolute, never joined onto the directory before it (review round 14). The file
 is read only for a key not known to run nothing, at the cost of one
 repository lookup on that hook call. As a second layer, `ln`, `cp`, `mv` and `rsync` may not put
 a file in place of the `config` or `config.worktree` of any git directory,

@@ -18,9 +18,9 @@ use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
-    self, assignment, expand_word, flat_top_level, has_substitution, join_path, launcher_env,
-    map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val, GIT_LOCATION_VARS,
-    SUBSTITUTED, SUBSTITUTED_BARE,
+    self, assignment, expand_word, flat_top_level, has_substitution, host_absolute, host_path,
+    join_path, launcher_env, map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val,
+    GIT_LOCATION_VARS, SUBSTITUTED, SUBSTITUTED_BARE,
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -4281,7 +4281,8 @@ fn entry_in(dir: &Path, source: &str) -> PathBuf {
 /// shell constructs an agent can hide a `git`/`gh` token behind so it is not
 /// only the first word of a `&&`/`||`/`;`/`|` segment that is inspected:
 /// newlines, backgrounding `&`, subshells `( )`, brace groups `{ }`,
-/// `$(…)`/backtick command substitution, `bash -c '…'`, and `eval '…'`. Text
+/// `$(…)`/backtick command substitution, `bash -c '…'`, `eval '…'` and `env
+/// -S '…'`, each body unwrapped again in turn up to [`NESTING_LIMIT`]. Text
 /// the shell never executes stays out: comments and heredoc bodies (see
 /// [`split_into_segments`]). Program
 /// resolution goes through [`strip_launchers`], so an env/`command` prefix on
@@ -4292,38 +4293,166 @@ fn entry_in(dir: &Path, source: &str) -> PathBuf {
 pub(crate) fn expand_commands(command: &str) -> Vec<String> {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
-
     let mut out = Vec::new();
-    for seg in raw {
+    expand_segments(raw, &mut out, 1);
+    out
+}
+
+/// Push each segment, then the commands its text carries, unwrapped again
+/// in turn: a `bash -c` body inside another, an `eval` of one, or an `env
+/// -S` string. Each body level counts toward [`NESTING_LIMIT`]; a body past
+/// it is the [`NESTING_UNREAD`] marker, which refuses the line (TSK-242
+/// review round 14).
+fn expand_segments(segments: Vec<String>, out: &mut Vec<String>, depth: usize) {
+    for seg in segments {
         let toks = command_argv(&seg);
         out.push(seg);
-        let Some((prog, args)) = strip_launchers(&toks) else {
+        let Some(body) = carried_command(&toks) else {
             continue;
         };
-        let name = basename(prog);
-        if is_shell(name) {
-            // `-c`/`--command`, or a clustered short flag containing `c`
-            // (`-lc`, `-ec`): the wrapped command is the following argument.
-            // It runs in the directory its launchers move to (`env -C DIR
-            // sh -c ...`), which the body carries as its own leading `cd`
-            // so every check that follows directories sees it (TSK-216
-            // round 5).
-            if let Some(inner) = shell_c_argument(args) {
-                let mut moves = String::new();
-                for dir in launcher_effects(&toks).0 {
-                    moves.push_str("cd '");
-                    moves.push_str(&dir.replace('\'', "'\\''"));
-                    moves.push_str("' && ");
-                }
-                split_into_segments(&format!("{moves}{inner}"), &mut out, 1, false);
+        if depth > NESTING_LIMIT {
+            if !out.iter().any(|s| s == NESTING_UNREAD) {
+                out.push(NESTING_UNREAD.to_string());
             }
-        } else if name == "eval" {
-            // `eval '<cmd>'` runs its (joined) arguments as a command.
-            let joined = args.join(" ");
-            split_into_segments(&joined, &mut out, 1, false);
+            continue;
+        }
+        let mut inner = Vec::new();
+        split_into_segments(&body, &mut inner, depth, false);
+        expand_segments(inner, out, depth + 1);
+    }
+}
+
+/// The command text a simple command runs from a string it carries: the
+/// command `env -S` splits ([`env_split_command`]), the body of a shell's
+/// `-c`, or the joined words of `eval`.
+fn carried_command(toks: &[String]) -> Option<String> {
+    if let Some(command) = env_split_command(toks) {
+        return Some(command);
+    }
+    let (prog, args) = strip_launchers(toks)?;
+    let name = basename(prog);
+    if is_shell(name) {
+        // `-c`/`--command`, or a clustered short flag containing `c`
+        // (`-lc`, `-ec`): the wrapped command is the following argument.
+        // It runs in the directory its launchers move to (`env -C DIR
+        // sh -c ...`), which the body carries as its own leading `cd`
+        // so every check that follows directories sees it (TSK-216
+        // round 5).
+        let inner = shell_c_argument(args)?;
+        let mut moves = String::new();
+        for dir in launcher_effects(toks).0 {
+            moves.push_str("cd '");
+            moves.push_str(&dir.replace('\'', "'\\''"));
+            moves.push_str("' && ");
+        }
+        Some(format!("{moves}{inner}"))
+    } else if name == "eval" {
+        // `eval '<cmd>'` runs its (joined) arguments as a command.
+        Some(args.join(" "))
+    } else {
+        None
+    }
+}
+
+/// Where an `env -S` option word puts the string env splits.
+enum SplitString<'a> {
+    /// The next word (`-S`, `--split-string`, a cluster ending in `S` such
+    /// as `-iS`, or an abbreviation such as `--split`).
+    NextWord,
+    /// The word itself (`-Scmd`, `-iScmd`, `--split-string=cmd`).
+    Attached(&'a str),
+}
+
+/// How an `env` option word packs the command env runs into one string;
+/// `None` for any other word.
+fn env_split_option(word: &str) -> Option<SplitString<'_>> {
+    if let Some(long) = word.strip_prefix("--") {
+        let (name, value) = long
+            .split_once('=')
+            .map_or((long, None), |(n, v)| (n, Some(v)));
+        return (!name.is_empty() && "split-string".starts_with(name))
+            .then_some(value.map_or(SplitString::NextWord, SplitString::Attached));
+    }
+    let flags = word.strip_prefix('-')?;
+    for (at, flag) in flags.char_indices() {
+        match flag {
+            'S' => {
+                let rest = &flags[at + 1..];
+                return Some(if rest.is_empty() {
+                    SplitString::NextWord
+                } else {
+                    SplitString::Attached(rest)
+                });
+            }
+            // An option that takes a value ends the cluster.
+            'u' | 'C' | 'P' | 'a' | 'L' | 'U' => return None,
+            _ => {}
         }
     }
-    out
+    None
+}
+
+/// The command an `env -S` (`--split-string`, or an attached form) in front
+/// of a simple command runs, as shell text the guard reads again: the words
+/// before the option, the split string in its place, then the words after
+/// it. env splits that string into the words it runs, and they may hold
+/// more env options, assignments or a shell `-c`, so the text is expanded
+/// like any other command. `None` when no launcher in front uses `-S`.
+fn env_split_command(tokens: &[String]) -> Option<String> {
+    let quote = |words: &[String]| {
+        words
+            .iter()
+            .map(|w| format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let assignment = |t: &str| {
+        t.split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+    };
+    let mut idx = 0;
+    loop {
+        while tokens.get(idx).is_some_and(|t| assignment(t)) {
+            idx += 1;
+        }
+        let t = tokens.get(idx)?.as_str();
+        if is_prefix_launcher(t) {
+            idx = skip_launcher_options(t, tokens, idx + 1)?;
+            continue;
+        }
+        if basename(t) != "env" {
+            return None;
+        }
+        idx += 1;
+        while let Some(a) = tokens.get(idx).map(String::as_str) {
+            if a == "--" {
+                idx += 1;
+                break;
+            }
+            if let Some(attached) = env_split_option(a) {
+                let (operand, after) = match attached {
+                    SplitString::Attached(text) => (text, idx + 1),
+                    SplitString::NextWord => (tokens.get(idx + 1)?.as_str(), idx + 2),
+                };
+                let rest = tokens.get(after..).unwrap_or_default();
+                return Some(format!(
+                    "{} {operand} {}",
+                    quote(&tokens[..idx]),
+                    quote(rest)
+                ));
+            }
+            if matches!(
+                a,
+                "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
+            ) {
+                idx += 2;
+            } else if a.starts_with('-') || assignment(a) {
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 /// The command-string argument of a shell invocation: the token after a `-c`,
@@ -5521,8 +5650,8 @@ fn check_git(
         let local = || {
             located
                 .as_ref()
-                .map(|specs| local_config_files(specs, cwd, worktree))
                 .map_err(Clone::clone)
+                .and_then(|specs| local_config_files(specs, cwd, worktree))
         };
         if let Some(found) =
             config_writes_code_key(rest, Some(&dirs), variable.as_deref(), Some(&local))
@@ -6416,7 +6545,7 @@ fn compose_targets_with(
         for next in &dash_c {
             dir = match dir {
                 Some(d) => Some(join_path(&d, next)),
-                None if next.starts_with('/') => Some(next.clone()),
+                None if host_absolute(next) => Some(host_path(next)),
                 None => None,
             };
         }
@@ -6425,8 +6554,8 @@ fn compose_targets_with(
                 path: join_path(&d, g),
                 git_dir: true,
             }),
-            (Some(g), None) if g.starts_with('/') => Some(TargetSpec {
-                path: g.clone(),
+            (Some(g), None) if host_absolute(g) => Some(TargetSpec {
+                path: host_path(g),
                 git_dir: true,
             }),
             (None, Some(d)) if d.is_empty() => None,
@@ -6820,7 +6949,8 @@ fn config_file_scope(file: &str, dirs: Option<&[PathBuf]>) -> FileScope {
             FileScope::Other
         }
     };
-    if expanded.starts_with('/') {
+    // A drive path is as absolute as a rooted one (review round 14).
+    if host_absolute(&expanded) {
         return scope_of(&expanded);
     }
     let trimmed = expanded.trim_start_matches("./");
@@ -6942,7 +7072,11 @@ enum ConfigPlace {
 /// outright that the guard cannot open is judged by its path, and a
 /// directory outside any repository opens nothing, since git refuses the
 /// write there.
-fn local_config_files(targets: &[Option<TargetSpec>], cwd: &Path, worktree: bool) -> Vec<PathBuf> {
+fn local_config_files(
+    targets: &[Option<TargetSpec>],
+    cwd: &Path,
+    worktree: bool,
+) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     for spec in targets {
         let (path, git_dir) = spec.as_ref().map_or((cwd.to_path_buf(), false), |s| {
@@ -6959,7 +7093,15 @@ fn local_config_files(targets: &[Option<TargetSpec>], cwd: &Path, worktree: bool
         };
         let (own, common) = match repo {
             Ok(repo) => (repo.path().to_path_buf(), repo.commondir().to_path_buf()),
-            Err(_) if git_dir => (path.clone(), path),
+            // A named git directory the guard cannot open has no file to
+            // read through its links, and a `.git` in its name proves
+            // nothing (TSK-242 review round 14).
+            Err(_) if git_dir => {
+                return Err(format!(
+                    "the git directory `{}`, which the guard cannot open",
+                    path.display()
+                ))
+            }
             Err(_) => continue,
         };
         files.push(common.join("config"));
@@ -6968,7 +7110,7 @@ fn local_config_files(targets: &[Option<TargetSpec>], cwd: &Path, worktree: bool
         }
     }
     files.dedup();
-    files
+    Ok(files)
 }
 
 /// What [`config_writes_code_key`] found: the key, the section a rename
@@ -8861,6 +9003,12 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                     idx += 1;
                     break;
                 }
+                // `env -S 'cmd'` runs the command packed in that string,
+                // which [`expand_commands`] reads as its own segments; the
+                // string is never a program name.
+                if env_split_option(a).is_some() {
+                    return None;
+                }
                 if matches!(
                     a,
                     "-u" | "--unset" | "-C" | "--chdir" | "-P" | "-a" | "--argv0"
@@ -8898,9 +9046,8 @@ fn is_duration(word: &str) -> bool {
 /// --chdir[=]DIR` moves to, in order, and the first launcher word the
 /// guard cannot read with certainty: an `env` option it does not know, an
 /// `env -C` without a directory, or a `timeout` without a duration. `env
-/// -S`, which packs the command into one word, is a stated limit of this
-/// walk; the startup rule's data-reader check refuses the packed word because
-/// it is not a reader (`security/startup.rs`, `staged_run`).
+/// -S`, which packs the command into one word, ends this walk;
+/// [`expand_commands`] reads the packed command as its own segments.
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
     let assignment = |t: &str| {
         t.split_once('=')
@@ -10496,6 +10643,94 @@ mod tests {
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn env_split_string_and_nested_bodies_are_judged() {
+        // Review round fourteen: `env -S` packs the command it runs into one
+        // string, and a shell body can sit inside another body or an `eval`.
+        // Each is read as the commands it runs, never as a program name.
+        let p = default_policy();
+        for cmd in [
+            "env -S \"git config --global alias.x '!id'\"",
+            "/usr/bin/env -S \"git config --global alias.x '!id'\"",
+            "env -S'git config --global alias.x !id'",
+            "env --split-string='git config --global alias.x !id'",
+            "env --split-string 'git config --global alias.x !id'",
+            "env --split 'git config --global alias.x !id'",
+            "env -iS 'git config --global alias.x !id'",
+            "env -u X -S 'git config --global alias.x !id'",
+            "env -S 'git config --global' alias.x '!id'",
+            "nice env -S 'git config --global alias.x !id'",
+            "env -S \"sh -c 'git config --global alias.x !id'\"",
+            "env -S \"env -S 'git config --global alias.x !id'\"",
+            "bash -c \"bash -c 'git config --global alias.x !id'\"",
+            "eval \"bash -c 'git config --global alias.x !id'\"",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "env -S 'echo hi'",
+            "env -S 'git config --global user.name Test'",
+            "bash -c \"bash -c 'git status'\"",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+        // The packed string is never returned as a program.
+        let words: Vec<String> = ["env", "-S", "git status"].map(String::from).to_vec();
+        assert!(strip_launchers(&words).is_none());
+        assert_eq!(
+            expand_commands("env -S 'git status'")[1..],
+            ["\"env\" git status".to_string()]
+        );
+        // A body nested past the limit refuses instead of passing unread.
+        let mut deep = "git status".to_string();
+        for _ in 0..12 {
+            deep = format!("eval {}", deep.replace('\\', "\\\\").replace(' ', "\\ "));
+        }
+        assert!(
+            expand_commands(&deep).iter().any(|s| s == NESTING_UNREAD),
+            "{deep}"
+        );
+    }
+
+    #[test]
+    fn launcher_table_forms_carry_their_command_string() {
+        // Review round fourteen sweep: every launcher in the walker's table
+        // that can carry a command string, in front of a shell `-c`, an
+        // `eval` or an `env -S`, has that string judged.
+        let p = default_policy();
+        let key = "git config --global alias.x !id";
+        for launcher in [
+            "command",
+            "builtin",
+            "exec",
+            "nohup",
+            "time",
+            "nice -n 5",
+            "timeout 5",
+            "stdbuf -o0",
+            "ionice -c 3",
+            "caffeinate",
+            "xcrun",
+            "env",
+            "env -C /tmp",
+            "FOO=1",
+        ] {
+            for carrier in [
+                format!("sh -c '{key}'"),
+                format!("bash -lc '{key}'"),
+                format!("eval '{key}'"),
+                format!("env -S '{key}'"),
+                format!("env -S \"sh -c '{key}'\""),
+            ] {
+                let cmd = format!("{launcher} {carrier}");
+                let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+                assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+            }
         }
     }
 

@@ -7134,3 +7134,136 @@ fn git_guard_reads_git_locations_from_its_own_environment() {
         }
     }
 }
+
+/// TSK-242 review round 14: a git directory named by a drive, UNC or Git
+/// Bash path is absolute, never joined onto the `-C` or `cd` directory, and
+/// a named git directory the guard cannot open is never shown to be a
+/// repository's own by a `.git` in its name. The paths are the host's own:
+/// drive paths on Windows, rooted paths elsewhere, where the result is
+/// unchanged.
+#[test]
+fn git_guard_reads_an_absolute_git_dir_as_the_host_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    // A git directory whose `config` is a link to a stand-in for a file
+    // every repository may read.
+    let evil = dir.path().join("evil").join(".git");
+    std::fs::create_dir_all(evil.join("objects")).unwrap();
+    std::fs::create_dir_all(evil.join("refs")).unwrap();
+    std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+    let stand_in = dir.path().join("stand-in.gitconfig");
+    std::fs::write(&stand_in, "").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&stand_in, evil.join("config")).unwrap();
+    let missing = dir.path().join("no-such").join(".git");
+    let quoted = |p: &Path| format!("'{}'", p.display());
+    let (r, e, m) = (quoted(&repo), quoted(&evil), quoted(&missing));
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let mut wrong = Vec::new();
+    let mut refused = |out: &Output, what: &str| {
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("allowed {what}: {err}"));
+        }
+    };
+    let mut commands = vec![
+        format!("git -C {r} --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir={e} config alias.x '!id'"),
+        format!("cd {r} && git --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir {m} config alias.x '!id'"),
+        format!("git -C {r} --git-dir {m} config core.fsmonitor ./m"),
+    ];
+    if cfg!(windows) {
+        // The Git Bash spelling of the same git directory, `/c/...`.
+        let text = evil.display().to_string();
+        let (drive, rest) = text.split_once(":\\").unwrap();
+        let bash = format!("/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"));
+        commands.push(format!(
+            "git -C {r} --git-dir {bash} config core.fsmonitor ./m"
+        ));
+    }
+    for command in &commands {
+        refused(&guard(&mut codeflow(), command), command);
+    }
+    // The same git directories inherited from the hook's environment.
+    for (git_dir, command) in [
+        (&evil, format!("git -C {r} config core.fsmonitor ./m")),
+        (&missing, format!("git -C {r} config alias.x '!id'")),
+    ] {
+        let mut cmd = codeflow();
+        cmd.env("GIT_DIR", git_dir);
+        refused(
+            &guard(&mut cmd, &command),
+            &format!("GIT_DIR={}: {command}", git_dir.display()),
+        );
+    }
+    for command in [
+        format!("git -C {r} --git-dir {e} config user.name Ada"),
+        format!(
+            "git -C {r} --git-dir {} config alias.co checkout",
+            quoted(&repo.join(".git"))
+        ),
+    ] {
+        let out = guard(&mut codeflow(), &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("git.hook_integrity") {
+            wrong.push(format!("refused {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-242 review round 14: the edit guard protects the `.gitconfig` of
+/// every home a shell of this user may read, `USERPROFILE` included when
+/// `HOME` names another directory, as the startup class does.
+#[test]
+fn edit_guard_protects_the_gitconfig_of_every_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let home = dir.path().join("home");
+    let profile = dir.path().join("profile");
+    for d in [&repo, &home, &profile] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let write = |path: &Path| {
+        let payload = format!(
+            r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"[alias]"}},"cwd":{}}}"#,
+            json_string(&path.to_string_lossy()),
+            json_string(&repo.to_string_lossy()),
+        );
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .env("HOME", &home)
+                .env("USERPROFILE", &profile)
+                .env_remove("XDG_CONFIG_HOME")
+                .current_dir(&repo),
+            &payload,
+        )
+    };
+    for path in [home.join(".gitconfig"), profile.join(".gitconfig")] {
+        let out = write(&path);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{}: {err}", path.display());
+        assert!(
+            err.contains("git.hook_integrity"),
+            "{}: {err}",
+            path.display()
+        );
+    }
+    let out = write(&repo.join("notes.txt"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

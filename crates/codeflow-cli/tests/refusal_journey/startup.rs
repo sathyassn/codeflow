@@ -114,6 +114,12 @@ const REFUSED: &[&str] = &[
     // Grok round seven: assignments that use $HOME are substituted.
     "F=$HOME/.zshrc GIT_EDITOR='echo pwned >> $F' git commit --allow-empty",
     "F=$HOME/.zshrc git -c core.fsmonitor='echo pwned >> $F' status",
+    // Review round fourteen: the command an `env -S` string runs, and a
+    // shell body nested in another.
+    "env -S \"sh -c 'echo pwn1 >> $HOME/.zshrc'\"",
+    "/usr/bin/env -S \"sh -c 'echo pwn >> $HOME/.zshrc'\"",
+    "env --split-string='sh -c \"echo x >> ~/.zshrc\"'",
+    "bash -c \"bash -c 'echo x >> ~/.zshrc'\"",
 ];
 
 /// Reads and ordinary work stay allowed.
@@ -152,6 +158,7 @@ const ALLOWED: &[&str] = &[
     "EDITOR=vim git log",
     "grep alias ~/.zshrc | sed -E 's/a/b/'",
     "cd ~1; cat policy.json",
+    "env -S 'echo hi'",
 ];
 
 #[test]
@@ -179,13 +186,15 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
         }
         // A user-scope git key that runs a program is refused; an ordinary
         // user-scope key is not.
-        let outputs = project.replay(
-            harness,
-            "Bash",
-            json!({"command": "git config --global alias.st '!sh -c x'"}),
-        );
-        if !refused_with(&outputs, "git.hook_integrity") {
-            wrong.push(format!("{harness}: allowed a global git alias"));
+        for command in [
+            "git config --global alias.st '!sh -c x'",
+            "env -S \"git config --global alias.x '!id'\"",
+            "env -S'git config --global alias.x !id'",
+        ] {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, "git.hook_integrity") {
+                wrong.push(format!("{harness}: allowed {command}"));
+            }
         }
         let outputs = project.replay(
             harness,

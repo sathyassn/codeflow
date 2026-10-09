@@ -1997,13 +1997,15 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
         }
         let Some((program, args)) = strip_launchers(&words) else {
             // `env -S 'cmd'` and `env --split-string=cmd` leave no program
-            // behind: the command is inside the option.
+            // behind: the command is inside the option, and `expand_commands`
+            // judges it as its own segments. env is a wrapper, not a data
+            // reader, so the line still refuses here.
             return words
                 .iter()
                 .any(|w| w.starts_with("-S") || w.starts_with("--split-string"))
                 .then(|| {
                     finding(format!(
-                        "text this call produces names the shell startup file `{name}`, and the line runs a command packed into `env -S`, which the guard cannot read; read the file in its own call"
+                        "text this call produces names the shell startup file `{name}`, and the line runs `env -S`, a wrapper that is not a data reader, so it could run or apply that text; read the file in its own call"
                     ))
                 });
         };

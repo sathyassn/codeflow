@@ -488,16 +488,17 @@ pub(crate) const GIT_CONFIG_AUTHORITY: &str = "a user or system git configuratio
 // File edits cannot establish which config keys are safe. The Git command
 // checker still permits ordinary `git config --global user.name ...` updates.
 pub(crate) fn global_git_config_target(target: &Path, root: &Path) -> bool {
-    let home = crate::portable_path::user_home();
+    // Every home a shell of this user may read, as the startup class
+    // reads them: `HOME`, and `USERPROFILE` where it names another
+    // directory (TSK-242 review round 14).
+    let homes = crate::portable_path::user_homes();
     let mut paths = Vec::new();
-    if let Some(home) = &home {
+    for home in &homes {
         paths.push(home.join(".gitconfig"));
     }
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.map(|home| home.join(".config")));
-    if let Some(xdg) = xdg {
-        paths.push(xdg.join("git/config"));
+    match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(xdg) => paths.push(PathBuf::from(xdg).join("git/config")),
+        None => paths.extend(homes.iter().map(|home| home.join(".config/git/config"))),
     }
     // /dev/null deliberately disables global config; writes cannot change its contents.
     for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"] {

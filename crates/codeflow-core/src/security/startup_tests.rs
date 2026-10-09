@@ -1423,6 +1423,43 @@ fn nested_and_wrapped_commands_are_judged_like_the_command() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// Review round fourteen. The command an `env -S` string carries, and a
+/// shell body inside another body or an `eval`, is judged like the same
+/// command at the top of the line, with no script file written first.
+#[test]
+fn env_split_string_and_nested_bodies_are_judged() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "env -S \"sh -c 'echo pwn1 >> $HOME/.zshrc'\"",
+        "/usr/bin/env -S \"sh -c 'echo pwn >> $HOME/.zshrc'\"",
+        "env -S'sh -c \"echo x >> ~/.zshrc\"'",
+        "env --split-string='sh -c \"echo x >> ~/.zshrc\"'",
+        "env --split-string 'sh -c \"echo x >> ~/.zshrc\"'",
+        "env -iS 'sh -c \"echo x >> ~/.zshrc\"'",
+        "env -S 'sh -c' 'echo x >> ~/.zshrc'",
+        "nice env -S 'sh -c \"echo x >> ~/.zshrc\"'",
+        "env -S 'tee -a src/.envrc'",
+        "bash -c \"bash -c 'echo x >> ~/.zshrc'\"",
+        "eval \"bash -c 'echo x >> ~/.zshrc'\"",
+        "echo 'echo x >> src/.envrc' > r.sh; env -S 'sh r.sh'",
+    ] {
+        if !refused(&f.judge(command)) {
+            wrong.push(format!("allowed: {command}"));
+        }
+    }
+    for command in [
+        "env -S 'echo hi'",
+        "env -S 'sh -c \"echo hi\"'",
+        "bash -c \"bash -c 'echo hi'\"",
+    ] {
+        if refused(&f.judge(command)) {
+            wrong.push(format!("refused: {command}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// Grok round four. Editors, debuggers and database shells that run a script
 /// file the call wrote are rows of the same table as awk and sed.
 #[test]
