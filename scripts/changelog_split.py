@@ -29,11 +29,14 @@ import sys
 from typing import Any
 
 SCRIPT = Path(__file__).with_name("release.py")
-SPEC = importlib.util.spec_from_file_location("codeflow_release", SCRIPT)
-assert SPEC and SPEC.loader
-release = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = release
-SPEC.loader.exec_module(release)
+# One release.py module per process: the tests load it under this name too.
+release = sys.modules.get("codeflow_release")
+if release is None:
+    SPEC = importlib.util.spec_from_file_location("codeflow_release", SCRIPT)
+    assert SPEC and SPEC.loader
+    release = importlib.util.module_from_spec(SPEC)
+    sys.modules[SPEC.name] = release
+    SPEC.loader.exec_module(release)
 
 
 def baseline(root: Path) -> Any:
@@ -100,6 +103,9 @@ def split(root: Path) -> dict[str, Any]:
 def only_new(root: Path, target: str, name: str, source: str | None) -> dict[str, Any]:
     if not release.FRAGMENT_NAME.fullmatch(f"{name}.md"):
         release.fail(f"{name} is not a fragment name")
+    # The same refusal `split` has: a symlinked changelog.d, or a fragment
+    # that is not a regular file, is refused before anything is written.
+    release.read_fragments(root, cwd=root)
     destination = root / release.FRAGMENT_DIR / f"{name}.md"
     if destination.exists():
         release.fail(f"{destination.relative_to(root)} exists; choose another --name")

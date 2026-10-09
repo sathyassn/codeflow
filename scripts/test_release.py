@@ -2860,6 +2860,39 @@ class FragmentValidationTests(unittest.TestCase):
         self.assertRegex(" ".join(result["notes"]), message)
 
 
+class FragmentPathTests(unittest.TestCase):
+    """Security review F1 and F2 of TSK-264: the worktree readers and
+    writers see `changelog.d` as git does and never follow a link."""
+
+    def setUp(self) -> None:
+        self.repo = Repository("fragments")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_a_case_variant_directory_is_refused_as_git_never_reads_it(self) -> None:
+        self.repo.write("changelog.D/a.md", f"### Fixed\n\n{FragmentValidationTests.ENTRY}")
+        with self.assertRaisesRegex(release.ReleaseError, "changelog.D must be named changelog.d exactly"):
+            release.pending_text(self.repo.root, "2.0.0", cwd=self.repo.root)
+        head = self.repo.commit("fix: the parser")
+        self.assertEqual(release.read_fragments(head, cwd=self.repo.root), [])
+
+    def test_moving_an_open_pull_request_never_writes_through_a_link(self) -> None:
+        spec = importlib.util.spec_from_file_location("changelog_split", SCRIPT.with_name("changelog_split.py"))
+        assert spec and spec.loader
+        split = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(split)
+        outside = Path(tempfile.mkdtemp(prefix="codeflow-outside-"))
+        try:
+            (self.repo.root / "changelog.d").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(release.ReleaseError, "must be a directory of changelog fragments"):
+                split.only_new(self.repo.root, "HEAD", "TSK-001", None)
+            self.assertEqual(list(outside.iterdir()), [])
+        finally:
+            (self.repo.root / "changelog.d").unlink()
+            outside.rmdir()
+
+
 class FragmentCarrierTests(unittest.TestCase):
     """TSK-264 AC-4: a tree holds pending entries in one carrier."""
 

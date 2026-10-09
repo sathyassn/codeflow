@@ -854,6 +854,14 @@ def read_fragments(source: str | Path, *, cwd: Path) -> list[tuple[str, str]]:
     found: list[tuple[str, bytes]] = []
     if isinstance(source, Path):
         directory = source / FRAGMENT_DIR
+        # Read only the directory git would: on a case-insensitive file
+        # system `changelog.D` also answers to `changelog.d`, and the git
+        # reader would never see it.
+        variants = [
+            name for name in os.listdir(source) if name.casefold() == FRAGMENT_DIR and name != FRAGMENT_DIR
+        ]
+        if variants:
+            fail(f"{variants[0]} must be named {FRAGMENT_DIR} exactly, as git reads it")
         if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
             fail(f"{FRAGMENT_DIR} must be a directory of changelog fragments")
         if directory.is_dir():
