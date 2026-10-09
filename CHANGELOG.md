@@ -296,9 +296,12 @@ erratum below, never an edit of the section.
   `codeflow test --mode essential --strict` where the test config defines
   `essential`, so an unattended run costs that suite once; the review stage
   keeps the quick gate, and an existing
-  `.claude/workflows/pipeline.workflow.js` is user-owned and unchanged. The model evaluation kit adds three
-  requirements and cases, and the `cf-develop` and `cf-reviewer` reading
-  guidelines rise by 256 bytes each.
+  `.claude/workflows/pipeline.workflow.js` is user-owned and unchanged. A
+  shortcut never weakens a guard, gate, policy, credential path or input
+  validation. The model evaluation kit adds three requirements and cases.
+  The `cf-develop` and `cf-reviewer` reading guidelines rise by 256 bytes
+  each, and the per-task reading chain guideline rises from 128 KiB to 130
+  KiB, because these duties reach every task.
 
 <!-- codeflow:release-impact minor -->
 - **A reviewer can comment on a named part of every stage the cf-present

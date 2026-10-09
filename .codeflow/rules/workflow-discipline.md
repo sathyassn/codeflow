@@ -146,7 +146,9 @@ other deliberate shortcut, a known-worse shape chosen over the durable one,
 is allowed only when a code comment at the site names the shortcut and its
 tracked follow-up, and that follow-up is tracked once with its revisit event
 in the deferral homes "Find broadly" names; an unmarked shortcut is
-under-design and a reviewer refuses it.
+under-design and a reviewer refuses it. A shortcut never weakens a guard,
+hook, gate, policy, credential path, input validation or other security
+control; those stay under "Match the gate".
 
 ## Prove it at every surface
 

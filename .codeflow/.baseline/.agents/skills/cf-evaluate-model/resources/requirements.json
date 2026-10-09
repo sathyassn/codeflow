@@ -2336,7 +2336,8 @@
           "markers": [
             "a known-worse shape chosen over the durable one",
             "a code comment at the site names the shortcut and its tracked follow-up",
-            "an unmarked shortcut is under-design and a reviewer refuses it"
+            "an unmarked shortcut is under-design and a reviewer refuses it",
+            "A shortcut never weakens a guard, hook, gate, policy, credential path, input validation or other security control"
           ]
         },
         {

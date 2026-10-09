@@ -335,7 +335,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c8b4c9c08de4d616bf3e4af3d99917618dae7bc6d0fdb9eafaa68d42bcdf9ffa",
+      "sha256": "2d4e7026b50076b9a7e81c3d31da176afff63f81ffdc1e383fa90120bacd16e1",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "c8b4c9c08de4d616bf3e4af3d99917618dae7bc6d0fdb9eafaa68d42bcdf9ffa",
+      "sha256": "2d4e7026b50076b9a7e81c3d31da176afff63f81ffdc1e383fa90120bacd16e1",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "1c02939c34861c1c3b750f9597d9d24badaeae93df0b5e36f7d2293288b71e87",
+      "sha256": "b120a24f31bab9a6752e883934f3e6f114e561498008e8158395d6939ca00148",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

@@ -419,6 +419,10 @@ const RIGOUR_PINS: &[(&str, &[(&str, &str)])] = &[
                 "is allowed only when a code comment at the site names the shortcut and its tracked follow-up, and that follow-up is tracked once with its revisit event",
             ),
             (
+                "shortcut never weakens a security control",
+                "A shortcut never weakens a guard, hook, gate, policy, credential path, input validation or other security control; those stay under \"Match the gate\".",
+            ),
+            (
                 "scenario classes",
                 "Scenario coverage comes first: happy paths, boundaries, malformed and hostile input, timeouts, partial failure, authorization, concurrency and idempotency, recovery, platform differences where the code meets the operating system, and regression;",
             ),
