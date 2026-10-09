@@ -231,7 +231,8 @@
         "scripts/test_release.py",
         "scripts/fixtures/**",
         ".release/**",
-        "CHANGELOG.md"
+        "CHANGELOG.md",
+        "changelog.d/**"
       ]
     },
     {
