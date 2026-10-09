@@ -1,0 +1,11 @@
+id = "ADR-0082"
+uid = "c118b68a-f86e-4b57-9786-890035b30799"
+kind = "ADR"
+title = "Pending changelog entries live in fragments until a reviewed assemble"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-09T00:53:20Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
