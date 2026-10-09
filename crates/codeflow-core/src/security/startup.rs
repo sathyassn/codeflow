@@ -2938,8 +2938,9 @@ fn placing_violation(
     // Where the program puts the files it does not name: its working
     // directory, unless an option moves it there or the call places none.
     let read = super::unresolved::writer_read(name, args, &line.environment);
-    // Whether the line names the home, `/etc` or a startup directory: by a
-    // marker, or by a word or option value that expands to one.
+    let names_place = || call_names_place(args, read.as_ref(), line, dirs);
+    // Whether the line spells the home or `/etc` anywhere, for a call
+    // whose directory the guard cannot tell.
     let spelled = || {
         tilde_names_a_home(line.text)
             || ["$HOME", "${HOME}", "$ZDOTDIR", "${ZDOTDIR}", "/etc"]
@@ -2950,62 +2951,45 @@ fn placing_violation(
                 .home
                 .as_deref()
                 .is_some_and(|h| line.text.contains(&shown(h)))
-            || args
-                .iter()
-                .map(|word| value_of(word))
-                .chain(
-                    read.iter()
-                        .flat_map(|r| r.values.iter().map(|(_, v)| v.as_str())),
-                )
-                .filter(|word| path_like(word))
-                .any(|word| {
-                    dirs.iter().any(|d| {
-                        line.expand(word, d)
-                            .is_some_and(|path| line.class.placement(&path).is_some())
-                    })
-                })
+            || names_place()
     };
     let unlisted = read.as_ref().and_then(|read| read.unknown.clone());
+    // The closed rule for placement: an option the guard does not read
+    // could be the one that moves the call's files into a directory it
+    // names, so it refuses, as a program with no entry does (review rounds
+    // 20 and 21).
+    if let Some(option) = unlisted.as_deref().filter(|_| names_place()) {
+        return Some(line.finding(format!(
+            "`{name}` is given `{option}`, an option the guard does not read, with the home, `/etc` or a startup directory, where it can place a {noun} it does not name"
+        )));
+    }
+    if let Some(found) = read
+        .as_ref()
+        .and_then(|read| curl_output_violation(name, read, line, dirs))
+    {
+        return Some(found);
+    }
     let shifts = match placing_dirs(name, args, read.as_ref()) {
         Ok(shifts) => shifts?,
         // A placing program whose options the guard does not read could be
-        // told to place into a directory the line names (review round 19).
-        Err(()) if spelled() => {
+        // told to place into a directory the call names (review round 19).
+        Err(()) if names_place() => {
             return Some(line.finding(format!(
-                "`{name}` puts files where its options say, the guard does not read its options, and the line names the home or `/etc`"
+                "`{name}` puts files where its options say, the guard does not read its options, and the call names the home, `/etc` or a startup directory"
             )));
         }
         Err(()) => Vec::new(),
     };
-    // The closed rule for placement: an option the guard does not read
-    // could be the one that moves a call that places files into a
-    // directory the line names, so on such a line it refuses, as a
-    // program with no entry does (review round 20).
-    if let Some(option) = unlisted.as_deref().filter(|_| spelled()) {
-        return Some(line.finding(format!(
-            "`{name}` is given `{option}`, an option the guard does not read, on a line that names the home or `/etc`, where it can place a {noun} it does not name"
-        )));
-    }
     let mut unknown = line.unknown.is_some();
-    let mut dirs = dirs.to_vec();
-    // With an unlisted option the directory the scan read may not be the
-    // one the call uses, so where it runs is judged too.
-    let runs_in = if unlisted.is_some() {
-        dirs.clone()
-    } else {
-        Vec::new()
-    };
-    for dir in shifts {
-        dirs = dirs
-            .iter()
-            .filter_map(|d| {
-                let moved = line.expand(&dir, d);
-                unknown |= moved.is_none();
-                moved
-            })
-            .collect();
-    }
-    dirs.extend(runs_in);
+    let dirs = placed_dirs(
+        name,
+        args,
+        line,
+        dirs,
+        &shifts,
+        unlisted.is_some(),
+        &mut unknown,
+    );
     let dirs = dirs.as_slice();
     for word in args {
         let value = value_of(word);
@@ -3031,6 +3015,149 @@ fn placing_violation(
         )));
     }
     None
+}
+
+/// Whether a placing call names the home, `/etc` or a startup directory:
+/// an argument or option value that expands to one, or that spells the
+/// home, `$ZDOTDIR` or `/etc` anywhere in it, such as inside a rename
+/// pattern (`-s ",^,${HOME}/,"`). Only this call's words count, so a home
+/// file another command on the line reads does not (review round 21).
+fn call_names_place(
+    args: &[String],
+    read: Option<&super::unresolved::WriterRead>,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> bool {
+    let home = line.env.home.as_deref().map(shown);
+    let spells = |word: &str| {
+        tilde_names_a_home(word)
+            || ["$HOME", "${HOME}", "$ZDOTDIR", "${ZDOTDIR}", "/etc"]
+                .iter()
+                .any(|marker| word.contains(marker))
+            || home.as_deref().is_some_and(|h| word.contains(h))
+    };
+    let words: Vec<&str> = args
+        .iter()
+        .flat_map(|word| attached_values(word))
+        .chain(
+            read.iter()
+                .flat_map(|r| r.values.iter().map(|(_, v)| v.as_str())),
+        )
+        .collect();
+    words.iter().any(|word| spells(word))
+        || words.iter().filter(|word| path_like(word)).any(|word| {
+            dirs.iter().any(|d| {
+                line.expand(word, d)
+                    .is_some_and(|path| line.class.placement(&path).is_some())
+            })
+        })
+}
+
+/// The directories a placing call can put files into, in the program's
+/// own order (review round 21): tar and git apply each `-C` in turn from
+/// where the last one left; rsync's backup, partial and temporary
+/// directories are each their own place, relative to the destination when
+/// relative; the others keep the last directory given. The option
+/// variables come before the command line ([`super::unresolved::writer_read`]),
+/// so a command-line directory is the one that holds. With an unlisted
+/// option the directory read may not be the one used, so where the call
+/// runs is judged too. `unknown` is set when a directory cannot be
+/// expanded.
+fn placed_dirs(
+    name: &str,
+    args: &[String],
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+    shifts: &[String],
+    unlisted: bool,
+    unknown: &mut bool,
+) -> Vec<PathBuf> {
+    let mut expand = |dir: &str, from: &[PathBuf]| -> Vec<PathBuf> {
+        from.iter()
+            .filter_map(|d| {
+                let moved = line.expand(dir, d);
+                *unknown |= moved.is_none();
+                moved
+            })
+            .collect()
+    };
+    let mut placed = match name {
+        "tar" | "bsdtar" | "gtar" | "git" => shifts
+            .iter()
+            .fold(dirs.to_vec(), |from, dir| expand(dir, &from)),
+        "rsync" => {
+            let mut bases = dirs.to_vec();
+            if let Some(call) = copy_call(name, args) {
+                bases.extend(dirs.iter().filter_map(|d| line.expand(&call.dest, d)));
+            }
+            shifts.iter().flat_map(|dir| expand(dir, &bases)).collect()
+        }
+        _ => match shifts.last() {
+            Some(dir) => expand(dir, dirs),
+            None => dirs.to_vec(),
+        },
+    };
+    if unlisted && !shifts.is_empty() {
+        placed.extend(dirs.iter().cloned());
+    }
+    placed
+}
+
+/// The words an argument can name a path by: the word, the value of a
+/// `--name=value` option, and the rest of a short option cluster after
+/// each letter (`-o$HOME`, `-xC~`), so an attached value is read for a
+/// program whose options the guard does not know.
+fn attached_values(word: &str) -> Vec<&str> {
+    let mut words = vec![value_of(word)];
+    if word.starts_with('-') && !word.starts_with("--") {
+        words.extend(
+            word.char_indices()
+                .skip(2)
+                .map(|(at, _)| &word[at..])
+                .filter(|rest| rest.starts_with(['/', '~', '$', '.'])),
+        );
+    }
+    words
+}
+
+/// Whether a curl call names its outputs by a template (`-o '#1'`), whose
+/// names come from the URL, as a remote name does.
+fn curl_templates(read: Option<&super::unresolved::WriterRead>) -> bool {
+    read.is_some_and(|r| {
+        r.values.iter().any(|(option, value)| {
+            matches!(option.as_str(), "-o" | "--output")
+                && value
+                    .match_indices('#')
+                    .any(|(at, _)| value[at + 1..].starts_with(|c: char| c.is_ascii_digit()))
+        })
+    })
+}
+
+/// A curl output the class holds once joined with `--output-dir`: curl
+/// writes a relative `-o` or `--output` path inside that directory, so
+/// `--output-dir "$HOME" -o .zshrc` writes the startup file (review round
+/// 21). An ordinary name joined with the home passes.
+fn curl_output_violation(
+    name: &str,
+    read: &super::unresolved::WriterRead,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Option<Violation> {
+    if name != "curl" {
+        return None;
+    }
+    let base = read
+        .values
+        .iter()
+        .rev()
+        .find(|(option, _)| option == "--output-dir")
+        .map(|(_, value)| value.trim_end_matches('/'))?;
+    read.values
+        .iter()
+        .filter(|(option, _)| matches!(option.as_str(), "-o" | "--output"))
+        .map(|(_, value)| value.as_str())
+        .filter(|out| *out != "-" && !out.starts_with(['/', '~']))
+        .find_map(|out| word_violation(name, &format!("{base}/{out}"), line, dirs))
 }
 
 /// The directories, relative to the working directory and applied in
@@ -3085,7 +3212,8 @@ fn placing_dirs(
                 ]);
             extracts.then_some(dirs)
         }
-        // Without a remote name, curl writes only the files it names.
+        // Without a remote name or an output template (`-o '#1'`), curl
+        // writes only the files it names.
         "curl"
             if !flagged(&[
                 "-O",
@@ -3093,13 +3221,18 @@ fn placing_dirs(
                 "-J",
                 "--remote-header-name",
                 "--remote-name-all",
-            ]) =>
+            ]) && !curl_templates(read) =>
         {
             None
         }
         // A download to a named file places nothing else.
         "wget" if valued(&["-O", "--output-document"]) => None,
-        "rsync" | "scp" | "ditto" => None,
+        // rsync places files it does not name only in its backup, partial
+        // and temporary directories; its destination is judged as a copy.
+        "rsync" => read.map(|r| r.dirs.clone()).filter(|dirs| !dirs.is_empty()),
+        // scp has no option that moves a file away from its destination
+        // operand, and ditto has no entry; both are judged as copies.
+        "scp" | "ditto" => None,
         _ if PLACING.contains(&name) => Some(dirs()?),
         // `find`, `xargs` and `parallel` place in the working directory.
         _ => Some(Vec::new()),

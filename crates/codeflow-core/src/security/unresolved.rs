@@ -104,11 +104,23 @@ struct Known {
 /// option the list misses fails closed (review round 16). The other
 /// writers (`cp`, `mv`, `ln`, `tee`, `dd` and the like) have no such
 /// option, and every option of theirs is read as known.
+///
+/// An option that changes where a file lands is either a judged `dirs`
+/// entry or left out, so the placement check refuses it on a line that
+/// names the home, `/etc` or a startup directory (review round 21): a
+/// rename by pattern (`tar -s`, `--transform`), a path prefix or a suffix
+/// that makes a new name (`patch -B`, `-Y`, `-z`, `install -B`, `-S`,
+/// `rsync --suffix`), a path kept from the source (`rsync -R`,
+/// `--files-from`) and a temporary location (`zip -b`) are left out.
+/// Options that only shape names an archive, a diff or a server supplies
+/// below the judged directory stay known (`tar --strip-components`,
+/// `unzip -j`, `patch -p`, `wget -x`, `-nd`, `-nH`, `--cut-dirs`), as does
+/// `tar -P`, whose absolute member names are the archive residual.
 const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
     (
         &["rsync"],
         Known {
-            flags: "avrlptgoDzhPnquciHAXSxRWEmOJLkKbIyF80sCdUN",
+            flags: "avrlptgoDzhPnquciHAXSxWEmOJLkKbIyF80sCdUN",
             valued: "BTf@",
             words: &[],
             long: &[
@@ -137,7 +149,6 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "xattrs",
                 "sparse",
                 "one-file-system",
-                "relative",
                 "whole-file",
                 "executability",
                 "prune-empty-dirs",
@@ -151,12 +162,10 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "exclude-from",
                 "include",
                 "include-from",
-                "files-from",
                 "filter",
                 "from0",
                 "backup",
                 "backup-dir",
-                "suffix",
                 "inplace",
                 "append",
                 "append-verify",
@@ -206,7 +215,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "RSYNC_SHELL",
                 "SSH_ASKPASS",
             ],
-            dirs: &[],
+            dirs: &["-T", "--temp-dir", "--partial-dir", "--backup-dir"],
         },
     ),
     (
@@ -225,7 +234,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
         &["tar", "bsdtar", "gtar"],
         Known {
             flags: "AcdrtuxajJzZkmOpPSvwWhilBGMnoUqyRH",
-            valued: "fCTXbgKLNVs",
+            valued: "fCTXbgKLNV",
             words: &[],
             long: &[
                 "create",
@@ -272,7 +281,6 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "format",
                 "wildcards",
                 "anchored",
-                "transform",
                 "xattrs",
                 "acls",
                 "one-file-system",
@@ -299,7 +307,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
         &["zip"],
         Known {
             flags: "rqvjyufmdDXlkoAgFeJ0123456789$@",
-            valued: "xibntPZsO",
+            valued: "xintPZsO",
             words: &["-sf", "-FS", "-qq"],
             long: &[
                 "recurse-paths",
@@ -513,7 +521,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
         &["patch"],
         Known {
             flags: "bcEflnNRstTuvZ",
-            valued: "FVxYzBDdiopr",
+            valued: "FVxDdiopr",
             words: &[],
             long: &[
                 "forward",
@@ -545,9 +553,6 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "set-utc",
                 "follow-symlinks",
                 "read-only",
-                "prefix",
-                "suffix",
-                "basename-prefix",
                 "version-control",
                 "ifdef",
                 "reject-format",
@@ -566,8 +571,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
     (
         &["install"],
         Known {
-            flags: "cdCDpvbTMUS",
-            valued: "mogtBfhlN",
+            flags: "cdCDpvbTMU",
+            valued: "mogtfhlN",
             words: &[],
             long: &[
                 "mode",
@@ -580,7 +585,6 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "compare",
                 "verbose",
                 "backup",
-                "suffix",
                 "preserve-context",
             ],
             env_options: &[],
@@ -776,7 +780,7 @@ impl Scan {
 ///
 /// A letter takes the next word as its value only when that word is not
 /// an option itself (review round 18): the tar dialects disagree on which
-/// letters take one (BSD `-L` is a flag, GNU `-s` is one), and a word the
+/// letters take one (BSD `-L` is a flag, GNU `-L` takes a length), and a word the
 /// table took as a value would otherwise hide an option that runs a
 /// program. A lone `-` is an operand, and a value such as rsync's
 /// `- *.o` filter rule is not an option.
@@ -902,16 +906,21 @@ pub(crate) fn writer_read(
         operands: Vec::new(),
         unknown: None,
     };
-    let mut lists = vec![args.to_vec()];
+    // The writer reads its option variables before its command line (GNU
+    // tar prepends `TAR_OPTIONS`, Info-ZIP reads `UNZIP` and `ZIPOPT`
+    // first), so their directories come first and a command-line directory
+    // is the last one folded (review round 21). The `-` in front keeps a
+    // variable's first word from being read as a dashless tar key.
+    let mut lists = Vec::new();
     for (var, value) in assigned {
         if known.env_options.contains(&var.as_str()) {
-            // The value comes before the command line, so a tar key there
-            // is not the first word.
             let mut list = vec!["-".to_string()];
             list.extend(value.split_whitespace().map(str::to_string));
             lists.push(list);
         }
     }
+    lists.push(args.to_vec());
+    let last = lists.len() - 1;
     for (index, list) in lists.iter().enumerate() {
         let scan = scan_writer(name, list)?;
         if read.unknown.is_none() {
@@ -925,7 +934,7 @@ pub(crate) fn writer_read(
         );
         read.values.extend(scan.values);
         read.flags.extend(scan.flags);
-        if index == 0 {
+        if index == last {
             read.operands = scan.operands;
         }
     }
@@ -1128,7 +1137,13 @@ mod tests {
                 "tar cL --use-compress-program p -f a.tar b",
                 "`--use-compress-program`",
             ),
-            ("tar -s -I p -xf a.tar", "`-I`"),
+            ("tar -L -I p -xf a.tar", "`-I`"),
+            // A rename by pattern is left out of the table (review round 21).
+            ("tar -s 's/a/b/' -cf a.tar README", "`-s`"),
+            ("tar --transform=s/a/b/ -xf a.tar", "`--transform=s/a/b/`"),
+            ("rsync -R a/b c/", "`-R`"),
+            ("patch -B bak/ -p1 -i f.diff", "`-B`"),
+            ("install -S .bak a b", "`-S`"),
             ("ZIPOPT='-T -TT p' zip a.zip f", "reads `ZIPOPT` as options"),
             (
                 "TAR_OPTIONS='--use-compress-program=p' tar -cf a.tar f",
@@ -1192,7 +1207,6 @@ mod tests {
             "tar xzf a.tgz",
             "tar cfv a.tar README",
             "tar -L 1024 -cf a.tar README",
-            "tar -s 's/a/b/' -cf a.tar README",
             "tar -cf - README",
             "rsync -f '- *.o' a/ b/",
             "ZIPOPT=-q zip a.zip f",
@@ -1267,6 +1281,16 @@ mod tests {
         let read = writer_read("tar", &words("-czf/tmp/box.tar -C d ."), &[]).unwrap();
         assert!(read.flags.contains(&"-c".to_string()), "{:?}", read.flags);
         assert!(!read.flags.contains(&"-x".to_string()), "{:?}", read.flags);
+        // The option variables come first, so the command line's directory
+        // is the last one (review round 21).
+        assert_eq!(
+            dirs("tar", "-C/tmp/s -xf a", &[("TAR_OPTIONS", "-C ~")]),
+            some(&["~", "/tmp/s"])
+        );
+        assert_eq!(
+            dirs("rsync", "-a --backup-dir=b -T t --partial-dir p s d", &[]),
+            some(&["b", "t", "p"])
+        );
         let read = writer_read("unzip", &words("-uod d a"), &[]).unwrap();
         assert_eq!(read.unknown.as_deref(), Some("-uod"));
     }

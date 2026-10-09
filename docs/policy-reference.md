@@ -194,14 +194,25 @@ level:
   dashless keys and the option environment (`UNZIP="-d $HOME"`,
   `TAR_OPTIONS="-C $HOME"`), each writer's entry naming the options that
   carry a directory. A placing program the guard has no entry for
-  (`7z`, `cpio`, `stow`) refuses on a line that names the home or `/etc`,
-  since any of its options could carry it there (review round 19). An
-  option a writer's entry does not list is read past, so a directory after
-  it still counts, and a call that places files and carries such an option
-  refuses on a line that names the home, `/etc` or a startup directory
-  (`tar -x --no-mac-metadata -C$HOME`, review round 20). Tar's mode comes
-  from the same reading, so an archive name attached to `-f` is never read
-  as a mode letter;
+  (`7z`, `cpio`, `stow`) refuses when the call names the home, `/etc` or a
+  startup directory, since any of its options could carry it there (review
+  round 19). An option a writer's entry does not list is read past, so a
+  directory after it still counts, and a call that carries such an option
+  refuses when it names one of those places
+  (`tar -x --no-mac-metadata -C$HOME`, review round 20). Every option that
+  changes where a file lands is either a judged directory (rsync's
+  `--backup-dir`, `--partial-dir` and `-T`/`--temp-dir`) or left out of the
+  entry, so it refuses the same way: renames by pattern (`tar -s`,
+  `--transform`), path prefixes and suffixes (`patch -B`, `-Y`, `-z`,
+  `install -B`, `-S`, `rsync --suffix`), `rsync -R` and `--files-from`, and
+  `zip -b`. Options that only shape names an archive, a diff or a server
+  supplies below the judged directory stay listed (`tar
+  --strip-components`, `unzip -j`, `patch -p`, `wget -nd`). A relative
+  `curl -o` is judged joined with `--output-dir`. The option variables are
+  read before the command line, so the command-line directory is the one
+  that holds, as GNU tar and Info-ZIP apply them (review round 21). Tar's
+  mode comes from the same reading, so an archive name attached to `-f` is
+  never read as a mode letter;
 - a path the guard cannot resolve near the class, such as `~/$NAME`;
 - code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
   class file once the line's own literal assignments are filled in

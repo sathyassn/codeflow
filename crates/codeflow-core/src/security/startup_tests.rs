@@ -592,6 +592,45 @@ fn placing_into_the_home_refuses() {
     }
 }
 
+/// Options the table called known that move files: a rename by pattern,
+/// curl's output directory joined with `-o`, the option variables before
+/// the command line, and rsync's own directories (review round 21).
+#[test]
+fn options_that_move_files_are_judged() {
+    let f = Fixture::new();
+    for command in [
+        "tar -s \",^,${HOME}/,\" -xf bundle.tar",
+        "tar -P -s \",^,${HOME}/,\" -xf bundle.tar",
+        "tar --transform=\"s|^|${HOME}/|\" -xf bundle.tar",
+        "curl --output-dir \"$HOME\" -o .zshrc https://example.invalid/x",
+        "curl --output-dir=\"$HOME\" -o .zshrc https://example.invalid/x",
+        "curl --output-dir ~ -o '#1' 'https://example.invalid/{a,b}'",
+        "TAR_OPTIONS='-C /tmp/safe' tar -C\"$HOME\" -xf bundle.tar",
+        "TAR_OPTIONS=\"-C $HOME\" tar -xf bundle.tar",
+        "UNZIP='-d /tmp/safe' unzip -d\"$HOME\" dots.zip",
+        "rsync -a --backup --backup-dir=\"$HOME\" .zshrc /tmp/dest/",
+        "rsync -a --partial-dir=\"$HOME\" notes.txt /tmp/dest/",
+        "rsync -a --temp-dir=\"$HOME\" notes.txt /tmp/dest/",
+        "rsync -a -T ~ notes.txt /tmp/dest/",
+        "rsync -R .config/fish/config.fish ~/",
+    ] {
+        assert!(refused(&f.judge(command)), "{command}");
+    }
+    for command in [
+        "tar -s 's/a/b/' -cf a.tar README",
+        "curl --output-dir \"$HOME\" -o notes.txt https://example.invalid/x",
+        "curl --output-dir ./build -o notes.txt https://example.invalid/x",
+        "TAR_OPTIONS=\"-C $HOME\" tar -C/tmp/safe -xf bundle.tar",
+        "UNZIP=\"-d $HOME\" unzip -d /tmp/safe dots.zip",
+        "rsync -a --backup --backup-dir=./bak notes.txt ./dest/",
+        "rsync -a src/ ./dest/",
+        "tar --strip-components=1 -xf bundle.tar -C ./vendor",
+    ] {
+        let found = f.judge(command);
+        assert!(!refused(&found), "{command}: {found:?}");
+    }
+}
+
 /// A startup variable set for a shell that reads startup files refuses.
 #[test]
 fn startup_environment_for_a_shell_refuses() {
