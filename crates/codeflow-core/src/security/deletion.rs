@@ -4604,7 +4604,7 @@ impl Reader<'_> {
             if !(rest.is_empty() || rest.starts_with('/')) {
                 return None;
             }
-            let home = std::env::var_os("HOME")?;
+            let home = crate::portable_path::user_home()?;
             Some(PathBuf::from(format!("{}{rest}", home.to_string_lossy())))
         } else if path.starts_with('/') {
             Some(PathBuf::from(path))
@@ -7012,7 +7012,8 @@ fn from_home(rest: &str) -> String {
             "" | "." => {}
             ".." => {
                 if parts.pop().is_none() {
-                    let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+                    let home = crate::portable_path::user_home()
+                        .map_or_else(|| "/".to_string(), |h| h.to_string_lossy().into_owned());
                     return normalize_path(&format!("{home}/{rest}"));
                 }
             }

@@ -1071,6 +1071,50 @@ fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
     drop(unrelated);
 }
 
+/// The browser was just closed: its leader is gone and reaped, while another
+/// member of its process group has exited and waits to be reaped. The group
+/// still answers a signal probe but runs nothing, so `present show` reports
+/// the session ready and `present close` closes it, instead of refusing a
+/// group without its leader.
+#[cfg(target_os = "linux")]
+#[test]
+fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
+    use std::os::unix::process::CommandExt as _;
+
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let browser = register_stand_in_browser(&fixture, &session_id);
+    let group = i32::try_from(browser.0.id()).unwrap();
+    // Not reaped until the end: it stays in the group as a zombie.
+    let mut exited = Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .process_group(group)
+        .spawn()
+        .unwrap();
+    let stat = format!("/proc/{}/stat", exited.id());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fs::read_to_string(&stat).is_ok_and(|line| {
+        line.rsplit_once(") ")
+            .is_some_and(|(_, rest)| rest.starts_with('Z'))
+    }) {
+        assert!(Instant::now() < deadline, "the group member did not exit");
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(browser);
+
+    let shown = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(
+        shown.contains(&format!("session {session_id} ready")),
+        "{shown}"
+    );
+    close_and_clear(&fixture, &session_id);
+    exited.wait().unwrap();
+}
+
 /// A stand-in browser process group, killed when the test ends or fails.
 struct StandIn(std::process::Child);
 
@@ -1559,8 +1603,10 @@ fn shipped_example_documents_parse_and_match_the_document_schema() {
             "{path}"
         );
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        // The skill writes schema_version 2 (TSK-259).
+        assert_eq!(value["schema_version"], 2, "{path}");
         assert_eq!(
-            registry.errors("urn:codeflow:schema:present:document:1", &value),
+            registry.errors("urn:codeflow:schema:present:document:2", &value),
             Vec::<String>::new(),
             "{path}"
         );
@@ -3326,6 +3372,124 @@ fn tsk193_check_names_faults_and_accepts_a_clean_session() {
         assert!(faults.contains(id), "{faults}");
     }
     close_and_clear(&fixture, &id);
+}
+
+fn repository_file(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
+}
+
+/// The JSON lines a command printed, without its summary line.
+fn check_lines(text: &str) -> Vec<serde_json::Value> {
+    text.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|line| line.get("severity").is_some())
+        .collect()
+}
+
+#[test]
+fn tsk259_check_open_and_update_warn_on_a_v1_stage_without_refusing_it() {
+    let fixture = setup_project();
+    let delivery = fixture.project.join("delivery.json");
+    fs::copy(
+        repository_file(
+            "crates/codeflow-present/tests/fixtures/contract-v2/check/delivery-v1.json",
+        ),
+        &delivery,
+    )
+    .unwrap();
+    let output = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "check", "--file", delivery.to_str().unwrap()],
+    );
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = check_lines(&stdout);
+    let rules = |lines: &[serde_json::Value], rule: &str| {
+        lines
+            .iter()
+            .filter(|line| line["rule"] == rule && line["severity"] == "warning")
+            .count()
+    };
+    assert_eq!(lines.len(), 13, "{stdout}");
+    assert_eq!(rules(&lines, "framing"), 6, "{stdout}");
+    assert_eq!(rules(&lines, "entities"), 6, "{stdout}");
+    assert_eq!(rules(&lines, "version"), 1, "{stdout}");
+    let summary: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(
+        summary,
+        serde_json::json!({"faults": 0, "valid": true, "warnings": 13})
+    );
+
+    // open prints the same lines on stderr and still hands off on stdout.
+    let opened = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "open", delivery.to_str().unwrap(), "--no-launch"],
+    );
+    let stdout = require_success(&opened);
+    let id = stdout.split_whitespace().nth(1).unwrap().to_string();
+    assert!(
+        stdout.starts_with(&format!("session {id} ready")),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\"severity\""), "{stdout}");
+    let stderr = String::from_utf8(opened.stderr).unwrap();
+    assert_eq!(check_lines(&stderr), lines, "{stderr}");
+
+    let updated = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "update", &id, delivery.to_str().unwrap()],
+    );
+    assert_eq!(
+        require_success(&updated).trim(),
+        format!("updated {id} to revision 2")
+    );
+    assert_eq!(
+        check_lines(&String::from_utf8(updated.stderr).unwrap()),
+        lines
+    );
+
+    // A prose v1 document prints nothing but the summary.
+    let prose = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "check",
+            "--file",
+            fixture.second.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        require_success(&prose).trim(),
+        r#"{"faults":0,"valid":true,"warnings":0}"#
+    );
+    close_and_clear(&fixture, &id);
+}
+
+#[test]
+fn tsk259_the_skill_examples_check_clean() {
+    let fixture = setup_project();
+    for example in [
+        "assets/base/agents/skills/cf-present/resources/present-document.example.json",
+        "assets/base/agents/skills/cf-present/assets/review-document.example.json",
+    ] {
+        let path = repository_file(example);
+        let output = codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "check", "--file", path.to_str().unwrap()],
+        );
+        assert_eq!(
+            require_success(&output).trim(),
+            r#"{"faults":0,"valid":true,"warnings":0}"#,
+            "{example}"
+        );
+    }
 }
 
 #[test]

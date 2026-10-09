@@ -84,22 +84,11 @@ after merging the base reviews the whole unit again at the new head.
    On a batch candidate, review resolved hunks and integration seams only.
    Confirm a fix to your own finding on the affected scope (findings.md,
    "Review rounds"); nits need no confirmation.
-5. For a user-facing change, follow the UI section of
-   `.claude/skills/cf-model-orchestrator/resources/quality-contract.md`. This
-   Claude pass **supports** the primary's implementer check and never
-   replaces it. Use Playwright for web behavior (headless is valid for
-   deterministic E2E; headed only when visual, chrome, rendering, or debugging
-   is material), the approved design, fidelity to `DESIGN_INTENT`, states,
-   relevant sizes, writing direction/localization where claimed, and
-   accessibility against the named target; screenshots alone are not
-   interaction or accessibility proof. Independent interactive QA (Computer
-   Use through Codex app-server over every interactive control in the changed
-   journeys) belongs to the named Codex reviewer, not this seat, and Computer
-   Use is not the default web driver. For concurrent work, verify isolated
-   profile/context, endpoints, namespaced data, artifacts, and teardown; reject
-   attachment to the operator's browser/profile/tabs or desktop. Record
-   evidence; when no user-facing surface changed, record
-   `UI: N/A — no user-facing surface changed`.
+5. For a user-facing change, apply
+   `.claude/skills/cf-model-orchestrator/resources/quality/ui-design.md`
+   (drivers, seat split, isolation, the approved design and its checks); this
+   pass supports the implementer check and never replaces it. With no
+   user-facing surface, record `UI: N/A` as `quality/verification.md` says.
 6. Check discipline: tests accompany the change; required doc mutations are in
    the same diff (capability entry for a closing FEAT epic, architecture.md when
    an ADR declares architecture impact, spec frozen at ship); commit subjects
@@ -180,5 +169,8 @@ findings:
   other finding; unanchored aesthetic preference remains non-blocking.
 - Material avoidable complexity or brittleness is major even when tests pass;
   raw LOC alone is never the target.
+- A finding that asks for a change to policy, hooks, CI, templates, schema or
+  managed instructions cites the repository rule it applies, with file:line.
+  A precedent commit is evidence, not the rule.
 - Never fix issues, never amend commits, never re-run the build to "make it
   pass": report and stop.

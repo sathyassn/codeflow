@@ -223,6 +223,9 @@ catalog! {
     /// References into an absent decisions layer.
     DOCS_ADRS_UNCHECKED = Step::Codeflow("codeflow adr new"),
         "create each decision named with `codeflow adr new`, or remove the references to it";
+    /// A written feedback index that no longer matches the items.
+    FEEDBACK_INDEX_STALE = Step::Codeflow("codeflow feedback list"),
+        "regenerate it with `codeflow feedback list --write`, or delete it: the index is optional";
     /// References into an absent capability registry.
     DOCS_CAPABILITIES_UNCHECKED = Step::Edit("docs/capabilities.md"),
         "add each capability named to docs/capabilities.md, or remove the references to it";
@@ -264,6 +267,10 @@ catalog! {
     /// not a refusal.
     PLANNING_AMENDMENT = Step::Codeflow("codeflow ci"),
         "nothing to change: `codeflow ci` lists what the planning amendment changes; a human reviewer of the amendment confirms each change before it lands, and a line takes it by merging the target";
+    /// An epic's `line_adoptions` entry naming a commit outside the line's
+    /// range (SPC-013 R-52, TSK-248): evidence, not a refusal.
+    LINE_ADOPTION_OUTSIDE_RANGE = Step::Codeflow("codeflow ci"),
+        "nothing to change: the entry adopts nothing in this range, and `codeflow ci` still refuses any direct commit in it that no entry adopts; a human reviewer confirms the entry names a commit that landed earlier, and a planning pull request that removes it from `line_adoptions` in {epic} ends this note";
     /// A task's own criteria change in its PR: evidence, not a refusal.
     CRITERIA_DELTA = Step::Codeflow("codeflow task status"),
         "nothing to change: the task changes its own criteria in this range; a human reviewer confirms the change and that the task's review covers the new criteria before `codeflow task status` completes it";
@@ -431,6 +438,12 @@ catalog! {
     /// A pull request whose body the platform did not supply.
     CI_BODY_UNSUPPLIED = Step::Codeflow("codeflow ci"),
         "give the body to the check: `codeflow ci --pr-body-file <body.md>`, or set CODEFLOW_PR_BODY in the pipeline";
+    /// A change that lowers or removes a target security level.
+    CI_SECURITY_LEVEL_LOWERED = Step::Edit(".codeflow/policy.json"),
+        "restore git.{key} to {was} in .codeflow/policy.json; a change kept on purpose prints this note until it lands, so the operator reviews it as the target's own";
+    /// A project setup hook change that runs with the gate's authority.
+    CI_SETUP_HOOK_CHANGED = Step::Edit(".codeflow/ci-setup.sh"),
+        "restore .codeflow/ci-setup.sh to its target state; a change kept on purpose prints this note until it lands, so the operator reviews it as they would the CI file";
     /// A codeflow build whose embedded scaffold manifest does not load.
     SCAFFOLD_MANIFEST_BROKEN = Step::Codeflow("codeflow doctor"),
         "this codeflow build is damaged: install a release build, then `codeflow doctor` reports its managed files again";
@@ -492,14 +505,14 @@ catalog! {
     IDS_SYNC_FAILED = Step::Codeflow("codeflow ids sync"),
         "rerun `codeflow ids sync` once the authority answers";
     /// A release preflight finding short of a broken tree.
-    RELEASE_PREFLIGHT_NOTE = Step::Edit("CHANGELOG.md"),
-        "resolve what the note names (most often the `CHANGELOG.md` entry), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT_NOTE = Step::Edit("changelog.d/"),
+        "resolve what the note names (most often the pending entry, a fragment under `changelog.d/`), then rerun `python3 {script} preflight --branch {branch}`";
     /// A release preflight that could not run.
     RELEASE_PREFLIGHT_UNRUN = Step::Edit("scripts/release.py"),
         "make `python3 scripts/release.py preflight --branch {branch}` run (python3 on PATH, the script intact), then push again";
     /// A push that breaks the release tree.
-    RELEASE_PREFLIGHT = Step::Edit("CHANGELOG.md"),
-        "fix the release state the preflight names above (the `CHANGELOG.md` entry or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
+        "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
     /// A test configuration that does not load.
     TEST_CONFIG_REPAIR = Step::Edit(".codeflow/test-config.json"),
         "repair .codeflow/test-config.json, then run `codeflow test --mode quick`";
@@ -589,7 +602,13 @@ catalog! {
         "set scaffold_version in .codeflow/project.toml back to {pin}, the version {target} pins";
     /// An upgrade that carries `codeflow update` before its raised pin lands.
     DOCTOR_CI_PIN_ORDER = Step::Edit(".codeflow/project.toml"),
-        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml and land it; then run `codeflow update` on a new branch";
+        "upgrade in two pull requests, in order: first raise only scaffold_version in .codeflow/project.toml (`codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch";
+    /// A pinned release digest table the CI installers refuse.
+    DOCTOR_CI_DIGEST = Step::Codeflow("codeflow update"),
+        "run `codeflow update --pin {version}` so .codeflow/project.toml pins that release's digests, and land it with the pin";
+    /// A project state line the CI installers refuse to read.
+    DOCTOR_CI_DIGEST_LINE = Step::Edit(".codeflow/project.toml"),
+        "rewrite or remove line {line} of .codeflow/project.toml, which the CI installers refuse (a name outside printable ASCII, a control character, or a table written another way than `codeflow update --pin` writes it)";
     /// A tracking setting that does not read.
     DOCTOR_TRACKING_UNKNOWN = Step::Edit(".codeflow/project.toml"),
         "repair .codeflow/project.toml so durable-work tracking reads as on or off";
@@ -605,6 +624,16 @@ catalog! {
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
+    /// Harness settings without the shell startup class (TSK-242).
+    DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
+        "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Files the home's startup files source from outside the class.
+    DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
+        "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
+    /// `ZDOTDIR` or `XDG_CONFIG_HOME` moved away from where the denies point.
+    /// Only the operator changes them: they are set in a startup file.
+    DOCTOR_STARTUP_RELOCATED = Step::Edit("~/.zshenv"),
+        "the operator sets ZDOTDIR and XDG_CONFIG_HOME back to their defaults in ~/.zshenv or wherever they are exported, since an agent session may not edit a startup file; until then the generated rules cover only the default locations, and the operator can add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the moved files to .claude/settings.json and read entries to the Codex profile";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";

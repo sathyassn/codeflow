@@ -12,6 +12,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use codeflow_core::security::git::GLOBAL_VALUE_OPTIONS;
+
 const LINE: &str = "integration/EPC-001-offline";
 
 fn isolated_home() -> &'static Path {
@@ -108,16 +110,11 @@ fn planned_project(tasks: usize) -> (tempfile::TempDir, PathBuf) {
     );
     let default = git(&root, &["branch", "--show-current"]);
     git(&root, &["branch", LINE, &default]);
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            bare.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), bare.to_str().unwrap())
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
     ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
@@ -276,12 +273,14 @@ const NETWORK_SUBCOMMANDS: [&str; 8] = [
     "remote-https",
 ];
 
-/// The subcommand of a git argv, past global options and their values.
+/// The subcommand of a git argv, past global options and their values. The
+/// options that take the next word are the guards' own list, so a fetch
+/// behind `--attr-source` or `--shallow-file` still counts (issue 120).
 fn git_subcommand(argv: &[String]) -> Option<&str> {
     let mut rest = argv.iter().skip(1);
     while let Some(arg) = rest.next() {
         match arg.as_str() {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+            option if GLOBAL_VALUE_OPTIONS.contains(&option) => {
                 rest.next();
             }
             option if option.starts_with('-') => {}

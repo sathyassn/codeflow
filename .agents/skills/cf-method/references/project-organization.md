@@ -234,9 +234,12 @@ quoted. The kind is never inferred from the predecessor's `work_type`.
   and an unfetched line is unknown, never met. Before that, a task may be
   claimed and started on the predecessor's exact reviewed head, named with
   `--on TSK-NNN@<sha>`: the tool checks the pin structurally (an ancestor of
-  HEAD, on the predecessor's branch, still its tip), which is not
-  authentication of the review. CI still requires the predecessor complete at
-  the merge base when the task lands, so the stack lands in order.
+  HEAD, on the predecessor's branch, still its tip, and named by a review row,
+  or following the commit the review names only by the predecessor's status
+  and Closeout), which is not authentication of the review. Each push of the
+  new branch judges the commits up to the pin as the predecessor's own
+  reviewed pull request. CI still requires the predecessor complete at the
+  merge base when the task lands, so the stack lands in order.
 - A **research or decision dependency** is met when the predecessor is
   `complete` at the pinned commit on its target. The planner writes the pin
   when it is known; an entry without a pin is unmet.
@@ -299,8 +302,12 @@ After the review, a task pull request may merge its moved target and keep
 the binding when the merge's recorded result equals the conflict-free
 automatic merge of its parents, so refreshing a stale base needs no new
 review; any other merge or a later code change needs one. A reopened task
-keeps its criteria once its record is on the target; before that, a reopen
-inside its own pull request may change them.
+keeps its criteria once a completion of it has landed on the target, read
+from every version of its record in the target's history, so a later edit
+or deletion there does not undo the landing; before that, a reopen inside
+its own pull request may change them, also when the target already records
+the task. A history that cannot prove the task never landed (a shallow
+clone, for one) refuses the change.
 
 A spec moves by `codeflow spec status SPC-NNN approved`, which needs no open
 question, or `codeflow spec status SPC-NNN superseded --by SPC-NNN` when a new
@@ -321,6 +328,52 @@ terminal acts. A
 multi-task epic lands in gated batch candidates on its integration branch and
 reaches the protected branch as one reviewed body (cf-method, "Managing a body
 of work").
+
+### Operator feedback
+
+Feedback from the operator is a request like any other and attaches to its
+unit. At the full tier it also gets a record when its words must outlive
+that unit: it sets a standing rule, declines or reorders planned work, or
+spans more than one unit. An ordinary request needs no record.
+
+- **One item, one home.** `codeflow feedback new --topic <topic> --source
+  chat|pr|review|issue "<summary>"` issues `FB-NNN` from the registry and
+  writes `project-management/feedback/FB-NNN.md` as `received`. Topics come
+  from `[feedback] topics` in `.codeflow/project.toml`; the first item writes
+  a default list the project edits. A rule, plan line or record that applies
+  an item cites its id instead of restating it.
+- **Quote, then read.** Verbatim holds the operator's words exactly, typos
+  kept, and is never edited; Reading holds what the agent understood, and a
+  correction goes there with a note.
+- **Lifecycle.** `codeflow feedback status` moves an item by its table:
+  received to placed (`--in` a task, an epic or a path), placed to closed
+  (`--evidence`), an open item to declined (`--confirmed-by operator
+  --reason`), and received, placed or closed to superseded (`--by FB-NNN`).
+  The placement's unit shows progress, so there is no acting state.
+- **Standing rules.** Feedback that sets a standing rule closes with the
+  rule's line in `AGENTS.md` or a rules file, which cites the id. The record
+  stays the history; the rule file stays the instruction.
+- **Questions, decisions and defects stay where they are.** An open
+  question lives in the pull request body or the task, an architectural
+  decision in an ADR, and a reported defect follows
+  [issue-handling.md](issue-handling.md). Feedback that answers a question
+  or rules on a defect is linked from it, and a decision taken in response
+  cites the id.
+- **Views.** `codeflow feedback list` groups items by topic, open first;
+  `--write` writes an optional index beside the items, which
+  `validate --docs` warns about once it is stale. `codeflow status` counts
+  open items and `codeflow recall` searches them. A pull request that
+  closes feedback names its ids under Links.
+- **Migration.** Import each entry of an older log once, with its old id in
+  `external_refs`, and mark the old log as frozen history. Harness memory
+  points at FB ids instead of keeping its own copy of the words.
+
+`validate --docs` fails an item whose id and file name disagree, a repeated
+uid, an unlisted topic, an empty Verbatim, a placed item with no placement
+that resolves, a closed item with an empty Closure, a declined item without
+`confirmed_by: operator`, and a superseded item whose successor is missing.
+The standard and minimal tiers have no `project-management/`; there feedback
+stays with its unit in the harness's task tools.
 
 ## Choose the lightest durable artifact
 

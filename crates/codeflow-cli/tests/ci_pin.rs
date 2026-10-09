@@ -271,6 +271,802 @@ fn pinned_install_verifies_the_release_and_fails_closed() {
     );
 }
 
+/// `project_toml(version)` with a `[scaffold_sha256]` table naming
+/// `table_version` and, when given, the Linux archive's digest.
+fn pinned_state(version: &str, table_version: &str, digest: Option<&str>) -> String {
+    let entry = digest.map_or_else(String::new, |d| {
+        format!("x86_64-unknown-linux-gnu = \"{d}\"\n")
+    });
+    format!(
+        "{}\n[scaffold_sha256]\nversion = \"{table_version}\"\n{entry}",
+        project_toml(version)
+    )
+}
+
+fn set_state(work: &Path, state: &str, message: &str) {
+    std::fs::write(work.join(".codeflow/project.toml"), state).unwrap();
+    git(work, &["commit", "-qam", message]);
+}
+
+/// sathyassn/codeflow#47: a digest pinned beside the version in the target's
+/// state is the one the archive must have, whatever the release's own
+/// `sha256.sum` says; a table for another version or without this triple
+/// fails closed.
+#[test]
+fn a_pinned_release_digest_is_required_whatever_sha256_sum_says() {
+    for (workflow, prefix) in [
+        (POLICY, "Install codeflow"),
+        (CI, "Install codeflow"),
+        (CI, "Install candidate codeflow"),
+    ] {
+        let script = run_blocks(workflow, prefix).remove(0);
+        let dir = tempfile::tempdir().unwrap();
+        let releases = dir.path().join("releases");
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        repo(&work, "1.2.3");
+        let release = publish(&releases, "1.2.3");
+        let archive = release.join(format!("{ASSET}.tar.xz"));
+        let reviewed = sha256(&archive);
+
+        // The reviewed digest: installed, and the output names both checks.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.3", Some(&reviewed)),
+            "chore: pin the digest",
+        );
+        let ok = run_install(&script, &work, "HEAD", &releases);
+        assert!(ok.out.status.success(), "{prefix}: {}", ok.stderr());
+        assert_eq!(ok.installed_version().as_deref(), Some("codeflow 1.2.3"));
+        assert!(
+            ok.stderr().contains(
+                "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+            ),
+            "{}",
+            ok.stderr()
+        );
+        assert!(!ok.stderr().contains("::warning::"), "{}", ok.stderr());
+
+        // A replaced archive with a matching replaced sha256.sum: refused.
+        let original = std::fs::read(&archive).unwrap();
+        let listed = std::fs::read_to_string(release.join("sha256.sum")).unwrap();
+        let mut replaced = original.clone();
+        replaced.extend_from_slice(b"replaced");
+        std::fs::write(&archive, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  {ASSET}.tar.xz\n", sha256(&archive)),
+        )
+        .unwrap();
+        let swapped = run_install(&script, &work, "HEAD", &releases);
+        assert!(!swapped.out.status.success(), "{prefix}");
+        assert!(
+            swapped
+                .stderr()
+                .contains("does not match the digest pinned in .codeflow/project.toml"),
+            "{}",
+            swapped.stderr()
+        );
+        assert!(swapped.installed_version().is_none());
+        std::fs::write(&archive, &original).unwrap();
+        std::fs::write(release.join("sha256.sum"), &listed).unwrap();
+
+        // A table left from another version fails closed and names the fix.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.2", Some(&reviewed)),
+            "chore: stale digest",
+        );
+        let stale = run_install(&script, &work, "HEAD", &releases);
+        assert!(!stale.out.status.success(), "{prefix}");
+        assert!(
+            stale
+                .stderr()
+                .contains("pins the digests of codeflow 1.2.2, not 1.2.3"),
+            "{}",
+            stale.stderr()
+        );
+        assert!(
+            stale.stderr().contains("codeflow update --pin 1.2.3"),
+            "{}",
+            stale.stderr()
+        );
+        assert!(stale.installed_version().is_none());
+
+        // A table without this triple fails closed.
+        set_state(
+            &work,
+            &pinned_state("1.2.3", "1.2.3", None),
+            "chore: no linux digest",
+        );
+        let missing = run_install(&script, &work, "HEAD", &releases);
+        assert!(!missing.out.status.success(), "{prefix}");
+        assert!(
+            missing
+                .stderr()
+                .contains("lists no digest for x86_64-unknown-linux-gnu"),
+            "{}",
+            missing.stderr()
+        );
+        assert!(missing.installed_version().is_none());
+    }
+}
+
+/// A digest table written in a form the installers do not read, or declared
+/// or keyed twice, fails closed, even with a replaced archive and a matching
+/// replaced `sha256.sum`: it never reads as absent.
+#[test]
+fn an_unread_digest_table_fails_closed_against_a_replaced_release() {
+    for (workflow, prefix) in [
+        (POLICY, "Install codeflow"),
+        (CI, "Install codeflow"),
+        (CI, "Install candidate codeflow"),
+    ] {
+        let script = run_blocks(workflow, prefix).remove(0);
+        let dir = tempfile::tempdir().unwrap();
+        let releases = dir.path().join("releases");
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        repo(&work, "1.2.3");
+        let release = publish(&releases, "1.2.3");
+        let archive = release.join(format!("{ASSET}.tar.xz"));
+        let reviewed = sha256(&archive);
+        let mut replaced = std::fs::read(&archive).unwrap();
+        replaced.extend_from_slice(b"replaced");
+        std::fs::write(&archive, &replaced).unwrap();
+        std::fs::write(
+            release.join("sha256.sum"),
+            format!("{}  {ASSET}.tar.xz\n", sha256(&archive)),
+        )
+        .unwrap();
+        for (state, reason) in unread_tables(&reviewed) {
+            set_state(&work, &state, "chore: another table form");
+            let refused = run_install(&script, &work, "HEAD", &releases);
+            assert!(!refused.out.status.success(), "{prefix}: {state}");
+            assert!(
+                refused.stderr().contains(&format!(
+                    "the [scaffold_sha256] table in .codeflow/project.toml at HEAD {reason}"
+                )),
+                "{prefix}: {state}: {}",
+                refused.stderr()
+            );
+            assert!(refused.installed_version().is_none());
+        }
+    }
+}
+
+/// States whose digest table the installers refuse to read, each with the
+/// reason they give.
+fn unread_tables(digest: &str) -> Vec<(String, String)> {
+    let form = "is written in a form the CI installers do not read".to_string();
+    let start =
+        "may be hidden by a line that starts with a character the CI installers do not read"
+            .to_string();
+    let base = project_toml("1.2.3");
+    let table = pinned_state("1.2.3", "1.2.3", Some(digest));
+    vec![
+        (
+            format!("{base}\nscaffold_sha256 = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{digest}\" }}\n"),
+            form.clone(),
+        ),
+        (
+            format!("{base}\n[\"scaffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            form.clone(),
+        ),
+        (
+            format!("{base}\nscaffold_sha256.version = \"1.2.3\"\nscaffold_sha256.x86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            form,
+        ),
+        (
+            format!("{table}[other]\n[scaffold_sha256]\n"),
+            "is declared twice".to_string(),
+        ),
+        (
+            format!("{table}x86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "lists x86_64-unknown-linux-gnu twice".to_string(),
+        ),
+        (
+            format!("{base}\n[\"\\u0073caffold_sha256\"]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden behind an escaped key".to_string(),
+        ),
+        (
+            format!("{base}\n\"\\u0073caffold_sha256\" = {{ version = \"1.2.3\", x86_64-unknown-linux-gnu = \"{digest}\" }}\n"),
+            "may be hidden behind an escaped key".to_string(),
+        ),
+        // A multi-line string whose line reads as the entry, beside a real
+        // entry the reader would not see.
+        (
+            format!("{base}\n[scaffold_sha256]\nversion = \"1.2.3\"\nnotes = '''\nx86_64-unknown-linux-gnu = \"{digest}\"\n'''\n'x86_64-unknown-linux-gnu' = \"{digest}\"\n"),
+            "may be hidden by a multi-line string".to_string(),
+        ),
+        (
+            format!("{table}'x86_64-unknown-linux-gnu' = \"{digest}\"\n"),
+            "holds a line other than key = \"value\"".to_string(),
+        ),
+        // An invisible first character hides the header from a byte reader.
+        (
+            format!("{base}\n\u{a0}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            start.clone(),
+        ),
+        (
+            format!("{base}\n\u{2003}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            start.clone(),
+        ),
+        (
+            format!("{base}\n\0[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden by a control character".to_string(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha\x00256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden by a control character".to_string(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha\u{200b}256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"),
+            "may be hidden behind a name with a character outside printable ASCII".to_string(),
+        ),
+        (
+            format!("{base}\n[scaffold_sha256]\rversion = \"1.2.3\"\rx86_64-unknown-linux-gnu = \"{digest}\"\r"),
+            "may be hidden by a carriage return inside a line".to_string(),
+        ),
+        (
+            format!("\u{feff}[scaffold_sha256]\nversion = \"1.2.3\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n{base}"),
+            start,
+        ),
+    ]
+}
+
+/// Values and trailing comments that name the table are not declarations:
+/// with no table the install warns and checks `sha256.sum`, and a pinned
+/// table with such a comment is still enforced.
+#[test]
+fn comments_and_values_naming_the_table_are_not_declarations() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let release = publish(&releases, "1.2.3");
+    let reviewed = sha256(&release.join(format!("{ASSET}.tar.xz")));
+
+    set_state(
+        &work,
+        &format!(
+            "{}\n[notes] # scaffold_sha256 lands later\ntext = \"scaffold_sha256\" # scaffold_sha256\n",
+            project_toml("1.2.3")
+        ),
+        "chore: notes naming the table",
+    );
+    let unpinned = run_install(&script, &work, "HEAD", &releases);
+    assert!(unpinned.out.status.success(), "{}", unpinned.stderr());
+    assert!(
+        unpinned
+            .stderr()
+            .contains("::warning::no release digest is pinned"),
+        "{}",
+        unpinned.stderr()
+    );
+
+    set_state(
+        &work,
+        &format!(
+            "{}\n[scaffold_sha256] # reviewed\nversion = \"1.2.3\" # scaffold_sha256 for 1.2.3\nx86_64-unknown-linux-gnu = \"{reviewed}\"\n",
+            project_toml("1.2.3")
+        ),
+        "chore: a commented table",
+    );
+    let pinned = run_install(&script, &work, "HEAD", &releases);
+    assert!(pinned.out.status.success(), "{}", pinned.stderr());
+    assert!(
+        pinned.stderr().contains(
+            "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+        ),
+        "{}",
+        pinned.stderr()
+    );
+}
+
+/// The state `codeflow update --pin` writes is one the installers read: a
+/// project value that needs more than one line, or both quote kinds, is
+/// written as an escaped one-line string, never a multi-line string the
+/// installers refuse, and doctor finds nothing CI would refuse. A pin also
+/// rewrites a multi-line string written by hand, which is the remedy doctor
+/// and the installers name.
+#[test]
+fn a_state_codeflow_writes_is_one_the_installers_read() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    let workflows = work.join(".github/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::write(workflows.join("codeflow-ci.yml"), CI).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-qm", "ci: the managed workflow"]);
+    let release = publish(&releases, "1.2.3");
+    let mut sums = std::fs::read_to_string(release.join("sha256.sum")).unwrap();
+    for triple in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+        let archive = release.join(format!("codeflow-cli-{triple}.tar.xz"));
+        std::fs::write(&archive, format!("{triple}\n")).unwrap();
+        sums.push_str(&sha256(&archive));
+        sums.push_str("  codeflow-cli-");
+        sums.push_str(triple);
+        sums.push_str(".tar.xz\n");
+    }
+    std::fs::write(release.join("sha256.sum"), sums).unwrap();
+    set_state(
+        &work,
+        &format!(
+            "{}note = \"first line\\nsecond line\"\nquoted = \"it's \\\"both\\\"\"\npoem = \"\"\"\nline one\nline two\"\"\"\npath = \"C:\\\\Users\\\\O'Brien\"\nlist = [\"first line\\nx = 1\", \"ok\"]\n\n[notes]\ntext = \"a\\r\\nb '''\"\n",
+            project_toml("1.2.3")
+        ),
+        "chore: values that need more than one line",
+    );
+
+    let codeflow = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args(args)
+            .current_dir(&work)
+            .env("CODEFLOW_HOME", dir.path().join("home"))
+            .env(
+                "CODEFLOW_RELEASE_URL",
+                format!("file://{}", releases.display()),
+            )
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap()
+    };
+    let said = |out: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    // A multi-line string written by hand is refused, and doctor names the
+    // pin as the remedy.
+    let refused = run_install(&script, &work, "HEAD", &releases);
+    assert_eq!(refused.out.status.code(), Some(1), "{}", refused.stderr());
+    assert!(
+        refused
+            .stderr()
+            .contains("may be hidden by a multi-line string"),
+        "{}",
+        refused.stderr()
+    );
+    let before = codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(said(&before).contains("fails closed"), "{}", said(&before));
+
+    let pin = codeflow(&["update", "--pin", "1.2.3"]);
+    assert!(pin.status.success(), "{}", said(&pin));
+    let state = std::fs::read_to_string(work.join(".codeflow/project.toml")).unwrap();
+    assert!(
+        !state.contains("\"\"\"") && !state.contains("'''"),
+        "{state}"
+    );
+    let parsed: toml::Table = toml::from_str(&state).unwrap();
+    assert_eq!(parsed["note"].as_str(), Some("first line\nsecond line"));
+    assert_eq!(parsed["quoted"].as_str(), Some("it's \"both\""));
+    assert_eq!(parsed["notes"]["text"].as_str(), Some("a\r\nb '''"));
+    assert_eq!(parsed["poem"].as_str(), Some("line one\nline two"));
+    assert_eq!(parsed["path"].as_str(), Some("C:\\Users\\O'Brien"));
+    assert_eq!(
+        parsed["list"],
+        toml::Value::Array(vec!["first line\nx = 1".into(), "ok".into()])
+    );
+    git(&work, &["commit", "-qam", "chore: pin 1.2.3"]);
+
+    let install = run_install(&script, &work, "HEAD", &releases);
+    assert!(install.out.status.success(), "{}", install.stderr());
+    assert!(
+        install.stderr().contains(
+            "verified against the digest pinned in .codeflow/project.toml and sha256.sum"
+        ),
+        "{}",
+        install.stderr()
+    );
+    let doctor = codeflow(&["doctor", "--check", "ci-perimeter"]);
+    assert!(
+        said(&doctor).contains("the release digests pinned in .codeflow/project.toml")
+            && !said(&doctor).contains("fails closed"),
+        "{}",
+        said(&doctor)
+    );
+}
+
+/// sathyassn/codeflow#47: with no digest pinned the release's `sha256.sum`
+/// stays the check, and the job says so as a warning.
+#[test]
+fn without_a_pinned_digest_the_install_warns_and_checks_sha256_sum() {
+    let script = install_script(POLICY);
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    repo(&work, "1.2.3");
+    publish(&releases, "1.2.3");
+    let ok = run_install(&script, &work, "HEAD", &releases);
+    assert!(ok.out.status.success(), "{}", ok.stderr());
+    assert!(
+        ok.stderr()
+            .contains("::warning::no release digest is pinned in .codeflow/project.toml"),
+        "{}",
+        ok.stderr()
+    );
+    assert!(
+        ok.stderr().contains("codeflow update --pin 1.2.3"),
+        "{}",
+        ok.stderr()
+    );
+    assert!(
+        ok.stderr()
+            .contains("codeflow 1.2.3 installed and verified against sha256.sum"),
+        "{}",
+        ok.stderr()
+    );
+}
+
+/// Run the gates job's `codeflow test` step in `repo` with a logging
+/// `codeflow` first on PATH. Returns the output and the log.
+fn run_test_step(repo: &Path) -> (Output, String) {
+    let script = run_blocks(CI, "codeflow test").remove(0);
+    let bin = repo.parent().unwrap().join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = repo.parent().unwrap().join("calls.log");
+    let _ = std::fs::remove_file(&log);
+    std::fs::write(
+        bin.join("codeflow"),
+        format!(
+            "#!/bin/sh\necho \"codeflow $* HOOK_VALUE=${{HOOK_VALUE:-unset}} PWD=$(pwd)\" >> '{}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(bin.join("codeflow"))
+        .status()
+        .unwrap();
+    let out = Command::new("bash")
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+        .current_dir(repo)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("LOG", &log)
+        .output()
+        .unwrap();
+    (out, std::fs::read_to_string(&log).unwrap_or_default())
+}
+
+/// sathyassn/codeflow#46: the gates job sources a project-owned setup hook
+/// between the install and `codeflow test`, so what it exports reaches the
+/// test gate; a failing hook fails the step, and without one the test gate
+/// runs as before.
+#[test]
+fn the_gates_job_sources_the_project_setup_hook_before_the_test_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    let root = work.canonicalize().unwrap();
+
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.trim(),
+        format!(
+            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    );
+
+    // The hook runs first, its export reaches the gate, and a `cd` in it
+    // does not move the gate.
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        "echo hook >> \"$LOG\"\nexport HOOK_VALUE=set\ncd /\n",
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.lines().collect::<Vec<_>>(),
+        vec![
+            "hook".to_string(),
+            format!(
+                "codeflow test --strict HOOK_VALUE=set PWD={}",
+                root.display()
+            )
+        ]
+    );
+
+    // A failing hook fails the step before the gate runs.
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        "echo hook >> \"$LOG\"\nfalse\n",
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "hook");
+
+    // sathyassn/codeflow#81: the hook cannot move what the gate calls. A
+    // `codeflow` function, a `codeflow` earlier on PATH and `set +e` leave
+    // the real gate running, and reassigning the binary fails the step.
+    let decoy = dir.path().join("decoy");
+    std::fs::create_dir_all(&decoy).unwrap();
+    std::fs::write(
+        decoy.join("codeflow"),
+        "#!/bin/sh\necho decoy >> \"$LOG\"\n",
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(decoy.join("codeflow"))
+        .status()
+        .unwrap();
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        format!(
+            "set +e\nexport PATH='{}':\"$PATH\"\ncodeflow() {{ echo skipped >> \"$LOG\"; }}\n",
+            decoy.display()
+        ),
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        log.trim(),
+        format!(
+            "codeflow test --strict HOOK_VALUE=unset PWD={}",
+            root.display()
+        )
+    );
+    std::fs::write(
+        work.join(".codeflow/ci-setup.sh"),
+        format!("codeflow_bin='{}'\n", decoy.join("codeflow").display()),
+    )
+    .unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "");
+
+    // A hook that exits, even with status 0, fails the step: the gate
+    // never ran.
+    std::fs::write(work.join(".codeflow/ci-setup.sh"), "exit 0\n").unwrap();
+    let (out, log) = run_test_step(&work);
+    assert!(!out.status.success(), "{out:?}");
+    assert_eq!(log.trim(), "");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("the run ended before codeflow test ran"),
+        "{out:?}"
+    );
+}
+
+/// A repository whose base commit holds `base_policy` (none when `None`)
+/// and whose checked-out head holds `head_policy`; `suppression` names the
+/// side (`"base"` or `"head"`) that adds an `osv-scanner.toml` beside the
+/// lockfile; `"gitignore"` has the head ignore the lockfile and `"symlink"`
+/// has it commit a link named `osv-scanner` to a `victim` file outside the
+/// checkout. Returns the base SHA.
+fn audit_repo(
+    work: &Path,
+    base_policy: Option<&str>,
+    head_policy: &str,
+    suppression: &str,
+) -> String {
+    std::fs::create_dir_all(work.join(".codeflow")).unwrap();
+    git(work, &["init", "-q", "-b", "main"]);
+    git(work, &["config", "user.email", "t@example.com"]);
+    git(work, &["config", "user.name", "t"]);
+    std::fs::write(work.join("Cargo.lock"), "# lock\n").unwrap();
+    if let Some(policy) = base_policy {
+        std::fs::write(work.join(".codeflow/policy.json"), policy).unwrap();
+    }
+    if suppression == "base" {
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+    }
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-qm", "base"]);
+    let base = git(work, &["rev-parse", "HEAD"]);
+    std::fs::write(work.join(".codeflow/policy.json"), head_policy).unwrap();
+    if suppression == "head" {
+        std::fs::write(work.join("osv-scanner.toml"), "[[IgnoredVulns]]\n").unwrap();
+    }
+    if suppression == "gitignore" {
+        std::fs::write(work.join(".gitignore"), "Cargo.lock\n").unwrap();
+    }
+    if suppression == "symlink" {
+        std::os::unix::fs::symlink(
+            work.parent().unwrap().join("victim"),
+            work.join("osv-scanner"),
+        )
+        .unwrap();
+    }
+    git(work, &["add", "-A"]);
+    git(work, &["commit", "-q", "--allow-empty", "-m", "head"]);
+    base
+}
+
+/// Run the security-review job's dependency audit step in `repo` with
+/// `TRUSTED_SHA` set, a fake `curl` and `sha256sum`, and a fake
+/// osv-scanner that reports an advisory unless an `osv-scanner.toml` sits
+/// beside the lockfile and, as osv-scanner does, skips a lockfile the
+/// `.gitignore` names unless it runs with `--no-ignore`. `fake` sets
+/// `OSV_FAKE` (`empty` or `broken`, both exit 128) and `OSV_FAKE_SOURCE`
+/// (the path the advisory names) for the fake scanner.
+fn run_audit_step(repo: &Path, trusted: &str, fake: &[(&str, &str)]) -> Output {
+    let script = run_blocks(CI, "dependency audit").remove(0);
+    let bin = repo.parent().unwrap().join("audit-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let runner_temp = repo.parent().unwrap().join("runner-temp");
+    std::fs::create_dir_all(&runner_temp).unwrap();
+    let scanner = "#!/bin/sh\ncase \" $* \" in *' --no-ignore '*) ;; *) if grep -qx Cargo.lock .gitignore 2>/dev/null; then echo 'No package sources found'; exit 128; fi ;; esac\ncase ${OSV_FAKE:-} in\n  empty) echo 'No package sources found, --help for usage information.'; exit 128 ;;\n  broken) echo 'Error during extraction: Cargo.lock: could not extract'; echo 'No package sources found, --help for usage information.'; exit 128 ;;\nesac\nif [ -f osv-scanner.toml ]; then echo suppressed; exit 0; fi\necho \"GHSA-test advisory in ${OSV_FAKE_SOURCE:-Cargo.lock}\"; exit 1\n";
+    let curl = format!(
+        "#!/bin/sh\nwhile [ $# -gt 0 ]; do case $1 in -o) shift; printf '%s' \"{}\" > \"$1\";; esac; shift; done\n",
+        scanner.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
+    );
+    for (name, text) in [
+        ("curl", curl.as_str()),
+        ("sha256sum", "#!/bin/sh\ncat >/dev/null\nexit 0\n"),
+    ] {
+        std::fs::write(bin.join(name), text).unwrap();
+        Command::new("chmod")
+            .arg("755")
+            .arg(bin.join(name))
+            .status()
+            .unwrap();
+    }
+    Command::new("bash")
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", &script])
+        .current_dir(repo)
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("TRUSTED_SHA", trusted)
+        .env("RUNNER_TEMP", &runner_temp)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .envs(fake.iter().copied())
+        .output()
+        .unwrap()
+}
+
+fn levels(security_review: &str, dep_audit: &str) -> String {
+    format!(
+        "{{\"git\": {{\"security_review\": \"{security_review}\", \"dep_audit\": \"{dep_audit}\"}}}}\n"
+    )
+}
+
+/// sathyassn/codeflow#81: the dependency audit reads its levels from the
+/// trusted commit, so a pull request that turns both keys off, deletes
+/// them or adds its own suppression is still judged by the base, and a
+/// base whose policy cannot be read fails the job instead of warning.
+#[test]
+fn the_security_review_reads_its_levels_and_suppressions_from_the_trusted_commit() {
+    let run_with = |base: Option<&str>, head: &str, suppression: &str, fake: &[(&str, &str)]| {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("repo");
+        std::fs::create_dir_all(&work).unwrap();
+        let trusted = audit_repo(&work, base, head, suppression);
+        let out = run_audit_step(&work, &trusted, fake);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.success(), text)
+    };
+    let run =
+        |base: Option<&str>, head: &str, suppression: &str| run_with(base, head, suppression, &[]);
+    let block = levels("warn", "block");
+
+    // The head turns both keys off: the base's block still fails the job.
+    let (ok, text) = run(Some(&block), &levels("off", "off"), "");
+    assert!(!ok, "{text}");
+    assert!(text.contains("dep_audit=block"), "{text}");
+    assert!(!text.contains("skipping"), "{text}");
+
+    // The head deletes the keys: the base still judges.
+    let (ok, text) = run(Some(&block), "{\"git\": {}}\n", "");
+    assert!(!ok, "{text}");
+
+    // The head adds its own suppression: the base's (none) applies.
+    let (ok, text) = run(Some(&block), &block, "head");
+    assert!(!ok, "{text}");
+    assert!(text.contains("GHSA-test"), "{text}");
+
+    // The head hides its lockfile behind a `.gitignore`: it is still read.
+    let (ok, text) = run(Some(&block), &block, "gitignore");
+    assert!(!ok, "{text}");
+    assert!(text.contains("GHSA-test"), "{text}");
+
+    // A missing policy, a missing key or a value outside block, warn and
+    // off fails closed whatever the head says.
+    for base in [
+        None,
+        Some("{\"git\": {\"dep_audit\": \"block\"}}\n"),
+        Some(levels("warn", "loud").as_str()),
+        Some("not json\n"),
+    ] {
+        let (ok, text) = run(base, &levels("off", "off"), "");
+        assert!(!ok, "{base:?}: {text}");
+        assert!(text.contains("fails closed"), "{base:?}: {text}");
+    }
+
+    // The base's own levels still decide: warn reports, off skips, and a
+    // suppression the base holds applies.
+    let (ok, text) = run(Some(&levels("warn", "warn")), &block, "");
+    assert!(ok, "{text}");
+    assert!(text.contains("::warning::dependency advisories"), "{text}");
+    let (ok, text) = run(Some(&levels("off", "off")), &block, "");
+    assert!(ok, "{text}");
+    assert!(text.contains("skipping"), "{text}");
+    let (ok, text) = run(Some(&block), &block, "base");
+    assert!(ok, "{text}");
+    assert!(
+        text.contains("suppressions from trusted commit: osv-scanner.toml"),
+        "{text}"
+    );
+
+    // The verdict follows the scanner's exit status: an advisory whose path
+    // reads like the no-lockfile message still fails under block, a scan
+    // that finds no package sources passes, and one that could not read a
+    // lockfile is a scan error.
+    let (ok, text) = run_with(
+        Some(&block),
+        &block,
+        "",
+        &[("OSV_FAKE_SOURCE", "no lockfiles/Cargo.lock")],
+    );
+    assert!(!ok, "{text}");
+    assert!(
+        text.contains("GHSA-test advisory in no lockfiles/"),
+        "{text}"
+    );
+    assert!(!text.contains("nothing to audit"), "{text}");
+    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "empty")]);
+    assert!(ok, "{text}");
+    assert!(text.contains("nothing to audit"), "{text}");
+    let (ok, text) = run_with(Some(&block), &block, "", &[("OSV_FAKE", "broken")]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("exit 128"), "{text}");
+
+    // The scanner downloads outside the checkout, so a link the change
+    // commits at `osv-scanner` cannot redirect the write.
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("repo");
+    std::fs::create_dir_all(&work).unwrap();
+    let victim = dir.path().join("victim");
+    std::fs::write(&victim, "keep\n").unwrap();
+    let trusted = audit_repo(&work, Some(&block), &block, "symlink");
+    let out = run_audit_step(&work, &trusted, &[]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("GHSA-test"), "{out:?}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep\n");
+}
+
+/// sathyassn/codeflow#48: the full-history secret scan runs on a schedule
+/// and on demand, and the gates job stays off the schedule.
+#[test]
+fn the_ci_workflow_schedules_the_full_scan_and_keeps_the_gates_off_it() {
+    let on = CI
+        .split("\non:\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .unwrap();
+    for event in ["pull_request:", "push:", "schedule:", "workflow_dispatch:"] {
+        assert!(on.contains(event), "{event}: {on}");
+    }
+    assert!(job(CI, "gates").contains("    if: github.event_name != 'schedule'\n"));
+    assert!(!job(CI, "secret-scan").contains("    if:"));
+}
+
 /// The job-level text of `id` in a workflow, up to the next job.
 fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
     let start = workflow
@@ -453,15 +1249,14 @@ fn judge_a_forged_head(head_pin: &str) {
 
     // The pull_request_target run: the target checkout, the head as data.
     let target = dir.path().join("target");
-    git(
+    codeflow_fixture::clone(
         dir.path(),
-        &[
-            "clone",
-            "-q",
-            origin.to_str().unwrap(),
-            target.to_str().unwrap(),
-        ],
-    );
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     git(
         &target,
         &["fetch", "-q", "origin", "feat/x:refs/codeflow/pr-head"],
@@ -562,15 +1357,14 @@ fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
 
     // The run's working tree: GitHub's default checkout, the default branch.
     let target = dir.path().join("target");
-    git(
+    codeflow_fixture::clone(
         dir.path(),
-        &[
-            "clone",
-            "-q",
-            origin.to_str().unwrap(),
-            target.to_str().unwrap(),
-        ],
-    );
+        origin.to_str().unwrap(),
+        target.to_str().unwrap(),
+    )
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
+    .run();
     assert_eq!(git(&target, &["branch", "--show-current"]), "main");
     git(
         &target,

@@ -3135,19 +3135,10 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = Command::new("git")
-        .args([
-            "clone",
-            origin.path().to_str().unwrap(),
-            work.to_str().unwrap(),
-        ])
+    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .unwrap();
+        .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -5390,10 +5381,11 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    git(
-        clone.path(),
-        &["clone", "-q", "--filter=blob:none", &url, "."],
-    );
+    codeflow_fixture::clone(clone.path(), &url, ".")
+        .filter("blob:none")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
     git(source.path(), &["checkout", "-q", "-b", "feature"]);
@@ -6995,5 +6987,283 @@ fn git_hook_help_matches_the_install_path_constant() {
     assert!(
         !line.contains(".git/hooks"),
         "git-hook help names .git/hooks, which the install code does not use"
+    );
+}
+
+#[path = "support/line_adoption.rs"]
+mod line_adoption_fixture;
+
+/// TSK-248 AC-3 (issue 85): a push that adds an unadopted direct commit to
+/// an epic line is refused with the `git reset --keep` remedy, on a first
+/// push and on an update; an older direct commit outside the pushed range
+/// does not block later merges, and a landed adoption clears the line.
+#[test]
+fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
+    use line_adoption_fixture::{blocks, output, passes, Line, LINE, ZERO};
+    let f = Line::new();
+    passes(&f.push(ZERO));
+    let direct = f.direct();
+    blocks(&f.push(ZERO), "git reset --keep main");
+    let refused = f.push(&f.git(&["rev-parse", "main"]));
+    blocks(&refused, &direct[..9]);
+    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains("line_adoptions"));
+    // The already shared direct commit must not prevent unrelated merges.
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn work() {}\n");
+    f.commit("feat: build work");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&direct));
+    f.land_adoption(&direct);
+    passes(&f.push(ZERO));
+    passes(&f.push(&direct));
+}
+
+/// TSK-248 AC-3 controls: a push of merges only passes, on an update and on
+/// the line's first push.
+#[test]
+fn epic_line_adoption_pre_push_merge_only_control() {
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    let f = Line::new();
+    let old = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.direct();
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&old));
+    passes(&f.push(ZERO));
+}
+
+/// TSK-248 control: in a repository that never had durable work tracking
+/// (no task record on the target or the line) there is no epic class and no
+/// adoption route, so the push check stays off, as before this change.
+#[test]
+fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
+    use line_adoption_fixture::{passes, Line, ZERO};
+    let f = Line::untracked();
+    let first = f.direct();
+    passes(&f.push(ZERO));
+    f.write("src/lib.rs", "pub fn again() {}\n");
+    f.commit("fix: second direct change");
+    passes(&f.push(&first));
+}
+
+/// TSK-248 review finding: tracking is on when the target or the pushed tip
+/// has it, as in CI (SPC-013 R-70), so a direct commit that deletes the only
+/// task record is still refused while the target keeps tracking on.
+#[test]
+fn epic_line_adoption_pre_push_refuses_a_tip_that_drops_tracking() {
+    use line_adoption_fixture::{blocks, Line, ZERO};
+    let f = Line::new();
+    f.git(&["rm", "-q", "project-management/tasks/TSK-001.md"]);
+    let direct = f.direct();
+    blocks(&f.push(ZERO), &direct[..9]);
+}
+
+/// TSK-242 review round 13: git reads `GIT_DIR`, `GIT_COMMON_DIR` and
+/// `GIT_WORK_TREE` from the environment it inherits, so the hook reads them
+/// from its own. A scopeless `git config` that sets a code-running key
+/// refuses when that environment leaves the repository's configuration
+/// unplaced, or names a git directory whose `config` links elsewhere; a
+/// known-safe key still passes.
+#[test]
+fn git_guard_reads_git_locations_from_its_own_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let common = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_COMMON_DIR", &elsewhere);
+        cmd
+    };
+    let work_tree = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_WORK_TREE", &elsewhere);
+        cmd
+    };
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config core.fsmonitor ./m");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{name}: {err}");
+        assert!(err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config user.name Ada");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    #[cfg(unix)]
+    {
+        // A git directory whose `config` is a link to a file every
+        // repository may read.
+        let evil = dir.path().join("evil");
+        std::fs::create_dir_all(evil.join("objects")).unwrap();
+        std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        let stand_in = dir.path().join("stand-in.gitconfig");
+        std::fs::write(&stand_in, "").unwrap();
+        std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+        let git_dir = || {
+            let mut cmd = codeflow();
+            cmd.env("GIT_DIR", &evil);
+            cmd
+        };
+        for command in [
+            "git config core.fsmonitor ./m",
+            "git config alias.x '!id'",
+            "git config core.fsmonitor 08",
+        ] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+            assert!(err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+        for command in ["git config user.name Ada", "git config core.fsmonitor true"] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+    }
+}
+
+/// TSK-242 review round 14: a git directory named by a drive, UNC or Git
+/// Bash path is absolute, never joined onto the `-C` or `cd` directory, and
+/// a named git directory the guard cannot open is never shown to be a
+/// repository's own by a `.git` in its name. The paths are the host's own:
+/// drive paths on Windows, rooted paths elsewhere, where the result is
+/// unchanged.
+#[test]
+fn git_guard_reads_an_absolute_git_dir_as_the_host_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    // A git directory whose `config` is a link to a stand-in for a file
+    // every repository may read.
+    let evil = dir.path().join("evil").join(".git");
+    std::fs::create_dir_all(evil.join("objects")).unwrap();
+    std::fs::create_dir_all(evil.join("refs")).unwrap();
+    std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+    let stand_in = dir.path().join("stand-in.gitconfig");
+    std::fs::write(&stand_in, "").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&stand_in, evil.join("config")).unwrap();
+    let missing = dir.path().join("no-such").join(".git");
+    let quoted = |p: &Path| format!("'{}'", p.display());
+    let (r, e, m) = (quoted(&repo), quoted(&evil), quoted(&missing));
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let mut wrong = Vec::new();
+    let mut refused = |out: &Output, what: &str| {
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("allowed {what}: {err}"));
+        }
+    };
+    let mut commands = vec![
+        format!("git -C {r} --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir={e} config alias.x '!id'"),
+        format!("cd {r} && git --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir {m} config alias.x '!id'"),
+        format!("git -C {r} --git-dir {m} config core.fsmonitor ./m"),
+    ];
+    if cfg!(windows) {
+        // The Git Bash spelling of the same git directory, `/c/...`.
+        let text = evil.display().to_string();
+        let (drive, rest) = text.split_once(":\\").unwrap();
+        let bash = format!("/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"));
+        commands.push(format!(
+            "git -C {r} --git-dir {bash} config core.fsmonitor ./m"
+        ));
+    }
+    for command in &commands {
+        refused(&guard(&mut codeflow(), command), command);
+    }
+    // The same git directories inherited from the hook's environment.
+    for (git_dir, command) in [
+        (&evil, format!("git -C {r} config core.fsmonitor ./m")),
+        (&missing, format!("git -C {r} config alias.x '!id'")),
+    ] {
+        let mut cmd = codeflow();
+        cmd.env("GIT_DIR", git_dir);
+        refused(
+            &guard(&mut cmd, &command),
+            &format!("GIT_DIR={}: {command}", git_dir.display()),
+        );
+    }
+    for command in [
+        format!("git -C {r} --git-dir {e} config user.name Ada"),
+        format!(
+            "git -C {r} --git-dir {} config alias.co checkout",
+            quoted(&repo.join(".git"))
+        ),
+    ] {
+        let out = guard(&mut codeflow(), &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("git.hook_integrity") {
+            wrong.push(format!("refused {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-242 review round 14: the edit guard protects the `.gitconfig` of
+/// every home a shell of this user may read, `USERPROFILE` included when
+/// `HOME` names another directory, as the startup class does.
+#[test]
+fn edit_guard_protects_the_gitconfig_of_every_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let home = dir.path().join("home");
+    let profile = dir.path().join("profile");
+    for d in [&repo, &home, &profile] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let write = |path: &Path| {
+        let payload = format!(
+            r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"[alias]"}},"cwd":{}}}"#,
+            json_string(&path.to_string_lossy()),
+            json_string(&repo.to_string_lossy()),
+        );
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .env("HOME", &home)
+                .env("USERPROFILE", &profile)
+                .env_remove("XDG_CONFIG_HOME")
+                .current_dir(&repo),
+            &payload,
+        )
+    };
+    for path in [home.join(".gitconfig"), profile.join(".gitconfig")] {
+        let out = write(&path);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{}: {err}", path.display());
+        assert!(
+            err.contains("git.hook_integrity"),
+            "{}: {err}",
+            path.display()
+        );
+    }
+    let out = write(&repo.join("notes.txt"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

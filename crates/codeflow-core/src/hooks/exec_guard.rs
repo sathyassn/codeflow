@@ -4,7 +4,11 @@
 //! reads and headless peer runs use their existing policy levels. The family
 //! classifier unwraps supported launchers; interpreter literals use the same
 //! rule as the action they name. Enforcement-path references use
-//! `git.hook_integrity`. Opaque child programs remain outside this parser.
+//! `git.hook_integrity`. Writes to shell startup files refuse under
+//! `security.shell_startup`, which no policy relaxes (TSK-242), and writes
+//! to the default user and system git configuration files under
+//! `git.hook_integrity`. Opaque
+//! child programs remain outside this parser.
 
 use crate::security::dangerous::DangerousModule;
 use crate::security::headless::{headless_peer_run, HeadlessRun};
@@ -122,6 +126,20 @@ pub fn evaluate_in(
     } else {
         evaluate_floor(command)
     };
+    // Shell startup files: always blocking, no policy key (TSK-242); the
+    // default user and system git configuration files by the same check,
+    // under `git.hook_integrity` at its level. A command the catastrophic
+    // floor already refuses (`rm -rf /etc/*`) gets that one finding. A
+    // certified prose line is judged here too: the startup check is a
+    // write-target check, not a raw-text word check.
+    if violations.is_empty() {
+        violations.extend(crate::security::startup::evaluate_with(
+            command,
+            cwd,
+            &crate::security::startup::StartupEnv::from_process_at(cwd),
+            integrity,
+        ));
+    }
     if !prose && levels.privilege_escalation.is_active() {
         if let Some(verdict) = PrivilegeModule.check(&ctx) {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
@@ -143,9 +161,7 @@ pub fn evaluate_in(
             violations.push(violation);
         }
     }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from);
+    let home = crate::portable_path::user_home();
     for finding in crate::security::interpreter::evaluate(
         command,
         levels,

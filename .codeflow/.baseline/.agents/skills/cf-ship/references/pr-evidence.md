@@ -15,11 +15,11 @@ only) leaves out Testing; a light range (only Markdown under `docs/` or
 `project-management/`, outside every contract surface) needs only Summary
 and Changes. The rest appear only when their condition holds.
 
-Every PR names its work on a `Task:` line: `TSK-NNN` or `EPC-NNN` where
-durable tracking is active (judged from the tracking state, not the
-installed tier), and a non-empty unit name where it is not. It names its
-task, or its epic for the breakdown PR and the PR to main. A missing, empty,
-malformed, repeated or mismatched `Task:` line is refused.
+Every PR names its work on one `Task:` line. With durable tracking (judged
+from tracking state, not tier): `TSK-NNN` for a task, `EPC-NNN` for the
+breakdown PR and the PR to main, and every epic it changes for a planning
+amendment, `Task: EPC-001, EPC-002`. Without it, a non-empty unit name.
+A missing, empty, malformed, repeated or mismatched line is refused.
 
 | Section | When | Content |
 |---|---|---|
@@ -33,7 +33,7 @@ malformed, repeated or mismatched `Task:` line is refused.
 | Whole-flow evidence | after Testing, when a CLI command's behavior, flags or output; install, update or scaffold; a hook or guard; an automation handoff; or a rendered UI changed | one bullet per journey: what ran, what was observed, what was not exercised |
 | Breaking change | after Release impact, when Breaking is yes and the migration needs more than one line | what breaks and the migration steps |
 | Risk and follow-up | after Release impact, when Impact is the breaking level, a watched contract path changed, a hook, guard, secret scan, sandbox or permission surface changed, or landing needs a human step | what can go wrong, how to back out, steps after merge |
-| Links | last, when the change serves tracked work, a decision or durable evidence | the IDs and the record that carries the detail; omitted, not `N/A`, when there is nothing to link |
+| Links | last, when it serves tracked work, a decision or durable evidence | the IDs, any FB ids of feedback it closes, and the record with the detail; omitted, not `N/A`, if none |
 
 - Keep the Testing heading the project's policy requires (`Testing` by
   default); a renamed heading fails an unchanged policy. A conditional
@@ -46,11 +46,9 @@ malformed, repeated or mismatched `Task:` line is refused.
   copying them; never drop evidence to shorten it.
 - `codeflow ci` also warns, and never blocks, when the body passes 1,000
   words as a reader sees it: HTML comments are left out, fenced blocks and
-  tables count. The warning names the count and the three largest `##`
-  sections. A body grows when each review round is appended. Write it to its
-  final state instead: replace it on each update, link records instead of
-  copying them, keep one results block at the head and one review row per
-  reviewer.
+  tables count. A body grows when each review round is appended. Write it to
+  its final state instead: replace it on each update, keep one results block
+  at the head and one review row per reviewer.
 - Reviews rows name the reviewer with the model that produced the verdict,
   the scope and the verdict, nothing more; the verdict and its native
   provenance live on the PR and findings live in the linked record. A review

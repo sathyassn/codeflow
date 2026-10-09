@@ -55,6 +55,12 @@ enum Command {
         /// Replace user-modified managed files instead of merging.
         #[arg(long)]
         force: bool,
+        /// Only pin this codeflow release for CI: download its archives,
+        /// check them against its sha256.sum and write `scaffold_version` and
+        /// their digests (`[scaffold_sha256]`) to .codeflow/project.toml.
+        /// Nothing else changes. Upgrade step one; land it before the update.
+        #[arg(long, value_name = "VERSION", conflicts_with_all = ["diff", "force"])]
+        pin: Option<String>,
     },
     /// Claude-layer hooks, wired by the settings presets (charter §3.3).
     Hook(cmd::hook::HookArgs),
@@ -98,9 +104,11 @@ enum Command {
     Work(cmd::work::WorkArgs),
     /// Create an ADR: number the next ADR-NNNN and write it as proposed.
     Adr(cmd::new::AdrArgs),
+    /// Operator feedback items: record (FB-NNN), move by the transition table, list.
+    Feedback(cmd::feedback::FeedbackArgs),
     /// The shared id registry: seed, backfill, sync, admit, retarget, restore, check.
     Ids(cmd::ids::IdsArgs),
-    /// Check explicit forecast allocations and pinned evidence without writes.
+    /// Check forecast allocations and compare outcomes derived from git, without writes.
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
     Present(cmd::present::PresentArgs),
@@ -143,6 +151,57 @@ fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> 
         report.pending_pr_template = None;
     }
     Ok(())
+}
+
+/// `codeflow update`: refresh the managed files, then the adopted portal;
+/// exits 2 when either leaves a conflict.
+fn update(
+    assets: &embedded::EmbeddedAssets,
+    cwd: &std::path::Path,
+    diff: Option<PathBuf>,
+    force: bool,
+) -> anyhow::Result<()> {
+    let options = scaffold::UpdateOptions {
+        force,
+        binary_version: BINARY_VERSION.to_string(),
+        diff_out: diff,
+    };
+    let mut report = scaffold::update(assets, cwd, &options)?;
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        decide_pr_template(cwd, &mut report)?;
+    }
+    print!("{report}");
+    cmd::present::provision_state_root_or_warn();
+    print_workspace_hint(cwd);
+    let portal_report = scaffold::portal::update_adopted_portal(assets, cwd)?;
+    if let Some(portal_report) = &portal_report {
+        print!("{portal_report}");
+    }
+    if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts()) {
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// `codeflow update --pin <version>`: pin that release and its archive
+/// digests for CI (sathyassn/codeflow#47). Returns the exit code.
+fn pin_release(root: &std::path::Path, version: &str) -> i32 {
+    let base = scaffold::release_pin::release_url();
+    match scaffold::release_pin::pin_release(
+        root,
+        version,
+        &base,
+        &scaffold::release_pin::fetch_with_curl,
+    ) {
+        Ok(report) => {
+            println!("{report}");
+            0
+        }
+        Err(error) => {
+            eprintln!("codeflow update --pin: error: {error}");
+            1
+        }
+    }
 }
 
 /// Plain `init` and `update` switch nothing in a folder that holds nested
@@ -278,28 +337,10 @@ fn main() -> anyhow::Result<()> {
             cmd::present::provision_state_root_or_warn();
             report_workspace(&cwd, workspace_step)?;
         }
-        Command::Update { diff, force } => {
-            let options = scaffold::UpdateOptions {
-                force,
-                binary_version: BINARY_VERSION.to_string(),
-                diff_out: diff,
-            };
-            let mut report = scaffold::update(&assets, &cwd, &options)?;
-            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                decide_pr_template(&cwd, &mut report)?;
-            }
-            print!("{report}");
-            cmd::present::provision_state_root_or_warn();
-            print_workspace_hint(&cwd);
-            let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
-            if let Some(portal_report) = &portal_report {
-                print!("{portal_report}");
-            }
-            if report.has_conflicts() || portal_report.is_some_and(|report| report.has_conflicts())
-            {
-                std::process::exit(2);
-            }
-        }
+        Command::Update { diff, force, pin } => match pin {
+            Some(version) => std::process::exit(pin_release(&cwd, &version)),
+            None => update(&assets, &cwd, diff, force)?,
+        },
         Command::Hook(args) => std::process::exit(cmd::hook::run(&args)),
         Command::Delegate(args) => std::process::exit(cmd::delegate::run(&args)),
         Command::GitHook(args) => std::process::exit(cmd::git_hook::run(&args)),
@@ -320,6 +361,7 @@ fn main() -> anyhow::Result<()> {
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
         Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
+        Command::Feedback(args) => std::process::exit(cmd::feedback::run(&args)),
         Command::Ids(args) => std::process::exit(cmd::ids::run(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
