@@ -6,6 +6,10 @@
 # classify. Nothing here is specific to one project; CodeFlow's own product
 # (`assets/`, `crates/`) is named in its own `git.product_paths`.
 #
+# A planning amendment (ADR-0078) may carry a `docs/` path only when no
+# adopter-facing member below matches it, so this table also keeps shipped
+# templates and a project's product or watched paths out of a planning range.
+#
 # Globs use the `glob` crate syntax against repository-relative paths; `*`
 # also crosses `/`, and `**/name` matches `name` at the root too. A member
 # with `policy_key` reads its globs from that policy key instead.

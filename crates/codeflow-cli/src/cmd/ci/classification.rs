@@ -1,7 +1,8 @@
 //! Pull request classification (TSK-104, SPC-013 R-64, R-70 to R-72, R-78).
 //!
-//! A tracked range names its task, a planning range names its epic, and an
-//! integration line names the epic verified by its history. A release pull
+//! A tracked range names its task, a planning amendment names every epic it
+//! changes (ADR-0078), and an integration line names the epic verified by
+//! its history. A release pull
 //! request names its release-integration task (R-120). Every PR names
 //! exactly one unit, including projects without durable tracking. The one
 //! exception is the workspace root branch the target's `git.root_branch`
@@ -12,13 +13,14 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
-use codeflow_core::workgraph::classify::{
-    is_planning_path, is_spike_path, path_sets, ProjectPaths,
-};
+use codeflow_core::workgraph::amendment;
+use codeflow_core::workgraph::classify::{is_spike_path, path_sets, ProjectPaths};
+use codeflow_core::workgraph::line_adoption::AdoptionReport;
 use codeflow_core::workgraph::{
-    check_epic_line, declared_work_target, declared_work_target_at_revision,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
-    task_id_from_branch, task_id_from_branch_at,
+    check_epic_line, check_epic_line_with_adoptions, declared_work_target,
+    declared_work_target_at_revision, durable_work_tracking_enabled,
+    durable_work_tracking_enabled_at, resolve_work_target_checked, task_id_from_branch,
+    task_id_from_branch_at,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -28,6 +30,9 @@ pub(super) enum TaskLine {
     Tracked(String),
     /// An epic for a planning change or a verified integration line.
     Epic(String),
+    /// Several epics, comma separated, for one planning amendment that
+    /// changes them all (ADR-0078).
+    Epics(Vec<String>),
     /// A named unit where durable tracking is inactive.
     Unit(String),
     /// Anything else after `Task:`.
@@ -59,27 +64,54 @@ pub(super) fn task_lines(body: &str) -> Vec<TaskLine> {
             .and_then(|value| value.strip_suffix('`'))
             .unwrap_or(value)
             .trim();
-        lines.push(
-            if value.is_empty()
-                || value.eq_ignore_ascii_case("none")
-                || value.to_ascii_lowercase().starts_with("none:")
-                || value.contains(['|', '<', '>', '`'])
-                || value == "TSK-NNN"
-                || value == "EPC-NNN"
-            {
-                TaskLine::Malformed(value.to_string())
-            } else if codeflow_core::workgraph::is_valid_task_format_id(value) {
-                TaskLine::Tracked(value.to_string())
-            } else if codeflow_core::workgraph::is_valid_epic_format_id(value) {
-                TaskLine::Epic(value.to_string())
-            } else if value.starts_with("TSK-") || value.starts_with("EPC-") {
-                TaskLine::Malformed(value.to_string())
-            } else {
-                TaskLine::Unit(value.to_string())
-            },
-        );
+        lines.push(if let Some(epics) = epic_list(value) {
+            epics
+        } else if value.is_empty()
+            || value.eq_ignore_ascii_case("none")
+            || value.to_ascii_lowercase().starts_with("none:")
+            || value.contains(['|', '<', '>', '`'])
+            || value == "TSK-NNN"
+            || value == "EPC-NNN"
+        {
+            TaskLine::Malformed(value.to_string())
+        } else if codeflow_core::workgraph::is_valid_task_format_id(value) {
+            TaskLine::Tracked(value.to_string())
+        } else if codeflow_core::workgraph::is_valid_epic_format_id(value) {
+            TaskLine::Epic(value.to_string())
+        } else if value.starts_with("TSK-") || value.starts_with("EPC-") {
+            TaskLine::Malformed(value.to_string())
+        } else {
+            TaskLine::Unit(value.to_string())
+        });
     }
     lines
+}
+
+/// A comma-separated `Task:` value: `Some(Epics)` for two or more distinct
+/// epic ids, `Some(Malformed)` for any other list, `None` for a single
+/// value. A task id never takes a list.
+fn epic_list(value: &str) -> Option<TaskLine> {
+    if !value.contains(',') {
+        return None;
+    }
+    let items: Vec<&str> = value.split(',').map(str::trim).collect();
+    let distinct = items
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        == items.len();
+    Some(
+        if items.len() > 1
+            && distinct
+            && items
+                .iter()
+                .all(|item| codeflow_core::workgraph::is_valid_epic_format_id(item))
+        {
+            TaskLine::Epics(items.iter().map(ToString::to_string).collect())
+        } else {
+            TaskLine::Malformed(value.to_string())
+        },
+    )
 }
 
 /// The class a pull request resolved to.
@@ -92,8 +124,10 @@ pub(super) enum Class {
     /// what the range brings and bind that task's completion to the head,
     /// so the task rules do not apply.
     ReleaseIntegration { task_id: String },
-    /// The range touches only records and plans.
-    PlanningOnly,
+    /// A planning amendment of the named epics (ADR-0078): the range
+    /// touches records, plans, documentation and `AGENTS.md` outside its
+    /// managed block.
+    PlanningOnly { epics: Vec<String> },
     /// An epic's integration line landing on its target; each task on it was
     /// classified when it landed on the line.
     EpicLine(String),
@@ -122,6 +156,13 @@ pub(super) struct Input<'a> {
     pub epic_line: Option<Result<String, String>>,
     /// Whether the head is the branch the target's `git.root_branch` names.
     pub root_branch: bool,
+    /// Why a range changing these files cannot ride in a planning
+    /// amendment ([`amendment::range_problem`]), asked only for a planning
+    /// class.
+    pub amendment_problem: &'a dyn Fn(&[String]) -> Option<String>,
+    /// Why an epic a planning amendment names cannot be named: absent from
+    /// the head, or cancelled at the target. `None` when it can.
+    pub epic_problem: &'a dyn Fn(&str) -> Option<String>,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -159,13 +200,23 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                     None => Err(format!("'{}' is not a verified epic line", input.branch)),
                 };
             }
-            if let Some(path) = input.files.iter().find(|path| !is_planning_path(path)) {
+            planning(input, vec![epic])
+        }
+        Some(TaskLine::Epics(epics)) => {
+            if input.branch_task.is_some() {
+                return Err("a task branch must name its own task".into());
+            }
+            if input.branch.starts_with("integration/") {
                 return Err(format!(
-                    "a planning-only pull request touches a product path: {path}"
+                    "an integration line lands one epic; `Task: {}` names several",
+                    epics.join(", ")
                 ));
             }
-            Ok(Class::PlanningOnly)
+            planning(input, epics)
         }
+        Some(TaskLine::Malformed(value)) if value.contains(',') => Err(format!(
+            "`Task: {value}` is not a list of distinct epics; only a planning amendment names several, as `Task: EPC-001, EPC-002`, and a task id never takes a list"
+        )),
         Some(TaskLine::Malformed(value) | TaskLine::Unit(value)) => Err(format!(
             "`Task: {value}` is neither `TSK-NNN` nor `EPC-NNN`"
         )),
@@ -174,6 +225,19 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
             "no `Task:` line; name the task, or the epic for a planning change or integration line"
                 .into(),
         ),
+    }
+}
+
+/// A planning amendment of `epics` (ADR-0078): each epic can be named, and
+/// the range carries only what a planning amendment may, `AGENTS.md` only
+/// while its managed block is the target's.
+fn planning(input: &Input<'_>, epics: Vec<String>) -> Result<Class, String> {
+    if let Some(problem) = epics.iter().find_map(|epic| (input.epic_problem)(epic)) {
+        return Err(problem);
+    }
+    match (input.amendment_problem)(input.files) {
+        Some(problem) => Err(problem),
+        None => Ok(Class::PlanningOnly { epics }),
     }
 }
 
@@ -275,6 +339,7 @@ pub(super) fn branch_journey(
     git: &GitPolicy,
     branch: &str,
     range: Option<&Range<'_>>,
+    stacked: &[codeflow_core::workgraph::work_start::ReviewedPin],
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -311,19 +376,74 @@ pub(super) fn branch_journey(
         }
     }
     ran.push("journey");
-    match range_changes(root, range.base, range.head) {
-        Ok(changes) => {
-            let files: Vec<String> = changes.into_iter().map(|(_, path)| path).collect();
-            journey(root, git, &task_id, range.head, &files, tagged);
+    // A branch stacked on reviewed predecessor heads (issue #69) answers
+    // for the paths it changes after them, and the predecessors' own pull
+    // requests answer for theirs (SPC-013 R-53, TSK-234).
+    let stack = match codeflow_core::workgraph::work_start::stack_base(root, stacked) {
+        Ok(stack) => stack.map(|stack| stack.to_string()),
+        Err(error) => {
+            push_unlisted(tagged, &error);
+            return;
         }
-        // The same finding the pull request check gives for that failure.
-        Err(error) => push(
-            tagged,
-            RULE,
-            format!("cannot list the paths the range changes: {error}"),
-            "pass --base and --head so CI can read the range",
-        ),
+    };
+    match journey_paths(root, range.base, range.head, stack.as_deref()) {
+        Ok(files) => journey(root, git, &task_id, range.head, &files, tagged),
+        Err(error) => push_unlisted(tagged, &error),
     }
+}
+
+/// The paths a range answers for under the journey rule (SPC-013 R-53,
+/// TSK-234): what its own commits change, read per commit, and what each
+/// merge changes against the automatic remerge of its parents
+/// ([`codeflow_core::workgraph::acceptance::owned_paths`]). Without a
+/// stack, the range's net change from its target is included too; with
+/// one, the predecessor's commits up to `stack` are its own pull request's.
+fn journey_paths(
+    root: &Path,
+    base: &str,
+    head: &str,
+    stack: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let mut hide = vec![base];
+    hide.extend(stack);
+    let mut files = codeflow_core::workgraph::acceptance::owned_paths(root, head, &hide)?;
+    if stack.is_none() {
+        // The net change can name a path the walked range never touched
+        // (a merge base shared by two lines), so its names are checked raw
+        // too, as `owned_paths` checks its own.
+        for (_, raw) in parse_name_status_raw(&name_status(root, base, head)?)? {
+            let path = codeflow_core::workgraph::acceptance::rule_name(&raw)?;
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// The journey rule for a pull request's task over its whole range.
+fn range_journey(
+    root: &Path,
+    git: &GitPolicy,
+    task_id: &str,
+    range: &Range<'_>,
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    match journey_paths(root, range.base, range.head, None) {
+        Ok(paths) => journey(root, git, task_id, range.head, &paths, tagged),
+        Err(error) => push_unlisted(tagged, &error),
+    }
+}
+
+/// The finding for a range whose paths cannot be listed: the one the pull
+/// request check gives for that failure.
+fn push_unlisted(tagged: &mut Vec<super::TaggedViolation>, error: &str) {
+    push(
+        tagged,
+        RULE,
+        format!("cannot list the paths the range changes: {error}"),
+        "pass --base and --head so CI can read the range; redo an octopus merge as two-parent merges; rename a file whose name is not UTF-8",
+    );
 }
 
 /// Where durable tracking is off: whether the body names exactly one unit
@@ -334,7 +454,9 @@ fn names_its_unit(root: &Path, body: &str, branch: &str, range: Option<&Range<'_
         [TaskLine::Tracked(id)] => {
             task_id_from_branch(root, branch).is_none_or(|carried| carried == *id)
         }
-        [TaskLine::Epic(_) | TaskLine::Unit(_)] => task_id_from_branch(root, branch).is_none(),
+        [TaskLine::Epic(_) | TaskLine::Epics(_) | TaskLine::Unit(_)] => {
+            task_id_from_branch(root, branch).is_none()
+        }
         [] => {
             range.is_some_and(|range| root_branch_at(root, range.base).as_deref() == Some(branch))
         }
@@ -403,15 +525,21 @@ pub(super) fn dispatch(
     }
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
     selection_check(root, branch, range, &files, tagged);
+    let amendment_problem =
+        |files: &[String]| amendment::range_problem_at(root, range.base, range.head, files);
+    let epic_problem = |epic: &str| amendment::epic_problem(root, range.base, range.head, epic);
+    let epic_line = branch.starts_with("integration/").then(|| {
+        check_epic_line_with_adoptions(root, branch, range.target, range.base, range.head)
+    });
     let input = Input {
         body,
         branch,
         files: &files,
         branch_task: task_id_from_branch(root, branch),
-        epic_line: branch
-            .starts_with("integration/")
-            .then(|| check_epic_line(root, branch, range.target, range.base, range.head)),
+        epic_line: epic_line.as_ref().map(epic_line_id),
         root_branch: root_branch_at(root, range.base).as_deref() == Some(branch),
+        amendment_problem: &amendment_problem,
+        epic_problem: &epic_problem,
     };
     let class = match classify(&input).map(|class| release_class(release, class)) {
         Ok(class) => class,
@@ -437,23 +565,70 @@ pub(super) fn dispatch(
                 head: range.head,
             };
             tracked(root, task_id, anchor, &files, &changes, tagged);
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
         Class::ReleaseIntegration { task_id } => {
             println!(
                 "codeflow ci: pull request class: release integration {task_id} (from the Task: line)"
             );
-            journey(root, git, task_id, range.head, &files, tagged);
+            range_journey(root, git, task_id, range, tagged);
         }
-        Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
+        untracked => announce(untracked, epic_line.as_ref()),
+    }
+    Some(class)
+}
+
+type EpicLineResult = Result<(String, AdoptionReport), String>;
+
+fn epic_line_id(result: &EpicLineResult) -> Result<String, String> {
+    result
+        .as_ref()
+        .map(|(epic, _)| epic.clone())
+        .map_err(Clone::clone)
+}
+
+/// Print the class and the direct commits its reviewer is accepting.
+fn announce(class: &Class, line: Option<&EpicLineResult>) {
+    let adoptions = line
+        .and_then(|result| result.as_ref().ok())
+        .map(|(_, report)| report);
+    match class {
+        Class::PlanningOnly { epics } => println!(
+            "codeflow ci: pull request class: planning-only amendment of {}",
+            epics.join(", ")
+        ),
         Class::EpicLine(epic) => {
-            println!("codeflow ci: pull request class: epic integration line of {epic}");
+            print!("codeflow ci: pull request class: epic integration line of {epic}");
+            if let Some(report) = adoptions {
+                for entry in &report.adopted {
+                    print!(
+                        " (adopts {}: {}, reviewed at {})",
+                        &entry.commit[..9],
+                        entry.reason.escape_debug(),
+                        entry.review.escape_debug()
+                    );
+                }
+            }
+            println!();
+            if let Some(report) = adoptions {
+                for entry in &report.outside_range {
+                    let note = codeflow_core::remedy::Finding::new(
+                        format!(
+                            "the {epic} line_adoptions entry for {} names a commit outside the range, so it adopts nothing here",
+                            entry.commit
+                        ),
+                        codeflow_core::remedy::LINE_ADOPTION_OUTSIDE_RANGE
+                            .with(&[("epic", epic.as_str())]),
+                    );
+                    println!("{}", note.line("codeflow ci", "note"));
+                }
+            }
         }
         Class::RootBranch(name) => {
             println!("codeflow ci: pull request class: workspace root branch {name}");
         }
+        Class::Tracked { .. } | Class::ReleaseIntegration { .. } => {}
     }
-    Some(class)
 }
 
 /// On a release head, a `Task:` line naming the task the release checks
@@ -559,13 +734,7 @@ fn tracked(
         .iter()
         .filter(|(status, _)| status == "A")
         .map(|(_, path)| path.as_str())
-        .filter(|path| {
-            path.starts_with("project-management/")
-                && Path::new(path)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                && !path.starts_with("project-management/templates/")
-        })
+        .filter(|path| is_added_work_record(path))
         .collect();
     if added_records
         .iter()
@@ -665,6 +834,20 @@ fn journey(
     }
 }
 
+/// Whether an added path is a work record a task pull request may not add
+/// beyond its own: Markdown under `project-management/`, except the record
+/// templates and operator feedback items (`FB-NNN.md` and the index
+/// directly in the feedback directory), which are not work records and
+/// whose ids the registry merge rule binds (TSK-241).
+fn is_added_work_record(path: &str) -> bool {
+    path.starts_with("project-management/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        && !path.starts_with("project-management/templates/")
+        && !codeflow_core::feedback::is_feedback_path(path)
+}
+
 fn is_record_of(path: &str, task_id: &str) -> bool {
     path.starts_with("project-management/")
         && path
@@ -683,6 +866,12 @@ pub(super) fn range_changes(
     base: &str,
     head: &str,
 ) -> Result<Vec<(String, String)>, String> {
+    parse_name_status(&name_status(root, base, head)?)
+}
+
+/// The raw `git diff -z --name-status` output for the net change from
+/// `base` to `head`.
+fn name_status(root: &Path, base: &str, head: &str) -> Result<Vec<u8>, String> {
     let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
@@ -701,10 +890,18 @@ pub(super) fn range_changes(
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_name_status(&out.stdout)
+    Ok(out.stdout)
 }
 
 fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
+    Ok(parse_name_status_raw(stdout)?
+        .into_iter()
+        .map(|(status, path)| (status, String::from_utf8_lossy(&path).to_string()))
+        .collect())
+}
+
+/// Each change as its status and the raw name git printed.
+fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let mut fields = stdout
         .split(|byte| *byte == 0)
         .filter(|field| !field.is_empty());
@@ -714,7 +911,7 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
         let path = fields
             .next()
             .ok_or_else(|| format!("git diff output ends after status {status}"))?;
-        changes.push((status, String::from_utf8_lossy(path).to_string()));
+        changes.push((status, path.to_vec()));
     }
     Ok(changes)
 }
@@ -722,6 +919,25 @@ fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_problem(_: &str) -> Option<String> {
+        None
+    }
+
+    /// The path rule alone, for a project whose product is `src/**`; the
+    /// managed block and links need a repository (`planning_amendment`).
+    fn path_problem(files: &[String]) -> Option<String> {
+        let project = ProjectPaths {
+            product: vec!["src/**".to_string()],
+            watched: Vec::new(),
+        };
+        files
+            .iter()
+            .find(|path| {
+                codeflow_core::workgraph::classify::amendment_path(path, &project).is_none()
+            })
+            .map(|path| format!("a planning-only pull request touches a product path: {path}"))
+    }
 
     fn input<'a>(body: &'a str, branch: &'a str, files: &'a [String]) -> Input<'a> {
         Input {
@@ -731,11 +947,51 @@ mod tests {
             branch_task: None,
             epic_line: None,
             root_branch: false,
+            amendment_problem: &path_problem,
+            epic_problem: &no_problem,
+        }
+    }
+
+    fn planning(epics: &[&str]) -> Class {
+        Class::PlanningOnly {
+            epics: epics.iter().map(ToString::to_string).collect(),
         }
     }
 
     fn paths(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()
+    }
+
+    /// TSK-241: a task pull request may add operator feedback items beside
+    /// its own record; any other added record is still refused.
+    #[test]
+    fn a_task_pr_may_add_feedback_items_but_no_other_record() {
+        assert!(is_added_work_record("project-management/tasks/TSK-002.md"));
+        assert!(is_added_work_record("project-management/epics/EPC-001.md"));
+        assert!(is_added_work_record("project-management/specs/SPC-001.md"));
+        assert!(!is_added_work_record(
+            "project-management/feedback/FB-001.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/feedback/INDEX.md"
+        ));
+        assert!(!is_added_work_record(
+            "project-management/templates/feedback.md"
+        ));
+        assert!(is_added_work_record(
+            "project-management/feedbackx/TSK-001.md"
+        ));
+        // Only canonical items and the index directly in the directory.
+        for smuggled in [
+            "project-management/feedback/archive/TSK-002.md",
+            "project-management/feedback/TSK-002.md",
+            "project-management/feedback/FB-1.md",
+            "project-management/feedback/FB-001.MD",
+            "project-management/feedback/notes.md",
+            "project-management/feedback/archive/INDEX.md",
+        ] {
+            assert!(is_added_work_record(smuggled), "{smuggled}");
+        }
     }
 
     #[test]
@@ -748,7 +1004,7 @@ mod tests {
         );
         assert_eq!(
             classify(&input("Task: EPC-001", "plan/next", &records)),
-            Ok(Class::PlanningOnly)
+            Ok(planning(&["EPC-001"]))
         );
         assert!(classify(&input("Task: EPC-001", "plan/next", &code)).is_err());
         for body in [
@@ -781,6 +1037,77 @@ mod tests {
                 codeflow_core::root_checkout::WORKSPACE_ROOT_BRANCH.into()
             ))
         );
+    }
+
+    /// TSK-229 AC-1, AC-2, AC-4: one amendment names several epics and
+    /// carries its instruction text; a task id never takes a list.
+    #[test]
+    fn a_planning_amendment_names_several_epics() {
+        let carried = paths(&[
+            "project-management/tasks/TSK-001.md",
+            "docs/plan/plan.md",
+            "docs/reading.md",
+            "AGENTS.md",
+        ]);
+        assert_eq!(
+            task_lines("Task: EPC-001, EPC-002"),
+            [TaskLine::Epics(vec!["EPC-001".into(), "EPC-002".into()])]
+        );
+        assert_eq!(
+            classify(&input("Task: EPC-001, EPC-002", "plan/next", &carried)),
+            Ok(planning(&["EPC-001", "EPC-002"]))
+        );
+        assert_eq!(
+            classify(&input("Task: `EPC-001,EPC-002`", "plan/next", &carried)),
+            Ok(planning(&["EPC-001", "EPC-002"]))
+        );
+        for body in [
+            "Task: TSK-001, TSK-002",
+            "Task: EPC-001, TSK-002",
+            "Task: EPC-001, EPC-001",
+            "Task: EPC-001,",
+            "Task: EPC-001 EPC-002",
+        ] {
+            assert!(
+                classify(&input(body, "plan/next", &carried)).is_err(),
+                "{body}"
+            );
+        }
+        assert!(
+            classify(&input("Task: TSK-001, TSK-002", "plan/next", &carried))
+                .unwrap_err()
+                .contains("a task id never takes a list")
+        );
+        let block = |_: &[String]| Some(amendment::MANAGED_BLOCK_CHANGED.to_string());
+        let mut changed = input("Task: EPC-001, EPC-002", "plan/next", &carried);
+        changed.amendment_problem = &block;
+        assert!(classify(&changed)
+            .unwrap_err()
+            .contains("managed block of AGENTS.md"));
+        let claude_settings = [".claude", "settings.json"].join("/");
+        let policy = [".codeflow", "policy.json"].join("/");
+        for path in ["src/lib.rs", "CLAUDE.md", &claude_settings, &policy] {
+            let files = paths(&["docs/plan/plan.md", path]);
+            let refused = classify(&input("Task: EPC-001, EPC-002", "plan/next", &files));
+            assert!(
+                refused
+                    .as_ref()
+                    .unwrap_err()
+                    .contains(&format!("touches a product path: {path}")),
+                "{path}: {refused:?}"
+            );
+        }
+        let cancelled = |epic: &str| (epic == "EPC-002").then(|| format!("{epic} is cancelled"));
+        let mut named = input("Task: EPC-001, EPC-002", "plan/next", &carried);
+        named.epic_problem = &cancelled;
+        assert_eq!(classify(&named), Err("EPC-002 is cancelled".into()));
+        let mut line = input(
+            "Task: EPC-001, EPC-002",
+            "integration/EPC-001-work",
+            &carried,
+        );
+        line.epic_line = Some(Ok("EPC-001".into()));
+        assert!(classify(&line).unwrap_err().contains("lands one epic"));
     }
 
     #[test]

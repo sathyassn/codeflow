@@ -177,6 +177,7 @@ fn json_string(s: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
             c => out.push(c),
         }
     }
@@ -1877,6 +1878,277 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
     }
 }
 
+/// The exec-guard's answer to `command` sent as a `tool` payload from `dir`.
+fn exec_guard_tool(dir: &Path, tool: &str, command: &str) -> Output {
+    exec_guard_tool_in_shell(dir, tool, command, Some("/bin/zsh"))
+}
+
+/// [`exec_guard_tool`] with the hook's `SHELL` set to `shell`, or removed.
+fn exec_guard_tool_in_shell(dir: &Path, tool: &str, command: &str, shell: Option<&str>) -> Output {
+    let payload = serde_json::json!({
+        "tool_name": tool,
+        "tool_input": {"command": command},
+        "cwd": dir,
+    })
+    .to_string();
+    let mut hook = codeflow();
+    match shell {
+        Some(shell) => hook.env("SHELL", shell),
+        None => hook.env_remove("SHELL"),
+    };
+    run_with_stdin(hook.args(["hook", "exec-guard"]).current_dir(dir), &payload)
+}
+
+#[test]
+fn exec_guard_allows_certified_prose_and_keeps_the_3_0_0_floor_elsewhere() {
+    // TSK-233 (sathyassn/codeflow#66), through the real hook. A line the strict
+    // prose tokenizer certifies (echo, printf, grep and cat with quoted words)
+    // is not refused for launcher text inside its data; every other line keeps
+    // the 3.0.0 raw matching, including each form the design reviews found.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let allowed = [
+        "printf '%s\\n' 'first; such as this' > note.md",
+        "grep -n '; su' file.txt",
+        "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
+        "echo \"(...; supersedes A3's ...)\"",
+        "echo 'a; doasync b' && grep -c 'su' f",
+        "cat <<'EOF'\n$(sudo id)\n`su -`\ntrue; sudo id\nEOF\n",
+    ];
+    for tool in ["Bash", "run_terminal_command"] {
+        // `run_terminal_command` runs in the user's own shell, so it is
+        // certified only on a Unix host; on Windows the 3.0.0 floor applies.
+        let certified = tool == "Bash" || cfg!(unix);
+        for command in allowed {
+            let out = exec_guard_tool(dir.path(), tool, command);
+            if certified {
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{tool}: should allow: {command}"
+                );
+                assert!(
+                    out.stderr.is_empty(),
+                    "{tool}: {command}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            } else {
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{tool}: keeps the 3.0.0 floor off Unix: {command}"
+                );
+            }
+        }
+    }
+    // PowerShell reads `1,2` and `@name` differently, so nothing is certified.
+    let out = exec_guard_tool(dir.path(), "PowerShell", allowed[1]);
+    assert_eq!(out.status.code(), Some(2), "PowerShell is never certified");
+}
+
+#[test]
+fn exec_guard_certifies_run_terminal_command_only_in_a_shell_shown_to_be_posix() {
+    // `run_terminal_command` runs in the user's own shell, so it is certified
+    // only when SHELL names bash or zsh on a Unix host; otherwise the line
+    // keeps the 3.0.0 floor. The Bash tool is bash by name.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = "grep -n '; su' file.txt";
+    let code = |tool: &str, shell: Option<&str>| {
+        exec_guard_tool_in_shell(dir.path(), tool, line, shell)
+            .status
+            .code()
+    };
+    let unix = cfg!(unix);
+    for (shell, certified) in [
+        (Some("/bin/zsh"), true),
+        (Some("/usr/local/bin/bash"), true),
+        (Some("bash"), true),
+        (Some("/usr/bin/fish"), false),
+        (Some("/bin/dash"), false),
+        (Some("C:\\Windows\\System32\\cmd.exe"), false),
+        (Some("pwsh"), false),
+        (Some(""), false),
+        (None, false),
+    ] {
+        let want = if certified && unix { 0 } else { 2 };
+        assert_eq!(
+            code("run_terminal_command", shell),
+            Some(want),
+            "run_terminal_command with SHELL={shell:?}"
+        );
+        assert_eq!(code("Bash", shell), Some(0), "Bash with SHELL={shell:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_guard_does_not_certify_a_write_that_reaches_a_link_pipe_or_executable() {
+    // A `.md` name proves nothing about what the write reaches. Review 07: a
+    // link named `note.md` to a script, a named pipe and an executable were
+    // all certified by their extension alone.
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let line = |target: &str| format!("printf '%s\\n' 'true; sudo -n id' > {target}");
+    // The same line into a new document is certified and allowed.
+    let out = exec_guard_tool(dir.path(), "Bash", &line("new.md"));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(dir.path().join("job.sh"), "true\n").unwrap();
+    std::fs::set_permissions(
+        dir.path().join("job.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    symlink("job.sh", dir.path().join("note.md")).unwrap();
+    std::fs::hard_link(dir.path().join("job.sh"), dir.path().join("hard.md")).unwrap();
+    std::fs::write(dir.path().join("plain.py"), "true\n").unwrap();
+    std::fs::hard_link(dir.path().join("plain.py"), dir.path().join("py.md")).unwrap();
+    assert!(Command::new("mkfifo")
+        .arg(dir.path().join("pipe.md"))
+        .status()
+        .unwrap()
+        .success());
+    for target in [
+        "note.md",
+        "hard.md",
+        "py.md",
+        "pipe.md",
+        "/dev/example.md",
+        "/./dev/example.md",
+        "//dev/example.md",
+        "/./proc/example.md",
+    ] {
+        let out = exec_guard_tool(dir.path(), "Bash", &line(target));
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "must refuse a write to {target}"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("security.privilege_escalation"),
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn exec_guard_keeps_the_3_0_0_floor_on_every_line_it_cannot_certify() {
+    // Each form the design reviews found, plus the other raw rules, through the
+    // real hook; every one keeps the 3.0.0 verdict.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let blocked = [
+        // The issue's own pattern with a backslash in double quotes, an
+        // unquoted heredoc delimiter, and tools off the list.
+        (
+            "grep -rn -i \"chained su\\|; su\" docs/",
+            "security.privilege_escalation",
+        ),
+        (
+            "cat <<EOF\nsupersedes; summary\nEOF",
+            "security.privilege_escalation",
+        ),
+        ("git commit -m 'a; su b'", "security.privilege_escalation"),
+        ("rg --no-config '; su' src", "security.privilege_escalation"),
+        // Real launches, plain and through every bypass form the reviews found.
+        ("true; su -", "security.privilege_escalation"),
+        ("true; sudo -i", "security.privilege_escalation"),
+        ("true; doas sh", "security.privilege_escalation"),
+        ("true; su\t-", "security.privilege_escalation"),
+        (
+            "printf '%s\\n' \"\\\"\"; sudo id",
+            "security.privilege_escalation",
+        ),
+        (
+            "awk 'BEGIN { system(\"true; sudo id\") }'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '%s\\n' '; su'; s??? -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; supersedes -n id", "security.privilege_escalation"),
+        (
+            "true; runas.exe /user:x cmd",
+            "security.privilege_escalation",
+        ),
+        ("touch sudo; su?? -n id", "security.privilege_escalation"),
+        ("touch sudo; su[d]o -n id", "security.privilege_escalation"),
+        (
+            "shopt -s extglob\ntouch sudo; su@(do) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa# -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "setopt extendedglob; touch sudo; sudoa(#c0,1) -n id",
+            "security.privilege_escalation",
+        ),
+        (
+            "touch supersedes; supersedes(e:'REPLY=sudo':) -n id",
+            "security.privilege_escalation",
+        ),
+        ("true; sudoedit /etc/hosts", "security.privilege_escalation"),
+        ("true; super id", "security.privilege_escalation"),
+        (
+            "printf '%n' 'a[$(true; sudo id)]'",
+            "security.privilege_escalation",
+        ),
+        // zsh decodes a numeric escape in the format before it reads conversions.
+        (
+            "printf '\\u0025n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\x25n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf '\\045n' marker '; sudo id'",
+            "security.privilege_escalation",
+        ),
+        (
+            "printf -v x '%s' 'a; sudo id'",
+            "security.privilege_escalation",
+        ),
+        ("echo 'x; sudo id' > s.sh", "security.privilege_escalation"),
+        ("echo a; sudo id", "security.privilege_escalation"),
+        (
+            "cat <<'EOF' > a.md\nA3\nEOF\nls; sudo id",
+            "security.privilege_escalation",
+        ),
+        ("LD_PRELOAD=example true", "security.privilege_escalation"),
+        ("export PATH=/usr/bin:/tmp", "security.privilege_escalation"),
+        ("env -S 'sudo -n id'", "security.privilege_escalation"),
+        // The other raw rules stay on the floor too.
+        ("true; claude -p x", "security.headless_peer_runs"),
+        ("echo a; mkfs.ext4 /dev/sda1", "security.dangerous_commands"),
+        (
+            "echo x > /dev/sda; echo '; su'",
+            "security.dangerous_commands",
+        ),
+        ("cmd /c \"format C: /Q\"", "security.dangerous_commands"),
+    ];
+    for (command, rule) in blocked {
+        let out = exec_guard_tool(dir.path(), "Bash", command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        assert!(err.contains(rule), "{command}: {err}");
+    }
+    // The privilege refusal says how to write prose that is not refused.
+    let out = exec_guard_tool(dir.path(), "Bash", "git commit -m 'a; su b'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("quoted heredoc delimiter"), "{err}");
+}
+
 /// Run the exec-guard on `command` with `TMPDIR` set, from `repo`.
 fn exec_guard_with_tmpdir(repo: &Path, tmpdir: &Path, command: &str) -> Output {
     run_with_stdin(
@@ -2863,19 +3135,10 @@ fn real_wired_reference_transaction_allows_git_pull_sync() {
 
     let workroot = tempfile::tempdir().unwrap();
     let work = workroot.path().join("repo");
-    let clone = Command::new("git")
-        .args([
-            "clone",
-            origin.path().to_str().unwrap(),
-            work.to_str().unwrap(),
-        ])
+    let clone = codeflow_fixture::clone(workroot.path(), origin.path(), &work)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .output()
-        .unwrap();
+        .output();
     assert!(
         clone.status.success(),
         "clone: {}",
@@ -5118,10 +5381,11 @@ fn push_set_fetches_nothing_in_a_partial_clone() {
     receive(bare.path(), source.path(), "main:main");
     let url = format!("file://{}", bare.path().display());
     let clone = tempfile::tempdir().unwrap();
-    git(
-        clone.path(),
-        &["clone", "-q", "--filter=blob:none", &url, "."],
-    );
+    codeflow_fixture::clone(clone.path(), &url, ".")
+        .filter("blob:none")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(clone.path(), &["config", "user.email", "t@example.com"]);
     git(clone.path(), &["config", "user.name", "t"]);
     git(source.path(), &["checkout", "-q", "-b", "feature"]);
@@ -6723,5 +6987,283 @@ fn git_hook_help_matches_the_install_path_constant() {
     assert!(
         !line.contains(".git/hooks"),
         "git-hook help names .git/hooks, which the install code does not use"
+    );
+}
+
+#[path = "support/line_adoption.rs"]
+mod line_adoption_fixture;
+
+/// TSK-248 AC-3 (issue 85): a push that adds an unadopted direct commit to
+/// an epic line is refused with the `git reset --keep` remedy, on a first
+/// push and on an update; an older direct commit outside the pushed range
+/// does not block later merges, and a landed adoption clears the line.
+#[test]
+fn epic_line_adoption_pre_push_refuses_only_unadopted_pushed_direct_commits() {
+    use line_adoption_fixture::{blocks, output, passes, Line, LINE, ZERO};
+    let f = Line::new();
+    passes(&f.push(ZERO));
+    let direct = f.direct();
+    blocks(&f.push(ZERO), "git reset --keep main");
+    let refused = f.push(&f.git(&["rev-parse", "main"]));
+    blocks(&refused, &direct[..9]);
+    assert!(output(&refused).contains(&format!("git reset --keep origin/{LINE}")));
+    assert!(output(&refused).contains("line_adoptions"));
+    // The already shared direct commit must not prevent unrelated merges.
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.write("src/lib.rs", "pub fn work() {}\n");
+    f.commit("feat: build work");
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&direct));
+    f.land_adoption(&direct);
+    passes(&f.push(ZERO));
+    passes(&f.push(&direct));
+}
+
+/// TSK-248 AC-3 controls: a push of merges only passes, on an update and on
+/// the line's first push.
+#[test]
+fn epic_line_adoption_pre_push_merge_only_control() {
+    use line_adoption_fixture::{passes, Line, LINE, ZERO};
+    let f = Line::new();
+    let old = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-qc", "task/TSK-001-work"]);
+    f.direct();
+    f.git(&["switch", "-q", LINE]);
+    f.merge("task/TSK-001-work");
+    passes(&f.push(&old));
+    passes(&f.push(ZERO));
+}
+
+/// TSK-248 control: in a repository that never had durable work tracking
+/// (no task record on the target or the line) there is no epic class and no
+/// adoption route, so the push check stays off, as before this change.
+#[test]
+fn epic_line_adoption_pre_push_is_off_without_work_tracking() {
+    use line_adoption_fixture::{passes, Line, ZERO};
+    let f = Line::untracked();
+    let first = f.direct();
+    passes(&f.push(ZERO));
+    f.write("src/lib.rs", "pub fn again() {}\n");
+    f.commit("fix: second direct change");
+    passes(&f.push(&first));
+}
+
+/// TSK-248 review finding: tracking is on when the target or the pushed tip
+/// has it, as in CI (SPC-013 R-70), so a direct commit that deletes the only
+/// task record is still refused while the target keeps tracking on.
+#[test]
+fn epic_line_adoption_pre_push_refuses_a_tip_that_drops_tracking() {
+    use line_adoption_fixture::{blocks, Line, ZERO};
+    let f = Line::new();
+    f.git(&["rm", "-q", "project-management/tasks/TSK-001.md"]);
+    let direct = f.direct();
+    blocks(&f.push(ZERO), &direct[..9]);
+}
+
+/// TSK-242 review round 13: git reads `GIT_DIR`, `GIT_COMMON_DIR` and
+/// `GIT_WORK_TREE` from the environment it inherits, so the hook reads them
+/// from its own. A scopeless `git config` that sets a code-running key
+/// refuses when that environment leaves the repository's configuration
+/// unplaced, or names a git directory whose `config` links elsewhere; a
+/// known-safe key still passes.
+#[test]
+fn git_guard_reads_git_locations_from_its_own_environment() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let common = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_COMMON_DIR", &elsewhere);
+        cmd
+    };
+    let work_tree = || {
+        let mut cmd = codeflow();
+        cmd.env("GIT_WORK_TREE", &elsewhere);
+        cmd
+    };
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config core.fsmonitor ./m");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{name}: {err}");
+        assert!(err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    for (name, mut cmd) in [("GIT_COMMON_DIR", common()), ("GIT_WORK_TREE", work_tree())] {
+        let out = guard(&mut cmd, "git config user.name Ada");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!err.contains("git.hook_integrity"), "{name}: {err}");
+    }
+    #[cfg(unix)]
+    {
+        // A git directory whose `config` is a link to a file every
+        // repository may read.
+        let evil = dir.path().join("evil");
+        std::fs::create_dir_all(evil.join("objects")).unwrap();
+        std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+        let stand_in = dir.path().join("stand-in.gitconfig");
+        std::fs::write(&stand_in, "").unwrap();
+        std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+        let git_dir = || {
+            let mut cmd = codeflow();
+            cmd.env("GIT_DIR", &evil);
+            cmd
+        };
+        for command in [
+            "git config core.fsmonitor ./m",
+            "git config alias.x '!id'",
+            "git config core.fsmonitor 08",
+        ] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{command}: {err}");
+            assert!(err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+        for command in ["git config user.name Ada", "git config core.fsmonitor true"] {
+            let out = guard(&mut git_dir(), command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(!err.contains("git.hook_integrity"), "{command}: {err}");
+        }
+    }
+}
+
+/// TSK-242 review round 14: a git directory named by a drive, UNC or Git
+/// Bash path is absolute, never joined onto the `-C` or `cd` directory, and
+/// a named git directory the guard cannot open is never shown to be a
+/// repository's own by a `.git` in its name. The paths are the host's own:
+/// drive paths on Windows, rooted paths elsewhere, where the result is
+/// unchanged.
+#[test]
+fn git_guard_reads_an_absolute_git_dir_as_the_host_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_repo(&repo, "feat/x");
+    // A git directory whose `config` is a link to a stand-in for a file
+    // every repository may read.
+    let evil = dir.path().join("evil").join(".git");
+    std::fs::create_dir_all(evil.join("objects")).unwrap();
+    std::fs::create_dir_all(evil.join("refs")).unwrap();
+    std::fs::write(evil.join("HEAD"), "ref: refs/heads/feat/x\n").unwrap();
+    let stand_in = dir.path().join("stand-in.gitconfig");
+    std::fs::write(&stand_in, "").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&stand_in, evil.join("config")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&stand_in, evil.join("config")).unwrap();
+    let missing = dir.path().join("no-such").join(".git");
+    let quoted = |p: &Path| format!("'{}'", p.display());
+    let (r, e, m) = (quoted(&repo), quoted(&evil), quoted(&missing));
+    let guard = |cmd: &mut Command, command: &str| {
+        run_with_stdin(
+            cmd.args(["hook", "git-guard"]).current_dir(&repo),
+            &guard_payload(command, &repo),
+        )
+    };
+    let mut wrong = Vec::new();
+    let mut refused = |out: &Output, what: &str| {
+        let err = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() != Some(2) || !err.contains("git.hook_integrity") {
+            wrong.push(format!("allowed {what}: {err}"));
+        }
+    };
+    let mut commands = vec![
+        format!("git -C {r} --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir={e} config alias.x '!id'"),
+        format!("cd {r} && git --git-dir {e} config core.fsmonitor ./m"),
+        format!("git -C {r} --git-dir {m} config alias.x '!id'"),
+        format!("git -C {r} --git-dir {m} config core.fsmonitor ./m"),
+    ];
+    if cfg!(windows) {
+        // The Git Bash spelling of the same git directory, `/c/...`.
+        let text = evil.display().to_string();
+        let (drive, rest) = text.split_once(":\\").unwrap();
+        let bash = format!("/{}/{}", drive.to_lowercase(), rest.replace('\\', "/"));
+        commands.push(format!(
+            "git -C {r} --git-dir {bash} config core.fsmonitor ./m"
+        ));
+    }
+    for command in &commands {
+        refused(&guard(&mut codeflow(), command), command);
+    }
+    // The same git directories inherited from the hook's environment.
+    for (git_dir, command) in [
+        (&evil, format!("git -C {r} config core.fsmonitor ./m")),
+        (&missing, format!("git -C {r} config alias.x '!id'")),
+    ] {
+        let mut cmd = codeflow();
+        cmd.env("GIT_DIR", git_dir);
+        refused(
+            &guard(&mut cmd, &command),
+            &format!("GIT_DIR={}: {command}", git_dir.display()),
+        );
+    }
+    for command in [
+        format!("git -C {r} --git-dir {e} config user.name Ada"),
+        format!(
+            "git -C {r} --git-dir {} config alias.co checkout",
+            quoted(&repo.join(".git"))
+        ),
+    ] {
+        let out = guard(&mut codeflow(), &command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.contains("git.hook_integrity") {
+            wrong.push(format!("refused {command}: {err}"));
+        }
+    }
+    assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+}
+
+/// TSK-242 review round 14: the edit guard protects the `.gitconfig` of
+/// every home a shell of this user may read, `USERPROFILE` included when
+/// `HOME` names another directory, as the startup class does.
+#[test]
+fn edit_guard_protects_the_gitconfig_of_every_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let home = dir.path().join("home");
+    let profile = dir.path().join("profile");
+    for d in [&repo, &home, &profile] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let write = |path: &Path| {
+        let payload = format!(
+            r#"{{"tool_name":"Write","tool_input":{{"file_path":{},"content":"[alias]"}},"cwd":{}}}"#,
+            json_string(&path.to_string_lossy()),
+            json_string(&repo.to_string_lossy()),
+        );
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "edit-guard"])
+                .env("HOME", &home)
+                .env("USERPROFILE", &profile)
+                .env_remove("XDG_CONFIG_HOME")
+                .current_dir(&repo),
+            &payload,
+        )
+    };
+    for path in [home.join(".gitconfig"), profile.join(".gitconfig")] {
+        let out = write(&path);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{}: {err}", path.display());
+        assert!(
+            err.contains("git.hook_integrity"),
+            "{}: {err}",
+            path.display()
+        );
+    }
+    let out = write(&repo.join("notes.txt"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

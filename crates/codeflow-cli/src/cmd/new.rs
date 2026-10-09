@@ -515,17 +515,22 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
 
 /// How a new record gets its id: from the shared registry where durable
 /// work is tracked, else from the visible checkout.
-struct Issuer<'a> {
+pub(crate) struct Issuer<'a> {
     root: &'a Path,
     kind: Kind,
     title: String,
     request: serde_json::Value,
-    registry: bool,
+    pub(crate) registry: bool,
     reserved: Option<(RegId, Standing, Option<String>)>,
 }
 
 impl<'a> Issuer<'a> {
-    fn new(root: &'a Path, kind: Kind, title: &str, request: serde_json::Value) -> Option<Self> {
+    pub(crate) fn new(
+        root: &'a Path,
+        kind: Kind,
+        title: &str,
+        request: serde_json::Value,
+    ) -> Option<Self> {
         let registry = match durable_work_tracking_enabled(root) {
             Ok(tracked) => tracked,
             Err(error) => {
@@ -546,7 +551,7 @@ impl<'a> Issuer<'a> {
         })
     }
 
-    fn allocate(&mut self, target: &str) -> Result<(String, String), StoreError> {
+    pub(crate) fn allocate(&mut self, target: &str) -> Result<(String, String), StoreError> {
         let mut request = Request::issue(self.kind, &self.title, target);
         request.resume = Some(self.request.clone());
         let reservation = issue::reserve(self.root, &request)?;
@@ -560,7 +565,7 @@ impl<'a> Issuer<'a> {
 
     /// Settle the reservation against the write: report the registry
     /// standing on success, or the reserved-but-unwritten number on failure.
-    fn settle(self, result: Result<NewRecord, StoreError>) -> Option<NewRecord> {
+    pub(crate) fn settle(self, result: Result<NewRecord, StoreError>) -> Option<NewRecord> {
         match (result, self.reserved) {
             (Ok(record), reserved) => {
                 if let Some((id, standing, note)) = reserved {

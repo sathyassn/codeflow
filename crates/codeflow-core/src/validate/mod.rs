@@ -187,6 +187,7 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         .issues
         .extend(docs.issues.into_iter().map(|issue| issue.to_string()));
     report.notes = docs.notes;
+    report.warnings.extend(docs.warnings);
     report.issues.sort();
     report.issues.dedup();
     report.warnings.sort();
@@ -248,18 +249,7 @@ pub fn parse_frontmatter(
         ));
     }
 
-    let after_opener = match s.find('\n') {
-        Some(idx) => &s[idx + 1..],
-        None => {
-            return Err(ValidateError::InvalidFrontmatter(
-                "no content after opening delimiter".into(),
-            ));
-        }
-    };
-
-    let closing = find_closing_delim(after_opener)
-        .ok_or_else(|| ValidateError::InvalidFrontmatter("missing closing delimiter".into()))?;
-
+    let (after_opener, closing) = frontmatter_bounds(s)?;
     let yaml_str = &after_opener[..closing];
 
     let body_start = &after_opener[closing..];
@@ -278,6 +268,38 @@ pub fn parse_frontmatter(
     }
 
     Ok((data, body))
+}
+
+/// The text after the opening delimiter line and the offset of the closing
+/// one in it, as [`parse_frontmatter`] reads them.
+fn frontmatter_bounds(s: &str) -> Result<(&str, usize), ValidateError> {
+    let after_opener = match s.find('\n') {
+        Some(idx) => &s[idx + 1..],
+        None => {
+            return Err(ValidateError::InvalidFrontmatter(
+                "no content after opening delimiter".into(),
+            ));
+        }
+    };
+    let closing = find_closing_delim(after_opener)
+        .ok_or_else(|| ValidateError::InvalidFrontmatter("missing closing delimiter".into()))?;
+    Ok((after_opener, closing))
+}
+
+/// The text [`parse_frontmatter`] would read as YAML in `content`, found
+/// by the same delimiter rules; the whole text, without a byte order mark,
+/// when it finds no frontmatter. A caller that cannot parse a file uses it
+/// to tell what its YAML could say.
+#[must_use]
+pub fn frontmatter_scope(content: &str) -> &str {
+    let s = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+    if !s.starts_with("---") {
+        return s;
+    }
+    match frontmatter_bounds(s) {
+        Ok((after_opener, closing)) => &after_opener[..closing],
+        Err(_) => s,
+    }
 }
 
 fn find_closing_delim(s: &str) -> Option<usize> {
@@ -824,6 +846,13 @@ pub fn validate_epic(
         &data,
         &["capabilities", "adrs", "specs"],
     ));
+
+    if let Err(message) = crate::workgraph::line_adoption::parse(data.get("line_adoptions")) {
+        errs.push(ValidationError {
+            field: "line_adoptions".into(),
+            message,
+        });
+    }
 
     Ok((errs, warns))
 }
@@ -1549,6 +1578,58 @@ Criteria
     }
 
     // -- epic validation --
+
+    /// TSK-248 AC-2: a short id, an empty reason or an empty review is an
+    /// error naming the field; a well-formed entry is valid whatever commit
+    /// it names, so one outside any range is never a record error.
+    #[test]
+    fn epic_line_adoption_validation_rejects_bad_shape_and_accepts_full_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("EPC-022.md");
+        let full = "a".repeat(40);
+        // (value, the field the error must name, or None when valid)
+        for (entry, named) in [
+            ("[]".to_string(), None),
+            (
+                "wrong".to_string(),
+                Some("line_adoptions must be a YAML list"),
+            ),
+            ("[{}]".to_string(), Some("line_adoptions[0].commit")),
+            (
+                "[{commit: abc, reason: repair, review: pr}]".to_string(),
+                Some("line_adoptions[0].commit must be a full 40-hex commit id"),
+            ),
+            (
+                format!("[{{commit: '{full}', reason: '', review: pr}}]"),
+                Some("line_adoptions[0].reason"),
+            ),
+            (
+                format!("[{{commit: '{full}', reason: repair, review: '  '}}]"),
+                Some("line_adoptions[0].review"),
+            ),
+            (
+                format!("[{{commit: '{full}', reason: repair, review: pr}}]"),
+                None,
+            ),
+        ] {
+            let content = valid_epic_content().replacen(
+                "---\n",
+                &format!("---\nline_adoptions: {entry}\n"),
+                1,
+            );
+            std::fs::write(&path, content).unwrap();
+            let (errors, _) = validate_epic(&path, &ValidateOptions::default()).unwrap();
+            match named {
+                None => assert!(errors.is_empty(), "{entry}: {errors:?}"),
+                Some(field) => assert!(
+                    errors
+                        .iter()
+                        .any(|e| e.field == "line_adoptions" && e.message.contains(field)),
+                    "{entry}: expected {field}: {errors:?}"
+                ),
+            }
+        }
+    }
 
     #[test]
     fn test_validate_epic_valid() {

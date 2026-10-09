@@ -92,7 +92,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 65] = [
+pub const SCHEMA: [KeySpec; 66] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -227,6 +227,17 @@ pub const SCHEMA: [KeySpec; 65] = [
         purpose: "Where linked worktrees may live; doctor reports one outside them.",
         notes: "The default covers .worktrees and the folders the Claude \
                 desktop app, Codex and Grok manage.",
+    },
+    KeySpec {
+        path: "git.claim_remotes",
+        kind: KeyKind::StringList,
+        valid: "an array of configured remote names, none starting with a dash",
+        purpose: "Additional remotes whose branches count as advisory work claims.",
+        notes: "Origin and the target's fetch remote always count. Empty by default; \
+                other remote branches are reported as information. Named remotes \
+                must be configured when work claim lists their branches. The \
+                shipped policy file does not list it, so an older binary never \
+                meets the key.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
@@ -953,6 +964,21 @@ fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<Policy
                 }
             }
         }
+        "git.claim_remotes" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if entry.starts_with('-') || !git2::Remote::is_valid_name(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!("invalid remote '{entry}' in {path}; use a remote name that does not start with a dash"),
+                    });
+                }
+            }
+        }
         "git.worktree_locations" => {
             for entry in value
                 .as_array()
@@ -1074,7 +1100,7 @@ pub fn upgrade_order_hint(errors: &[PolicyError], binary_version: &str) -> Optio
         .any(|e| e.message.starts_with("unknown key"))
         .then(|| {
             format!(
-                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
+                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary; `codeflow update --pin <version>` also pins its release digests) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
             )
         })
 }
@@ -1374,6 +1400,37 @@ mod tests {
             "{}",
             errs[0]
         );
+    }
+
+    #[test]
+    fn claim_remotes_policy_accepts_names_and_rejects_invalid_values() {
+        assert_eq!(
+            default_policy_value()["git"]["claim_remotes"],
+            serde_json::json!([])
+        );
+        for list in ["[]", r#"["archive","team/mirror"]"#] {
+            let text = format!(r#"{{"git":{{"claim_remotes":{list}}}}}"#);
+            validate_policy_str(&text).unwrap();
+            let policy: Policy = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                serde_json::to_value(policy).unwrap()["git"]["claim_remotes"],
+                serde_json::from_str::<Value>(list).unwrap()
+            );
+        }
+        for list in [
+            r#""archive""#,
+            "[1]",
+            r#"[""]"#,
+            r#"["--upload-pack=bad"]"#,
+            r#"["bad name"]"#,
+        ] {
+            let text = format!(r#"{{"git":{{"claim_remotes":{list}}}}}"#);
+            let errors = validate_policy_str(&text).unwrap_err();
+            assert!(
+                errors.iter().all(|error| error.key == "git.claim_remotes"),
+                "{errors:?}"
+            );
+        }
     }
 
     #[test]

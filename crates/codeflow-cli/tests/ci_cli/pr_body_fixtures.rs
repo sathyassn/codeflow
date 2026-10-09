@@ -140,7 +140,8 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             .unwrap();
         assert!(matches!(
             task_line,
-            "Task: `TSK-NNN | none: <reason>`" | "Task: `TSK-NNN | EPC-NNN | <unit name>`"
+            "Task: `TSK-NNN | none: <reason>`"
+                | "Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`"
         ));
         assert_clean(
             dir.path(),
@@ -446,7 +447,10 @@ fn presentation_keeps_defect_warnings_without_size_budgets() {
 fn fill_installed_template(template: &str) -> String {
     template
         .replace("Task: `TSK-NNN | none: <reason>`", "Task: TSK-001")
-        .replace("Task: `TSK-NNN | EPC-NNN | <unit name>`", "Task: TSK-001")
+        .replace(
+            "Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`",
+            "Task: TSK-001",
+        )
         .replace(
             "## Summary\n",
             "## Summary\n\nClarify the command's result.\n\n- Explain the result.\n",

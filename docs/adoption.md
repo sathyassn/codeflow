@@ -232,7 +232,7 @@ rules. Add a trusted profile per bot to `git.automation_profiles` in
 | What still runs | Tests, the secret scan, AI attribution, emoji, the dash rule, the release declaration, and PR sections at their configured level; `sections` only supplies the headings the bot body leaves out |
 | Trusted actor | Only in a GitHub Actions pull request event from the same repository, and only as that event's own actor. In a local run, in another CI and on a fork pull request, the actor is `unknown` whatever `--actor` says, and no profile applies |
 | `task` | Names the unit the bot's pull requests are. Every pull request needs a `Task:` line and a bot names no task record, so `codeflow ci` puts the profile's unit on that line when the bot body has none. A profile without `task` leaves every bot pull request refused for the missing line. This works where durable work tracking is off (the standard and minimal tiers), where any non-empty unit name is accepted |
-| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, so a bot's unit name is refused there. A dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump. The bot's pull request is closed once that task lands |
+| Bots at the full tier | The `Task:` line must name a `TSK-NNN` or `EPC-NNN` record, or every epic a planning amendment changes (`EPC-001, EPC-002`), so a bot's unit name is refused there. A dependency update lands through a task of its own, opened by a person or an agent, whose pull request carries the bump. The bot's pull request is closed once that task lands |
 
 **A PR template you already have.**
 
@@ -313,6 +313,7 @@ the table below gives the commands.
 | Start a task | `codeflow work claim TSK-NNN`, then `codeflow work start TSK-NNN` on `task/TSK-NNN-<slug>` before editing. Add `--on TSK-NNN@<sha>` to build on a predecessor's reviewed head before it lands |
 | A later change of scope | One batched epic amendment on a `plan/` branch, reviewed once; a task changes only its own criteria, in its own PR, and CI prints the change for the reviewer |
 | A team tracker already owns the portfolio | Link its ids in `external_refs`; do not mirror its status, specs or task trees |
+| Operator feedback (FB) | `codeflow feedback new --topic <topic> --source chat "<summary>"` for feedback that sets a standing rule, declines or reorders planned work, or spans several units; `codeflow feedback status` places, closes, declines or supersedes it, and `codeflow feedback list` shows it by topic. Topics are `[feedback] topics` in `.codeflow/project.toml` |
 
 ### Update
 
@@ -343,8 +344,9 @@ The version-skew warning is gone and no `.new` file remains.
 
 **CI pins its binary too.** The scaffolded workflows install the release
 named by `scaffold_version` in the target branch's `.codeflow/project.toml`
-and verify it against that release's `sha256.sum`. A missing or wrong
-checksum fails the job, and nothing unverified is installed.
+and verify it against that release's `sha256.sum` and the target's
+pinned digests (below). A mismatch fails the job and installs nothing
+unverified.
 
 - The commit and PR-body standards run in `codeflow-policy.yml` on
   `pull_request_target`.
@@ -356,9 +358,9 @@ checksum fails the job, and nothing unverified is installed.
 
 An upgrade therefore takes two pull requests, in order:
 
-1. Install the new binary locally, then land a pull request that raises only
-   `scaffold_version`. The target's current binary judges it, and the
-   `candidate codeflow` job tests the new one.
+1. Install the new binary locally, run `codeflow update --pin <version>`,
+   and land the pin it raises. The target's current binary judges it, and
+   the `candidate codeflow` job tests the new one.
 2. On a new branch, run `codeflow update` and land its new keys and files;
    the new binary judges them.
 
@@ -368,15 +370,28 @@ An upgrade therefore takes two pull requests, in order:
 | A pull request lowers the pin | The target's binary still judges it, and the job then fails |
 | A branch started before the target raised its pin and kept the pin it started from | It lowers nothing and is judged by the new binary |
 | A raised pin | Its release is installed separately and only tested |
-| `codeflow doctor` | Reports the version CI installs, a raise alone (step 1), a lowered pin, or new policy keys or schema carried before the raise has landed, with this order |
+| A hand-raised pin that leaves an older `[scaffold_sha256]` table | The `candidate codeflow` job fails closed and names `codeflow update --pin <version>` |
+| `codeflow doctor` | Reports the version CI installs and whether it is checked against pinned digests or `sha256.sum` alone, a digest table CI would refuse, a raise alone (step 1), a lowered pin, or new policy keys or schema carried before the raise has landed, with this order |
 | The git hook shims | Check the binary first and warn when it is older than they are, then run the checks it has |
 
 The other CI templates carry the same pin: `.gitlab-ci.yml`,
 `bitbucket-pipelines.yml` and `ci-generic.sh` (in `assets/base/ci/` of the
 CodeFlow repository; copy the one your host needs). They run one shared
 script. It reads the pin from the target branch's current commit, installs
-that release with the same checksum verification, and runs `codeflow ci` from
+that release with the same verification, and runs `codeflow ci` from
 a checkout of that commit, so the target's policy judges the change.
+
+| Managed CI, 3.1.0 | What it does |
+|---|---|
+| Pinned release digests | `codeflow update --pin <version>` downloads the release's `sha256.sum` and its Linux and macOS archives, refuses any that does not match, and writes only `scaffold_version` and a `[scaffold_sha256]` table of one digest per platform. Once the target pins it, every installer requires the archive to match it as well as `sha256.sum`, since whoever replaces a release asset can replace `sha256.sum` too |
+| A table CI cannot use | One from another version, missing the runner's platform, declared or keyed twice, written as a quoted header, an inline or dotted table or a sub-table, a table holding any line but plain `key = "value"` entries, or a state with a backslash in a header or before a line's first `=`, three quote marks in a row on any line but a full-line comment (they could open a multi-line string), a line starting with a character that is not printable ASCII (a byte-order mark or a Unicode space could hide the header), a control character other than a tab, a header or key name outside printable ASCII, or a carriage return inside a line fails the job closed, even where a value, an array element or a comment happens to match. CodeFlow writes the values it serializes so they never match; a name you wrote yourself is kept, so `--pin` refuses and doctor names the line to rewrite. Keep the plain table `--pin` writes |
+| No table | The install checks `sha256.sum` alone and warns, so a fresh `codeflow init` and the pull request adding the table pass |
+| Project setup hook | A project that needs its own toolchain commits `.codeflow/ci-setup.sh`. The gates job and the shared script source it under `set -eu` just before `codeflow test --strict`, so its exports reach the gate and a failing command fails the job. `codeflow update` never writes it. It is project code with the gate's authority |
+| Secret scan range | A pull request scans only its own commits and a push only its pushed range, so a finding already in the base no longer fails every pull request. A weekly schedule and manual dispatch scan the full history, as do a branch-creating push and a push whose previous tip is gone; each run prints what it read. Exemptions come only from the trusted commit. To adopt: run `codeflow update`, review the merged workflow, land it on the default branch (the only place the schedule runs) and check the scheduled run appears |
+| Security review levels | The `security review` job reads `git.security_review`, `git.dep_audit` and the `osv-scanner.toml` suppressions from the trusted commit (the pull request's base, or the pushed commit), so a pull request cannot lower them; osv-scanner runs with `--no-ignore`. A missing file, key or unknown value fails the job, so land missing keys (`codeflow update` adds them) before the 3.1.0 workflow. `codeflow ci` names a change that lowers either key or edits the setup hook |
+| `codeflow doctor --check ci-perimeter` | Names the check CI applies on the target (pinned digests or `sha256.sum` alone), a table it would refuse, a table the checkout changes, and the setup hook with its first command |
+
+Details: `assets/base/ci/README.md`.
 
 | Host | Target commit |
 |---|---|
@@ -456,11 +471,12 @@ With no remote, `codeflow integrate` replaces the pull request.
    push. Keep `codeflow test --mode quick` and `codeflow validate --docs` green
    before push, and merge the current integration line into the branch before
    asking for review, so conflicts surface in the task.
-4. **Open one PR for the whole task.** Its body carries a `Task:` line naming
-   the task, or the epic for a planning-only change, the template sections,
+4. **Open one PR for the whole task.** Its body carries a `Task:` line
+   (`TSK-NNN`; `EPC-NNN` for the breakdown PR and the PR to main; each epic a
+   planning amendment changes, as `EPC-001, EPC-002`), the template sections,
    and the test evidence with revision and command. `codeflow ci` refuses a PR
-   that names no task and no epic. The Release impact section is required
-   only into a protected branch or with a breaking commit.
+   naming neither. The Release impact section is required only into a
+   protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
    whole change once, and a material finding is fixed in the same PR. The
    reviewed head lands with the next batch on the integration line. When
@@ -478,10 +494,9 @@ With no remote, `codeflow integrate` replaces the pull request.
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
-The PR shows green required checks, and a human merges it. [How work moves to
-main](delivery.md) covers how a batch of reviewed tasks lands with one full
-gate, how an epic closes into `main`, and what happens when something changes
-midway.
+[How work moves to main](delivery.md) covers how a batch of reviewed tasks
+lands with one full gate, how an epic closes into `main`, and what happens
+when something changes midway.
 
 ### Related guides
 

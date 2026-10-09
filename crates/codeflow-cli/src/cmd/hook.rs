@@ -442,8 +442,13 @@ fn exec_guard_to(stdin: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
     };
     let policy = &authority.policy;
-    let violations = exec_guard::evaluate_at(
+    let violations = exec_guard::evaluate_in(
         command,
+        exec_guard::shell_is_posix(
+            &payload.tool_name,
+            std::env::var("SHELL").ok().as_deref(),
+            cfg!(unix),
+        ),
         &policy.security,
         policy.git.hook_integrity,
         &cwd,
@@ -475,10 +480,9 @@ fn edit_guard(stdin: &str) -> i32 {
         }
     };
     let policy = &authority.policy;
-    let Some(home) = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-    else {
+    // The home the shell guards read, a Git Bash `HOME` included; the
+    // startup class adds any other home (TSK-242 review round 13).
+    let Some(home) = codeflow_core::portable_path::user_home() else {
         eprintln!("codeflow edit-guard: git.hook_integrity: cannot resolve home; the operator repairs the hook process environment");
         return 2;
     };

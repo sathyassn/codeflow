@@ -904,6 +904,30 @@ fn nested_repositories_are_found_at_any_depth_and_classified() {
     );
 }
 
+/// `git check-ignore -v -n --stdin -z` answers every path it reads, so
+/// output larger than a pipe, with input larger than a pipe, deadlocked a
+/// writer that sent all of stdin before it read stdout (issue 71). This runs
+/// the real function over real git with tens of thousands of folder names.
+#[test]
+fn many_folders_do_not_deadlock_the_check_ignore_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo_with_commit(&dir.path().join("u"));
+    repo_with_commit(&root.join("plain"));
+    let padding = "p".repeat(100);
+    for i in 0..12_000 {
+        std::fs::create_dir(root.join(format!("{padding}-{i:05}"))).unwrap();
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(found(&root));
+    });
+    let nested = receiver
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("nested_repositories finished instead of deadlocking on the pipe");
+    let paths: Vec<&str> = nested.iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(paths, vec!["plain"]);
+}
+
 #[test]
 fn a_tracked_gitignore_entry_marks_a_nested_repository_ignored() {
     let dir = tempfile::tempdir().unwrap();

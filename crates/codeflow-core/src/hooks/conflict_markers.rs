@@ -13,9 +13,7 @@
 //! of that length there too, so a real conflict in it is still caught.
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::Path;
-use std::process::Stdio;
 
 use super::policy::PolicyLevel;
 use super::Violation;
@@ -246,25 +244,18 @@ pub fn marker_sizes(
         }
         AttrSource::Revision(revision) => format!("--source={revision}"),
     };
-    let mut child = command
-        .args(["check-attr", "-z", "--stdin", &from, ATTRIBUTE])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| failed(&e))?;
-    let mut stdin = child.stdin.take().ok_or_else(|| failed(&"no stdin"))?;
     let input: Vec<u8> = paths
         .iter()
         .flat_map(|path| path.bytes().chain(std::iter::once(0)))
         .collect();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let out = child.wait_with_output().map_err(|e| failed(&e))?;
-    let written = writer
-        .join()
-        .map_err(|_| failed(&"input writer panicked"))?;
     // A git that refuses its arguments exits before it reads the paths, so
-    // the write may fail with a broken pipe; git's own refusal says why.
+    // the write may fail with a broken pipe, which the helper leaves to the
+    // exit status: git's own refusal says why.
+    let out = crate::git::output_with_input(
+        command.args(["check-attr", "-z", "--stdin", &from, ATTRIBUTE]),
+        &input,
+    )
+    .map_err(|e| failed(&e))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let message = format!("git check-attr: {stderr}");
@@ -276,7 +267,6 @@ pub fn marker_sizes(
             },
         );
     }
-    written.map_err(|e| failed(&e))?;
     // `-z` output is path, attribute, value, each ended by a NUL.
     let text = String::from_utf8_lossy(&out.stdout);
     let fields: Vec<&str> = text.split('\0').collect();

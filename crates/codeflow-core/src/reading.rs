@@ -392,6 +392,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "When you shape a body of work, land a batch or handle a change midway, read",
         "only when shaping a body of work, landing a batch or handling a change midway",
     ),
+    // TSK-240: issue handling is read when a reported defect is fixed,
+    // never on every task.
+    conditional(
+        "cf-method/references/workflow-lifecycle.md",
+        "cf-method/references/issue-handling.md",
+        "a reported one first through",
+        "only when a reported defect is fixed",
+    ),
     conditional(
         "cf-method/SKILL.md",
         "cf-method/references/skill-authoring.md",
@@ -699,6 +707,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "epics/EPC-NNN.md",
     "specs/SPC-NNN.md",
     "tasks/TSK-NNN.md",
+    // An operator feedback item, named where project organization teaches
+    // the tracker (TSK-241).
+    "project-management/feedback/FB-NNN.md",
     ".claude/settings.json",
     // A retention fixture's window setting (TSK-130), in the disposable
     // fixture only.

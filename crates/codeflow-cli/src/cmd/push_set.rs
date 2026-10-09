@@ -37,9 +37,8 @@
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Instant;
 
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
@@ -530,25 +529,10 @@ fn run_check_with(
         command.arg("--blocking-rules-out").arg(&out.0);
     }
     let started = Instant::now();
-    let output = command
-        .current_dir(root)
-        .env_remove("CODEFLOW_PR_BODY")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            let stdin = child.stdin.take();
-            let input = input.unwrap_or_default().to_string();
-            // Written from its own thread so a large output cannot
-            // deadlock the pipes; closing stdin ends the input.
-            let writer = std::thread::spawn(move || {
-                stdin.map_or(Ok(()), |mut stdin| stdin.write_all(input.as_bytes()))
-            });
-            let out = child.wait_with_output();
-            let _ = writer.join();
-            out
-        });
+    let output = codeflow_core::git::output_with_input(
+        command.current_dir(root).env_remove("CODEFLOW_PR_BODY"),
+        input.unwrap_or_default().as_bytes(),
+    );
     steps.push(PushStep {
         name: shown.clone(),
         duration: started.elapsed(),
@@ -1506,22 +1490,15 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 
 /// [`git`] with `input` on stdin.
 fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
-    let mut child = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    // Written from a thread so a large answer cannot fill the pipe first.
-    let mut stdin = child.stdin.take()?;
-    let input = input.to_string();
-    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-    let out = child.wait_with_output().ok()?;
-    writer.join().ok()?.ok()?;
+    let out = codeflow_core::git::output_with_input(
+        codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_NO_LAZY_FETCH", "1"),
+        input.as_bytes(),
+    )
+    .ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).to_string())

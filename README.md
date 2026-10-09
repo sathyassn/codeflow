@@ -131,7 +131,7 @@ required tools before the first non-trivial task goes to
 | `update` | Refresh managed scaffold files (3-way merge, never clobbers) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `status` | Show the branch, worktrees, in-flight work and capabilities; `--delivery` adds the capability-delivery rollup |
-| `doctor` | Health checks (20): hooks, claude, codex, grok, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
+| `doctor` | Health checks (21): hooks, claude, codex, grok, startup-files, config, permissions, policy-source, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, instructions, reading, test-config, id-registry, adopter-fit |
 | `test` | Run the test gate; `test setup` detects root stacks, lists templates and appends targets |
 | `validate` | Validate policy and records; `--docs` adds doc-graph checks and `--portal <dir>` verifies portal evidence without running project code |
 | `ci` | Check a commit range and branch name against policy, the same check CI runs; exit 2 on a violation or invalid policy |
@@ -145,7 +145,7 @@ required tools before the first non-trivial task goes to
 | `delegate` | Track one delegate turn handed to a peer model: `init`, `arm`, `wait`; the host launches the harness |
 | `present` | Open, review, export and close a review of this session in a local browser window |
 | `portal setup`, `portal transfer` | Adopt the offline docs-portal starter, or take ownership of the adopted runtime |
-| `estimate check <forecast.json>` | Read-only check of a project-owned forecast; it makes no estimate (ADR-0057) |
+| `estimate check <forecast.json>`, `estimate outcomes` | Read-only check of a project-owned forecast, and completed tasks' timings derived from git and compared with it; neither makes an estimate (ADR-0057, ADR-0079) |
 | `models` | Resolve catalog duties without launching models |
 | `ids`, `adr`, `report` | The shared ID registry, ADR allocation, and read-only process reports |
 

@@ -137,6 +137,17 @@
       ]
     },
     {
+      "name": "repository-update-noop",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "quick": {
+          "command": "cargo test -p codeflow-core --test repository_update_noop --quiet"
+        }
+      },
+      "requires": []
+    },
+    {
       "name": "rust-doctest",
       "enabled": true,
       "runner": "custom",
@@ -218,9 +229,11 @@
       "narrow": [
         "scripts/release.py",
         "scripts/test_release.py",
+        "scripts/changelog_split.py",
         "scripts/fixtures/**",
         ".release/**",
-        "CHANGELOG.md"
+        "CHANGELOG.md",
+        "changelog.d/**"
       ]
     },
     {
@@ -414,6 +427,22 @@
       "outputs": [],
       "exclusive": true,
       "timeout_seconds": 2400
+    },
+    {
+      "name": "prose-exhaustive",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "CODEFLOW_ORACLE_FULL=1 cargo test --release -p codeflow-core --test prose_differential && CODEFLOW_ORACLE_FULL=1 cargo test --release -p codeflow-cli --test prose_oracle"
+        }
+      },
+      "requires": [
+        "rust-build"
+      ],
+      "outputs": [],
+      "exclusive": false,
+      "timeout_seconds": 7200
     },
     {
       "name": "present-supply-chain",

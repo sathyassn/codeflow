@@ -181,16 +181,11 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
     for line in [LINE, OTHER] {
         git(&root, &["branch", line, &default]);
     }
-    git(
-        dir.path(),
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            root.to_str().unwrap(),
-            bare.to_str().unwrap(),
-        ],
-    );
+    codeflow_fixture::clone(dir.path(), root.to_str().unwrap(), bare.to_str().unwrap())
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
     // The scaffold holds a record (ADR-0001), so the shared id registry is
@@ -303,7 +298,8 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         &codeflow(&root, &["validate", "--docs"]),
         "validate the plan",
     );
-    let (code, out) = pull_request(&root, "plan/backlog", LINE, "Task: EPC-001");
+    // The breakdown creates both epics, so it names both (ADR-0078).
+    let (code, out) = pull_request(&root, "plan/backlog", LINE, "Task: EPC-001, EPC-002");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("class: planning-only"), "{out}");
     land(&root, LINE, "plan/backlog");
@@ -735,4 +731,106 @@ fn a_join_awaiting_selection_validates_and_cannot_start() {
     assert!(!out.status.success(), "the join started:\n{text}");
     assert!(text.contains("TSK-004"), "{text}");
     assert!(text.contains("awaiting selection"), "{text}");
+}
+
+/// TSK-249 AC-2: real init, policy, remote refs, readiness and claim output.
+#[test]
+fn archive_branches_are_information_until_policy_names_the_remote() {
+    let (dir, root) = planned_project();
+    let archive = dir.path().join("archive.git");
+    codeflow_fixture::clone(&root, ".", &archive)
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
+    git(&archive, &["branch", "task/TSK-001-old", LINE]);
+    git(
+        &root,
+        &["remote", "add", "archive", archive.to_str().unwrap()],
+    );
+    git(&root, &["fetch", "-q", "archive"]);
+    let next = ok(&codeflow(&root, &["work", "next"]), "archive next");
+    assert!(next.contains("ready    TSK-001 Root"), "{next}");
+    assert!(
+        next.contains("also on archive: task/TSK-001-old (not a claim:"),
+        "{next}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&ok(
+        &codeflow(&root, &["work", "next", "--json"]),
+        "archive JSON",
+    ))
+    .unwrap();
+    assert!(json["conflicts"].as_object().unwrap().is_empty(), "{json}");
+    let policy = root.join(".codeflow/policy.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+    value["git"]["claim_remotes"] = serde_json::json!(["archive"]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    // Keep the policy change on the integration line, as an adopter would.
+    commit(&root, "feat: count archive claims");
+    let json: serde_json::Value = serde_json::from_str(&ok(
+        &codeflow(&root, &["work", "next", "--json"]),
+        "named archive JSON",
+    ))
+    .unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["state"], "active", "{json}");
+    let refused = refused(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "named archive claim",
+    );
+    assert!(refused.contains("archive/task/TSK-001-old"), "{refused}");
+    value["git"]["claim_remotes"] = serde_json::json!([]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    commit(&root, "fix: exclude archive claims");
+    let claimed = ok(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "claim despite archive",
+    );
+    assert!(
+        claimed.contains("also on archive: task/TSK-001-old (not a claim:"),
+        "{claimed}"
+    );
+    assert!(claimed.contains("pushed to origin"), "{claimed}");
+}
+
+/// TSK-249 review: an unconfigured `git.claim_remotes` name is reported by
+/// `work start` as a note, as `work next` and `work claim` refuse it.
+#[test]
+fn work_start_reports_an_unconfigured_claim_remote() {
+    let (_dir, root) = planned_project();
+    git(&root, &["switch", "-q", "-c", "task/TSK-001-root", LINE]);
+    // Control: with no policy value, `work start` prints no note.
+    let clean = ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start with default remotes",
+    );
+    assert!(!clean.contains("not checked"), "{clean}");
+    let policy = root.join(".codeflow/policy.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+    value["git"]["claim_remotes"] = serde_json::json!(["archive"]);
+    std::fs::write(&policy, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    let started = ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start with an unconfigured remote",
+    );
+    assert!(
+        started.contains("note: other branches were not checked")
+            && started.contains("git.claim_remotes names 'archive'"),
+        "{started}"
+    );
+    let refused = refused(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "claim with an unconfigured remote",
+    );
+    assert!(
+        refused.contains("git.claim_remotes names 'archive'"),
+        "{refused}"
+    );
 }

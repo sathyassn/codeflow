@@ -2,8 +2,9 @@
 //!
 //! One embedded table, `path_sets.toml`, defines the adopter-facing path set
 //! used by the journey criterion and release contract (R-114). Every PR
-//! names its task or epic (R-70). The planning-only and spike
-//! path rules live here too, so every caller judges a range the same way.
+//! names its task or epic (R-70). The planning-only, planning amendment
+//! (ADR-0078) and spike path rules live here too, so every caller judges a
+//! range the same way.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -137,6 +138,26 @@ fn member_matches(member: &PathMember, path: &str, project: &ProjectPaths) -> bo
 }
 
 impl PathSets {
+    /// Whether an adopter-facing member matches `path` in any letter case,
+    /// for the planning amendment, which must not admit a path a
+    /// case-insensitive file system would read as an adopter-facing one.
+    #[must_use]
+    pub fn adopter_facing_any_case(&self, path: &str, project: &ProjectPaths) -> bool {
+        let options = glob::MatchOptions {
+            case_sensitive: false,
+            ..glob::MatchOptions::new()
+        };
+        self.adopter_facing.iter().any(|member| {
+            let policy_globs = member
+                .policy_key
+                .as_deref()
+                .map_or(&[][..], |key| project.for_key(key));
+            member.patterns.iter().chain(policy_globs).any(|pattern| {
+                glob::Pattern::new(pattern).is_ok_and(|glob| glob.matches_with(path, options))
+            })
+        })
+    }
+
     /// The adopter-facing member `path` belongs to, if any.
     #[must_use]
     pub fn adopter_facing_member(&self, path: &str, project: &ProjectPaths) -> Option<&str> {
@@ -170,6 +191,77 @@ impl PathSets {
 pub fn is_planning_path(path: &str) -> bool {
     (path.starts_with("project-management/") && !path.starts_with("project-management/templates/"))
         || path.starts_with("docs/plan/")
+}
+
+/// What a path is to a planning amendment (ADR-0078, SPC-013 R-70).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmendmentPath {
+    /// A record or a plan ([`is_planning_path`]).
+    Record,
+    /// A documentation file under `docs/` that is not adopter-facing.
+    Doc,
+    /// The root `AGENTS.md`, admitted only while its managed block is
+    /// byte-identical to the target's ([`instructions_block_unchanged`]).
+    Instructions,
+}
+
+/// The stems of the files a harness reads as instructions wherever they
+/// sit (`AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`,
+/// `GEMINI.md`), matched without case so a case-insensitive file system
+/// cannot slip one into a records or documentation folder.
+const INSTRUCTION_STEMS: &[&str] = &["agents.", "claude.", "gemini."];
+
+/// What a planning amendment may carry at `path`, or `None` when the path
+/// keeps the range out of the planning class. Outside the root `AGENTS.md`,
+/// whose managed block the caller compares, a path is refused first when
+/// any folder or the file on the way is hidden (a `.gitkeep` excepted), its
+/// file name is a harness instruction file, or an adopter-facing member
+/// matches it in any letter case (so a shipped template such as
+/// `docs/decisions/template.md`, or a product glob such as `**/*.py`, keeps
+/// it out even under `docs/plan/`). What is left is admitted as a record or
+/// plan ([`is_planning_path`]) or a file under `docs/`. `CLAUDE.md`,
+/// `.claude/`, `.agents/`, `.codeflow/`, record templates, policy, hooks and
+/// CI all stay out.
+#[must_use]
+pub fn amendment_path(path: &str, project: &ProjectPaths) -> Option<AmendmentPath> {
+    if path == "AGENTS.md" {
+        return Some(AmendmentPath::Instructions);
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    let hidden = parts
+        .iter()
+        .any(|part| part.starts_with('.') && *part != ".gitkeep");
+    let instructions = parts
+        .last()
+        .map(|name| name.to_ascii_lowercase())
+        .is_some_and(|name| INSTRUCTION_STEMS.iter().any(|stem| name.starts_with(stem)));
+    if hidden || instructions || path_sets().adopter_facing_any_case(path, project) {
+        return None;
+    }
+    if is_planning_path(path) {
+        Some(AmendmentPath::Record)
+    } else {
+        path.starts_with("docs/").then_some(AmendmentPath::Doc)
+    }
+}
+
+/// Whether `AGENTS.md` keeps the target's managed block byte for byte:
+/// `target` and `head` are the file's bytes on each side, `None` where it is
+/// absent. Two files without a block, or no file on either side, keep it;
+/// adding, removing or editing the block, its markers included, does not.
+/// A side that is not UTF-8 keeps it only when both files are identical.
+#[must_use]
+pub fn instructions_block_unchanged(target: Option<&[u8]>, head: Option<&[u8]>) -> bool {
+    fn text(bytes: Option<&[u8]>) -> Result<Option<&str>, std::str::Utf8Error> {
+        bytes.map(std::str::from_utf8).transpose()
+    }
+    match (text(target), text(head)) {
+        (Ok(target), Ok(head)) => {
+            let block = crate::scaffold::region::managed_span;
+            target.and_then(block) == head.and_then(block)
+        }
+        _ => target == head,
+    }
 }
 
 /// Whether a spike may land `path`: its findings under `docs/research/` or
@@ -412,6 +504,89 @@ mod tests {
         assert!(!is_planning_path("project-management/templates/task.md"));
         assert!(!is_planning_path("docs/guide.md"));
         assert!(!is_planning_path("src/lib.rs"));
+    }
+
+    /// TSK-229 AC-2, AC-4: a planning amendment carries records, plans,
+    /// non-adopter docs and `AGENTS.md`; instruction and enforcement paths
+    /// stay out, inside `docs/` too.
+    #[test]
+    fn an_amendment_carries_records_docs_and_the_project_section() {
+        let project = ProjectPaths {
+            product: vec!["src/**".to_string(), "**/*.py".to_string()],
+            watched: vec!["docs/api/schema.json".to_string()],
+        };
+        for (path, expected) in [
+            (
+                "project-management/tasks/TSK-001.md",
+                Some(AmendmentPath::Record),
+            ),
+            ("docs/plan/plan.md", Some(AmendmentPath::Record)),
+            ("docs/reading.md", Some(AmendmentPath::Doc)),
+            ("docs/decisions/ADR-0078-x.md", Some(AmendmentPath::Doc)),
+            ("AGENTS.md", Some(AmendmentPath::Instructions)),
+            ("docs/decisions/template.md", None),
+            ("docs/api/schema.json", None),
+            ("docs/tool.py", None),
+            ("docs/AGENTS.md", None),
+            ("docs/guide/CLAUDE.md", None),
+            ("docs/guide/claude.local.md", None),
+            ("docs/AGENTS.override.md", None),
+            ("docs/Gemini.md", None),
+            ("docs/agents-guide.md", Some(AmendmentPath::Doc)),
+            ("docs/.claude/settings.json", None),
+            ("docs/.github/workflows/x.yml", None),
+            ("CLAUDE.md", None),
+            (".claude/settings.json", None),
+            (".agents/skills/cf-plan/SKILL.md", None),
+            (".codeflow/policy.json", None),
+            (".codeflow/rules/git-rules.md", None),
+            (".github/workflows/codeflow-ci.yml", None),
+            ("project-management/templates/task.md", None),
+            ("src/lib.rs", None),
+            ("README.md", None),
+            ("crates/AGENTS.md", None),
+            ("docs/plan/AGENTS.md", None),
+            ("project-management/AGENTS.md", None),
+            ("docs/plan/.claude/settings.json", None),
+            ("docs/plan/code.py", None),
+            ("docs/decisions/TEMPLATE.md", None),
+            ("docs/.envrc", None),
+            (
+                "project-management/tasks/.gitkeep",
+                Some(AmendmentPath::Record),
+            ),
+        ] {
+            assert_eq!(amendment_path(path, &project), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn the_instructions_block_is_compared_byte_for_byte() {
+        let block =
+            "<!-- codeflow:managed:begin scaffold=3.1.0 -->\nrules\n<!-- codeflow:managed:end -->";
+        let target = format!("# p\n\n{block}\n\n## Project\n\nmine\n");
+        let below = format!("# p\n\n{block}\n\n## Project\n\nmine, amended\n");
+        let inside = target.replace("rules", "rules!");
+        let same = |a: Option<&str>, b: Option<&str>| {
+            instructions_block_unchanged(a.map(str::as_bytes), b.map(str::as_bytes))
+        };
+        assert!(same(Some(&target), Some(&below)));
+        assert!(!same(Some(&target), Some(&inside)));
+        assert!(!same(Some(&target), Some("# p\n")));
+        assert!(!same(None, Some(&target)));
+        assert!(!same(Some(&target), None));
+        assert!(same(Some("# p\n"), Some("# q\n")));
+        assert!(same(None, Some("# p\n")));
+        // Bytes that are not UTF-8 never decode to the target's text.
+        let replacement = target.replace("rules", "rules\u{fffd}");
+        let mut raw = target.clone().into_bytes();
+        let at = raw.windows(5).position(|w| w == b"rules").unwrap() + 5;
+        raw.insert(at, 0xFF);
+        assert!(!instructions_block_unchanged(
+            Some(replacement.as_bytes()),
+            Some(&raw)
+        ));
+        assert!(instructions_block_unchanged(Some(&raw), Some(&raw)));
     }
 
     #[test]

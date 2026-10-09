@@ -9,12 +9,15 @@
 
 pub mod acceptance;
 pub mod allocate;
+pub mod amendment;
 pub mod classify;
 pub mod deps;
 mod format_id;
+mod landing;
 pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;
+pub mod line_adoption;
 pub mod readiness;
 pub mod record_template;
 pub mod record_text;
@@ -32,12 +35,12 @@ pub use format_id::{
 };
 pub use store::{MarkdownStore, RecordStore, StoreError};
 pub use work_start::{
-    branch_claims_task_id, check_epic_line, check_work_start, check_work_start_anchored,
-    check_work_start_for_branch, declared_work_target, declared_work_target_at_revision,
-    default_work_target, durable_work_tracking_enabled, durable_work_tracking_enabled_at,
-    is_stable_work_target, resolve_work_target, resolve_work_target_checked, task_id_from_branch,
-    task_id_from_branch_at, work_target_resolves, DurableTrackingError, RecordKind,
-    ResolvedWorkTarget, WorkStartError, WorkStartReport,
+    branch_claims_task_id, check_epic_line, check_epic_line_with_adoptions, check_work_start,
+    check_work_start_anchored, check_work_start_for_branch, declared_work_target,
+    declared_work_target_at_revision, default_work_target, durable_work_tracking_enabled,
+    durable_work_tracking_enabled_at, is_stable_work_target, resolve_work_target,
+    resolve_work_target_checked, task_id_from_branch, task_id_from_branch_at, work_target_resolves,
+    DurableTrackingError, RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
 };
 
 /// Generate an RFC 3339 UTC timestamp string.

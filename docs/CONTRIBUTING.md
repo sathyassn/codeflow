@@ -51,16 +51,61 @@ registry.
 Open an issue using the templates. For security issues, see
 [SECURITY.md](SECURITY.md) and do not open a public issue.
 
+A bug report gives a reproduction and a severity. Severity is `critical`
+when the bug is live in a published release or blocks current work and does
+one of these:
+
+- blocks adopters: a managed file, gate, hook or guard fails or refuses
+  ordinary work in a consuming project;
+- weakens a security boundary or lets it be bypassed (report it privately,
+  as above);
+- loses or rewrites data, records or history;
+- deadlocks or hangs a gate, or blocks the tool's own fix path.
+
+Anything else is `normal`. Maintainers confirm the severity at intake and
+add the `critical` label when it holds. A fix then names the defect class,
+checks the tree for every other site of that class, and closes the issue
+with a note of what was fixed, what was deferred and which release carries
+it. The full process is the issue-handling reference,
+`.agents/skills/cf-method/references/issue-handling.md`; the release routes
+for a critical bug are in [releasing](releasing.md#critical-issues).
+
 ## Releasing
 
 Each work PR carries its release state (ADR-0062):
 
-- a labelled pending `CHANGELOG.md` entry with its impact marker
+- a labelled pending changelog entry with its impact marker, in the PR's own
+  fragment `changelog.d/<task id>.md` (ADR-0082)
 - the coupled version stamps
 
 `scripts/release.py` checks both. Conventional commit markers set a floor for
 the version, not the version itself. cargo-dist builds the binaries, and a
 human dispatches every publication.
+
+A fragment holds only kind headings, each with labelled entries after their
+impact markers:
+
+```text
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Label of the entry.** What changed, for a user, in the
+  `CHANGELOG.md` style.
+```
+
+The fragment rules, `assemble` and publication are in the
+[releasing](releasing.md#pending-entries-local-checks-and-repairs) table.
+
+An open pull request written before fragments moves its entries at the merge
+of `main` it owes: take `main`'s `CHANGELOG.md` in the conflict, then run
+`python3 scripts/changelog_split.py --only-new-against origin/main --name
+TSK-NNN --from HEAD`. It writes the entries whose labels `main` lacks into
+`changelog.d/TSK-NNN.md` and lists, under `edited`, every entry the pull
+request changed under a label `main` already carries, with the fragment that
+carries it; apply each of those edits to that fragment by hand. Then commit
+the merge, run `sync`, and check that `preflight` and `check-pr` pass with
+the same `Impact`. The merge was resolved by hand, so it needs one fresh
+review.
 
 See [releasing](releasing.md) for the runbook and for how a project that
 *consumes* CodeFlow should handle its own versioning.

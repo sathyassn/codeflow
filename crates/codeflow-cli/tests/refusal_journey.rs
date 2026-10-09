@@ -33,7 +33,13 @@ impl Project {
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
             .env_remove("CODEFLOW_HUMAN_OVERRIDE")
-            .env_remove("CODEFLOW_INTEGRATE_TOKEN");
+            .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+            // The shell startup class follows these (TSK-242); the fixture
+            // home is the only startup location a test should see.
+            .env_remove("ZDOTDIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("BASH_ENV")
+            .env_remove("ENV");
         command
     }
     fn git(&self, args: &[&str]) {
@@ -228,6 +234,7 @@ fn shell_refusal_pairs(project: &Project) {
     for harness in ["claude", "codex", "grok"] {
         for (command, rule) in [
             ("timeout 1 sudo true", "security.privilege_escalation"),
+            ("true; su -", "security.privilege_escalation"),
             ("nohup cargo +stable publish", "security.outward_actions"),
             ("xargs gh gist create notes.txt", "security.outward_actions"),
             ("gh -R o/r release create v1", "security.outward_actions"),
@@ -289,6 +296,7 @@ fn shell_refusal_pairs(project: &Project) {
             "gh release view v1",
             "cargo package",
             "grep -rn sudo docs/",
+            "cat <<'EOF' > a.md\nA3 (supersedes; summary below)\nEOF",
             "cat README.md",
             "cat .env.example",
             "rg 'claude -p' assets/",
@@ -791,5 +799,12 @@ fn r5_n2_root_dot_patterns_match_protected_names_only() {
 }
 
 #[cfg(unix)]
+#[path = "refusal_journey/startup.rs"]
+mod startup;
+
+#[cfg(unix)]
 #[path = "refusal_journey/landed.rs"]
 mod landed;
+
+#[path = "refusal_journey/line_adoption.rs"]
+mod line_adoption;

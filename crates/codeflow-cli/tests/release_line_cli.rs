@@ -555,6 +555,120 @@ fn a_reopened_task_brought_with_changed_criteria_is_frozen() {
     );
 }
 
+/// TSK-229 review rounds 1 and 2: a planning amendment that also carries a
+/// doc (ADR-0078) brings its criteria change into a release as a planning
+/// landing; the same landing with `CLAUDE.md`, or with an instruction or
+/// harness file inside a planning folder, stays frozen.
+#[test]
+fn an_amendment_carrying_a_doc_is_brought_into_a_release() {
+    for (file, admitted) in [
+        ("docs/reading.md", true),
+        ("CLAUDE.md", false),
+        ("docs/plan/AGENTS.md", false),
+        ("project-management/AGENTS.md", false),
+        ("docs/plan/.claude/settings.json", false),
+    ] {
+        let fx = Fx::new(false);
+        fx.git(&["switch", "-q", "-C", "plan/amend-with-doc", LINE_A]);
+        let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+        fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+        fx.write(file, "Read this.\n");
+        fx.commit("docs(records): amend the criterion with its doc");
+        let landing = fx.land(LINE_A, "plan/amend-with-doc");
+        fx.cut_release();
+        fx.import(LINE_A);
+        let result = agree(&fx, file);
+        if admitted {
+            passes(&result, "an amendment with a doc");
+        } else {
+            blocks(
+                &result,
+                file,
+                &[
+                    "work.criteria_frozen",
+                    &format!(
+                        "TSK-003 changes its criteria on its line at {}",
+                        &landing[..9]
+                    ),
+                ],
+            );
+        }
+    }
+}
+
+/// TSK-229 review round 3: a planning landing that changes a document an
+/// instruction link reaches through a folder link stays frozen in a
+/// release, as its planning pull request was refused.
+#[cfg(unix)]
+#[test]
+fn an_amendment_behind_a_link_chain_stays_frozen_in_a_release() {
+    use std::os::unix::fs::symlink;
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "chore/link", LINE_A]);
+    fx.write("docs/another/rules.md", "Rules.\n");
+    fx.write("docs/another/subdir/keep.md", "Kept.\n");
+    symlink("another/subdir", fx.root.join("docs/alias")).unwrap();
+    symlink("docs/alias/../rules.md", fx.root.join("CLAUDE.md")).unwrap();
+    fx.commit("docs: link the harness instructions");
+    fx.land(LINE_A, "chore/link");
+    fx.git(&["switch", "-q", "-C", "plan/amend-behind-a-link", LINE_A]);
+    let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+    fx.write("docs/another/rules.md", "Other rules.\n");
+    fx.commit("docs(records): amend the criterion behind a link");
+    let landing = fx.land(LINE_A, "plan/amend-behind-a-link");
+    fx.cut_release();
+    fx.import(LINE_A);
+    blocks(
+        &agree(&fx, "a document behind a link chain"),
+        "a document behind a link chain",
+        &[
+            "work.criteria_frozen",
+            &format!(
+                "TSK-003 changes its criteria on its line at {}",
+                &landing[..9]
+            ),
+        ],
+    );
+}
+
+/// TSK-229 review rounds 5 and 6: a planning landing that changes a link
+/// whose name holds a backslash stays frozen in a release, as its planning
+/// pull request was refused; the name is never rewritten before the check,
+/// and the refusal names the link, not a plan file beside it.
+#[cfg(unix)]
+#[test]
+fn an_amendment_that_moves_an_odd_link_stays_frozen_in_a_release() {
+    use std::os::unix::fs::symlink;
+    let fx = Fx::new(false);
+    let link = fx.root.join("project-management/ref\\alias");
+    fx.git(&["switch", "-q", "-C", "chore/link", LINE_A]);
+    symlink("one", &link).unwrap();
+    fx.commit("docs: add a link");
+    fx.land(LINE_A, "chore/link");
+    fx.git(&["switch", "-q", "-C", "plan/move-the-link", LINE_A]);
+    let current = std::fs::read_to_string(fx.root.join(path("TSK-003"))).unwrap();
+    fx.write(&path("TSK-003"), &current.replace(CRITERIA, STRONGER));
+    fx.write("docs/plan/aaa.md", "A plan note.\n");
+    std::fs::remove_file(&link).unwrap();
+    symlink("two", &link).unwrap();
+    fx.commit("docs(records): amend the criterion and move the link");
+    let landing = fx.land(LINE_A, "plan/move-the-link");
+    fx.cut_release();
+    fx.import(LINE_A);
+    blocks(
+        &agree(&fx, "a moved link with a backslash"),
+        "a moved link with a backslash",
+        &[
+            "work.criteria_frozen",
+            &format!(
+                "TSK-003 changes its criteria on its line at {}, which also changes project-management/ref\\alias",
+                &landing[..9]
+            ),
+        ],
+    );
+}
+
 /// A project config for the baseline fixtures to extend.
 const PROJECT: &str = "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n";
 /// The adoption marker line (SPC-013 R-120).
@@ -864,7 +978,11 @@ fn a_shallow_default_history_is_never_read_as_unadopted() {
     let removal = set_marker(&fx, "");
     let parent = fx.root.parent().unwrap();
     let url = format!("file://{}", fx.origin.display());
-    run_git(parent, &["clone", "-q", "--depth", "1", &url, "shallow"]);
+    codeflow_fixture::clone(parent, &url, "shallow")
+        .depth(1)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let shallow = parent.join("shallow");
     let cut = [
         "this clone's history is shallow at",
@@ -1154,10 +1272,11 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     std::fs::write(unrelated.join("x"), "x\n").unwrap();
     run_git(&unrelated, &["add", "-A"]);
     run_git(&unrelated, &["commit", "-q", "-m", "chore: unrelated"]);
-    run_git(
-        &parent,
-        &["clone", "-q", "--bare", "unrelated", "dangling.git"],
-    );
+    codeflow_fixture::clone(&parent, "unrelated", "dangling.git")
+        .bare()
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .run();
     let dangling = parent.join("dangling.git");
     run_git(&dangling, &["symbolic-ref", "HEAD", "refs/heads/nope"]);
     let head = fx.head();
@@ -1489,7 +1608,10 @@ fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
         run_git(&up, &["add", "-A"]);
         run_git(&up, &["commit", "-q", "-m", "chore: start"]);
         run_git(&up, &["push", "-q", url, "main"]);
-        run_git(dir.path(), &["clone", "-q", url, "client"]);
+        codeflow_fixture::clone(dir.path(), url, "client")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let client = dir.path().join("client");
         if adopted && !readable {
             write(&up, ".codeflow/project.toml", broken);
@@ -2793,10 +2915,10 @@ fn callers_fail_closed_when_scope_cannot_be_read() {
         use std::os::unix::fs::PermissionsExt as _;
         let fx = Fx::new(false);
         let parent = fx.root.parent().unwrap();
-        run_git(
-            parent,
-            &["clone", "-q", fx.origin.to_str().unwrap(), "other"],
-        );
+        codeflow_fixture::clone(parent, fx.origin.to_str().unwrap(), "other")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let other = parent.join("other");
         run_git(
             &other,
@@ -3661,10 +3783,10 @@ fn a_cutoff_the_clone_lacks_is_fetched_before_it_is_read() {
     for key in ["release_rule_baseline", "release_records_baseline"] {
         let fx = Fx::new(false);
         let parent = fx.root.parent().unwrap().to_path_buf();
-        run_git(
-            &parent,
-            &["clone", "-q", fx.origin.to_str().unwrap(), "other"],
-        );
+        codeflow_fixture::clone(&parent, fx.origin.to_str().unwrap(), "other")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .run();
         let other = parent.join("other");
         // Line B lands work by a merge, as a verified epic line does.
         run_git(

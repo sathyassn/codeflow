@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 pub mod ci;
 pub mod conflict;
 pub mod remote_query;
+pub(crate) mod stdin;
 
 /// The variable a codeflow git-hook shim reads to run the codeflow binary
 /// whose command started git, instead of the `codeflow` first on PATH
@@ -61,10 +62,11 @@ fn runs_git(program: &std::ffi::OsStr) -> bool {
 
 pub use ci::{wait_for_ci_green, CiOutcome, CiWaitConfig, CiWaitError};
 pub use conflict::{attempt_rebase, check_merge_conflicts, ConflictResult, RebaseResult};
+pub use stdin::{output_with_input, spawn_with_input, spawn_with_input_stopping, InputWriter};
 
 #[cfg(test)]
 mod tests {
-    use super::runs_git;
+    use super::{output_with_input, runs_git};
     use std::ffi::OsStr;
 
     #[test]
@@ -81,5 +83,72 @@ mod tests {
         for program in ["gh", "gitleaks", "git-lfs", "/opt/git/bin/sh", "digit"] {
             assert!(!runs_git(OsStr::new(program)), "{program}");
         }
+    }
+
+    /// Run `work` on its own thread and fail, instead of hanging, when it
+    /// does not finish within a minute.
+    #[cfg(unix)]
+    fn bounded<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the child exchange finished instead of deadlocking on a pipe")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_larger_than_a_pipe_does_not_block_the_input() {
+        // `cat` answers as it reads, so a writer that sends all 4 MiB before
+        // reading blocks once the output pipe fills.
+        let input: Vec<u8> = (b'a'..=b'w').cycle().take(4 * 1024 * 1024).collect();
+        let expected = input.clone();
+        let out = bounded(move || {
+            output_with_input(&mut std::process::Command::new("cat"), &input).unwrap()
+        });
+        assert!(out.status.success());
+        assert_eq!(out.stdout, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_stops_reading_is_judged_by_its_exit_status() {
+        let input = vec![b'x'; 4 * 1024 * 1024];
+        let out = bounded(move || {
+            output_with_input(&mut std::process::Command::new("true"), &input).unwrap()
+        });
+        assert!(out.status.success());
+        let input = vec![b'x'; 4 * 1024 * 1024];
+        let out = bounded(move || {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "exit 3"]);
+            output_with_input(&mut command, &input).unwrap()
+        });
+        assert_eq!(out.status.code(), Some(3));
+    }
+
+    #[test]
+    fn a_program_that_cannot_start_is_an_error() {
+        let mut command = std::process::Command::new("/nonexistent/codeflow-test-program");
+        assert!(output_with_input(&mut command, b"x").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_on_both_pipes_does_not_block_the_input() {
+        // The child fills stderr with 2 MiB before it reads any stdin, then
+        // echoes stdin: a caller that reads stdout alone, or writes first,
+        // blocks with a pipe full.
+        let input = vec![b'y'; 4 * 1024 * 1024];
+        let out = bounded(move || {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "head -c 2097152 /dev/zero >&2 && cat"]);
+            output_with_input(&mut command, &input).unwrap()
+        });
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 4 * 1024 * 1024);
+        assert_eq!(out.stderr.len(), 2 * 1024 * 1024);
     }
 }

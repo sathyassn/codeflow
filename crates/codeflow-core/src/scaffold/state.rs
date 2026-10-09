@@ -107,7 +107,7 @@ impl ProjectState {
             }
             None => ours,
         };
-        let text = toml::to_string_pretty(&merged).map_err(|e| ScaffoldError::InvalidState {
+        let text = state_text(&merged).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
@@ -201,6 +201,177 @@ impl ScaffoldConfig {
         self.ignore
             .iter()
             .any(|glob| crate::security::pattern::matches_extended_glob(dest, glob))
+    }
+}
+
+/// The `[feedback]` section of `project.toml`: the topics an operator
+/// feedback item may carry (`codeflow feedback`). User-owned like
+/// `[scaffold]`: [`ProjectState::store`] round-trips it as a foreign key, and
+/// only [`FeedbackConfig::write_defaults`] ever adds it, once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedbackConfig {
+    /// The project's topic list; `None` when the section or key is absent.
+    pub topics: Option<Vec<String>>,
+}
+
+impl FeedbackConfig {
+    /// The list written on the first `codeflow feedback new` when the project
+    /// has none.
+    pub const DEFAULT_TOPICS: [&'static str; 7] = [
+        "process",
+        "design",
+        "architecture",
+        "writing",
+        "tooling",
+        "security",
+        "scope",
+    ];
+
+    /// Reads `[feedback]` from `project.toml`. A missing file, section or key
+    /// yields no list.
+    ///
+    /// # Errors
+    ///
+    /// IO failures other than not-found, invalid TOML, or a section that is
+    /// not a table of non-empty topic strings.
+    pub fn load(root: &Path) -> Result<Self, ScaffoldError> {
+        let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
+            return Ok(Self::default());
+        };
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
+        let invalid = |detail: String| ScaffoldError::InvalidState {
+            what: PROJECT_TOML.to_string(),
+            detail,
+        };
+        let Some(section) = table.get("feedback") else {
+            return Ok(Self::default());
+        };
+        let section = section
+            .as_table()
+            .ok_or_else(|| invalid("feedback: expected a table".to_string()))?;
+        let Some(topics) = section.get("topics") else {
+            return Ok(Self::default());
+        };
+        let topics = topics
+            .as_array()
+            .ok_or_else(|| invalid("feedback.topics: expected an array of strings".to_string()))?
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|topic| !topic.is_empty() && !topic.contains(char::is_whitespace))
+                    .map(ToString::to_string)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "feedback.topics[{index}]: expected a one-word topic string"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            topics: Some(topics),
+        })
+    }
+
+    /// The project's topics, or the default list when it has none.
+    #[must_use]
+    pub fn topics_or_default(&self) -> Vec<String> {
+        self.topics.clone().unwrap_or_else(|| {
+            Self::DEFAULT_TOPICS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+    }
+
+    /// Write the default list into an existing `project.toml` that has no
+    /// `feedback.topics`: under its `[feedback]` header, or as a new section
+    /// appended; the rest of the file keeps its bytes. Returns the topics in force afterwards and
+    /// whether the file was written.
+    ///
+    /// # Errors
+    ///
+    /// [`ScaffoldError::NotInitialized`] without a `project.toml`, IO
+    /// failures, invalid TOML, or a `[feedback]` value that is not a table.
+    pub fn write_defaults(root: &Path) -> Result<(Vec<String>, bool), ScaffoldError> {
+        let Some(text) = read_beneath_root(root, PROJECT_TOML)? else {
+            return Err(ScaffoldError::NotInitialized);
+        };
+        let current = Self::load(root)?;
+        if let Some(topics) = current.topics {
+            return Ok((topics, false));
+        }
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: e.to_string(),
+            })?;
+        let mut topics_line = String::from("topics = [\n");
+        for topic in Self::DEFAULT_TOPICS {
+            topics_line.push_str("    \"");
+            topics_line.push_str(topic);
+            topics_line.push_str("\",\n");
+        }
+        topics_line.push_str("]\n");
+        // Either way every other byte of the file stays as the project wrote
+        // it: the key goes right under an existing `[feedback]` header, or a
+        // new section is appended.
+        let updated = if table.contains_key("feedback") {
+            let header = text.split_inclusive('\n').position(|line| {
+                let code = line.split('#').next().unwrap_or_default().trim();
+                code == "[feedback]"
+            });
+            let Some(header) = header else {
+                return Err(ScaffoldError::InvalidState {
+                    what: PROJECT_TOML.to_string(),
+                    detail: "`feedback` is set without a `[feedback]` header line; add `topics` to it by hand".to_string(),
+                });
+            };
+            let mut updated = String::with_capacity(text.len() + topics_line.len() + 1);
+            for (index, line) in text.split_inclusive('\n').enumerate() {
+                updated.push_str(line);
+                if index == header {
+                    if !line.ends_with('\n') {
+                        updated.push('\n');
+                    }
+                    updated.push_str(&topics_line);
+                }
+            }
+            updated
+        } else {
+            let mut updated = text.clone();
+            if !updated.is_empty() && !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            updated.push_str("\n[feedback]\n");
+            updated.push_str(&topics_line);
+            updated
+        };
+        let check: toml::Table =
+            toml::from_str(&updated).map_err(|e| ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: format!("adding the feedback topics would break the file: {e}"),
+            })?;
+        if check
+            .get("feedback")
+            .and_then(|v| v.get("topics"))
+            .is_none()
+        {
+            return Err(ScaffoldError::InvalidState {
+                what: PROJECT_TOML.to_string(),
+                detail: "the feedback topics could not be added".to_string(),
+            });
+        }
+        // The state file keeps its permissions (a private one stays
+        // private) and the scaffold writer's durability.
+        write_record_keeping_mode(root, PROJECT_TOML, updated.as_bytes())?;
+        Ok((Self::load(root)?.topics_or_default(), true))
     }
 }
 
@@ -320,6 +491,21 @@ impl Baseline {
 /// sync waits until a record write ([`write_record`]) or
 /// [`SyncBatch::finish`] needs it (see the `sync` module).
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    write_file_with_mode(path, bytes, None)
+}
+
+/// [`write_file`], and when `mode_from` names an existing regular file, the
+/// result takes its permissions: the temporary file is private (0600 on
+/// unix) until they are applied, so a private file never reads wider.
+fn write_file_with_mode(
+    path: &Path,
+    bytes: &[u8],
+    mode_from: Option<&Path>,
+) -> Result<(), ScaffoldError> {
+    let permissions = mode_from
+        .and_then(|from| std::fs::symlink_metadata(from).ok())
+        .filter(std::fs::Metadata::is_file)
+        .map(|meta| meta.permissions());
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
             path,
@@ -336,13 +522,21 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
 
     let result = (|| {
         use std::io::Write;
-        let mut temp = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if permissions.is_some() {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        let mut temp = options
             .open(&temp_path)
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
         temp.write_all(bytes)
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        if let Some(permissions) = &permissions {
+            temp.set_permissions(permissions.clone())
+                .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        }
         sync::content(&temp, !batched).map_err(|e| ScaffoldError::io(&temp_path, e))?;
         #[cfg(test)]
         interruption::before_rename(path, bytes)?;
@@ -363,6 +557,125 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
     result
 }
 
+/// Serializes a project state as `toml::to_string_pretty` does, in the form
+/// the managed CI installers read (TSK-225). They read the state line by
+/// line: three quotes in a row anywhere, or a backslash or the digest
+/// table's name before a line's first `=` or in a header, fail the install
+/// closed, since such a line could fake or hide the digest table. So every
+/// string that is not plain (a quote, an apostrophe, a backslash or a
+/// control character) is written as a one-line basic string with every one
+/// of those escaped, and an array holding anything but plain strings
+/// without `=` and other scalars is written on its key's line, where no
+/// element can read as a key or a header. Arrays of tables keep their
+/// `[[name]]` sections. A state with nothing to rewrite is written exactly
+/// as `to_string_pretty` writes it.
+pub(crate) fn state_text(table: &toml::Table) -> Result<String, toml::ser::Error> {
+    /// Characters the encoder writes as themselves inside `"..."`.
+    fn plain(text: &str) -> bool {
+        !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '"' | '\\' | '\''))
+    }
+    /// An element a multi-line array may hold on its own line.
+    fn own_line(item: &toml::Value) -> bool {
+        match item {
+            toml::Value::String(text) => plain(text) && !text.contains('='),
+            toml::Value::Array(_) | toml::Value::Table(_) => false,
+            _ => true,
+        }
+    }
+    fn hold(value: &mut toml::Value, marker: &str, held: &mut Vec<String>) {
+        let inline = match value {
+            toml::Value::String(text) if !plain(text) => basic(text),
+            toml::Value::Array(items)
+                if !items.is_empty() && items.iter().all(toml::Value::is_table) =>
+            {
+                for item in items {
+                    hold(item, marker, held);
+                }
+                return;
+            }
+            toml::Value::Array(items) if !items.iter().all(own_line) => inline(value),
+            toml::Value::Table(table) => {
+                for (_, item) in table.iter_mut() {
+                    hold(item, marker, held);
+                }
+                return;
+            }
+            _ => return,
+        };
+        *value = toml::Value::String(format!("{marker}{}", held.len()));
+        held.push(inline);
+    }
+    /// A value written on one line: strings as [`basic`], arrays and tables
+    /// inline.
+    fn inline(value: &toml::Value) -> String {
+        match value {
+            toml::Value::String(text) => basic(text),
+            toml::Value::Array(items) => {
+                let items: Vec<String> = items.iter().map(inline).collect();
+                format!("[{}]", items.join(", "))
+            }
+            toml::Value::Table(table) if table.is_empty() => "{}".to_string(),
+            toml::Value::Table(table) => {
+                let entries: Vec<String> = table
+                    .iter()
+                    .map(|(key, item)| {
+                        let bare = !key.is_empty()
+                            && key
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+                        let key = if bare { key.clone() } else { basic(key) };
+                        format!("{key} = {}", inline(item))
+                    })
+                    .collect();
+                format!("{{ {} }}", entries.join(", "))
+            }
+            toml::Value::Datetime(when) => when.to_string(),
+            scalar => scalar.to_string(),
+        }
+    }
+    /// A basic string on one line: quotes, apostrophes, backslashes and
+    /// control characters escaped, so no run of three quotes of either kind
+    /// appears.
+    fn basic(text: &str) -> String {
+        let mut out = String::from("\"");
+        for c in text.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\'' => out.push_str("\\u0027"),
+                c if c.is_control() => {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "\\u{:04X}", u32::from(c));
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+    let plain_text = toml::to_string_pretty(table)?;
+    let mut marker = String::from("codeflow-one-line-");
+    while plain_text.contains(&marker) {
+        marker.push('x');
+    }
+    let mut copy = toml::Value::Table(table.clone());
+    let mut held = Vec::new();
+    hold(&mut copy, &marker, &mut held);
+    if held.is_empty() {
+        return Ok(plain_text);
+    }
+    let mut text = toml::to_string_pretty(&copy)?;
+    for (at, value) in held.iter().enumerate() {
+        text = text.replace(&format!("\"{marker}{at}\""), value);
+    }
+    Ok(text)
+}
+
 /// Writes a state record (a baseline copy, the manifest, `project.toml`)
 /// at repo-relative `rel`, refusing a symlink on the way (leaf or ancestor),
 /// that says earlier writes are in place.
@@ -375,6 +688,14 @@ pub(crate) fn write_record(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), S
     let path = guard_beneath_root(root, Path::new(rel))?;
     sync::settle_before(&path)?;
     write_file(&path, bytes)
+}
+
+/// [`write_record`] that keeps the record's permissions, for a write that
+/// must not widen a file the project made private (the feedback topics).
+fn write_record_keeping_mode(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    sync::settle_before(&path)?;
+    write_file_with_mode(&path, bytes, Some(&path))
 }
 
 /// One scaffold run's deferred directory syncs and device flushes (TSK-153).
@@ -1063,6 +1384,49 @@ pub(crate) fn set_exec(path: &Path, exec: bool) -> Result<(), ScaffoldError> {
 mod tests {
     use super::*;
 
+    /// TSK-225: the state stays readable by the CI installers' line reader
+    /// whatever its values hold, and means the same as before.
+    #[test]
+    fn state_text_keeps_every_string_on_one_line() {
+        let digest = "a".repeat(64);
+        let source = format!(
+            "scaffold_version = \"1.2.3\"\nnote = \"first line\\nsecond line\"\nboth = \"he said \\\"it's\\\"\"\nruns = \"a'''b\\\"\\\"\\\"c\"\ncontrol = \"a\\u0001b\\tc\"\nplain = \"x\"\npath = \"C:\\\\Users\\\\O'Brien\"\nliteral = 'C:\\Temp'\nnotes = [\"first line\\nx = 1\", \"ok\"]\nkeyed = [\"scaffold_sha256 = x\", 1]\nnested = [[\"a\\\\b\"], [2.5, true]]\nmixed = [{{ \"a b\" = \"c'd\", e = [1] }}, 1979-05-27T07:32:00Z, 1.0, -3]\n\n[[jobs]]\nname = \"x\\ny\"\n\n[[jobs]]\nname = \"z\"\n\n[deep]\nlines = [\"l1\\nl2\", \"ok\"]\n\n[scaffold_sha256]\nversion = \"1.2.3\"\naarch64-apple-darwin = \"{digest}\"\nx86_64-apple-darwin = \"{digest}\"\nx86_64-unknown-linux-gnu = \"{digest}\"\n"
+        );
+        let table: toml::Table = toml::from_str(&source).unwrap();
+        // The plain encoder writes triple quotes for these values.
+        let pretty = toml::to_string_pretty(&table).unwrap();
+        assert!(
+            pretty.contains("\"\"\"") || pretty.contains("'''"),
+            "{pretty}"
+        );
+
+        let text = state_text(&table).unwrap();
+        assert!(!text.contains("\"\"\"") && !text.contains("'''"), "{text}");
+        assert_eq!(
+            toml::from_str::<toml::Table>(&text).unwrap(),
+            table,
+            "{text}"
+        );
+        assert!(
+            matches!(
+                super::super::release_pin::pinned_digests(&text),
+                super::super::release_pin::PinnedDigests::Table { ref missing, .. } if missing.is_empty()
+            ),
+            "{text}"
+        );
+        assert!(text.contains("[[jobs]]"), "{text}");
+        assert!(text.contains(", 1979-05-27T07:32:00Z, 1.0, -3]"), "{text}");
+        // A state with nothing to rewrite is written exactly as before.
+        let simple: toml::Table = toml::from_str(
+            "tier = \"minimal\"\nareas = [\"a\", \"b\"]\ncounts = [1, 2]\n\n[[runs]]\nname = \"x\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            state_text(&simple).unwrap(),
+            toml::to_string_pretty(&simple).unwrap()
+        );
+    }
+
     #[test]
     fn project_state_round_trip_preserves_foreign_keys() {
         let dir = tempfile::tempdir().unwrap();
@@ -1094,6 +1458,25 @@ mod tests {
         let final_text = std::fs::read_to_string(&path).unwrap();
         assert!(final_text.contains("[orient]"), "foreign key survived");
         assert!(final_text.contains("policy_armed = false"));
+
+        // Foreign values the plain encoder would write in a form the CI
+        // installers refuse are stored in one they read.
+        let mut text = final_text;
+        text.push_str(
+            "\n[notes]\npath = \"C:\\\\Users\\\\O'Brien\"\nlist = [\"first line\\nx = 1\", \"ok\"]\n",
+        );
+        std::fs::write(&path, &text).unwrap();
+        loaded.store(root).unwrap();
+        let stored = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            super::super::release_pin::pinned_digests(&stored),
+            super::super::release_pin::PinnedDigests::Absent,
+            "{stored}"
+        );
+        assert_eq!(
+            toml::from_str::<toml::Table>(&stored).unwrap()["notes"],
+            toml::from_str::<toml::Table>(&text).unwrap()["notes"]
+        );
     }
 
     #[test]
@@ -1156,6 +1539,70 @@ mod tests {
             .unwrap()
             .ignore
             .is_empty());
+    }
+
+    #[test]
+    fn feedback_topics_default_once_and_keep_the_rest_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(matches!(
+            FeedbackConfig::write_defaults(root),
+            Err(ScaffoldError::NotInitialized)
+        ));
+        let original =
+            "# kept\nschema_version = 1\ntier = \"full\"\n\n[scaffold]\nignore = [\".codex/**\"]\n";
+        write_file(&ProjectState::path(root), original.as_bytes()).unwrap();
+        assert_eq!(FeedbackConfig::load(root).unwrap().topics, None);
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(written);
+        assert_eq!(topics, FeedbackConfig::DEFAULT_TOPICS.to_vec());
+        let text = std::fs::read_to_string(ProjectState::path(root)).unwrap();
+        assert!(text.starts_with(original), "{text}");
+        assert_eq!(ScaffoldConfig::load(root).unwrap().ignore, [".codex/**"]);
+
+        // A project's own list is kept and never rewritten.
+        let own = format!("{original}\n[feedback]\ntopics = [\"ux\", \"process\"]\n");
+        write_file(&ProjectState::path(root), own.as_bytes()).unwrap();
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(!written);
+        assert_eq!(topics, ["ux", "process"]);
+        assert_eq!(
+            std::fs::read_to_string(ProjectState::path(root)).unwrap(),
+            own
+        );
+
+        // A `[feedback]` table without topics gains the key under its
+        // header; comments and every other line keep their bytes.
+        let partial = "# top\nschema_version = 1 # kept\n\n[feedback] # mine\nnote = \"x\"\n\n[scaffold]\n# why\nignore = []\n";
+        write_file(&ProjectState::path(root), partial.as_bytes()).unwrap();
+        let (topics, written) = FeedbackConfig::write_defaults(root).unwrap();
+        assert!(written);
+        assert_eq!(topics, FeedbackConfig::DEFAULT_TOPICS.to_vec());
+        let text = std::fs::read_to_string(ProjectState::path(root)).unwrap();
+        let (head, tail) = partial.split_at(partial.find("note").unwrap());
+        assert!(text.starts_with(head), "{text}");
+        assert!(text.ends_with(tail), "{text}");
+        assert!(
+            text[head.len()..].starts_with("topics = [\n    \"process\",\n"),
+            "{text}"
+        );
+
+        // `feedback` set without a header line is refused, the file untouched.
+        let dotted = "schema_version = 1\nfeedback.note = \"x\"\n";
+        write_file(&ProjectState::path(root), dotted.as_bytes()).unwrap();
+        assert!(FeedbackConfig::write_defaults(root).is_err());
+        assert_eq!(
+            std::fs::read_to_string(ProjectState::path(root)).unwrap(),
+            dotted
+        );
+
+        write_file(
+            &ProjectState::path(root),
+            b"schema_version = 1\n[feedback]\ntopics = [\"two words\"]\n",
+        )
+        .unwrap();
+        let error = FeedbackConfig::load(root).unwrap_err().to_string();
+        assert!(error.contains("feedback.topics[0]"), "{error}");
     }
 
     #[test]
@@ -1270,6 +1717,42 @@ mod tests {
     }
 
     // TSK-153: sync calls per file and per run.
+
+    /// Adding the default feedback topics is a scaffold record write: it is
+    /// flushed like any single write (content and directory, in full) and
+    /// the state file keeps its permissions.
+    #[test]
+    fn feedback_topics_are_written_durably_and_keep_the_file_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_file(&ProjectState::path(root), b"schema_version = 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                ProjectState::path(root),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .unwrap();
+        }
+        let before = sync_counts();
+        let (_, written) = FeedbackConfig::write_defaults(root).unwrap();
+        let after = sync_counts();
+        assert!(written);
+        assert_eq!(after.files_written - before.files_written, 1);
+        let directory = usize::from(cfg!(unix));
+        assert_eq!(after.directory_syncs - before.directory_syncs, directory);
+        assert_eq!(after.full_flushes - before.full_flushes, 1 + directory);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(ProjectState::path(root))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
 
     #[test]
     fn a_single_write_outside_a_batch_is_fully_flushed_at_once() {

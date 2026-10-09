@@ -17,7 +17,6 @@
 //! checklist until an adapter is warranted (charter D18).
 
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -369,30 +368,24 @@ impl GithubProvider {
         let mut cmd = Command::new(&self.gh);
         cmd.args(args)
             .current_dir(&self.repo_dir)
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| format!("gh spawn: {e}"))?;
-        if let Some(data) = input {
-            if let Some(mut stdin) = child.stdin.take() {
-                // If gh exits before consuming all of --input (an early auth
-                // failure, or a test shim that ignores stdin), the closed read
-                // end surfaces as BrokenPipe. That is not itself the verdict —
-                // let the child's exit status and stderr decide, rather than
-                // racing the write against the child's exit.
-                match stdin.write_all(data.as_bytes()) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
-                    Err(e) => return Err(format!("gh stdin: {e}")),
-                }
-            }
-        }
-        let output = child.wait_with_output().map_err(|e| format!("gh: {e}"))?;
+        // Stdin is written on its own thread while stdout and stderr are
+        // drained, so a large `gh` answer cannot deadlock a large `--input`.
+        // A `gh` that exits before consuming all of `--input` (an early auth
+        // failure, or a test shim that ignores stdin) is not itself the
+        // verdict: its exit status and stderr decide.
+        let output = match input {
+            Some(data) => crate::git::output_with_input(&mut cmd, data.as_bytes())
+                .map_err(|e| format!("gh: {e}"))?,
+            None => cmd
+                .spawn()
+                .map_err(|e| format!("gh spawn: {e}"))?
+                .wait_with_output()
+                .map_err(|e| format!("gh: {e}"))?,
+        };
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if output.status.success() {
             Ok(stdout)
@@ -877,5 +870,24 @@ mod tests {
                 "missing required context {expected}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_gh_answer_larger_than_a_pipe_does_not_block_a_large_input() {
+        // `cat` stands in for `gh`: it echoes its stdin as it reads.
+        let dir = tempfile::tempdir().unwrap();
+        let provider = GithubProvider::with_gh("cat", dir.path());
+        let input = "x".repeat(4 * 1024 * 1024);
+        let expected = input.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(provider.run_gh(&[], Some(&input)));
+        });
+        let out = receiver
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("run_gh finished instead of deadlocking on the pipe")
+            .unwrap();
+        assert_eq!(out, expected);
     }
 }
