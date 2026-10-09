@@ -586,9 +586,9 @@ CodeFlow's routes for a critical defect:
 
 | A maintenance branch, such as `release/3.0` for a 3.0.1 patch, would change | Where | What it needs |
 |---|---|---|
-| Publication guard: the dispatch must run on `main` | `.github/workflows/release-plan-authority.yml:41`; `scripts/release.py:1839` | accept a second ref |
-| Publication guard: the source must be the current `main` tip | `.github/workflows/release-plan-authority.yml:43`; `scripts/release.py:1822` | accept a source that is not `main` |
-| Publication guard: the source must be a PR merged into `main` | `scripts/release.py:1860` | accept a merge into the branch |
+| Publication guard: the dispatch must run on `main` | `.github/workflows/release-plan-authority.yml:41`; `scripts/release.py:2160` | accept a second ref |
+| Publication guard: the source must be the current `main` tip | `.github/workflows/release-plan-authority.yml:43`; `scripts/release.py:2143` | accept a source that is not `main` |
+| Publication guard: the source must be a PR merged into `main` | `scripts/release.py:2181` | accept a merge into the branch |
 | One pending section, bumped once from the published baseline | `scripts/release.py:817`, `scripts/release.py:830` | a second live `CHANGELOG.md` section and target |
 | Branch protection | repository settings | rules for the new branch |
 | A fix that applies to both lines | each such pull request | landed twice, once per line |
