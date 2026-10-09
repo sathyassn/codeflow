@@ -1071,6 +1071,50 @@ fn show_after_the_browser_exited_ignores_unreadable_command_lines() {
     drop(unrelated);
 }
 
+/// The browser was just closed: its leader is gone and reaped, while another
+/// member of its process group has exited and waits to be reaped. The group
+/// still answers a signal probe but runs nothing, so `present show` reports
+/// the session ready and `present close` closes it, instead of refusing a
+/// group without its leader.
+#[cfg(target_os = "linux")]
+#[test]
+fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
+    use std::os::unix::process::CommandExt as _;
+
+    let fixture = setup_project();
+    let (session_id, _) = open_no_launch(&fixture, &fixture.project.join("first.json"));
+    let browser = register_stand_in_browser(&fixture, &session_id);
+    let group = i32::try_from(browser.0.id()).unwrap();
+    // Not reaped until the end: it stays in the group as a zombie.
+    let mut exited = Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .process_group(group)
+        .spawn()
+        .unwrap();
+    let stat = format!("/proc/{}/stat", exited.id());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !fs::read_to_string(&stat).is_ok_and(|line| {
+        line.rsplit_once(") ")
+            .is_some_and(|(_, rest)| rest.starts_with('Z'))
+    }) {
+        assert!(Instant::now() < deadline, "the group member did not exit");
+        thread::sleep(Duration::from_millis(10));
+    }
+    drop(browser);
+
+    let shown = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "show", &session_id, "--no-launch"],
+    ));
+    assert!(
+        shown.contains(&format!("session {session_id} ready")),
+        "{shown}"
+    );
+    close_and_clear(&fixture, &session_id);
+    exited.wait().unwrap();
+}
+
 /// A stand-in browser process group, killed when the test ends or fails.
 struct StandIn(std::process::Child);
 
