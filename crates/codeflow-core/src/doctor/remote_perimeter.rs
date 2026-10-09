@@ -11,11 +11,13 @@
 //! with `git.required_checks`. Bypass lists belong to one rule each, so a
 //! policy check, or the up-to-date requirement, counts only when a rule that
 //! binds everyone requires it. It warns, never blocks; when `gh`, the
-//! network or a GitHub `origin` is missing, the policy fails the schema (an
-//! empty `git.required_checks` would otherwise name nothing to find
-//! missing), or the rules, the classic protection or a bypass list that
-//! decides the answer cannot be read (the host omits a bypass list without
-//! write access), it says so in a note rather than passing or warning. Only a 404 means no classic protection.
+//! network or a GitHub `origin` is missing, the policy file does not parse
+//! or the schema refuses `git.required_checks` (an empty list would
+//! otherwise name nothing to find missing), or the rules, the classic
+//! protection or a bypass list that decides the answer cannot be read (the
+//! host omits a bypass list without write access), it says so in a note
+//! rather than passing or warning. A schema error on another key is named
+//! beside the answer. Only a 404 means no classic protection.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -57,16 +59,17 @@ enum Bypass {
 
 pub(super) fn check(opts: &Options) -> CheckResult {
     let start = Instant::now();
+    let root = Path::new(&opts.project_dir);
+    let policy = policy_list(root);
     let result = |status: Status, message: String| CheckResult {
         name: NAME.into(),
         status,
-        message,
+        message: format!("{message}{}", policy.as_ref().map_or("", |(_, also)| also)),
         duration: start.elapsed(),
     };
     let note =
         |message: String| result(Status::Note(remedy::DOCTOR_REMOTE_UNREAD.remedy()), message);
 
-    let root = Path::new(&opts.project_dir);
     let Some(nwo) = github_origin(root) else {
         return note(
             "no GitHub `origin` remote, so doctor reads no host rules for the default branch"
@@ -78,9 +81,10 @@ pub(super) fn check(opts: &Options) -> CheckResult {
             "`gh` not found, so doctor cannot read the host rules of {nwo}"
         ));
     }
-    if let Some(message) = invalid_policy(root, &nwo) {
-        return note(message);
-    }
+    let required = match &policy {
+        Ok((required, _)) => required,
+        Err(why) => return note(why.clone()),
+    };
     let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, GH_TIMEOUT);
     let parse = |text: &str| serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
 
@@ -113,8 +117,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     let (classic, classic_unread) = classic_protection(&gh, &nwo, &branch);
 
     let sources = sources(&rules, classic.as_ref());
-    let required: Vec<String> = crate::hooks::policy::Policy::load(root).git.required_checks;
-    let problems = problems(opts, &nwo, &branch, &sources, &required, &mut bypass_unread);
+    let problems = problems(opts, &nwo, &branch, &sources, required, &mut bypass_unread);
     let mut unread: Vec<String> = classic_unread.iter().cloned().collect();
     unread.extend(bypass_unread.iter().cloned());
 
@@ -166,18 +169,67 @@ pub(super) fn check(opts: &Options) -> CheckResult {
     }
 }
 
-/// The note for a policy that fails the schema, naming each key, or `None`
-/// when it is valid. The comparison needs a list `codeflow remote protect`
-/// would accept: an empty list names no check to find missing and would
-/// pass whenever some other strict rule binds everyone. The same validation
-/// `remote protect` runs decides, so the two never disagree.
-fn invalid_policy(root: &Path, nwo: &str) -> Option<String> {
-    let errors = crate::hooks::policy_schema::validate_policy(root).err()?;
-    let found: Vec<String> = errors.iter().map(ToString::to_string).collect();
-    Some(format!(
-        "the policy is invalid, so doctor cannot compare {nwo}'s host rules with git.required_checks: {} (see `codeflow policy explain`)",
-        found.join("; ")
-    ))
+/// The `git.required_checks` list to judge, with a suffix naming the
+/// policy's other schema errors (empty when there are none), or the note
+/// for a list that cannot be trusted. It cannot when the file does not
+/// parse (the loader puts the defaults in its place), when the schema
+/// refuses the key itself (an empty list names no check to find missing and
+/// would pass whenever some other strict rule binds everyone), or when an
+/// unknown key looks like a misspelt `required_checks` (the intended list
+/// never loads). A schema error elsewhere leaves the loaded list usable, so
+/// it is judged and the error named rather than hiding the host's answer.
+fn policy_list(root: &Path) -> Result<(Vec<String>, String), String> {
+    use crate::hooks::policy::{Policy, PolicySource};
+    use crate::hooks::policy_schema::{spec_for, validate_policy, PolicyError};
+
+    let errors = validate_policy(root).err().unwrap_or_default();
+    let text = |errors: &[&PolicyError]| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let untrusted = |why: String| {
+        Err(format!(
+            "doctor cannot compare the host rules with git.required_checks: {why} (see `codeflow policy explain`)"
+        ))
+    };
+    let all: Vec<_> = errors.iter().collect();
+    // `policy.json` is the key of a file-level error: unreadable, not JSON,
+    // not an object, or refused by the loader's own deserialize.
+    if Policy::source(root) == PolicySource::MalformedFile
+        || errors.iter().any(|e| e.key == "policy.json")
+    {
+        return untrusted(format!(
+            "the policy file does not parse, so the built-in defaults stand in for it: {}",
+            text(&all)
+        ));
+    }
+    let misspelt = |key: &str| {
+        let leaf = key.rsplit('.').next().unwrap_or(key).to_ascii_lowercase();
+        spec_for(key).is_none() && leaf.contains("check") && !leaf.contains("checkout")
+    };
+    let list_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| e.key == "git.required_checks" || misspelt(&e.key))
+        .collect();
+    if !list_errors.is_empty() {
+        return untrusted(text(&list_errors));
+    }
+    let required = Policy::load(root).git.required_checks;
+    if required.is_empty() || required.iter().any(|name| name.trim().is_empty()) {
+        return untrusted("git.required_checks names no usable check".into());
+    }
+    let also = if all.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; the policy also fails the schema: {} (see `codeflow policy explain`)",
+            text(&all)
+        )
+    };
+    Ok((required, also))
 }
 
 /// The rules the host applies to `branch`, all pages: `rules/branches`
@@ -486,6 +538,7 @@ fn parse_github_url(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A project whose `origin` is `https://github.com/o/r.git`.
     fn project() -> tempfile::TempDir {
@@ -601,36 +654,85 @@ mod tests {
         );
     }
 
+    /// Write `text` as the project's policy file.
+    fn write_policy(dir: &Path, text: &str) {
+        std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+        std::fs::write(dir.join(".codeflow/policy.json"), text).unwrap();
+    }
+
     #[test]
-    fn an_invalid_required_checks_list_is_a_note_never_a_pass() {
+    fn an_untrusted_required_checks_list_notes_before_any_host_call() {
         // The host strictly requires one other check for everyone. An empty
-        // list would leave no policy name to find missing, so the invalid
-        // list must stop the check instead of passing it.
+        // list would leave no policy name to find missing, and a file that
+        // does not parse, or names the key wrongly, loads the defaults in
+        // place of the intended list, so each must stop the check before
+        // `gh` is asked anything instead of passing it.
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
         fn exec(_: &str, args: &[&str]) -> Result<String, String> {
+            CALLS.fetch_add(1, Ordering::SeqCst);
             let lint = r#"[{"context":"lint","integration_id":15368}]"#;
             host(args, &format!("[{}]", rule(7, true, lint)), None, "[]")
         }
-        for list in ["[]", r#"[" "]"#] {
+        for (policy, why) in [
+            (r#"{"git":{"required_checks":[]}}"#, "git.required_checks"),
+            (
+                r#"{"git":{"required_checks":[" "]}}"#,
+                "git.required_checks",
+            ),
+            (
+                r#"{"git":{"required_checks":"lint"}}"#,
+                "git.required_checks",
+            ),
+            (
+                r#"{"git":{"required_check":["lint"]}}"#,
+                "git.required_check",
+            ),
+            ("not json", "does not parse"),
+        ] {
             let dir = project();
-            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
-            std::fs::write(
-                dir.path().join(".codeflow/policy.json"),
-                format!(r#"{{"git":{{"required_checks":{list}}}}}"#),
-            )
-            .unwrap();
+            write_policy(dir.path(), policy);
             let result = check(&opts(dir.path(), exec));
             assert!(
                 matches!(result.status, Status::Note(_)),
-                "{list}: {:?}: {}",
+                "{policy}: {:?}: {}",
                 result.status,
                 result.message
             );
-            assert!(
-                result.message.contains("git.required_checks"),
-                "{list}: {}",
-                result.message
-            );
+            assert!(result.message.contains(why), "{policy}: {}", result.message);
         }
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0, "gh was called");
+    }
+
+    #[test]
+    fn another_schema_error_still_judges_the_loaded_list() {
+        // The file deserializes and the list it loads is usable, so a schema
+        // error elsewhere is named but does not hide the host's answer.
+        fn strict(_: &str, args: &[&str]) -> Result<String, String> {
+            host(args, &ruleset(true), None, "[]")
+        }
+        let dir = project();
+        write_policy(dir.path(), r#"{"git":{"nope":1}}"#);
+        let result = check(&opts(dir.path(), strict));
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+        assert!(result.message.contains("git.nope"), "{}", result.message);
+    }
+
+    #[test]
+    fn another_schema_error_keeps_the_up_to_date_warning() {
+        fn loose(_: &str, args: &[&str]) -> Result<String, String> {
+            host(args, &ruleset(false), None, "[]")
+        }
+        let dir = project();
+        write_policy(
+            dir.path(),
+            r#"{"git":{"required_checks":["codeflow gates"],"commit_ticket_pattern":"("}}"#,
+        );
+        let text = warn_text(&check(&opts(dir.path(), loose)));
+        assert!(
+            text.contains("not that a branch be up to date (ruleset 7)"),
+            "{text}"
+        );
+        assert!(text.contains("git.commit_ticket_pattern"), "{text}");
     }
 
     #[test]
