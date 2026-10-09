@@ -275,9 +275,9 @@ erratum below, never an edit of the section.
   merge and leave the base red, as happened to this repository's `main` on
   2026-10-08. `codeflow remote protect` now requires the checks on a branch
   that is up to date with its base on both host paths: the ruleset rule
-  pins each check to GitHub Actions with
-  `strict_required_status_checks_policy`, as classic protection already did
-  with `strict`. It reads the live rules first, updates every active ruleset
+  sets `strict_required_status_checks_policy`, as classic protection sets
+  `strict`, and pins each check it adds to GitHub Actions; an update keeps
+  each existing check's app pin. It reads the live rules first, updates every active ruleset
   that already targets the branch in place instead of adding another, and
   keeps the classic settings it does not own, such as conversation
   resolution. It matches ruleset ref patterns as GitHub does; a ruleset
@@ -290,7 +290,8 @@ erratum below, never an edit of the section.
   do not require an up-to-date branch, or miss a listed check, and when
   only rules that someone can bypass require a listed check or the
   up-to-date setting; without `gh`, the network or a GitHub `origin`, with
-  an empty or blank `git.required_checks` list or a policy file that does
+  a `git.required_checks` list the schema refuses (empty, a blank name or
+  the wrong type), a misspelt key in its place or a policy file that does
   not parse, or when it cannot read a bypass list that decides the answer,
   it is a note.
   Nothing changes on a host until you run `codeflow remote protect` or turn
