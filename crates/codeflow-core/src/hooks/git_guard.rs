@@ -2814,15 +2814,6 @@ fn redirect_word(chars: &[char], start: usize) -> (String, usize) {
     (word, i)
 }
 
-fn rsync_dry_run(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        arg == "--dry-run"
-            || arg
-                .strip_prefix('-')
-                .is_some_and(|flags| !flags.starts_with('-') && flags.contains('n'))
-    })
-}
-
 // Find's traversal roots are separate from predicate operands and -exec data.
 fn find_mutating_roots(args: &[String]) -> Option<&[String]> {
     let start = args
@@ -4144,21 +4135,21 @@ fn direct_write_violation(
         "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
         _ => None,
     };
-    // A copy, link or install writes its destination and the files its
-    // options name; a source it copies from stays in place (review rounds
-    // 19 and 22). The destination comes from the writer table's arity, the
-    // reader exec-guard uses too.
-    if matches!(cmd, "cp" | "ln" | "install") || (cmd == "rsync" && !rsync_dry_run(args)) {
-        let paths = copy_destinations(cmd, args);
-        if let Some(p) = arg_integrity_path(&paths, cwd, payload_cwd)
-            .map(str::to_string)
-            .or_else(|| unresolved_names_enforcement(&paths, line, cwd, payload_cwd))
-        {
-            return Some(hook_integrity_violation(
-                level,
-                format!("`{cmd}` writes the integrity path `{p}`"),
-            ));
-        }
+    // Every writer the table lists goes through the one judge exec-guard
+    // uses too: what it copies, the files its options and operands write
+    // (from the line's option environment as well), an option the table
+    // does not list, and where it places files (review round 23).
+    let guard = GitWriter {
+        cmd,
+        level,
+        cwd,
+        payload_cwd,
+        line,
+    };
+    let assigned =
+        crate::security::unresolved::line_assignments(&expand_commands_read(line).segments);
+    if let Some(v) = crate::security::unresolved::judge_writer(cmd, args, &assigned, &guard) {
+        return Some(v);
     }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
@@ -4208,14 +4199,6 @@ fn direct_write_violation(
             ));
         }
     }
-    if let Some(p) = git_config_destination(cmd, args, cwd) {
-        return Some(hook_integrity_violation(
-            level,
-            format!(
-                "`{cmd}` would put a file in place of the git configuration `{p}`, and a symbolic link there sends later `git config` writes to the file it points at"
-            ),
-        ));
-    }
     if cmd == "git" && matches!(args.first().map(String::as_str), Some("rm" | "mv")) {
         if let Some(p) = arg_integrity_path(&args[1..], cwd, payload_cwd) {
             return Some(hook_integrity_violation(
@@ -4227,18 +4210,132 @@ fn direct_write_violation(
     None
 }
 
+/// Git-guard's side of the shared writer judge: the integrity files and
+/// prefixes, and the repository git configuration a copy can replace
+/// (review round 23).
+struct GitWriter<'a> {
+    cmd: &'a str,
+    level: PolicyLevel,
+    cwd: &'a Path,
+    payload_cwd: &'a Path,
+    line: &'a str,
+}
+
+impl GitWriter<'_> {
+    /// The integrity path one of `paths` names, as spelled or unresolved
+    /// on a line that names an enforcement path.
+    fn integrity(&self, paths: &[String]) -> Option<String> {
+        arg_integrity_path(paths, self.cwd, self.payload_cwd)
+            .map(str::to_string)
+            .or_else(|| unresolved_names_enforcement(paths, self.line, self.cwd, self.payload_cwd))
+    }
+
+    fn refuse(&self, message: String) -> Violation {
+        hook_integrity_violation(self.level, message)
+    }
+}
+
+impl crate::security::unresolved::WriterGuard for GitWriter<'_> {
+    type Found = Violation;
+
+    fn writes(&self, path: &str) -> Option<Violation> {
+        let p = self.integrity(&[path.to_string()])?;
+        Some(self.refuse(format!("`{}` writes the integrity path `{p}`", self.cmd)))
+    }
+
+    fn copies(&self, copy: &crate::security::unresolved::CopyRead) -> Option<Violation> {
+        let cmd = self.cmd;
+        // A dry run writes nothing at its destination.
+        if cmd == "rsync" && copy.flags.iter().any(|f| f == "-n" || f == "--dry-run") {
+            return None;
+        }
+        if let Some(p) = self.integrity(&copy_destinations(cmd, copy)) {
+            return Some(self.refuse(format!("`{cmd}` writes the integrity path `{p}`")));
+        }
+        let p = git_config_destination(cmd, copy, self.cwd)?;
+        Some(self.refuse(format!(
+            "`{cmd}` would put a file in place of the git configuration `{p}`, and a symbolic link there sends later `git config` writes to the file it points at"
+        )))
+    }
+
+    fn unread(
+        &self,
+        option: &str,
+        effects: &crate::security::unresolved::WriterEffects,
+    ) -> Option<Violation> {
+        let words: Vec<String> = effects
+            .read
+            .operands
+            .iter()
+            .chain(effects.copy.iter().flat_map(|c| c.dest.iter()))
+            .chain(effects.read.values.iter().map(|(_, value)| value))
+            .cloned()
+            .collect();
+        let p = self.integrity(&words)?;
+        Some(self.refuse(format!(
+            "`{}` is given `{option}`, an option the guard does not read, so any of its words could be a target, and one names the integrity path `{p}`",
+            self.cmd
+        )))
+    }
+
+    fn places(
+        &self,
+        places: &crate::security::unresolved::Places,
+        effects: &crate::security::unresolved::WriterEffects,
+    ) -> Option<Violation> {
+        use crate::security::unresolved::DirOrder;
+        let join = |base: &str, dir: &str| {
+            if dir.starts_with(['/', '~', '$']) {
+                dir.to_string()
+            } else {
+                format!("{}/{dir}", base.trim_end_matches('/'))
+            }
+        };
+        let dirs: Vec<String> = match places.order {
+            DirOrder::Sequential => places
+                .dirs
+                .iter()
+                .fold(Vec::<String>::new(), |mut at, dir| {
+                    let next = at
+                        .last()
+                        .map_or_else(|| dir.clone(), |last| join(last, dir));
+                    at.push(next);
+                    at
+                })
+                .into_iter()
+                .last()
+                .into_iter()
+                .collect(),
+            DirOrder::Last => places.dirs.last().cloned().into_iter().collect(),
+            DirOrder::Each => {
+                let dest = effects.copy.as_ref().and_then(|c| c.dest.as_deref());
+                places
+                    .dirs
+                    .iter()
+                    .flat_map(|dir| {
+                        std::iter::once(dir.clone()).chain(dest.map(|dest| join(dest, dir)))
+                    })
+                    .collect()
+            }
+        };
+        let p = self.integrity(&dirs)?;
+        Some(self.refuse(format!(
+            "`{}` places files it does not name in the integrity path `{p}`",
+            self.cmd
+        )))
+    }
+}
+
 /// The paths a copy, link, move or install call writes, read with the
-/// writer table's arity ([`crate::security::unresolved::copy_read`]): the
+/// writer table's arity by the shared judge
+/// ([`crate::security::unresolved::judge_writer`]): the
 /// files its options write; with `install -d` every operand (each is a
 /// directory it makes); with `-t DIR` each source's name in `DIR`;
 /// otherwise the destination, and for `install` each source's name inside
 /// it in case it is a directory. With an option the table does not list,
 /// whose arity is unknown, every operand could be the destination and
 /// each is returned.
-fn copy_destinations(cmd: &str, args: &[String]) -> Vec<String> {
-    let Some(read) = crate::security::unresolved::copy_read(cmd, args) else {
-        return Vec::new();
-    };
+fn copy_destinations(cmd: &str, read: &crate::security::unresolved::CopyRead) -> Vec<String> {
     let inside = |dir: &str, source: &str| {
         let base = source
             .trim_end_matches('/')
@@ -4277,13 +4374,17 @@ fn copy_destinations(cmd: &str, args: &[String]) -> Vec<String> {
 /// symbolic link there, so a link made on the same line as a `git config`
 /// write would send that write to the user's file before the guard can read
 /// the link (review round twelve).
-fn git_config_destination(cmd: &str, args: &[String], cwd: &Path) -> Option<String> {
-    if !matches!(cmd, "ln" | "cp" | "mv" | "rsync") {
+fn git_config_destination(
+    cmd: &str,
+    read: &crate::security::unresolved::CopyRead,
+    cwd: &Path,
+) -> Option<String> {
+    if !matches!(
+        cmd,
+        "ln" | "cp" | "mv" | "rsync" | "scp" | "ditto" | "install"
+    ) {
         return None;
     }
-    // The operands come from the writer table's arity, the reader the
-    // other copy checks use (review round 22).
-    let read = crate::security::unresolved::copy_read(cmd, args)?;
     let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
         (Some(dir), true) => {
             let dir = integrity_shell_path(dir, cwd);
@@ -11849,6 +11950,25 @@ mod tests {
         }
     }
 
+    /// Every writer the table lists is judged by git-guard through the
+    /// shared judge: each one writing the repository configuration or into
+    /// the hooks directory refuses (review round 23; exec-guard has the
+    /// same test for its classes).
+    #[test]
+    fn every_writer_entry_is_judged() {
+        let p = default_policy();
+        let config = [".git", "config"].join("/");
+        let hooks = [".git", "hooks"].join("/");
+        for (name, cmd) in crate::security::unresolved::writer_spellings(&config, &hooks) {
+            let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{name}: {cmd}: {v:?}");
+        }
+        for (name, cmd) in crate::security::unresolved::writer_spellings("out/notes.txt", "out") {
+            let v = evaluate(&cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{name}: {cmd}: {v:?}");
+        }
+    }
+
     /// `sed` takes the in-place flag inside a cluster and with an attached
     /// backup suffix, so the guard reads the cluster's letters rather than the
     /// whole token.
@@ -15097,7 +15217,10 @@ mod tests {
             ("-- -m b", vec!["b", "b/-m"]),
         ] {
             assert_eq!(
-                copy_destinations("install", &words(line)),
+                copy_destinations(
+                    "install",
+                    &crate::security::unresolved::copy_read("install", &words(line)).unwrap()
+                ),
                 written,
                 "{line}"
             );
@@ -15129,7 +15252,10 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                copy_destinations(cmd, &words(&line)),
+                copy_destinations(
+                    cmd,
+                    &crate::security::unresolved::copy_read(cmd, &words(&line)).unwrap()
+                ),
                 written,
                 "{cmd} {line}"
             );

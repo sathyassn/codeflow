@@ -151,12 +151,24 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   the tar dialects disagree on which letters take one (review round 18).
   The table records each long option's arity and the options whose value
   is a file the program writes (`rsync --log-file`, `curl --trace`, `wget
-  -o`, `zip -lf`), and one reader of it chooses the operands for exec-guard
-  and git-guard alike: every option that takes a word takes it before the
-  destination is chosen, so `rsync -a SRC ~/.zshrc --exclude foo` writes
-  the startup file and refuses, and a written-path value is judged as a
-  target. With an option the table does not list, any operand could be the
-  destination, so each is judged as one (review round 22);
+  -o`, `zip -lf`, `tar -f` when it creates or adds to an archive, so
+  `tar -tf` and `tar -xf` read theirs), and every option that takes a word
+  takes it before the destination is chosen, so `rsync -a SRC ~/.zshrc
+  --exclude foo` writes the startup file and refuses (review round 22).
+  One judge reads every writer the table lists, once, with the line's
+  option environment, and both guards call it: exec-guard against the
+  startup and user git configuration classes, git-guard against the
+  integrity paths and the repository git configuration. It judges the
+  copy's destination, each written path from the command line or the
+  option environment (`TAR_OPTIONS="--file=$HOME/.zshrc" tar -c .`,
+  `ZIPOPT="-O $HOME/.zshrc"`), each as spelled and joined with the
+  writer's directory options in program order (`patch -d DIR -o ../x`
+  writes `DIR/../x`), an option the table does not list, and where the
+  call places files it does not name, so `ditto`, `scp`, `curl -o` and
+  `tar -cf` onto `.git/config` refuse on git-guard as `cp` does. With an
+  option the table does not list, any operand could be the destination,
+  so each is judged as one, and a test fails when a table entry is not
+  judged by both guards (review round 23);
 - a writer's option environment: a variable the line sets that the writer
   reads as more options (`ZIPOPT`, `ZIP` and `ZIP_OPTS` for `zip`, `UNZIP`,
   `UNZIPOPT` and `UNZIP_OPTS` for `unzip`, `TAR_OPTIONS` for `tar`) is
@@ -217,8 +229,9 @@ level:
   --strip-components`, `tar -P`, `unzip -j`, `patch -p`, `wget -nd`), but a
   name an archive, a diff or a server supplies can still leave the judged
   directory; that is the content residual listed below (review round 22).
-  A relative
-  `curl -o` is judged joined with `--output-dir`. The option variables are
+  A relative written path is judged both as spelled and joined with the
+  writer's directory (`curl -o` with `--output-dir`, `patch -o` and `-r`
+  with `-d`). The option variables are
   read before the command line, so the command-line directory is the one
   that holds, as GNU tar and Info-ZIP apply them (review round 21). Tar's
   mode comes from the same reading, so an archive name attached to `-f` is

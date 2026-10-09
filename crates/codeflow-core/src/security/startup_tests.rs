@@ -631,6 +631,30 @@ fn options_that_move_files_are_judged() {
     }
 }
 
+/// Every writer the table lists is judged by exec-guard through the shared
+/// judge: each one writing a startup file or the user git configuration
+/// refuses (review round 23; git-guard has the same test for its paths).
+#[test]
+fn every_writer_entry_is_judged() {
+    let f = Fixture::new();
+    for (file, dir, rule) in [
+        ("~/.zshrc", "~", RULE),
+        ("~/.gitconfig", "~/.config/git", "git.hook_integrity"),
+    ] {
+        for (name, command) in super::super::unresolved::writer_spellings(file, dir) {
+            let found = f.judge(&command);
+            assert!(
+                found.iter().any(|v| v.rule == rule),
+                "{name}: {command}: {found:?}"
+            );
+        }
+    }
+    for (name, command) in super::super::unresolved::writer_spellings("out/notes.txt", "out") {
+        let found = f.judge(&command);
+        assert!(found.is_empty(), "{name}: {command}: {found:?}");
+    }
+}
+
 /// A startup variable set for a shell that reads startup files refuses.
 #[test]
 fn startup_environment_for_a_shell_refuses() {
