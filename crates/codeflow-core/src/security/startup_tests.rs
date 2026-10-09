@@ -43,9 +43,17 @@ impl Fixture {
     }
 
     /// The command with `H` replaced by the fixture home, spelled with
-    /// `/` as a shell command spells a path on every platform.
+    /// `/` as a shell command spells a path on every platform. A command
+    /// that already spells the home keeps it: the temporary directory's
+    /// random name can end in `H` (`.tmpCeqjnH/home`), which a plain
+    /// replace rewrote one run in about sixty.
     fn spell(&self, command: &str) -> String {
-        command.replace("H/", &format!("{}/", slashed(&self.home)))
+        let home = slashed(&self.home);
+        command
+            .split(home.as_str())
+            .map(|part| part.replace("H/", &format!("{home}/")))
+            .collect::<Vec<_>>()
+            .join(&home)
     }
 
     fn judge_in(&self, command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {

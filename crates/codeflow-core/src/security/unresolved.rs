@@ -74,11 +74,22 @@ const WRITERS: &[&str] = &[
 /// word when the letter ends it), whole short words (`wget -nc`), and long
 /// names. Each of them runs nothing and reads no configuration that could
 /// name another target.
+///
+/// A writer also reads its environment, which the argument vector does not
+/// show (review round 18). Every entry declares it: `env_options` are
+/// variables whose value the writer reads as more options (`ZIPOPT`,
+/// `TAR_OPTIONS`), judged by the same lists; `env_refused` are variables
+/// that name a program, a configuration file or a file it writes
+/// (`RSYNC_RSH`, `CURL_HOME`, `TAPE`), which refuse whenever the line
+/// assigns one. Both fields are required, and a writer that reads neither
+/// is named with its reason in the test `writers_declare_their_environment`.
 struct Known {
     flags: &'static str,
     valued: &'static str,
     words: &'static [&'static str],
     long: &'static [&'static str],
+    env_options: &'static [&'static str],
+    env_refused: &'static [&'static str],
 }
 
 /// The options known for each writer that has an option which runs a
@@ -184,6 +195,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "remove-source-files",
                 "list-only",
             ],
+            env_options: &[],
+            env_refused: &["RSYNC_RSH", "RSYNC_CONNECT_PROG", "SSH_ASKPASS"],
         },
     ),
     (
@@ -193,6 +206,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             valued: "PlicJX",
             words: &[],
             long: &[],
+            env_options: &[],
+            env_refused: &["SSH_ASKPASS"],
         },
     ),
     (
@@ -264,6 +279,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "no-acls",
                 "options",
             ],
+            env_options: &["TAR_OPTIONS"],
+            env_refused: &["TAPE", "TAR_READER_OPTIONS", "TAR_WRITER_OPTIONS"],
         },
     ),
     (
@@ -290,6 +307,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "filesync",
                 "test-only",
             ],
+            env_options: &["ZIPOPT", "ZIP", "ZIP_OPTS"],
+            env_refused: &[],
         },
     ),
     (
@@ -299,6 +318,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             valued: "dPx",
             words: &["-qq", "-aa", "-LL", "-UU", "-DD"],
             long: &[],
+            env_options: &["UNZIP", "UNZIPOPT", "UNZIP_OPTS"],
+            env_refused: &[],
         },
     ),
     (
@@ -393,6 +414,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "speed-limit",
                 "speed-time",
             ],
+            env_options: &[],
+            env_refused: &["CURL_HOME", "XDG_CONFIG_HOME", "SSLKEYLOGFILE", "QLOGDIR"],
         },
     ),
     (
@@ -466,6 +489,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "force-html",
                 "base",
             ],
+            env_options: &[],
+            env_refused: &["WGETRC", "SYSTEM_WGETRC"],
         },
     ),
     (
@@ -512,6 +537,13 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "reject-format",
                 "quoting-style",
             ],
+            env_options: &[],
+            env_refused: &[
+                "PATCH_GET",
+                "SIMPLE_BACKUP_SUFFIX",
+                "VERSION_CONTROL",
+                "PATCH_VERSION_CONTROL",
+            ],
         },
     ),
     (
@@ -534,6 +566,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "suffix",
                 "preserve-context",
             ],
+            env_options: &[],
+            env_refused: &["STRIPBIN", "SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
         },
     ),
 ];
@@ -559,19 +593,36 @@ pub(crate) fn unresolved_form(
             shown(word)
         ));
     }
+    // Every `NAME=value` on the line, prefixed, exported or bare: a writer
+    // reads its environment as well as its arguments (review round 18).
+    let assigned: Vec<(String, String)> = expanded
+        .segments
+        .iter()
+        .flat_map(|segment| command_argv(segment))
+        .filter_map(|word| {
+            let (name, value) = word.split_once('=')?;
+            (name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .then(|| (name.to_string(), value.to_string()))
+        })
+        .collect();
     expanded.segments.iter().find_map(|segment| {
         if segment == NESTING_UNREAD {
             return Some("it nests commands deeper than the guard reads".to_string());
         }
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
-        segment_form(&words, names_target)
+        segment_form(&words, names_target, &assigned)
     })
 }
 
 /// The unresolved form of one simple command, or `None` when the guard
 /// reads it.
-fn segment_form(words: &[String], names_target: &dyn Fn(&str) -> bool) -> Option<String> {
+fn segment_form(
+    words: &[String],
+    names_target: &dyn Fn(&str) -> bool,
+    assigned: &[(String, String)],
+) -> Option<String> {
     let launched = strip_launchers(words);
     let program_at = launched.map_or(words.len(), |(_, args)| words.len() - args.len() - 1);
     if let Some(prefixed) = words[..program_at].iter().find(|w| gnu_prefixed(w)) {
@@ -640,11 +691,7 @@ fn segment_form(words: &[String], names_target: &dyn Fn(&str) -> bool) -> Option
         "flock" | "script" | "watch" | "setsid" | "unbuffer" => launcher_commands(name, args)
             .is_empty()
             .then(|| format!("`{name}` runs a command the guard does not read")),
-        _ if WRITERS.contains(&name) => writer_option(name, args).map(|option| {
-            format!(
-                "`{name}` is given `{option}`, an option the guard does not know, which could run a command or pick another target"
-            )
-        }),
+        _ if WRITERS.contains(&name) => writer_form(name, args, assigned),
         _ if reader_program(program, args) => None,
         _ => Some(format!(
             "`{program}` is a program the guard does not read, which can run a command of its own"
@@ -682,16 +729,23 @@ fn find_commands(args: &[String]) -> Vec<&[String]> {
 /// A `tar` key without a dash (`tar cfI x.tar cmd`) is a run of letters
 /// read whole: each letter that takes a value takes the next word, in
 /// order, so a letter after `f` is still judged (review round 17).
+///
+/// A letter takes the next word as its value only when that word is not
+/// an option itself (review round 18): the tar dialects disagree on which
+/// letters take one (BSD `-L` is a flag, GNU `-s` is one), and a word the
+/// table took as a value would otherwise hide an option that runs a
+/// program. A lone `-` is an operand, and a value such as rsync's
+/// `- *.o` filter rule is not an option.
 fn writer_option(name: &str, args: &[String]) -> Option<String> {
     let known = known_options(name)?;
     let tar = matches!(name, "tar" | "bsdtar" | "gtar");
-    let mut skip = 0usize;
+    let mut pending = 0usize;
     for (at, arg) in args.iter().enumerate() {
-        if skip > 0 {
-            skip -= 1;
+        let a = arg.as_str();
+        if pending > 0 && !option_like(a) {
+            pending -= 1;
             continue;
         }
-        let a = arg.as_str();
         if a == "--" {
             break;
         }
@@ -708,24 +762,69 @@ fn writer_option(name: &str, args: &[String]) -> Option<String> {
         if at == 0 && tar && !a.is_empty() && !a.starts_with('-') {
             for c in a.chars() {
                 if known.valued.contains(c) {
-                    skip += 1;
+                    pending += 1;
                 } else if !known.flags.contains(c) {
                     return Some(a.to_string());
                 }
             }
             continue;
         }
-        let Some(letters) = a.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
+        if !option_like(a) {
             continue;
-        };
+        }
+        let letters = &a[1..];
         for (i, c) in letters.char_indices() {
             if known.valued.contains(c) {
                 // The value is the rest of the word, or the next word.
-                skip = usize::from(i + c.len_utf8() == letters.len());
+                if i + c.len_utf8() == letters.len() {
+                    pending += 1;
+                }
                 break;
             }
             if !known.flags.contains(c) {
                 return Some(a.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Whether `word` is an option rather than a value: a `-` followed by a
+/// letter, a digit or a second `-`.
+fn option_like(word: &str) -> bool {
+    word.strip_prefix('-')
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// The unread form of a writer call: an option [`writer_option`] does not
+/// know, on the command line or in a variable the writer reads as options,
+/// or a variable that names a program, a configuration or a file the
+/// writer uses. `assigned` is every `NAME=value` the line sets before or
+/// for the call.
+fn writer_form(name: &str, args: &[String], assigned: &[(String, String)]) -> Option<String> {
+    if let Some(option) = writer_option(name, args) {
+        return Some(format!(
+            "`{name}` is given `{option}`, an option the guard does not know, which could run a command or pick another target"
+        ));
+    }
+    let known = known_options(name)?;
+    for (var, value) in assigned {
+        if known.env_refused.contains(&var.as_str()) {
+            return Some(format!(
+                "`{name}` reads `{var}`, which names a program, a configuration or a file the guard does not read"
+            ));
+        }
+        if known.env_options.contains(&var.as_str()) {
+            let words: Vec<String> = value.split_whitespace().map(str::to_string).collect();
+            // The value comes before the command line, so a tar key there
+            // is not the first word.
+            let mut read = vec!["-".to_string()];
+            read.extend(words);
+            if let Some(option) = writer_option(name, &read) {
+                return Some(format!(
+                    "`{name}` reads `{var}` as options, which give it `{option}`, an option the guard does not know"
+                ));
             }
         }
     }
@@ -876,6 +975,32 @@ mod tests {
             ("patch -g1 a", "`patch` is given `-g1`"),
             ("install -s a b", "`install` is given `-s`"),
             ("Path=/tmp/x cat ~/.zshrc", "`Path=/tmp/x` picks"),
+            // Review round 18: a word that is an option is never taken as
+            // a value, and the environment a writer reads is judged.
+            (
+                "tar -L --use-compress-program p -cf a.tar b",
+                "`--use-compress-program`",
+            ),
+            (
+                "tar cL --use-compress-program p -f a.tar b",
+                "`--use-compress-program`",
+            ),
+            ("tar -s -I p -xf a.tar", "`-I`"),
+            ("ZIPOPT='-T -TT p' zip a.zip f", "reads `ZIPOPT` as options"),
+            (
+                "TAR_OPTIONS='--use-compress-program=p' tar -cf a.tar f",
+                "reads `TAR_OPTIONS`",
+            ),
+            (
+                "export TAR_OPTIONS=--to-command=p; tar -xf a.tar",
+                "reads `TAR_OPTIONS`",
+            ),
+            ("RSYNC_RSH=p rsync -a f host:d", "reads `RSYNC_RSH`"),
+            (
+                "CURL_HOME=/tmp/x curl -o out https://example.invalid",
+                "reads `CURL_HOME`",
+            ),
+            ("TAPE=out tar -c f", "reads `TAPE`"),
             ("path=/tmp/x cat ~/.zshrc", "`path=/tmp/x` picks"),
             ("script -q /dev/null", "`script` runs a command"),
             ("trap 'true' EXIT", "`trap` is a program"),
@@ -922,6 +1047,12 @@ mod tests {
             "tar -czf a.tgz -C src .",
             "tar xzf a.tgz",
             "tar cfv a.tar README",
+            "tar -L 1024 -cf a.tar README",
+            "tar -s 's/a/b/' -cf a.tar README",
+            "tar -cf - README",
+            "rsync -f '- *.o' a/ b/",
+            "ZIPOPT=-q zip a.zip f",
+            "LANG=C cat ~/.zshrc",
             "tar cf a.tar README",
             "tar -czf a.tgz README",
             "rsync -av --delete --exclude target a/ b/",
@@ -933,6 +1064,28 @@ mod tests {
             "cp -a a b",
         ] {
             assert_eq!(form(line), None, "{line}");
+        }
+    }
+
+    /// Writers of [`KNOWN_OPTIONS`] that read no option, program or file
+    /// from their environment, each with the reason. None does today.
+    const READS_NO_ENVIRONMENT: &[(&str, &str)] = &[];
+
+    /// Review round 18: a writer entry declares the environment it reads,
+    /// or is named here with the reason it reads none.
+    #[test]
+    fn writers_declare_their_environment() {
+        for (names, known) in KNOWN_OPTIONS {
+            let declared = !known.env_options.is_empty() || !known.env_refused.is_empty();
+            let excused = names.iter().any(|n| {
+                READS_NO_ENVIRONMENT
+                    .iter()
+                    .any(|(name, why)| name == n && !why.is_empty())
+            });
+            assert!(
+                declared != excused,
+                "{names:?}: declare its environment or the reason it reads none"
+            );
         }
     }
 

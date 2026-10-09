@@ -146,7 +146,23 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   program or read a configuration, so only the options the guard lists
   pass and any other refuses (`zip -TT`, `rsync --rsync-path`, `tar -I`,
   `scp -S`, `curl -K`, `wget -e`, `patch -g`, `install -s`), with no
-  keyword list to extend (review round 16);
+  keyword list to extend (review round 16). A letter that takes a value
+  takes the next word only when that word is not an option itself, since
+  the tar dialects disagree on which letters take one (review round 18);
+- a writer's option environment: a variable the line sets that the writer
+  reads as more options (`ZIPOPT`, `ZIP` and `ZIP_OPTS` for `zip`, `UNZIP`,
+  `UNZIPOPT` and `UNZIP_OPTS` for `unzip`, `TAR_OPTIONS` for `tar`) is
+  judged by the same list, so `ZIPOPT='-T -TT cmd'` refuses; a variable that
+  names a program, a configuration or a file the writer uses refuses
+  whatever its value (`RSYNC_RSH`, `RSYNC_CONNECT_PROG` and `SSH_ASKPASS`
+  for `rsync`, `SSH_ASKPASS` for `scp`, `TAPE`, `TAR_READER_OPTIONS` and
+  `TAR_WRITER_OPTIONS` for `tar`, `CURL_HOME`, `XDG_CONFIG_HOME`,
+  `SSLKEYLOGFILE` and `QLOGDIR` for `curl`, `WGETRC` and `SYSTEM_WGETRC`
+  for `wget`, `PATCH_GET`, `SIMPLE_BACKUP_SUFFIX`, `VERSION_CONTROL` and
+  `PATCH_VERSION_CONTROL` for `patch`, `STRIPBIN`, `SIMPLE_BACKUP_SUFFIX`
+  and `VERSION_CONTROL` for `install`). Each writer's table entry declares
+  both lists, and a test fails on an entry that declares neither without
+  a reason (review round 18);
 - any other program the guard does not know to run nothing of its own,
   such as `npm`, `make`, `tmux`, `ssh`, an interpreter or `trap`.
 
@@ -323,11 +339,12 @@ fixture or scratch file given a key not known to run nothing. edit-guard
 refuses a native edit of a `gitconfig` in any `etc` directory with the
 user's own files, which include the `.gitconfig` of every home a shell of
 this user may read: `HOME`, and `USERPROFILE` where it names another
-directory. The shell guards refuse a write only to the default paths in
-`git_config_paths` and those homes' files; a shell write to a `gitconfig`
-under another prefix (`~/etc/gitconfig`, `/opt/local/etc/gitconfig`) is the
-residual AC-6 names, held by the sandbox where that path is outside the
-writable root (review round 17).
+directory. exec-guard refuses a shell write only to the default paths in
+`git_config_paths` and those homes' files. For a `gitconfig` under another
+prefix (`~/etc/gitconfig`, `/opt/local/etc/gitconfig`), git-guard refuses a
+redirect into it and edit-guard a native edit; a write by any other program
+(`curl -o`, `cp`, `tar`) is the residual AC-6 names, held by the sandbox
+where that path is outside the writable root (review rounds 17 and 18).
 
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,
@@ -364,6 +381,18 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
 `--shallow-file`), so a value is never read as the subcommand (issue 120).
 
 ### What the startup backstop leaves open
+
+- **Every harness, the environment.** A writer's option environment
+  exported in an earlier tool call is invisible to the hook, which judges
+  one call. Variables that change only output, locale or proxy settings
+  (`LANG`, `TMPDIR`, `POSIXLY_CORRECT`, `QUOTING_STYLE`, `PATCH_VERBOSE`,
+  `DONTSTRIP`, `RSYNC_PASSWORD`, `RSYNC_PROXY`, curl's and wget's proxy and
+  certificate variables) are not judged: none of them runs a program or
+  names a file the writer writes. `SIMPLE_BACKUP_SUFFIX` and
+  `VERSION_CONTROL` also name the backup file of `cp`, `mv` and `ln -b`,
+  whose options are all read as known; a backup name assembled that way
+  spells no protected file on the line, the same residual as a path built
+  from pieces.
 
 - **Every harness.** The text guard does not inspect links inside a copied
   or moved tree, judge link text from where it lands, emulate dereference
