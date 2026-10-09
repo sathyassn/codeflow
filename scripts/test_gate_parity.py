@@ -484,10 +484,7 @@ class SharedInstallControls(unittest.TestCase):
 
 class TimeoutAndPlaywrightControls(unittest.TestCase):
     """TSK-254: every job has its own timeout, and only the present part
-    installs Playwright, with a bounded, retried system-library install."""
-
-    INSTALL_TIMEOUT = "        if: matrix.part == 'present'\n        timeout-minutes: 25\n"
-    BOUNDED = 'sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit'
+    touches Playwright, through the pinned steps (PLAYWRIGHT_STEPS)."""
 
     def problems(self, workflow: str) -> list[str]:
         return parity.timeout_problems(workflow) + parity.playwright_problems(workflow)
@@ -538,82 +535,94 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertTrue(values)
         self.assertLessEqual(max(values), parity.MAX_TIMEOUT_MINUTES)
 
-    def test_a_playwright_step_timeout_or_install_limit_above_the_bound_is_refused(self):
-        self.assertEqual(WORKFLOW.count(self.INSTALL_TIMEOUT), 1)
-        self.assertEqual(WORKFLOW.count(self.BOUNDED), 1)
-        self.assert_problem(WORKFLOW.replace(self.INSTALL_TIMEOUT, self.INSTALL_TIMEOUT.replace("25", "360")),
-                            "install-deps", "twice")
-        for limit in ("11m", "3h", "601s", "600", "1h", "0m"):
-            with self.subTest(limit=limit):
-                self.assert_problem(WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("10m", limit)),
-                                    "install-deps", "10 minutes")
-        within = WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("10m", "600s"))
-        self.assertEqual(self.problems(within), [], "600 seconds is 10 minutes")
-
+    INSTALL_HEAD = "      - name: Install Playwright browsers from the lockfile\n"
     BROWSERS = 'if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit'
+    CLI = "          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js\n"
 
-    def test_the_browser_install_is_bounded_like_install_deps(self):
-        """AC-2: each attempt is bounded at 10 minutes, the browser download
-        included, so a hang there reaches the retry and not the step timeout."""
+    def install_step(self) -> str:
+        start = WORKFLOW.index(self.INSTALL_HEAD)
+        end = WORKFLOW.index("          exit 1\n", start) + len("          exit 1\n")
+        return WORKFLOW[start:end]
+
+    def assert_unpinned(self, workflow: str) -> None:
+        """Refused, and the message names the pin a deliberate change edits."""
+        self.assert_problem(workflow, "PLAYWRIGHT_STEPS", "scripts/gate-parity.py")
+
+    def test_a_line_broken_install_without_a_step_timeout_is_refused(self):
+        """Round 9: the package and `install` on two lines, with no step
+        timeout, matched no same-line spelling and passed."""
+        broken = (self.INSTALL_HEAD + "        if: matrix.part == 'present'\n        run: |\n"
+                  "          npx playwright \\\n            install chromium firefox webkit\n")
+        self.assert_unpinned(WORKFLOW.replace(self.install_step(), broken))
+
+    def test_a_timeout_that_wraps_another_command_is_refused(self):
+        """Round 9: `timeout` wrapped `echo` on the install's own line."""
         self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
-        unwrapped = self.BROWSERS.replace("timeout --kill-after=30s 10m ", "")
-        self.assert_problem(WORKFLOW.replace(self.BROWSERS, unwrapped), "browser `install`", "10 minutes")
-        for limit in ("11m", "3h", "601s", "600", "1h", "0m"):
-            with self.subTest(limit=limit):
-                self.assert_problem(WORKFLOW.replace(self.BROWSERS, self.BROWSERS.replace("10m", limit)),
-                                    "browser `install`", "10 minutes")
-        within = WORKFLOW.replace(self.BROWSERS, self.BROWSERS.replace("10m", "600s"))
-        self.assertEqual(self.problems(within), [], "600 seconds is 10 minutes")
-        # A browser install with no install-deps still has to be bounded.
-        only_browsers = WORKFLOW.replace(self.BROWSERS, unwrapped).replace(self.BOUNDED, "true")
-        self.assertNotIn("install-deps chromium", only_browsers)
-        self.assert_problem(only_browsers, "browser `install`")
+        self.assert_unpinned(WORKFLOW.replace(
+            self.BROWSERS, "if timeout --kill-after=30s 10m echo skip; npx playwright install chromium"))
 
-    def test_every_spelling_of_the_browser_install_is_bounded(self):
-        """An `npx playwright install` or `playwright-core install` line is
-        the same download as the committed `"$cli" install`, so it needs the
-        same 10 minute attempt bound."""
-        self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
-        for spelling in ("npx playwright install chromium firefox webkit",
-                         "npx playwright-core install chromium",
-                         "npx playwright install",
-                         "npx playwright@1.49.0 install",
-                         "npx playwright-core@1.49.0 install",
-                         'npx "playwright" install',
-                         "node node_modules/playwright/cli.js install",
-                         "node node_modules/playwright-core/cli.js install",
-                         '"${cli}" install chromium',
-                         "$cli install chromium",
-                         'node -e "require(\'child_process\').execSync(\'npx playwright install\')"'):
-            with self.subTest(spelling=spelling):
-                extra = WORKFLOW.replace(self.BROWSERS, self.BROWSERS + "\n            " + spelling)
-                self.assert_problem(extra, "browser `install`", "10 minutes")
-                bounded = WORKFLOW.replace(
-                    self.BROWSERS, self.BROWSERS + "\n            timeout --kill-after=30s 10m " + spelling)
-                self.assertEqual(self.problems(bounded), [], spelling)
+    def test_an_added_install_through_a_variable_is_refused(self):
+        self.assertEqual(WORKFLOW.count(self.CLI), 1)
+        self.assert_unpinned(WORKFLOW.replace(
+            self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n'))
 
-    def test_a_playwright_step_on_every_part_is_refused(self):
+    def test_a_new_step_naming_playwright_is_refused(self):
+        step = ("      - name: Warm the Playwright cache\n        if: matrix.part == 'present'\n"
+                "        run: ls ~/.cache/ms-playwright\n")
+        self.assert_unpinned(WORKFLOW.replace(self.INSTALL_HEAD, step + self.INSTALL_HEAD))
+        upper = step.replace("Playwright", "PLAYWRIGHT").replace("ms-playwright", "ms-browsers")
+        self.assert_unpinned(WORKFLOW.replace(self.INSTALL_HEAD, upper + self.INSTALL_HEAD))
+        self.assert_unpinned(WORKFLOW.replace(self.install_step(), self.install_step() * 2))
+
+    def test_any_edit_to_a_pinned_step_is_refused(self):
+        """The forms the earlier text checks chased are each a change to the
+        pinned text, so each is refused the same way."""
+        install = self.install_step()
+        root = "sudo timeout --kill-after=30s 10m "
+        cases = {
+            "step timeout 360": install.replace("timeout-minutes: 25", "timeout-minutes: 360"),
+            "no step timeout": install.replace("        timeout-minutes: 25\n", ""),
+            "browser install unbounded": install.replace(
+                self.BROWSERS, self.BROWSERS.replace("timeout --kill-after=30s 10m ", "")),
+            "attempt limit 11m": install.replace(" 10m ", " 11m ", 1),
+            "apt-get outside a timeout": install.replace(root, root.split()[0] + " "),
+            "one attempt": install.replace("for attempt in 1 2; do", "for attempt in 1; do"),
+            "with-deps": install.replace('"$cli" install chromium', '"$cli" install --with-deps chromium'),
+            "every part": install.replace("        if: matrix.part == 'present'\n", ""),
+            "an extra spelling": install.replace(
+                self.BROWSERS, self.BROWSERS + "\n            npx playwright-core@1.49.0 install"),
+            "a bounded extra spelling": install.replace(
+                self.BROWSERS, self.BROWSERS + "\n            timeout --kill-after=30s 10m npx playwright install"),
+        }
+        for name, step in cases.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(step, install)
+                self.assert_unpinned(WORKFLOW.replace(install, step))
         cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
         self.assertEqual(WORKFLOW.count(cache), 1)
-        self.assert_problem(WORKFLOW.replace(cache, cache.replace("        if: matrix.part == 'present'\n", "")),
-                            "touches Playwright on every part")
-        self.assertEqual(WORKFLOW.count(self.INSTALL_TIMEOUT), 1)
-        self.assert_problem(WORKFLOW.replace(self.INSTALL_TIMEOUT, "        timeout-minutes: 25\n"),
-                            "touches Playwright on every part")
+        self.assert_unpinned(WORKFLOW.replace(cache, cache.replace("        if: matrix.part == 'present'\n", "")))
+        noted = install.replace("          exit 1\n", "          # a note\n\n          exit 1   \n")
+        self.assertEqual(parity.playwright_problems(WORKFLOW.replace(install, noted)), [],
+                         "comments, blank lines and trailing spaces are not part of the pin")
 
-    def test_an_unbounded_or_single_attempt_install_is_refused(self):
-        self.assertEqual(WORKFLOW.count(self.BOUNDED), 1)
-        for name, workflow in {
-            "no step timeout": WORKFLOW.replace(self.INSTALL_TIMEOUT, "        if: matrix.part == 'present'\n"),
-            "apt-get outside a timeout": WORKFLOW.replace(self.BOUNDED, self.BOUNDED.replace("sudo timeout --kill-after=30s 10m ", "sudo ")),
-            "one attempt": WORKFLOW.replace("for attempt in 1 2; do", "for attempt in 1; do"),
-        }.items():
-            with self.subTest(name=name):
-                self.assert_problem(workflow, "install-deps", "twice")
-
-    def test_with_deps_is_refused(self):
-        self.assert_problem(WORKFLOW.replace('"$cli" install chromium', '"$cli" install --with-deps chromium'),
-                            "--with-deps")
+    def test_the_pin_keeps_the_ac2_bound(self):
+        """A deliberate edit to the pin still keeps AC-2: present only, no
+        --with-deps, a step timeout within the job bound, two attempts, and
+        each install under a timeout of at most 10 minutes."""
+        steps = parity.PLAYWRIGHT_STEPS
+        self.assertEqual(len(steps), 4)
+        self.assertTrue(all("        if: matrix.part == 'present'\n" in s for s in steps))
+        installs = [s for s in steps if s.startswith(self.INSTALL_HEAD)]
+        self.assertEqual(len(installs), 1)
+        install = installs[0]
+        self.assertNotIn("--with-deps", "".join(steps))
+        limit = re.search(r"^ {8}timeout-minutes: (\d+)$", install, re.M)
+        self.assertTrue(limit and int(limit.group(1)) <= parity.MAX_TIMEOUT_MINUTES)
+        self.assertIn("for attempt in 1 2; do", install)
+        self.assertIn(self.BROWSERS, install)
+        self.assertIn('sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit', install)
+        self.assertEqual([s for s in steps if s is not install and " install" in s], [],
+                         "only the install step installs")
 
     def test_playwright_outside_the_gates_job_is_refused(self):
         windows = "      - name: Install nextest\n        uses: taiki-e/install-action"

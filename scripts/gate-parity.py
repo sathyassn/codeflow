@@ -687,68 +687,101 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
 
 
 # TSK-254: only the present part launches a browser, so only it touches
-# Playwright, and its install is bounded and retried: the apt download of
-# the browsers' system libraries stalled for up to three hours with no
-# timeout. `--with-deps` is refused because it hides that download inside
-# the browser install, where the root apt-get cannot be stopped.
-PRESENT_ONLY = "        if: matrix.part == 'present'"
-STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: ([1-9][0-9]*)$", re.M)
-BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ (\S+) .*install-deps")
-# A line is a browser install when it says `install` (not `install-deps`)
-# and names Playwright or the locked CLI in any spelling: `"$cli"`,
-# `${cli}`, a `cli.js` path, `npx playwright@<version>` or
-# `playwright-core`. This is a text check of the step, so an install hidden
-# in a script file, an `eval` or an env-var command is outside it; the job
-# and step timeouts still end such a run.
-BROWSER_INSTALL = re.compile(r'^(?=.*(?:playwright|\$\{?cli\b|cli\.js))(?=.*\binstall\b(?!-deps)).*$', re.M)
-BOUNDED_LINE = re.compile(r'timeout --kill-after=\S+ (\S+) ')
-# TSK-254 AC-2: each install attempt is bounded at 10 minutes.
-ATTEMPT_LIMIT = re.compile(r"^([1-9][0-9]*)([sm])$")
-MAX_ATTEMPT_SECONDS = 600
-
-
-def attempt_bounded(limit: str) -> bool:
-    found = ATTEMPT_LIMIT.match(limit)
-    return bool(found) and int(found.group(1)) * (60 if found.group(2) == "m" else 1) <= MAX_ATTEMPT_SECONDS
-
-
-def deps_bounded(step: str, body: str) -> bool:
-    """The install step carries its own timeout inside the job bound, and
-    both the browser `install` and `install-deps` run under a `timeout` of
-    at most 10 minutes."""
-    step_limit = STEP_TIMEOUT.search(step)
-    deps = BOUNDED_DEPS.search(body)
-    if not step_limit or not deps or int(step_limit.group(1)) > MAX_TIMEOUT_MINUTES:
-        return False
-    installs = [BOUNDED_LINE.search(line) for line in body.splitlines() if BROWSER_INSTALL.search(line)]
-    return (attempt_bounded(deps.group(1)) and bool(installs)
-            and all(m is not None and attempt_bounded(m.group(1)) for m in installs))
+# Playwright, and its install is bounded and retried: the apt download of the
+# browsers' system libraries stalled for up to three hours with no timeout
+# (AC-2: each attempt under a 10 minute `timeout`, two attempts, a step
+# timeout, no `--with-deps`). Text checks for "a bounded install line" were
+# beaten by new spellings each review round (a line-broken command, a
+# `timeout` that wraps another command, an install through a variable), so
+# the steps are pinned instead: every step of codeflow-ci.yml whose text
+# names Playwright, in any case, must be one of these, in this order, apart
+# from comment lines, blank lines and trailing spaces. A deliberate change
+# edits the workflow and this constant together, and
+# scripts/test_gate_parity.py checks that the pin itself keeps the AC-2 bound.
+# A step that installs without naming Playwright (a script file, an `eval`)
+# is outside a text check; the 45 minute job timeout still ends it.
+PLAYWRIGHT_STEPS = (
+    r"""      - name: Read the locked Playwright version
+        if: matrix.part == 'present'
+        id: playwright
+        run: |
+          present=$(node -p "require('./crates/codeflow-present/web/package-lock.json').packages['node_modules/playwright-core'].version")
+          portal=$(node -p "require('./docs-portal/package-lock.json').packages['node_modules/playwright-core'].version")
+          test "$present" = "$portal" || { echo "playwright-core differs: present $present, portal $portal"; exit 1; }
+          echo "version=$present" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+""",
+    r"""      - uses: actions/cache@v6
+        if: matrix.part == 'present'
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+""",
+    r"""      - uses: actions/cache@v6
+        if: matrix.part == 'present'
+        with:
+          path: ~/.cache/playwright-apt
+          key: playwright-apt-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}
+""",
+    r"""      - name: Install Playwright browsers from the lockfile
+        if: matrix.part == 'present'
+        timeout-minutes: 25
+        run: |
+          npm ci --ignore-scripts --prefix crates/codeflow-present/web
+          node=$(command -v node)
+          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js
+          archives="$HOME/.cache/playwright-apt"
+          mkdir -p "$archives/partial"
+          printf 'Dir::Cache::Archives "%s/";\nAPT::Keep-Downloaded-Packages "true";\n' "$archives" |
+            sudo tee /etc/apt/apt.conf.d/90codeflow-playwright-archives >/dev/null
+          echo "apt archives restored: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+          for attempt in 1 2; do
+            if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit &&
+              sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit; then
+              sudo apt-get autoclean || echo "::warning::apt-get autoclean failed; the cache keeps stale archives"
+              sudo chown -R "$(id -u):$(id -g)" "$archives" || echo "::warning::the apt archives may not be saved"
+              echo "apt archives kept: $(find "$archives" -maxdepth 1 -name '*.deb' | wc -l)"
+              exit 0
+            fi
+            echo "::warning::Playwright install attempt ${attempt} failed or ran past 10 minutes"
+            sudo dpkg --configure -a || true
+          done
+          echo "::error::the Playwright install failed twice; see the attempts above"
+          exit 1
+""",
+)
+PIN_FIX = ("to change a Playwright step on purpose, make the same edit in .github/workflows/codeflow-ci.yml "
+           "and in PLAYWRIGHT_STEPS in scripts/gate-parity.py (one entry per step, in workflow order), keep "
+           "each install attempt under a `timeout` of at most 10 minutes, two attempts, the step's "
+           "`timeout-minutes` and `if: matrix.part == 'present'` (TSK-254 AC-2), then run "
+           "`python3 -B -m unittest scripts.test_gate_parity`")
 
 
 def playwright_problems(workflow: str) -> list[str]:
+    """Every step that names Playwright is in the gates job and is one of
+    PLAYWRIGHT_STEPS, each once and in order."""
     problems = []
+    found: list[list[str]] = []
     for name, text in jobs_section(workflow).items():
         for step in re.split(r"\n(?= {6}- )", text):
-            body = "\n".join(norm_job(step))
-            if "playwright" not in body.lower() and not BROWSER_INSTALL.search(body):
+            lines = norm_job(step)
+            if "playwright" not in "\n".join(lines).lower():
                 continue
-            first = body.splitlines()[0].strip() if body else ""
             if name != "gates":
-                problems.append(f"job '{name}' has a Playwright step ({first}); only the gates job's "
+                problems.append(f"job '{name}' has a Playwright step ({lines[0].strip()}); only the gates job's "
                                 "present part launches a browser")
                 continue
-            if PRESENT_ONLY not in body.splitlines():
-                problems.append(f"the gates step `{first}` touches Playwright on every part; give it "
-                                f"`{PRESENT_ONLY.strip()}`")
-            if "--with-deps" in body:
-                problems.append(f"the gates step `{first}` installs with --with-deps; install the "
-                                "browsers and run `install-deps` as root under its own timeout")
-            if (("install-deps" in body or BROWSER_INSTALL.search(body))
-                    and not (deps_bounded(step, body) and "for attempt in 1 2; do" in body)):
-                problems.append(f"the gates step `{first}` must carry its own `timeout-minutes` (at most "
-                                f"{MAX_TIMEOUT_MINUTES}), run the browser `install` and `install-deps` (as root, "
-                                "`sudo timeout --kill-after=<s> <limit>`) each under a `timeout` of at most 10 "
-                                "minutes (`10m` or `600s`) and try them twice (`for attempt in 1 2; do`)")
+            found.append(lines)
+    pinned = [norm_job(step) for step in PLAYWRIGHT_STEPS]
+    for lines in found:
+        if lines not in pinned:
+            problems.append(f"the gates step `{lines[0].strip()}` names Playwright but matches no pinned step "
+                            f"in PLAYWRIGHT_STEPS; {PIN_FIX}")
+    for step, lines in zip(PLAYWRIGHT_STEPS, pinned):
+        if lines not in found:
+            problems.append(f"the gates job lacks this pinned Playwright step, or changed it:\n{step}{PIN_FIX}")
+    if found != pinned and all(lines in pinned for lines in found) and all(lines in found for lines in pinned):
+        problems.append(f"the gates job's Playwright steps repeat or reorder the pinned steps; {PIN_FIX}")
     return problems
 
 
@@ -767,7 +800,7 @@ def main() -> int:
         print("gate-parity OK: Node targets run on their CI pins, the "
               "real-browser check runs the gate's binary, the gate parts "
               "run every full-mode target, every job of every workflow has a timeout, and only "
-              "the present part installs Playwright, bounded and retried")
+              "the present part touches Playwright, through the pinned steps")
     return status
 
 
