@@ -224,6 +224,7 @@ fn retired_scan_rejects_outside_history_and_does_not_hide_instruction_pins() {
         "docs/verification/fixture.md",
         "project-management/tasks/TSK-900.md",
         "CHANGELOG.md",
+        "changelog.d/TSK-900.md",
         "docs/plan/history.md",
     ] {
         write(dir.path(), path, "quartz-old-selector");

@@ -505,14 +505,14 @@ catalog! {
     IDS_SYNC_FAILED = Step::Codeflow("codeflow ids sync"),
         "rerun `codeflow ids sync` once the authority answers";
     /// A release preflight finding short of a broken tree.
-    RELEASE_PREFLIGHT_NOTE = Step::Edit("CHANGELOG.md"),
-        "resolve what the note names (most often the `CHANGELOG.md` entry), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT_NOTE = Step::Edit("changelog.d/"),
+        "resolve what the note names (most often the pending entry, a fragment under `changelog.d/`), then rerun `python3 {script} preflight --branch {branch}`";
     /// A release preflight that could not run.
     RELEASE_PREFLIGHT_UNRUN = Step::Edit("scripts/release.py"),
         "make `python3 scripts/release.py preflight --branch {branch}` run (python3 on PATH, the script intact), then push again";
     /// A push that breaks the release tree.
-    RELEASE_PREFLIGHT = Step::Edit("CHANGELOG.md"),
-        "fix the release state the preflight names above (the `CHANGELOG.md` entry or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
+    RELEASE_PREFLIGHT = Step::Edit("changelog.d/"),
+        "fix the release state the preflight names above (the pending entry's fragment under `changelog.d/` or the release files it lists), then rerun `python3 {script} preflight --branch {branch}`";
     /// A test configuration that does not load.
     TEST_CONFIG_REPAIR = Step::Edit(".codeflow/test-config.json"),
         "repair .codeflow/test-config.json, then run `codeflow test --mode quick`";
