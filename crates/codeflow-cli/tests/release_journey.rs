@@ -455,18 +455,14 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     assert!(quiet.status.success(), "{text}");
     assert!(!text.contains("behaviour paths changed"), "{text}");
 
-    // A labelled pending entry with its stamps: no warning, and the pull
-    // request job accepts it.
+    // A labelled pending entry in its own fragment (ADR-0082), with its
+    // stamps: no warning, and the pull request job accepts it.
     git(root, &["switch", "-q", "feat/tool"]);
-    let changelog = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
     let next = next();
     write(
         root,
-        "CHANGELOG.md",
-        &changelog.replace(
-            &format!("## [{BASE}] - 2026-01-01"),
-            &format!("## [{next}]\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [{BASE}] - 2026-01-01"),
-        ),
+        "changelog.d/tool.md",
+        "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n",
     );
     for path in ["Cargo.toml", "Cargo.lock"] {
         let text = std::fs::read_to_string(root.join(path)).unwrap();
@@ -527,5 +523,161 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
         "{}\n{}",
         String::from_utf8_lossy(&accepted.stdout),
         stderr(&accepted)
+    );
+    assert!(
+        !std::fs::read_to_string(root.join("CHANGELOG.md"))
+            .unwrap()
+            .contains(&format!("## [{next}]")),
+        "the work PR writes no section"
+    );
+
+    fragments_merge_assemble_and_publish(&project, &fixed, &next);
+}
+
+fn release_py(root: &Path, args: &[&str]) -> Output {
+    let mut all = vec!["-B", "scripts/release.py"];
+    all.extend_from_slice(args);
+    run(root, "python3", &all)
+}
+
+fn release_notes(root: &Path, source: &str, version: &str) -> Output {
+    let tag = format!("v{version}");
+    release_py(
+        root,
+        &[
+            "release-notes",
+            "--ref",
+            source,
+            "--source",
+            source,
+            "--tag",
+            &tag,
+            "--repository",
+            "o/r",
+            "--output",
+            ".git/notes.md",
+        ],
+    )
+}
+
+/// TSK-264 AC-1, AC-6 and AC-7 (ADR-0082): two pull requests that each add
+/// a fragment merge without conflict and compose one section; the dispatch
+/// refuses a source that holds a fragment; a reviewed `assemble` writes the
+/// section with `Impact: none`, and the notes render from it.
+#[allow(clippy::too_many_lines)] // One journey, in the order a release lives it.
+fn fragments_merge_assemble_and_publish(project: &Adopted, work: &str, next: &str) {
+    let root = &project.root;
+
+    // The work PR lands.
+    git(root, &["switch", "-q", "main"]);
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge feat/tool",
+            work,
+        ],
+    );
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "push",
+            "-q",
+            "origin",
+            "main",
+        ],
+    );
+    git(root, &["fetch", "-q", "origin"]);
+    let landed = git(root, &["rev-parse", "HEAD"]);
+
+    // A fragment at the source: the dispatch's notes step refuses it.
+    let refused = release_notes(root, &landed, next);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("still holds changelog fragments (changelog.d/tool.md)"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // Two pull requests each add a fragment; they merge without conflict.
+    for name in ["one", "two"] {
+        git(
+            root,
+            &["switch", "-q", "-c", &format!("fix/{name}"), "main"],
+        );
+        write(
+            root,
+            &format!("changelog.d/{name}.md"),
+            &format!(
+                "### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **Fix {name}.** Detail.\n"
+            ),
+        );
+        commit(root, &format!("fix: {name}"));
+    }
+    let tree = run(
+        root,
+        "git",
+        &["merge-tree", "--write-tree", "fix/one", "fix/two"],
+    );
+    assert!(
+        tree.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tree.stdout)
+    );
+    git(root, &["merge", "-q", "--no-edit", "fix/one"]);
+    let state = ok(
+        &release_py(root, &["check-state", "--structural", "--ref", "HEAD"]),
+        "check-state on the merge",
+    );
+    let state: serde_json::Value = serde_json::from_str(state.trim()).unwrap();
+    assert_eq!(state["version"], next, "{state}");
+    for (path, label) in [
+        ("changelog.d/one.md", "Fix one."),
+        ("changelog.d/two.md", "Fix two."),
+        ("changelog.d/tool.md", "Start the tool."),
+    ] {
+        assert_eq!(state["fragments"][path][0], label, "{state}");
+    }
+
+    // The reviewed assemble pull request: the section, no fragments, no impact.
+    git(root, &["switch", "-q", "-c", "chore/assemble", "main"]);
+    let assembled = ok(
+        &release_py(root, &["assemble", "--host-state", ".git/host.json"]),
+        "assemble",
+    );
+    assert!(
+        assembled.contains("\"status\": \"assembled\""),
+        "{assembled}"
+    );
+    assert!(!root.join("changelog.d").exists());
+    let changelog = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let section = format!(
+        "## [{next}]\n\n### Fixed\n\n<!-- codeflow:release-impact patch -->\n- **Start the tool.** A new helper.\n\n## [{BASE}]"
+    );
+    assert!(changelog.contains(&section), "{changelog}");
+    let head = commit(root, "chore(release): assemble the pending section");
+    let verdict = ok(
+        &project.check_pr(&head, &body("none")),
+        "check-pr on assemble",
+    );
+    assert!(
+        verdict.contains("\"added\": [], \"declared\": \"none\", \"edited\": []"),
+        "{verdict}"
+    );
+    ok(
+        &release_notes(root, &head, next),
+        "release-notes after assemble",
+    );
+    let text = std::fs::read_to_string(root.join(".git/notes.md")).unwrap();
+    assert!(
+        text.contains("- **Start the tool.** A new helper."),
+        "{text}"
     );
 }
