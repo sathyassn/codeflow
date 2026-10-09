@@ -576,7 +576,15 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
         for spelling in ("npx playwright install chromium firefox webkit",
                          "npx playwright-core install chromium",
-                         "npx playwright install"):
+                         "npx playwright install",
+                         "npx playwright@1.49.0 install",
+                         "npx playwright-core@1.49.0 install",
+                         'npx "playwright" install',
+                         "node node_modules/playwright/cli.js install",
+                         "node node_modules/playwright-core/cli.js install",
+                         '"${cli}" install chromium',
+                         "$cli install chromium",
+                         'node -e "require(\'child_process\').execSync(\'npx playwright install\')"'):
             with self.subTest(spelling=spelling):
                 extra = WORKFLOW.replace(self.BROWSERS, self.BROWSERS + "\n            " + spelling)
                 self.assert_problem(extra, "browser `install`", "10 minutes")

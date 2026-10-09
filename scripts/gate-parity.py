@@ -694,12 +694,14 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
 PRESENT_ONLY = "        if: matrix.part == 'present'"
 STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: ([1-9][0-9]*)$", re.M)
 BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ (\S+) .*install-deps")
-# Any spelling of the browser install counts: the committed step calls the
-# locked CLI as `"$cli" install`, and `npx playwright install` or
-# `playwright-core install` reaches the same download.
-BROWSER_INSTALL = re.compile(r'(?:"\$cli"|\bplaywright(?:-core)?)\s+install(?:\s|$)', re.M)
-BOUNDED_BROWSERS = re.compile(
-    r'timeout --kill-after=\S+ (\S+) .*(?:"\$cli"|\bplaywright(?:-core)?)\s+install(?:\s|$)')
+# A line is a browser install when it says `install` (not `install-deps`)
+# and names Playwright or the locked CLI in any spelling: `"$cli"`,
+# `${cli}`, a `cli.js` path, `npx playwright@<version>` or
+# `playwright-core`. This is a text check of the step, so an install hidden
+# in a script file, an `eval` or an env-var command is outside it; the job
+# and step timeouts still end such a run.
+BROWSER_INSTALL = re.compile(r'^(?=.*(?:playwright|\$\{?cli\b|cli\.js))(?=.*\binstall\b(?!-deps)).*$', re.M)
+BOUNDED_LINE = re.compile(r'timeout --kill-after=\S+ (\S+) ')
 # TSK-254 AC-2: each install attempt is bounded at 10 minutes.
 ATTEMPT_LIMIT = re.compile(r"^([1-9][0-9]*)([sm])$")
 MAX_ATTEMPT_SECONDS = 600
@@ -718,7 +720,7 @@ def deps_bounded(step: str, body: str) -> bool:
     deps = BOUNDED_DEPS.search(body)
     if not step_limit or not deps or int(step_limit.group(1)) > MAX_TIMEOUT_MINUTES:
         return False
-    installs = [BOUNDED_BROWSERS.search(line) for line in body.splitlines() if BROWSER_INSTALL.search(line)]
+    installs = [BOUNDED_LINE.search(line) for line in body.splitlines() if BROWSER_INSTALL.search(line)]
     return (attempt_bounded(deps.group(1)) and bool(installs)
             and all(m is not None and attempt_bounded(m.group(1)) for m in installs))
 
@@ -728,7 +730,7 @@ def playwright_problems(workflow: str) -> list[str]:
     for name, text in jobs_section(workflow).items():
         for step in re.split(r"\n(?= {6}- )", text):
             body = "\n".join(norm_job(step))
-            if "playwright" not in body.lower():
+            if "playwright" not in body.lower() and not BROWSER_INSTALL.search(body):
                 continue
             first = body.splitlines()[0].strip() if body else ""
             if name != "gates":
