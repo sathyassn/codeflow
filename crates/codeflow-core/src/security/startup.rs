@@ -2741,83 +2741,68 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
 struct CopyCall {
     dest: String,
     sources: Vec<String>,
+    /// Files the call writes through its options (`rsync --log-file`).
+    written: Vec<String>,
+    /// Every option read without a value.
+    flags: Vec<String>,
+    /// The first option the writer table does not list.
+    unknown: Option<String>,
 }
 
-/// Split sources from the destination, recognizing exact target-directory
-/// options and a short table of operand-taking options. Do not emulate a
-/// copier's dereference, preservation or long-option abbreviation rules.
-///
-/// Kept apart from the writer scan (review round 20): `cp`, `mv`, `ln` and
-/// `ditto` have no writer entry, and the entries record which long options
-/// exist but not which take the next word, so an operand reader built on
-/// them would take the value of `--suffix .bak` as the destination.
+/// Split sources from the destination with the writer table's arity
+/// ([`super::unresolved::copy_read`]), the reader git-guard uses too, so a
+/// known option that takes a word cannot move which word is the
+/// destination (review round 22). `install -d` makes every operand and has
+/// no destination; its words are judged one by one.
 fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
     if !COPIERS.contains(&name) {
         return None;
     }
-    let mut operands = Vec::new();
-    let mut target = None;
-    let mut iter = args.iter();
-    let mut options = true;
-    let targeted = matches!(name, "cp" | "mv" | "ln" | "install");
-    while let Some(arg) = iter.next() {
-        if options && arg == "--" {
-            options = false;
-        } else if options && arg.starts_with('-') && arg.len() > 1 {
-            if targeted && arg == "--target-directory" {
-                target = iter.next().cloned();
-            } else if targeted && arg.starts_with("--target-directory=") {
-                target = arg.split_once('=').map(|(_, v)| v.to_string());
-            } else if (targeted && arg == "--suffix")
-                || (name == "install" && matches!(arg.as_str(), "--mode" | "--owner" | "--group"))
-            {
-                iter.next();
-            } else if targeted && !arg.starts_with("--") {
-                for (at, letter) in arg[1..].char_indices() {
-                    if !(matches!(letter, 't' | 'S')
-                        || name == "install" && matches!(letter, 'm' | 'o' | 'g' | 'l'))
-                    {
-                        continue;
-                    }
-                    let rest = &arg[at + 2..];
-                    let value = if rest.is_empty() {
-                        iter.next().cloned()
-                    } else {
-                        Some(rest.to_string())
-                    };
-                    if letter == 't' {
-                        target = value;
-                    }
-                    break;
-                }
-            }
-        } else {
-            operands.push(arg.clone());
-        }
+    let read = super::unresolved::copy_read(name, args)?;
+    if read.directories {
+        return None;
     }
-    let dest = target.or_else(|| (operands.len() >= 2).then(|| operands.pop()).flatten())?;
     Some(CopyCall {
-        dest,
-        sources: operands,
+        dest: read.dest?,
+        sources: read.sources,
+        written: read.written,
+        flags: read.flags,
+        unknown: read.unknown,
     })
 }
 
-/// Exact flags and short clusters, stopping at a value-taking option.
-fn copy_flag(name: &str, args: &[String], short: &[char], long: &[&str]) -> bool {
-    args.iter().take_while(|a| a.as_str() != "--").any(|arg| {
-        if arg.starts_with("--") {
-            long.contains(&arg.as_str())
-        } else if let Some(letters) = arg.strip_prefix('-') {
-            letters
-                .chars()
-                .take_while(|c| {
-                    !(matches!(c, 't' | 'S')
-                        || name == "install" && matches!(c, 'm' | 'o' | 'g' | 'l'))
-                })
-                .any(|c| short.contains(&c))
-        } else {
-            false
-        }
+/// What a copier's options write or hide: a file an option writes is
+/// judged as any target, and with an option the table does not list,
+/// whose arity is unknown, any operand could be the destination, so each
+/// is judged as a target, and a call that names the home, `/etc` or a
+/// startup directory refuses as a placing call does (review round 22).
+fn copy_option_violation(
+    name: &str,
+    args: &[String],
+    call: &CopyCall,
+    line: &Line<'_>,
+    dirs: &[PathBuf],
+) -> Option<Violation> {
+    let noun = line.noun();
+    if let Some(v) = call
+        .written
+        .iter()
+        .find_map(|path| word_violation(name, path, line, dirs))
+    {
+        return Some(v);
+    }
+    let option = call.unknown.as_deref()?;
+    if let Some(v) = call
+        .sources
+        .iter()
+        .find_map(|source| word_violation(name, source, line, dirs))
+    {
+        return Some(v);
+    }
+    call_names_place(args, None, line, dirs).then(|| {
+        line.finding(format!(
+            "`{name}` is given `{option}`, an option the guard does not read, with the home, `/etc` or a startup directory, where it can place a {noun} it does not name"
+        ))
     })
 }
 
@@ -2835,13 +2820,21 @@ fn copy_judgment(
     dirs: &[PathBuf],
 ) -> Option<Violation> {
     let (noun, nouns) = (line.noun(), line.kind.nouns());
-    let CopyCall { dest, sources } = call;
+    let CopyCall {
+        dest,
+        sources,
+        flags,
+        ..
+    } = call;
     let dest = dest.as_str();
-    let recursive =
-        name == "ditto" || copy_flag(name, args, &['r', 'R', 'a'], &["--recursive", "--archive"]);
+    let flagged = |names: &[&str]| flags.iter().any(|f| names.contains(&f.as_str()));
+    let recursive = name == "ditto" || flagged(&["-r", "-R", "-a", "--recursive", "--archive"]);
     let moves = name == "mv";
-    let links = name == "ln"
-        || (name == "cp" && copy_flag(name, args, &['s', 'l'], &["--symbolic-link", "--link"]));
+    let links =
+        name == "ln" || (name == "cp" && flagged(&["-s", "-l", "--symbolic-link", "--link"]));
+    if let Some(v) = copy_option_violation(name, args, call, line, dirs) {
+        return Some(v);
+    }
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
         Judged::Class(label) => {

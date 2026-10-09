@@ -4144,18 +4144,21 @@ fn direct_write_violation(
         "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
         _ => None,
     };
-    // `install` writes its destination, as `cp` does; a source it copies
-    // from stays in place (review round 19).
-    let installed = (cmd == "install").then(|| install_destinations(args));
-    if let Some(p) = installed.as_deref().and_then(|paths| {
-        arg_integrity_path(paths, cwd, payload_cwd)
+    // A copy, link or install writes its destination and the files its
+    // options name; a source it copies from stays in place (review rounds
+    // 19 and 22). The destination comes from the writer table's arity, the
+    // reader exec-guard uses too.
+    if matches!(cmd, "cp" | "ln" | "install") || (cmd == "rsync" && !rsync_dry_run(args)) {
+        let paths = copy_destinations(cmd, args);
+        if let Some(p) = arg_integrity_path(&paths, cwd, payload_cwd)
             .map(str::to_string)
-            .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
-    }) {
-        return Some(hook_integrity_violation(
-            level,
-            format!("`install` writes the integrity path `{p}`"),
-        ));
+            .or_else(|| unresolved_names_enforcement(&paths, line, cwd, payload_cwd))
+        {
+            return Some(hook_integrity_violation(
+                level,
+                format!("`{cmd}` writes the integrity path `{p}`"),
+            ));
+        }
     }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
@@ -4205,18 +4208,6 @@ fn direct_write_violation(
             ));
         }
     }
-    if matches!(cmd, "cp" | "ln") || (cmd == "rsync" && !rsync_dry_run(args)) {
-        // Only the destination is written. A copy or link from an integrity
-        // path leaves that source in place.
-        if let Some(dest) = args.iter().rev().find(|a| !a.starts_with('-')) {
-            if let Some(p) = token_integrity_path(dest, cwd, payload_cwd) {
-                return Some(hook_integrity_violation(
-                    level,
-                    format!("`{cmd}` writes the integrity path `{p}`"),
-                ));
-            }
-        }
-    }
     if let Some(p) = git_config_destination(cmd, args, cwd) {
         return Some(hook_integrity_violation(
             level,
@@ -4236,68 +4227,18 @@ fn direct_write_violation(
     None
 }
 
-/// The paths an `install` call writes: with `-d` every operand (each is a
+/// The paths a copy, link, move or install call writes, read with the
+/// writer table's arity ([`crate::security::unresolved::copy_read`]): the
+/// files its options write; with `install -d` every operand (each is a
 /// directory it makes); with `-t DIR` each source's name in `DIR`;
-/// otherwise the last operand, and each source's name inside it in case it
-/// is a directory. `-D` only makes the leading directories of that
-/// destination. Options that take a value (`-m`, `-o`, `-g`, `-S`, `-t`
-/// and their long forms) are skipped with it.
-///
-/// Kept apart from the writer scan (review round 20): the `install` entry
-/// records which long options exist but not which take the next word, so
-/// an operand reader built on it would read `--suffix .bak` after the
-/// operands as the destination.
-fn install_destinations(args: &[String]) -> Vec<String> {
-    let mut operands: Vec<&str> = Vec::new();
-    let mut target: Option<String> = None;
-    let mut directories = false;
-    let mut words = args.iter().map(String::as_str);
-    let mut options = true;
-    while let Some(word) = words.next() {
-        if !options || word == "-" || !word.starts_with('-') {
-            operands.push(word);
-            continue;
-        }
-        if word == "--" {
-            options = false;
-        } else if let Some(long) = word.strip_prefix("--") {
-            let (name, value) = long
-                .split_once('=')
-                .map_or((long, None), |(n, v)| (n, Some(v)));
-            match name {
-                "directory" => directories = true,
-                "target-directory" => {
-                    target = value
-                        .map(str::to_string)
-                        .or_else(|| words.next().map(str::to_string));
-                }
-                "mode" | "owner" | "group" | "suffix" | "strip-program" if value.is_none() => {
-                    words.next();
-                }
-                _ => {}
-            }
-        } else {
-            let letters = &word[1..];
-            for (at, c) in letters.char_indices() {
-                match c {
-                    'd' => directories = true,
-                    'm' | 'o' | 'g' | 'S' | 't' => {
-                        let rest = &letters[at + 1..];
-                        let value = if rest.is_empty() {
-                            words.next().map(str::to_string)
-                        } else {
-                            Some(rest.to_string())
-                        };
-                        if c == 't' {
-                            target = value;
-                        }
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+/// otherwise the destination, and for `install` each source's name inside
+/// it in case it is a directory. With an option the table does not list,
+/// whose arity is unknown, every operand could be the destination and
+/// each is returned.
+fn copy_destinations(cmd: &str, args: &[String]) -> Vec<String> {
+    let Some(read) = crate::security::unresolved::copy_read(cmd, args) else {
+        return Vec::new();
+    };
     let inside = |dir: &str, source: &str| {
         let base = source
             .trim_end_matches('/')
@@ -4306,18 +4247,27 @@ fn install_destinations(args: &[String]) -> Vec<String> {
             .unwrap_or(source);
         format!("{}/{base}", dir.trim_end_matches('/'))
     };
-    if directories {
-        return operands.iter().map(|o| (*o).to_string()).collect();
+    let mut paths = read.written.clone();
+    if read.directories || read.unknown.is_some() {
+        paths.extend(read.sources.iter().cloned());
+        paths.extend(read.dest.iter().cloned());
+        if read.directories {
+            return paths;
+        }
     }
-    if let Some(dir) = target {
-        return operands.iter().map(|o| inside(&dir, o)).collect();
+    if let Some(dest) = &read.dest {
+        if !read.target {
+            paths.push(dest.clone());
+        }
+        // A copy into a target directory lands each source there; `install`
+        // is also judged at each source's name inside its destination, in
+        // case that is a directory (review round 19). For `cp`, `ln` and
+        // `rsync` the destination directory itself is judged.
+        if read.target || cmd == "install" {
+            paths.extend(read.sources.iter().map(|source| inside(dest, source)));
+        }
     }
-    let Some((dest, sources)) = operands.split_last() else {
-        return Vec::new();
-    };
-    std::iter::once((*dest).to_string())
-        .chain(sources.iter().map(|s| inside(dest, s)))
-        .collect()
+    paths
 }
 
 /// The git configuration a link, copy or move puts a file in place of: its
@@ -4331,40 +4281,37 @@ fn git_config_destination(cmd: &str, args: &[String], cwd: &Path) -> Option<Stri
     if !matches!(cmd, "ln" | "cp" | "mv" | "rsync") {
         return None;
     }
-    let mut operands: Vec<&str> = Vec::new();
-    let mut target_dir: Option<&str> = None;
-    let mut words = args.iter().map(String::as_str);
-    let mut options = true;
-    while let Some(word) = words.next() {
-        match word {
-            "--" if options => options = false,
-            "-t" | "--target-directory" if options && cmd != "rsync" => target_dir = words.next(),
-            "-S" | "--suffix" if options && cmd != "rsync" => {
-                words.next();
-            }
-            _ if options && word.starts_with("--target-directory=") => {
-                target_dir = word.split_once('=').map(|(_, dir)| dir);
-            }
-            _ if options && word.starts_with('-') && word.len() > 1 => {}
-            _ => operands.push(word),
-        }
-    }
-    let destinations: Vec<PathBuf> = match (target_dir, operands.split_last()) {
-        (Some(dir), _) => {
+    // The operands come from the writer table's arity, the reader the
+    // other copy checks use (review round 22).
+    let read = crate::security::unresolved::copy_read(cmd, args)?;
+    let mut destinations: Vec<PathBuf> = match (&read.dest, read.target) {
+        (Some(dir), true) => {
             let dir = integrity_shell_path(dir, cwd);
-            operands.iter().map(|op| entry_in(&dir, op)).collect()
+            read.sources.iter().map(|op| entry_in(&dir, op)).collect()
         }
-        (None, Some((only, []))) if cmd == "ln" => vec![entry_in(cwd, only)],
-        (None, Some((dest, sources))) => {
+        (Some(dest), false) => {
             let path = integrity_shell_path(dest, cwd);
             if dest.ends_with('/') || path.is_dir() {
-                sources.iter().map(|op| entry_in(&path, op)).collect()
+                read.sources.iter().map(|op| entry_in(&path, op)).collect()
             } else {
                 vec![path]
             }
         }
-        (None, None) => Vec::new(),
+        (None, _) if cmd == "ln" && read.sources.len() == 1 => {
+            vec![entry_in(cwd, &read.sources[0])]
+        }
+        (None, _) => Vec::new(),
     };
+    // With an option the table does not list, any operand could be the
+    // destination.
+    if read.unknown.is_some() {
+        destinations.extend(
+            read.sources
+                .iter()
+                .chain(&read.dest)
+                .map(|op| integrity_shell_path(op, cwd)),
+        );
+    }
     destinations.into_iter().find_map(|path| {
         let config = |p: &Path| {
             p.file_name().is_some_and(|name| {
@@ -15149,7 +15096,43 @@ mod tests {
             ("-d one two", vec!["one", "two"]),
             ("-- -m b", vec!["b", "b/-m"]),
         ] {
-            assert_eq!(install_destinations(&words(line)), written, "{line}");
+            assert_eq!(
+                copy_destinations("install", &words(line)),
+                written,
+                "{line}"
+            );
+        }
+        // A known option that takes a word, after the destination, does
+        // not move it; a file an option writes is a destination too; an
+        // unlisted option makes every operand one (review round 22).
+        let config = [".git", "config"].join("/");
+        for (cmd, line, written) in [
+            (
+                "rsync",
+                format!("-a p {config} --exclude foo"),
+                vec![config.clone()],
+            ),
+            (
+                "rsync",
+                "-a p d/ --log-file=L".to_string(),
+                vec!["L".to_string(), "d/".to_string()],
+            ),
+            (
+                "cp",
+                format!("p {config} --suffix .bak"),
+                vec![
+                    "p".to_string(),
+                    config.clone(),
+                    ".bak".to_string(),
+                    ".bak".to_string(),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                copy_destinations(cmd, &words(&line)),
+                written,
+                "{cmd} {line}"
+            );
         }
     }
 }

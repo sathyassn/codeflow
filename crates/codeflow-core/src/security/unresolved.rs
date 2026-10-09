@@ -75,6 +75,14 @@ const WRITERS: &[&str] = &[
 /// names. Each of them runs nothing and reads no configuration that could
 /// name another target.
 ///
+/// The table records each option's arity, so one reader chooses the
+/// operands for every guard (review round 22): a long name or whole word
+/// written with a trailing `=` (`exclude=`, `-lf=`) takes a value, attached
+/// with `=` or as the next word; a bare long name takes none, or only an
+/// attached `=` value (`--backup=numbered`). `writes` names the options
+/// whose value is a file the program writes (`rsync --log-file`, `curl
+/// --trace`), judged as a written path.
+///
 /// A writer also reads its environment, which the argument vector does not
 /// show (review round 18). Every entry declares it: `env_options` are
 /// variables whose value the writer reads as more options (`ZIPOPT`,
@@ -94,6 +102,9 @@ struct Known {
     /// does not name into (`-C`, `--directory`), judged by the placement
     /// check from the same scan (review round 19).
     dirs: &'static [&'static str],
+    /// The options whose value is a file the writer writes, judged as a
+    /// written path wherever it sits on the line (review round 22).
+    writes: &'static [&'static str],
 }
 
 /// The options known for each writer that has an option which runs a
@@ -101,9 +112,10 @@ struct Known {
 /// -S`, `-o`, `-F` and `-D`, `tar -I`, `-F` and `--to-command`, `zip -TT`,
 /// `curl -K`, `wget -e`, `patch -e` and `-g`, `install -s`. Any option not
 /// listed refuses on a line that names a protected target, so a writer
-/// option the list misses fails closed (review round 16). The other
-/// writers (`cp`, `mv`, `ln`, `tee`, `dd` and the like) have no such
-/// option, and every option of theirs is read as known.
+/// option the list misses fails closed (review round 16). The copiers
+/// (`cp`, `mv`, `ln`, `ditto`) have no such option; their entries give the
+/// arity their destination is read with (review round 22). The other
+/// writers (`tee`, `dd` and the like) take no option that moves a target.
 ///
 /// An option that changes where a file lands is either a judged `dirs`
 /// entry or left out, so the placement check refuses it on a line that
@@ -112,10 +124,12 @@ struct Known {
 /// that makes a new name (`patch -B`, `-Y`, `-z`, `install -B`, `-S`,
 /// `rsync --suffix`), a path kept from the source (`rsync -R`,
 /// `--files-from`) and a temporary location (`zip -b`) are left out.
-/// Options that only shape names an archive, a diff or a server supplies
-/// below the judged directory stay known (`tar --strip-components`,
-/// `unzip -j`, `patch -p`, `wget -x`, `-nd`, `-nH`, `--cut-dirs`), as does
-/// `tar -P`, whose absolute member names are the archive residual.
+/// Options that add no directory themselves stay known (`tar
+/// --strip-components`, `-P`, `unzip -j`, `patch -p`, `wget -x`, `-nd`,
+/// `-nH`, `--cut-dirs`), but a name an archive, a diff or a server
+/// supplies can still leave the judged directory (`tar -P` with an
+/// absolute member, `patch -p0` with an absolute or `..` path in the
+/// diff): the content residual the policy page lists (review round 22).
 const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
     (
         &["rsync"],
@@ -139,7 +153,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "human-readable",
                 "progress",
                 "partial",
-                "partial-dir",
+                "partial-dir=",
                 "dry-run",
                 "update",
                 "checksum",
@@ -158,14 +172,14 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "delete-before",
                 "delete-during",
                 "delete-excluded",
-                "exclude",
-                "exclude-from",
-                "include",
-                "include-from",
-                "filter",
+                "exclude=",
+                "exclude-from=",
+                "include=",
+                "include-from=",
+                "filter=",
                 "from0",
                 "backup",
-                "backup-dir",
+                "backup-dir=",
                 "inplace",
                 "append",
                 "append-verify",
@@ -178,20 +192,20 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "size-only",
                 "existing",
                 "stats",
-                "info",
+                "info=",
                 "mkpath",
-                "chmod",
-                "chown",
-                "temp-dir",
-                "timeout",
-                "bwlimit",
-                "max-size",
-                "min-size",
-                "out-format",
-                "log-file",
-                "link-dest",
-                "compare-dest",
-                "copy-dest",
+                "chmod=",
+                "chown=",
+                "temp-dir=",
+                "timeout=",
+                "bwlimit=",
+                "max-size=",
+                "min-size=",
+                "out-format=",
+                "log-file=",
+                "link-dest=",
+                "compare-dest=",
+                "copy-dest=",
                 "numeric-ids",
                 "protect-args",
                 "secluded-args",
@@ -204,7 +218,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "fuzzy",
                 "atimes",
                 "crtimes",
-                "modify-window",
+                "modify-window=",
                 "remove-source-files",
                 "list-only",
             ],
@@ -216,6 +230,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "SSH_ASKPASS",
             ],
             dirs: &["-T", "--temp-dir", "--partial-dir", "--backup-dir"],
+            writes: &["--log-file"],
         },
     ),
     (
@@ -228,6 +243,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             env_options: &[],
             env_refused: &["SSH_ASKPASS"],
             dirs: &[],
+            writes: &[],
         },
     ),
     (
@@ -245,8 +261,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "update",
                 "diff",
                 "compare",
-                "file",
-                "directory",
+                "file=",
+                "directory=",
                 "verbose",
                 "gzip",
                 "gunzip",
@@ -264,21 +280,21 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "to-stdout",
                 "touch",
                 "dereference",
-                "strip-components",
-                "exclude",
-                "exclude-from",
+                "strip-components=",
+                "exclude=",
+                "exclude-from=",
                 "exclude-vcs",
-                "files-from",
+                "files-from=",
                 "null",
-                "owner",
-                "group",
-                "mode",
-                "mtime",
+                "owner=",
+                "group=",
+                "mode=",
+                "mtime=",
                 "numeric-owner",
                 "no-same-owner",
                 "no-same-permissions",
-                "sort",
-                "format",
+                "sort=",
+                "format=",
                 "wildcards",
                 "anchored",
                 "xattrs",
@@ -287,20 +303,21 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "totals",
                 "no-recursion",
                 "recursion",
-                "warning",
-                "blocking-factor",
-                "label",
+                "warning=",
+                "blocking-factor=",
+                "label=",
                 "sparse",
                 "ignore-zeros",
                 "unlink-first",
                 "show-transformed-names",
                 "no-xattrs",
                 "no-acls",
-                "options",
+                "options=",
             ],
             env_options: &["TAR_OPTIONS"],
             env_refused: &["TAPE", "TAR_READER_OPTIONS", "TAR_WRITER_OPTIONS"],
             dirs: &["-C", "--directory"],
+            writes: &["-f", "--file", "-g"],
         },
     ),
     (
@@ -308,7 +325,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
         Known {
             flags: "rqvjyufmdDXlkoAgFeJ0123456789$@",
             valued: "xintPZsO",
-            words: &["-sf", "-FS", "-qq"],
+            words: &["-sf", "-FS", "-qq", "-lf="],
             long: &[
                 "recurse-paths",
                 "quiet",
@@ -320,8 +337,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "move",
                 "no-dir-entries",
                 "no-extra",
-                "exclude",
-                "include",
+                "exclude=",
+                "include=",
                 "encrypt",
                 "delete",
                 "filesync",
@@ -330,6 +347,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             env_options: &["ZIPOPT", "ZIP", "ZIP_OPTS"],
             env_refused: &[],
             dirs: &[],
+            writes: &["-O", "-lf"],
         },
     ),
     (
@@ -342,6 +360,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             env_options: &["UNZIP", "UNZIPOPT", "UNZIP_OPTS"],
             env_refused: &[],
             dirs: &["-d"],
+            writes: &[],
         },
     ),
     (
@@ -358,8 +377,8 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "fail-early",
                 "location",
                 "location-trusted",
-                "output",
-                "output-dir",
+                "output=",
+                "output-dir=",
                 "create-dirs",
                 "remote-name",
                 "remote-name-all",
@@ -368,77 +387,88 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "verbose",
                 "include",
                 "head",
-                "header",
-                "request",
-                "data",
-                "data-raw",
-                "data-binary",
-                "data-urlencode",
-                "data-ascii",
-                "form",
-                "form-string",
-                "json",
-                "user-agent",
-                "referer",
-                "max-time",
-                "connect-timeout",
-                "retry",
-                "retry-delay",
-                "retry-max-time",
+                "header=",
+                "request=",
+                "data=",
+                "data-raw=",
+                "data-binary=",
+                "data-urlencode=",
+                "data-ascii=",
+                "form=",
+                "form-string=",
+                "json=",
+                "user-agent=",
+                "referer=",
+                "max-time=",
+                "connect-timeout=",
+                "retry=",
+                "retry-delay=",
+                "retry-max-time=",
                 "retry-all-errors",
                 "compressed",
-                "proto",
-                "proto-redir",
+                "proto=",
+                "proto-redir=",
                 "tlsv1.2",
                 "tlsv1.3",
                 "http1.1",
                 "http2",
-                "url",
+                "url=",
                 "get",
-                "upload-file",
-                "dump-header",
-                "write-out",
-                "continue-at",
-                "range",
-                "user",
-                "oauth2-bearer",
-                "cacert",
-                "capath",
-                "cert",
-                "key",
+                "upload-file=",
+                "dump-header=",
+                "write-out=",
+                "continue-at=",
+                "range=",
+                "user=",
+                "oauth2-bearer=",
+                "cacert=",
+                "capath=",
+                "cert=",
+                "key=",
                 "no-progress-meter",
                 "progress-bar",
                 "globoff",
-                "max-redirs",
-                "noproxy",
-                "proxy",
+                "max-redirs=",
+                "noproxy=",
+                "proxy=",
                 "ipv4",
                 "ipv6",
                 "disable",
                 "no-buffer",
-                "max-filesize",
-                "limit-rate",
-                "resolve",
-                "cookie",
-                "cookie-jar",
+                "max-filesize=",
+                "limit-rate=",
+                "resolve=",
+                "cookie=",
+                "cookie-jar=",
                 "junk-session-cookies",
                 "netrc",
                 "netrc-optional",
-                "stderr",
-                "trace",
-                "trace-ascii",
+                "stderr=",
+                "trace=",
+                "trace-ascii=",
                 "list-only",
                 "append",
                 "help",
                 "version",
                 "manual",
                 "ssl-reqd",
-                "speed-limit",
-                "speed-time",
+                "speed-limit=",
+                "speed-time=",
             ],
             env_options: &[],
             env_refused: &["CURL_HOME", "XDG_CONFIG_HOME", "SSLKEYLOGFILE", "QLOGDIR"],
             dirs: &["--output-dir"],
+            writes: &[
+                "-o",
+                "--output",
+                "-D",
+                "--dump-header",
+                "-c",
+                "--cookie-jar",
+                "--stderr",
+                "--trace",
+                "--trace-ascii",
+            ],
         },
     ),
     (
@@ -453,68 +483,77 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "no-verbose",
                 "continue",
                 "timestamping",
-                "output-document",
-                "output-file",
-                "append-output",
-                "directory-prefix",
-                "tries",
-                "timeout",
-                "wait",
-                "waitretry",
+                "output-document=",
+                "output-file=",
+                "append-output=",
+                "directory-prefix=",
+                "tries=",
+                "timeout=",
+                "wait=",
+                "waitretry=",
                 "random-wait",
-                "user-agent",
-                "header",
+                "user-agent=",
+                "header=",
                 "no-check-certificate",
                 "recursive",
-                "level",
+                "level=",
                 "no-parent",
                 "mirror",
                 "page-requisites",
                 "convert-links",
                 "adjust-extension",
-                "input-file",
+                "input-file=",
                 "no-clobber",
                 "no-directories",
                 "no-host-directories",
-                "cut-dirs",
+                "cut-dirs=",
                 "show-progress",
-                "progress",
-                "limit-rate",
-                "user",
-                "password",
-                "post-data",
-                "post-file",
-                "method",
-                "body-data",
-                "body-file",
-                "max-redirect",
+                "progress=",
+                "limit-rate=",
+                "user=",
+                "password=",
+                "post-data=",
+                "post-file=",
+                "method=",
+                "body-data=",
+                "body-file=",
+                "max-redirect=",
                 "https-only",
                 "inet4-only",
                 "inet6-only",
                 "spider",
                 "server-response",
-                "accept",
-                "reject",
-                "domains",
+                "accept=",
+                "reject=",
+                "domains=",
                 "content-disposition",
                 "retry-connrefused",
-                "quota",
+                "quota=",
                 "no-cache",
                 "no-cookies",
-                "load-cookies",
-                "save-cookies",
+                "load-cookies=",
+                "save-cookies=",
                 "keep-session-cookies",
-                "referer",
-                "compression",
+                "referer=",
+                "compression=",
                 "no-config",
                 "force-directories",
                 "span-hosts",
                 "force-html",
-                "base",
+                "base=",
             ],
             env_options: &[],
             env_refused: &["WGETRC", "SYSTEM_WGETRC"],
             dirs: &["-P", "--directory-prefix"],
+            writes: &[
+                "-O",
+                "--output-document",
+                "-o",
+                "--output-file",
+                "-a",
+                "--append-output",
+                "--save-cookies",
+            ],
         },
     ),
     (
@@ -534,11 +573,11 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "unified",
                 "context",
                 "normal",
-                "strip",
-                "directory",
-                "input",
-                "output",
-                "reject-file",
+                "strip=",
+                "directory=",
+                "input=",
+                "output=",
+                "reject-file=",
                 "backup",
                 "no-backup-if-mismatch",
                 "backup-if-mismatch",
@@ -547,16 +586,16 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "verbose",
                 "ignore-whitespace",
                 "merge",
-                "fuzz",
+                "fuzz=",
                 "binary",
                 "set-time",
                 "set-utc",
                 "follow-symlinks",
-                "read-only",
-                "version-control",
-                "ifdef",
-                "reject-format",
-                "quoting-style",
+                "read-only=",
+                "version-control=",
+                "ifdef=",
+                "reject-format=",
+                "quoting-style=",
             ],
             env_options: &[],
             env_refused: &[
@@ -566,6 +605,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "PATCH_VERSION_CONTROL",
             ],
             dirs: &["-d", "--directory"],
+            writes: &["-o", "--output", "-r", "--reject-file"],
         },
     ),
     (
@@ -575,10 +615,10 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             valued: "mogtfhlN",
             words: &[],
             long: &[
-                "mode",
-                "owner",
-                "group",
-                "target-directory",
+                "mode=",
+                "owner=",
+                "group=",
+                "target-directory=",
                 "no-target-directory",
                 "directory",
                 "preserve-timestamps",
@@ -590,6 +630,133 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             env_options: &[],
             env_refused: &["STRIPBIN", "SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
             dirs: &[],
+            writes: &[],
+        },
+    ),
+    (
+        &["cp"],
+        Known {
+            flags: "abdfiHlLnPpRrsTuvxZcXN",
+            valued: "t",
+            words: &[],
+            long: &[
+                "archive",
+                "attributes-only",
+                "backup",
+                "copy-contents",
+                "dereference",
+                "force",
+                "interactive",
+                "link",
+                "no-dereference",
+                "no-clobber",
+                "preserve",
+                "no-preserve=",
+                "recursive",
+                "reflink",
+                "remove-destination",
+                "sparse=",
+                "strip-trailing-slashes",
+                "symbolic-link",
+                "target-directory=",
+                "no-target-directory",
+                "update",
+                "verbose",
+                "one-file-system",
+                "context",
+                "keep-directory-symlink",
+                "debug",
+            ],
+            env_options: &[],
+            env_refused: &["SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
+            dirs: &[],
+            writes: &[],
+        },
+    ),
+    (
+        &["mv"],
+        Known {
+            flags: "bfinTuvZh",
+            valued: "t",
+            words: &[],
+            long: &[
+                "backup",
+                "force",
+                "interactive",
+                "no-clobber",
+                "no-copy",
+                "strip-trailing-slashes",
+                "target-directory=",
+                "no-target-directory",
+                "update",
+                "verbose",
+                "context",
+                "exchange",
+                "debug",
+            ],
+            env_options: &[],
+            env_refused: &["SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
+            dirs: &[],
+            writes: &[],
+        },
+    ),
+    (
+        &["ln"],
+        Known {
+            flags: "bdFfiLnPrsTvhw",
+            valued: "t",
+            words: &[],
+            long: &[
+                "backup",
+                "directory",
+                "force",
+                "interactive",
+                "logical",
+                "no-dereference",
+                "physical",
+                "relative",
+                "symbolic",
+                "target-directory=",
+                "no-target-directory",
+                "verbose",
+            ],
+            env_options: &[],
+            env_refused: &["SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
+            dirs: &[],
+            writes: &[],
+        },
+    ),
+    (
+        &["ditto"],
+        Known {
+            flags: "hvVXcxkzj",
+            valued: "",
+            words: &[],
+            long: &[
+                "keepParent",
+                "arch=",
+                "bom=",
+                "rsrc",
+                "norsrc",
+                "extattr",
+                "noextattr",
+                "qtn",
+                "noqtn",
+                "acl",
+                "noacl",
+                "nocache",
+                "hfsCompression",
+                "nohfsCompression",
+                "preserveHFSCompression",
+                "nopreserveHFSCompression",
+                "sequesterRsrc",
+                "zlibCompressionLevel=",
+                "password",
+            ],
+            env_options: &[],
+            env_refused: &["DITTOKEEPBINARIESDIR"],
+            dirs: &[],
+            writes: &[],
         },
     ),
 ];
@@ -818,16 +985,21 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
             let (option, value) = long
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
-            let listed = known.long.contains(&option);
-            if !listed {
+            let arity = known
+                .long
+                .iter()
+                .find(|entry| entry.trim_end_matches('=') == option);
+            if arity.is_none() {
                 scan.unlisted(a);
             }
             let option = format!("--{option}");
             match value {
                 Some(value) => scan.values.push((option, value.to_string())),
-                // A long option named as a directory takes the next word.
-                None if listed && known.dirs.contains(&option.as_str()) => {
-                    pending.push_back(option);
+                // A long option that takes a value takes the next word,
+                // whatever it is, as getopt does (review round 22).
+                None if arity.is_some_and(|entry| entry.ends_with('=')) => {
+                    let value = words.next().map(|(_, w)| w.clone()).unwrap_or_default();
+                    scan.values.push((option, value));
                 }
                 None => scan.flags.push(option),
             }
@@ -835,6 +1007,11 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
         }
         if known.words.contains(&a) {
             scan.flags.push(a.to_string());
+            continue;
+        }
+        if known.words.iter().any(|w| w.strip_suffix('=') == Some(a)) {
+            let value = words.next().map(|(_, w)| w.clone()).unwrap_or_default();
+            scan.values.push((a.to_string(), value));
             continue;
         }
         if at == 0 && tar && !a.is_empty() && !a.starts_with('-') {
@@ -888,6 +1065,9 @@ pub(crate) struct WriterRead {
     pub(crate) operands: Vec<String>,
     /// The first option the table does not list.
     pub(crate) unknown: Option<String>,
+    /// The values of the options the entry lists in `writes`: files the
+    /// call writes besides its operands.
+    pub(crate) written: Vec<String>,
 }
 
 /// Read a writer call with the shared scan: its command line, then each
@@ -905,6 +1085,7 @@ pub(crate) fn writer_read(
         values: Vec::new(),
         operands: Vec::new(),
         unknown: None,
+        written: Vec::new(),
     };
     // The writer reads its option variables before its command line (GNU
     // tar prepends `TAR_OPTIONS`, Info-ZIP reads `UNZIP` and `ZIPOPT`
@@ -932,6 +1113,12 @@ pub(crate) fn writer_read(
                 .filter(|(option, _)| known.dirs.contains(&option.as_str()))
                 .map(|(_, value)| value.clone()),
         );
+        read.written.extend(
+            scan.values
+                .iter()
+                .filter(|(option, _)| known.writes.contains(&option.as_str()))
+                .map(|(_, value)| value.clone()),
+        );
         read.values.extend(scan.values);
         read.flags.extend(scan.flags);
         if index == last {
@@ -939,6 +1126,65 @@ pub(crate) fn writer_read(
         }
     }
     Some(read)
+}
+
+/// A copy, link, move or install call as the shared reader reads it
+/// ([`copy_read`]).
+pub(crate) struct CopyRead {
+    /// The destination: the target directory (`-t DIR`), else the last
+    /// operand when there are two or more.
+    pub(crate) dest: Option<String>,
+    /// Whether the destination is a target directory every source lands in.
+    pub(crate) target: bool,
+    /// The operands that are not the destination.
+    pub(crate) sources: Vec<String>,
+    /// `install -d`: every operand is a directory the call makes.
+    pub(crate) directories: bool,
+    /// Files the call writes through its options (`rsync --log-file`).
+    pub(crate) written: Vec<String>,
+    /// Every option read without a value (`-r`, `--archive`).
+    pub(crate) flags: Vec<String>,
+    /// The first option the table does not list. Its arity is unknown, so
+    /// any operand could be the destination.
+    pub(crate) unknown: Option<String>,
+}
+
+/// Read a copier's operands with the writer table's arity: every option
+/// that takes a word takes it before the destination is chosen, wherever
+/// it sits on the line, so `rsync -a src DEST --exclude foo` writes DEST
+/// (review round 22). One reader serves exec-guard and git-guard. `None`
+/// for a program with no entry.
+pub(crate) fn copy_read(name: &str, args: &[String]) -> Option<CopyRead> {
+    let read = writer_read(name, args, &[])?;
+    let target = matches!(name, "cp" | "mv" | "ln" | "install")
+        .then(|| {
+            read.values
+                .iter()
+                .rev()
+                .find(|(option, _)| matches!(option.as_str(), "-t" | "--target-directory"))
+                .map(|(_, value)| value.clone())
+        })
+        .flatten();
+    let directories = name == "install"
+        && read
+            .flags
+            .iter()
+            .any(|flag| flag == "-d" || flag == "--directory");
+    let mut sources = read.operands;
+    let dest = match &target {
+        Some(dir) => Some(dir.clone()),
+        None if sources.len() >= 2 => sources.pop(),
+        None => None,
+    };
+    Some(CopyRead {
+        dest,
+        target: target.is_some(),
+        sources,
+        directories,
+        written: read.written,
+        flags: read.flags,
+        unknown: read.unknown,
+    })
 }
 
 /// Whether `word` is an option rather than a value: a `-` followed by a
@@ -1229,8 +1475,6 @@ mod tests {
     /// from their environment, each with the reason. None does today.
     const READS_NO_ENVIRONMENT: &[(&str, &str)] = &[];
 
-    /// Review round 18: a writer entry declares the environment it reads,
-    /// or is named here with the reason it reads none.
     /// Placement directories come from the same scan as the option check:
     /// clustered letters, attached values, dashless tar keys and option
     /// variables (review round 19).
@@ -1295,6 +1539,40 @@ mod tests {
         assert_eq!(read.unknown.as_deref(), Some("-uod"));
     }
 
+    /// One reader chooses a copier's operands with the table's arity, so a
+    /// known option that takes a word cannot move the destination, and a
+    /// file an option writes is read as one (review round 22).
+    #[test]
+    fn copy_operands_follow_the_table_arity() {
+        let words = |line: &str| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        for (name, line, dest) in [
+            ("rsync", "-a src D --exclude foo", "D"),
+            ("rsync", "-a src D --chmod 644", "D"),
+            ("rsync", "-a src D -T tmp", "D"),
+            ("rsync", "-a --exclude foo src D", "D"),
+            ("rsync", "-a src D --exclude=foo", "D"),
+            ("cp", "src D --no-preserve mode", "D"),
+            ("install", "-m 644 src D", "D"),
+            ("ln", "-s src D", "D"),
+            ("cp", "-t D src", "D"),
+        ] {
+            let read = copy_read(name, &words(line)).unwrap();
+            assert_eq!(read.dest.as_deref(), Some(dest), "{name} {line}");
+            assert!(read.unknown.is_none(), "{name} {line}");
+        }
+        let read = copy_read("rsync", &words("-a src D --log-file L")).unwrap();
+        assert_eq!(read.written, vec!["L".to_string()]);
+        assert_eq!(read.dest.as_deref(), Some("D"));
+        let read = copy_read("cp", &words("src D --suffix .bak")).unwrap();
+        assert_eq!(read.unknown.as_deref(), Some("--suffix"));
+    }
+
+    /// Review round 18: a writer entry declares the environment it reads,
+    /// or is named here with the reason it reads none.
     #[test]
     fn writers_declare_their_environment() {
         for (names, known) in KNOWN_OPTIONS {

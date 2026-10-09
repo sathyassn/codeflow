@@ -766,6 +766,39 @@ const ROUND_21_CONTROLS: &[&str] = &[
     "rsync -a src/ ./dest/",
 ];
 
+/// Round 22: a known option that takes a word, after the destination, and
+/// a file an option writes. git-guard judges the integrity paths.
+const ROUND_22: &[(&str, &str)] = &[
+    (RULE, "rsync -a /tmp/payload \"$HOME/.zshrc\" --exclude foo"),
+    (RULE, "rsync -a /tmp/payload \"$HOME/.zshrc\" --chmod 644"),
+    (
+        RULE,
+        "rsync -a /tmp/payload \"$HOME/.zshrc\" -T /tmp/rsync-tmp",
+    ),
+    (
+        RULE,
+        "rsync -a /tmp/payload /tmp/tsk242-dest/ --log-file=\"$HOME/.zshrc\"",
+    ),
+    (
+        GIT,
+        "rsync -a /tmp/payload \"$HOME/.gitconfig\" --exclude foo",
+    ),
+    (GIT, "rsync -a /tmp/payload .git/config --exclude foo"),
+    (
+        GIT,
+        "rsync -a /tmp/payload .codeflow/policy.json --exclude foo",
+    ),
+    (GIT, "cp /tmp/payload .git/config --suffix .bak"),
+    (RULE, "rsync -a --exclude foo /tmp/payload \"$HOME/.zshrc\""),
+    (RULE, "rsync -a /tmp/payload \"$HOME/.zshrc\" --exclude=foo"),
+];
+
+/// Round 22's controls: the same options on an ordinary copy.
+const ROUND_22_CONTROLS: &[&str] = &[
+    "rsync -a --exclude foo payload.txt /tmp/dest",
+    "rsync -a src/ ./dest/",
+];
+
 /// The round lines Grok's own shell tool allows, in its camelCase payload.
 fn grok_shell_allows(project: &Project) -> Vec<String> {
     let grok_shell = ROUND_16
@@ -778,7 +811,8 @@ fn grok_shell_allows(project: &Project) -> Vec<String> {
                 .map(|(_, rule, command, _)| (*rule, *command)),
         )
         .chain(ROUND_20.iter().map(|command| (RULE, *command)))
-        .chain(ROUND_21.iter().copied());
+        .chain(ROUND_21.iter().copied())
+        .chain(ROUND_22.iter().copied());
     let mut wrong = Vec::new();
     for (rule, command) in grok_shell {
         let payload = json!({
@@ -837,11 +871,12 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
         let later = ROUND_20
             .iter()
             .map(|command| (RULE, *command))
-            .chain(ROUND_21.iter().copied());
+            .chain(ROUND_21.iter().copied())
+            .chain(ROUND_22.iter().copied());
         for (rule, command) in later {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, rule) {
-                wrong.push(format!("{harness}: round 20 or 21: allowed {command}"));
+                wrong.push(format!("{harness}: rounds 20 to 22: allowed {command}"));
             }
         }
         for (finding, rule, command) in ROUND_16 {
@@ -868,6 +903,7 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_19_CONTROLS)
             .chain(ROUND_20_CONTROLS)
             .chain(ROUND_21_CONTROLS)
+            .chain(ROUND_22_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {

@@ -148,7 +148,15 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   `scp -S`, `curl -K`, `wget -e`, `patch -g`, `install -s`), with no
   keyword list to extend (review round 16). A letter that takes a value
   takes the next word only when that word is not an option itself, since
-  the tar dialects disagree on which letters take one (review round 18);
+  the tar dialects disagree on which letters take one (review round 18).
+  The table records each long option's arity and the options whose value
+  is a file the program writes (`rsync --log-file`, `curl --trace`, `wget
+  -o`, `zip -lf`), and one reader of it chooses the operands for exec-guard
+  and git-guard alike: every option that takes a word takes it before the
+  destination is chosen, so `rsync -a SRC ~/.zshrc --exclude foo` writes
+  the startup file and refuses, and a written-path value is judged as a
+  target. With an option the table does not list, any operand could be the
+  destination, so each is judged as one (review round 22);
 - a writer's option environment: a variable the line sets that the writer
   reads as more options (`ZIPOPT`, `ZIP` and `ZIP_OPTS` for `zip`, `UNZIP`,
   `UNZIPOPT` and `UNZIP_OPTS` for `unzip`, `TAR_OPTIONS` for `tar`) is
@@ -205,9 +213,11 @@ level:
   entry, so it refuses the same way: renames by pattern (`tar -s`,
   `--transform`), path prefixes and suffixes (`patch -B`, `-Y`, `-z`,
   `install -B`, `-S`, `rsync --suffix`), `rsync -R` and `--files-from`, and
-  `zip -b`. Options that only shape names an archive, a diff or a server
-  supplies below the judged directory stay listed (`tar
-  --strip-components`, `unzip -j`, `patch -p`, `wget -nd`). A relative
+  `zip -b`. Options that add no directory themselves stay listed (`tar
+  --strip-components`, `tar -P`, `unzip -j`, `patch -p`, `wget -nd`), but a
+  name an archive, a diff or a server supplies can still leave the judged
+  directory; that is the content residual listed below (review round 22).
+  A relative
   `curl -o` is judged joined with `--output-dir`. The option variables are
   read before the command line, so the command-line directory is the one
   that holds, as GNU tar and Info-ZIP apply them (review round 21). Tar's
@@ -417,10 +427,18 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   `DONTSTRIP`, `RSYNC_PASSWORD`, `RSYNC_PROXY`, curl's and wget's proxy and
   certificate variables) are not judged: none of them runs a program or
   names a file the writer writes. `SIMPLE_BACKUP_SUFFIX` and
-  `VERSION_CONTROL` also name the backup file of `cp`, `mv` and `ln -b`,
-  whose options are all read as known; a backup name assembled that way
-  spells no protected file on the line, the same residual as a path built
-  from pieces.
+  `VERSION_CONTROL`, which name the backup file of `cp`, `mv`, `ln`,
+  `install` and `patch`, refuse with those writers.
+- **Every harness, content the guard does not read.** The guard reads the
+  command line, not the files a program reads. A name an archive member,
+  a diff or a peer supplies can leave the directory the guard judged: an
+  absolute member name under `tar -P` or `ditto -x`, an absolute or `..`
+  path in a diff under `patch -p0`, a name a server chooses (`curl -J`,
+  `wget --content-disposition`, `wget -x`) and a name the peer chooses
+  under `scp -T`, which turns off scp's own check of that name. These
+  stay open when the line names no protected place; the sandbox holds
+  them when the resolved path is outside the writable root, and a nested
+  `.envrc` inside it stays open (review round 22).
 
 - **Every harness.** The text guard does not inspect links inside a copied
   or moved tree, judge link text from where it lands, emulate dereference
@@ -468,7 +486,7 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   the writable root, git-guard allows that key, and the operator's own
   shell is outside every harness sandbox. `gh auth setup-git`, `git lfs
   install` and `git maintenance` rewrite the global file and were not
-  run here. It does not read archive contents. The sandboxes on all three
+  run here. The sandboxes on all three
   harnesses hold writes into the unwritable home; an unsandboxed seat stays
   open. Relocated startup files and writable workspace paths have the
   limits listed below. An interpreter call whose code names a startup file
