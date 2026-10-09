@@ -29,9 +29,9 @@ use std::path::{Component, Path, PathBuf};
 use super::actions;
 use super::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::hooks::git_guard::{
-    basename, command_argv, expand_commands, has_glob, is_shell, launcher_effects, redirect_writes,
-    run_dirs_from_home, shell_tokens, startup_glob_paths, strip_launchers, strip_reserved_words,
-    unresolved_word, word_readings,
+    basename, command_argv, expand_commands_read, has_glob, is_shell, launcher_effects,
+    redirect_writes, run_dirs_from_home, shell_tokens, startup_glob_paths, strip_launchers,
+    strip_reserved_words, unresolved_word, word_readings,
 };
 use crate::hooks::Violation;
 
@@ -89,8 +89,10 @@ impl StartupEnv {
     }
 
     /// The same, from the variables `var` reads, so a test can give them
-    /// without changing this process's environment. The home is
-    /// [`crate::portable_path::home_from`]: `HOME`, else `USERPROFILE`.
+    /// without changing this process's environment. The homes are
+    /// [`crate::portable_path::homes_from`]: `HOME`, else `USERPROFILE`, is
+    /// the home `~` names, and a `USERPROFILE` that names another directory
+    /// is kept among the other homes, whose startup files are the class too.
     #[must_use]
     pub fn from_vars(var: &dyn Fn(&str) -> Option<OsString>, base: &Path) -> Self {
         let set = |name: &str| var(name).filter(|v| !v.is_empty()).map(PathBuf::from);
@@ -465,7 +467,7 @@ fn stack_token(prefix: &str) -> bool {
 
 /// Whether `needle` occurs in `text` as a path or a name: not preceded by
 /// a name character, and not followed by one.
-fn mentions(text: &str, needle: &str) -> bool {
+pub(crate) fn mentions(text: &str, needle: &str) -> bool {
     let name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-');
     text.match_indices(needle).any(|(at, _)| {
         let before = text[..at].chars().next_back();
@@ -593,7 +595,7 @@ impl Pattern {
 
 /// `word` with each of `vars` replaced by its value, repeated until
 /// nothing changes (at most six passes).
-fn substitute_with(word: &str, vars: &[(String, String)]) -> String {
+pub(crate) fn substitute_with(word: &str, vars: &[(String, String)]) -> String {
     let mut text = word.to_string();
     for _ in 0..6 {
         let before = text.clone();
@@ -1181,9 +1183,10 @@ fn finding(message: String) -> Violation {
 #[must_use]
 pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
     let class = Class::new(env);
-    let segments = expand_commands(command);
+    let expanded = expand_commands_read(command);
+    let segments = &expanded.segments;
     // `cd ~` lands in the home the class is built from.
-    let run = run_dirs_from_home(&segments, cwd, env.home.clone());
+    let run = run_dirs_from_home(segments, cwd, env.home.clone());
     let mut line = Line {
         class: &class,
         env,
@@ -1193,12 +1196,12 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
         unknown: run.unknown.clone(),
         staged: false,
     };
-    line.assigned = literal_assignments(&segments);
-    line.staged = staged_name(&segments, &line).is_some();
-    if let Some(v) = direnv_trust(&segments) {
+    line.assigned = literal_assignments(segments);
+    line.staged = staged_name(segments, &line).is_some();
+    if let Some(v) = direnv_trust(segments) {
         return vec![v];
     }
-    if let Some(v) = startup_environment(&segments) {
+    if let Some(v) = startup_environment(segments) {
         return vec![v];
     }
     for code in super::outward::interpreter_bodies(command) {
@@ -1208,10 +1211,10 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
             ))];
         }
     }
-    if let Some(v) = staged_run(&segments, &line) {
+    if let Some(v) = staged_run(segments, &line) {
         return vec![v];
     }
-    for segment in &segments {
+    for segment in segments {
         if let Some(v) = command_valued_variable(segment, &line) {
             return vec![v];
         }
@@ -1219,7 +1222,9 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
             return vec![v];
         }
     }
-    Vec::new()
+    closed_rule(segments, &expanded, &line)
+        .into_iter()
+        .collect()
 }
 
 /// Variables whose value is a command that a reader or git runs: an editor,
@@ -1808,8 +1813,13 @@ fn awk_reads(args: &[String]) -> bool {
 /// script of print-only commands (no `e`, `w`, `W`, `r`, `R`). `-i` edits the
 /// file operand in place; that write is judged on its own.
 fn sed_filter_reads(args: &[String]) -> bool {
+    // BSD sed takes `-i ''` as an empty backup suffix; an empty word is no
+    // script either way.
     let kept: Vec<String> = args
         .iter()
+        .enumerate()
+        .filter(|(at, a)| !(a.is_empty() && *at > 0 && args[at - 1] == "-i"))
+        .map(|(_, a)| a)
         .filter_map(|a| {
             if a == "--in-place" || a.starts_with("--in-place=") {
                 None
@@ -1928,22 +1938,35 @@ fn git_reads(args: &[String], line: &Line<'_>) -> bool {
 /// data reader used as one. Everything else, an unknown program or option
 /// included, is not.
 fn data_reader(program: &str, args: &[String], line: &Line<'_>) -> bool {
-    let name = basename(program);
+    if basename(program) == "git" {
+        return system_program(program) && git_reads(args, line);
+    }
+    reader_program(program, args)
+}
+
+/// Whether `program` names a program by its name or from a system
+/// directory ([`SYSTEM_DIRS`]), not a relative path or another directory.
+fn system_program(program: &str) -> bool {
     if program.starts_with("./") || (program.contains('/') && !program.starts_with('/')) {
         return false;
     }
-    if program.starts_with('/') {
-        let dir = program.rsplit_once('/').map_or("", |(dir, _)| dir);
-        if !SYSTEM_DIRS.contains(&dir) {
-            return false;
-        }
+    !program.starts_with('/')
+        || SYSTEM_DIRS.contains(&program.rsplit_once('/').map_or("", |(dir, _)| dir))
+}
+
+/// [`data_reader`] for a program other than git, which needs the line's
+/// facts: a listed data reader used as one, judged by operation. The
+/// closed rule of TSK-242 ([`super::unresolved`]) uses it on every guard.
+pub(crate) fn reader_program(program: &str, args: &[String]) -> bool {
+    let name = basename(program);
+    if !system_program(program) {
+        return false;
     }
     match name {
         _ if NO_COMMAND.contains(&name) => true,
-        "source" | "." | "eval" | "exec" => false,
+        "source" | "." | "eval" | "exec" | "git" => false,
         "sed" | "gsed" => sed_filter_reads(args),
         "awk" | "gawk" | "mawk" | "nawk" => awk_reads(args),
-        "git" => git_reads(args, line),
         "sort" => !args.iter().any(|a| {
             a.starts_with("--output")
                 || a.starts_with("--compress-program")
@@ -1964,8 +1987,13 @@ fn staged_name(segments: &[String], line: &Line<'_>) -> Option<String> {
     if !produces_text(segments, line.text) {
         return None;
     }
-    // The decoded words too: `$'\\x2ezshrc'` and `'.zs''hrc'` name the file
-    // although the raw text does not spell it.
+    class_named(segments, line)
+}
+
+/// The startup file a line names, read as written and in its decoded
+/// words: `$'\\x2ezshrc'` and `'.zs''hrc'` name the file although the raw
+/// text does not spell it.
+fn class_named(segments: &[String], line: &Line<'_>) -> Option<String> {
     line.names(line.text).or_else(|| {
         segments
             .iter()
@@ -1973,13 +2001,37 @@ fn staged_name(segments: &[String], line: &Line<'_>) -> Option<String> {
     })
 }
 
-/// The staged-run rule. A line that names a startup file and produces text
-/// (a pipe, heredoc, substitution or written file) refuses unless every
-/// program on it is a data reader used as one ([`data_reader`]): the text may
-/// then be read but cannot be run or applied. The allowlist replaces the
-/// list of programs that run text (shells, interpreters, script tools,
-/// wrappers, `find -exec`, `env -S`), which an unlisted spelling always
-/// escaped. A program or option the guard does not know fails closed.
+/// The closed rule of TSK-242 for the startup class. A line that names a
+/// startup file refuses when it also carries a form the guard cannot
+/// resolve ([`super::unresolved::unresolved_form`]): a command word whose
+/// expansion it cannot fill in, a shell or `eval` reading a script it does
+/// not see, a command read from standard input or built from a template,
+/// a launcher whose command it does not parse, a GNU-prefixed launcher, or
+/// a program it does not know to run nothing of its own. Every form the
+/// guard reads is judged by what it writes instead.
+///
+/// A line that names a startup file and also produces text (a pipe,
+/// heredoc, substitution or written file) is held to more: every program
+/// on it is a data reader used as one ([`data_reader`]), so the text may be
+/// read but cannot be run or applied. The allowlist replaces the list of
+/// programs that run text (shells, interpreters, script tools, wrappers,
+/// `find -exec`, `env -S`), which an unlisted spelling always escaped.
+fn closed_rule(
+    segments: &[String],
+    expanded: &crate::hooks::git_guard::Expanded,
+    line: &Line<'_>,
+) -> Option<Violation> {
+    let name = class_named(segments, line)?;
+    let reads_class = |word: &str| line.names(word).is_some();
+    super::unresolved::unresolved_form(expanded, &reads_class).map(|form| {
+        finding(format!(
+            "the line names the shell startup file `{name}`, and {form}, so it could write that file out of the guard's sight; run that command in a call that does not name the file"
+        ))
+    })
+}
+
+/// The staged-run half of the closed rule ([`closed_rule`]): a line that
+/// names a startup file and produces text.
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     let name = staged_name(segments, line)?;
     segments.iter().find_map(|segment| {
@@ -1995,20 +2047,9 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
                 "text this call produces names the shell startup file `{name}`, and the line sets `{word}`, which changes the program that runs; read the file in its own call"
             )));
         }
-        let Some((program, args)) = strip_launchers(&words) else {
-            // `env -S 'cmd'` and `env --split-string=cmd` leave no program
-            // behind: the command is inside the option, and `expand_commands`
-            // judges it as its own segments. env is a wrapper, not a data
-            // reader, so the line still refuses here.
-            return words
-                .iter()
-                .any(|w| w.starts_with("-S") || w.starts_with("--split-string"))
-                .then(|| {
-                    finding(format!(
-                        "text this call produces names the shell startup file `{name}`, and the line runs `env -S`, a wrapper that is not a data reader, so it could run or apply that text; read the file in its own call"
-                    ))
-                });
-        };
+        // `env -S 'cmd'` leaves no program behind: the reader judges the
+        // string as its own segments, each held to this rule in turn.
+        let (program, args) = strip_launchers(&words)?;
         (!data_reader(program, args, line)).then(|| {
             finding(format!(
                 "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which is not a data reader, so it could run or apply that text; read the file in its own call"

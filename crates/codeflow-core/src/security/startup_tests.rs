@@ -982,11 +982,21 @@ const BODY_CONTROLS: &[&str] = &[
     "p=notes.txt; python3 -c \"open('$p','a').write('x')\"",
     "p=notes.txt; node -e \"require('fs').appendFileSync('$p','x')\"",
     "p=notes.txt; sh -c \"echo x >> $p\"",
-    "cat ~/.zshrc; python3 -c 'print(1)'",
     "grep alias ~/.zshrc | awk '{print $2}'",
-    "grep alias ~/.zshrc; perl -ne 'print $_' notes.txt",
     "python3 -c \"open('$NAME','a').write('x')\"",
-    // The program reads the path at run time: the stated residual.
+    // The program builds the path from pieces and the line names no class
+    // file: the stated residual, pinned so a review does not reopen it.
+    "python3 -c 'import os; open(os.path.expanduser(\"~\")+\"/.\"+\"zsh\"+\"rc\",\"a\")'",
+];
+
+/// An interpreter's code is read only for the names it spells, so on a
+/// line that names a class file it is a form the guard cannot resolve
+/// (the closed rule of TSK-242). These were controls before it; the first
+/// two are listed among the measured false refusals of AC-7, and the third
+/// was the stated environment residual.
+const CLOSED_BODIES: &[&str] = &[
+    "cat ~/.zshrc; python3 -c 'print(1)'",
+    "grep alias ~/.zshrc; perl -ne 'print $_' notes.txt",
     "export p=~/.zshrc; python3 -c 'import os; open(os.environ[\"p\"],\"a\").write(\"x\")'",
 ];
 
@@ -994,7 +1004,11 @@ const BODY_CONTROLS: &[&str] = &[
 fn assigned_literals_read_as_values_in_every_body() {
     let f = Fixture::new();
     let mut wrong = Vec::new();
-    for command in ASSIGNED_BODIES.iter().chain(UNRESOLVED_BODIES) {
+    for command in ASSIGNED_BODIES
+        .iter()
+        .chain(UNRESOLVED_BODIES)
+        .chain(CLOSED_BODIES)
+    {
         if !refused(&f.judge(command)) {
             wrong.push(format!("allowed: {command}"));
         }
@@ -1402,6 +1416,10 @@ fn nested_and_wrapped_commands_are_judged_like_the_command() {
         "find . -name '*.rs' -print",
         "grep -c alias ~/.zshrc > b.txt; find . -name '*.rs' -print",
         "grep -c alias ~/.zshrc > b.txt; timeout 5 ls",
+        // The string `env -S` runs is read as its own commands, each held
+        // to the rule; the wrapper adds nothing it could run (TSK-242, the
+        // closed rule).
+        "grep alias ~/.zshrc | env -S 'echo hi'",
     ] {
         if refused(&f.judge(command)) {
             wrong.push(format!("refused: {command}"));
@@ -1411,7 +1429,7 @@ fn nested_and_wrapped_commands_are_judged_like_the_command() {
     // file and produces text, whatever they wrap (round five).
     for command in [
         "grep -c alias ~/.zshrc > b.txt; flock lockfile ls",
-        "grep alias ~/.zshrc | env -S 'echo hi'",
+        "grep alias ~/.zshrc | env -S 'sh r.sh'",
         "grep alias ~/.zshrc | watch -n1 echo hi",
         "grep alias ~/.zshrc | flock lockfile awk '{print $2}'",
         "grep alias ~/.zshrc | busybox awk '{print $2}'",

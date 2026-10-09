@@ -9,7 +9,7 @@
 //! line (D19).
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -467,14 +467,15 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
     branches.line = command.to_string();
-    let segments = expand_commands(command);
+    let expanded = expand_commands_read(command);
+    let segments = &expanded.segments;
     // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
     // top-level command and `None` for one nested in a substitution or a
     // `bash -c` string; `None` for the whole line when it is not flat.
-    let roles = flat_top_level(command).and_then(|top| map_top_level(&segments, &top));
+    let roles = flat_top_level(command).and_then(|top| map_top_level(segments, &top));
     let mut shell = ShellState::new(roles.is_some());
-    let line = LineFacts::read(&segments, roles.as_deref(), command);
-    let run = run_dirs(&segments, cwd);
+    let line = LineFacts::read(segments, roles.as_deref(), command);
+    let run = run_dirs(segments, cwd);
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -619,6 +620,24 @@ pub fn evaluate_report_at(command: &str, ctx: &GuardContext<'_>, cwd: &Path) -> 
                 ));
             }
             ProgramKind::Other => {}
+        }
+    }
+    // The closed rule (TSK-242): a line that names a user or system git
+    // configuration write and carries a form the guard cannot read refuses,
+    // unless a form it does read already refused that write.
+    if ctx.policy.hook_integrity.is_active()
+        && !violations.iter().any(|v| v.rule == "git.hook_integrity")
+    {
+        if let Some(target) = crate::security::unresolved::gitconfig_target(command) {
+            let names = |word: &str| crate::security::unresolved::gitconfig_target(word).is_some();
+            if let Some(form) = crate::security::unresolved::unresolved_form(&expanded, &names) {
+                violations.push(hook_integrity_violation(
+                    ctx.policy.hook_integrity,
+                    format!(
+                        "the line names {target}, and {form}, so it could set a git key that runs a program where every repository reads it. Run the git config write as its own visible command, or ask the operator to set it"
+                    ),
+                ));
+            }
         }
     }
     report.notes = notes;
@@ -3819,7 +3838,7 @@ fn find_action_violation(
 }
 
 /// The command an `xargs` runs, GNU and BSD options read.
-fn xargs_command(args: &[String]) -> Option<&[String]> {
+pub(crate) fn xargs_command(args: &[String]) -> Option<&[String]> {
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         if arg == "--" {
@@ -4291,37 +4310,166 @@ fn entry_in(dir: &Path, source: &str) -> PathBuf {
 /// (`python3 -c`) and pipe-to-shell (`echo … | sh`) are the genuinely unbounded
 /// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
 pub(crate) fn expand_commands(command: &str) -> Vec<String> {
+    expand_commands_read(command).segments
+}
+
+/// What [`expand_commands_read`] reads from a line.
+#[derive(Debug, Default)]
+pub(crate) struct Expanded {
+    /// The simple commands the line runs ([`expand_commands`]).
+    pub(crate) segments: Vec<String>,
+    /// Each command word whose expansion the guard cannot fill in (`$CMD`
+    /// with no literal assigned before it, `${X:-y}`, a substitution), in
+    /// the order the line runs them. The closed rule of TSK-242 refuses one
+    /// on a line that names a protected target.
+    pub(crate) unread_commands: Vec<String>,
+}
+
+/// [`expand_commands`], with the command words it could not fill in. A
+/// shell `-c` body, an `eval` body or a command word that expands a name
+/// the line assigned a literal before it is read with that literal
+/// (`CMD='git config ...'; sh -c "$CMD"`, TSK-242 review round 15).
+pub(crate) fn expand_commands_read(command: &str) -> Expanded {
     let mut raw = Vec::new();
     split_into_segments(command, &mut raw, 0, false);
-    let mut out = Vec::new();
-    expand_segments(raw, &mut out, 1);
+    let mut out = Expanded::default();
+    expand_segments(raw, &mut out, 1, &mut Literals::default());
     out
 }
 
 /// Push each segment, then the commands its text carries, unwrapped again
 /// in turn: a `bash -c` body inside another, an `eval` of one, or an `env
-/// -S` string. Each body level counts toward [`NESTING_LIMIT`]; a body past
-/// it is the [`NESTING_UNREAD`] marker, which refuses the line (TSK-242
-/// review round 14).
-fn expand_segments(segments: Vec<String>, out: &mut Vec<String>, depth: usize) {
+/// -S` string, with the literals assigned before it filled in, and a
+/// command word that expands such a literal read as the words it becomes.
+/// Each body level counts toward [`NESTING_LIMIT`]; a body past it is the
+/// [`NESTING_UNREAD`] marker, which refuses the line (TSK-242 review round
+/// 14).
+fn expand_segments(
+    segments: Vec<String>,
+    out: &mut Expanded,
+    depth: usize,
+    literals: &mut Literals,
+) {
     for seg in segments {
         let toks = command_argv(&seg);
-        out.push(seg);
-        let bodies = carried_commands(&toks);
+        let mut bodies: Vec<String> = carried_commands(&toks)
+            .iter()
+            .map(|body| literals.fill(body))
+            .collect();
+        let mut words = toks;
+        strip_reserved_words(&mut words);
+        if let Some((program, _)) = strip_launchers(&words) {
+            if expands(program) {
+                if literals.resolves(program) {
+                    bodies.push(literals.fill_words(&words));
+                } else {
+                    out.unread_commands.push(program.to_string());
+                }
+            }
+        }
+        // Only the line's own top level: an assignment inside a body or a
+        // subshell may not outlive it.
+        if depth == 1 {
+            literals.note(&words);
+        }
+        out.segments.push(seg);
         if bodies.is_empty() {
             continue;
         }
         if depth > NESTING_LIMIT {
-            if !out.iter().any(|s| s == NESTING_UNREAD) {
-                out.push(NESTING_UNREAD.to_string());
+            if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
+                out.segments.push(NESTING_UNREAD.to_string());
             }
             continue;
         }
         for body in bodies {
             let mut inner = Vec::new();
             split_into_segments(&body, &mut inner, depth, false);
-            expand_segments(inner, out, depth + 1);
+            expand_segments(inner, out, depth + 1, literals);
         }
+    }
+}
+
+/// Whether the shell fills in part of `word` at run time: a `$`, a
+/// backquote, or a substitution the segmenter lifted out.
+pub(crate) fn expands(word: &str) -> bool {
+    word.contains(['$', '`', '\u{1}', '\u{2}'])
+}
+
+/// The literal values a line assigns at its top level, in the order its
+/// segments run: a segment of assignments only, or the operands of
+/// `export`, `declare`, `typeset`, `local` and `readonly`. A value that
+/// expands a name with no literal, or a name assigned twice with different
+/// values, has none, so a word that uses it stays unread.
+#[derive(Debug, Default)]
+struct Literals(BTreeMap<String, Option<String>>);
+
+impl Literals {
+    /// Record the assignments of one segment's words.
+    fn note(&mut self, words: &[String]) {
+        fn assignment(w: &str) -> Option<(&str, &str)> {
+            w.split_once('=')
+                .filter(|(name, _)| !name.is_empty() && is_identifier(name))
+        }
+        let declaring = matches!(
+            words.first().map(String::as_str),
+            Some("export" | "declare" | "typeset" | "local" | "readonly")
+        );
+        let rest = if declaring { &words[1..] } else { words };
+        // Assignments in front of a command last only for that command.
+        if !declaring && !rest.iter().all(|w| assignment(w).is_some()) {
+            return;
+        }
+        for word in rest {
+            let Some((name, value)) = assignment(word) else {
+                continue;
+            };
+            let filled = self.fill(value);
+            let value = (!expands(&filled)).then_some(filled);
+            self.0
+                .entry(name.to_string())
+                .and_modify(|seen| {
+                    if *seen != value {
+                        *seen = None;
+                    }
+                })
+                .or_insert(value);
+        }
+    }
+
+    /// `text` with each name that has a literal replaced by it.
+    fn fill(&self, text: &str) -> String {
+        if !text.contains('$') {
+            return text.to_string();
+        }
+        let vars: Vec<(String, String)> = self
+            .0
+            .iter()
+            .filter_map(|(name, value)| value.clone().map(|v| (name.clone(), v)))
+            .collect();
+        crate::security::startup::substitute_with(text, &vars)
+    }
+
+    /// Whether every expansion in `word` has a literal.
+    fn resolves(&self, word: &str) -> bool {
+        !expands(&self.fill(word))
+    }
+
+    /// A command's words as shell text with the literals filled in: a
+    /// filled word splits at blanks as the shell splits an unquoted
+    /// expansion; every other word stays one word.
+    fn fill_words(&self, words: &[String]) -> String {
+        words
+            .iter()
+            .map(|word| {
+                if expands(word) {
+                    self.fill(word)
+                } else {
+                    quote_words(std::slice::from_ref(word))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -4338,7 +4486,7 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     let Some((prog, args)) = strip_launchers(toks) else {
         return Vec::new();
     };
-    let name = basename(prog);
+    let name = launcher_name(prog);
     if is_shell(name) {
         // `-c`/`--command`, or a clustered short flag containing `c`
         // (`-lc`, `-ec`): the wrapped command is the following argument.
@@ -4384,7 +4532,7 @@ fn quote_words(words: &[String]) -> String {
 /// carries a command string, the forms git-guard judges there; the
 /// integrity checks read those wrappers on their own ([`wrapped_violation`]).
 /// Empty for any other program.
-fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
+pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
     let judged = |words: &[String]| {
         strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
             || !carried_commands(words).is_empty()
@@ -4429,29 +4577,65 @@ fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
 }
 
 /// The command `flock` runs: after its options (`-w` and `-E` take a
-/// value) and the lock file, either `-c CMD` or `--command CMD`, a string
-/// run by `sh -c`, or the command words. `None` with no command.
+/// value) and the lock file, either a `-c CMD`, `-cCMD`, `--command CMD`
+/// or `--command=CMD` string run by `sh -c` (TSK-242 review round 15), or
+/// the command words. Short options run together (`-nc CMD`) are read
+/// letter by letter. `None` with no command.
 fn flock_command(args: &[String]) -> Option<String> {
-    let mut at = 0;
-    while let Some(a) = args.get(at).map(String::as_str) {
-        match a {
-            "--" => {
-                at += 1;
+    // The string of a `-c` or `--command` option word, the next word when
+    // the option word does not carry it.
+    let command_option = |at: usize| -> Option<Option<String>> {
+        let a = args.get(at)?.as_str();
+        if let Some(long) = a.strip_prefix("--") {
+            return match long.split_once('=') {
+                Some(("command", value)) => Some(Some(value.to_string())),
+                None if long == "command" => Some(args.get(at + 1).cloned()),
+                _ => None,
+            };
+        }
+        let cluster = a.strip_prefix('-').filter(|c| !c.is_empty())?;
+        for (offset, letter) in cluster.char_indices() {
+            let attached = &cluster[offset + letter.len_utf8()..];
+            match letter {
+                'c' if attached.is_empty() => return Some(args.get(at + 1).cloned()),
+                'c' => return Some(Some(attached.to_string())),
+                'w' | 'E' => return None,
+                _ => {}
+            }
+        }
+        None
+    };
+    // Options before the lock file and after it, which getopt permutes.
+    let skip_options = |mut at: usize| -> Result<usize, Option<String>> {
+        while let Some(a) = args.get(at).map(String::as_str) {
+            if a == "--" {
+                return Ok(at + 1);
+            }
+            if !a.starts_with('-') || a.len() < 2 {
                 break;
             }
             // Not valid before the file, but judged all the same.
-            "-c" | "--command" => return args.get(at + 1).cloned(),
-            "-w" | "-E" | "--wait" | "--timeout" | "--conflict-exit-code" => at += 2,
-            _ if a.starts_with('-') && a.len() > 1 => at += 1,
-            _ => break,
+            if let Some(command) = command_option(at) {
+                return Err(command);
+            }
+            let valued = matches!(a, "--wait" | "--timeout" | "--conflict-exit-code")
+                || a.strip_prefix('-')
+                    .filter(|c| !c.starts_with('-'))
+                    .is_some_and(|c| c.ends_with(['w', 'E']));
+            at += 1 + usize::from(valued);
         }
-    }
-    let rest = args.get(at + 1..).unwrap_or_default();
-    match rest.first().map(String::as_str) {
-        Some("-c" | "--command") => rest.get(1).cloned(),
-        Some(_) => Some(quote_words(rest)),
-        None => None,
-    }
+        Ok(at)
+    };
+    let file = match skip_options(0) {
+        Ok(file) => file,
+        Err(command) => return command,
+    };
+    let start = match skip_options(file + 1) {
+        Ok(start) => start,
+        Err(command) => return command,
+    };
+    let rest = args.get(start..).unwrap_or_default();
+    (!rest.is_empty()).then(|| quote_words(rest))
 }
 
 /// The command `script` runs: a `-c CMD` or `--command CMD` string
@@ -4660,9 +4844,10 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// The command an `env -S` (`--split-string`, or an attached form) in front
 /// of a simple command runs, as shell text the guard reads again: the words
 /// before the option, the split string in its place, then the words after
-/// it. env splits that string into the words it runs, and they may hold
-/// more env options, assignments or a shell `-c`, so the text is expanded
-/// like any other command. `None` when no launcher in front uses `-S`.
+/// it. env splits that string into the words it runs, at blanks and at the
+/// `\_` escape, and they may hold more env options, assignments or a shell
+/// `-c`, so the text is expanded like any other command. `None` when no
+/// launcher in front uses `-S`.
 fn env_split_command(tokens: &[String]) -> Option<String> {
     let assignment = |t: &str| {
         t.split_once('=')
@@ -4678,7 +4863,7 @@ fn env_split_command(tokens: &[String]) -> Option<String> {
             idx = skip_launcher_options(t, tokens, idx + 1)?;
             continue;
         }
-        if basename(t) != "env" {
+        if launcher_name(t) != "env" {
             return None;
         }
         idx += 1;
@@ -4692,6 +4877,9 @@ fn env_split_command(tokens: &[String]) -> Option<String> {
                     SplitString::Attached(text) => (text, idx + 1),
                     SplitString::NextWord => (tokens.get(idx + 1)?.as_str(), idx + 2),
                 };
+                // env reads `\_` in the string as a field separator, which
+                // the shell kept inside one word (TSK-242 review round 15).
+                let operand = operand.replace("\\_", " ");
                 let rest = tokens.get(after..).unwrap_or_default();
                 return Some(format!(
                     "{} {operand} {}",
@@ -4715,7 +4903,7 @@ fn env_split_command(tokens: &[String]) -> Option<String> {
 
 /// The command-string argument of a shell invocation: the token after a `-c`,
 /// `--command`, or a clustered short flag that contains `c` (`-lc`, `-ec`).
-fn shell_c_argument(args: &[String]) -> Option<&String> {
+pub(crate) fn shell_c_argument(args: &[String]) -> Option<&String> {
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -9251,7 +9439,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 None => return Some((t, &tokens[idx + 1..])),
             }
         }
-        if basename(t) == "env" {
+        if launcher_name(t) == "env" {
             idx += 1;
             // `env [-i] [-u NAME] [VAR=val]... command` — skip its own options
             // and assignments up to the wrapped command.
@@ -9320,7 +9508,7 @@ pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>)
         let Some(t) = tokens.get(idx).map(String::as_str) else {
             return (dirs, None);
         };
-        let name = basename(t);
+        let name = launcher_name(t);
         if is_prefix_launcher(t) {
             let Some(next) = skip_launcher_options(t, tokens, idx + 1) else {
                 return (dirs, None);
@@ -9423,13 +9611,34 @@ fn env_options<'t>(
     Ok(idx)
 }
 
+/// The name a launcher word runs as: its base name, or for the GNU names
+/// Homebrew installs with a `g` prefix (`gtimeout`, `gnice`, `gnohup`,
+/// `gstdbuf`, `gtime`, `genv`, `gxargs`, `gfind`) the name without it, so
+/// the command after one is read as after the plain launcher (TSK-242
+/// review round 15). [`gnu_prefixed`] tells the closed rule which it was.
+pub(crate) fn launcher_name(t: &str) -> &str {
+    let name = basename(t);
+    match name.strip_prefix('g') {
+        Some(
+            plain @ ("timeout" | "nice" | "nohup" | "stdbuf" | "time" | "env" | "xargs" | "find"),
+        ) => plain,
+        _ => name,
+    }
+}
+
+/// Whether `t` is a GNU-prefixed launcher name ([`launcher_name`]).
+pub(crate) fn gnu_prefixed(t: &str) -> bool {
+    launcher_name(t) != basename(t)
+}
+
 /// `true` for the launchers that run the simple command after them: the
 /// `command`, `builtin` and `exec` builtins, `nohup`, `time` in its
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
-/// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form.
+/// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
+/// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
 fn is_prefix_launcher(t: &str) -> bool {
     matches!(
-        basename(t),
+        launcher_name(t),
         "command"
             | "builtin"
             | "exec"
@@ -9453,7 +9662,7 @@ fn is_prefix_launcher(t: &str) -> bool {
 /// so a non-executing form such as `nohup --help git push` is judged as the
 /// command after it and may be refused, which fails closed.
 fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
-    let launcher = basename(launcher);
+    let launcher = launcher_name(launcher);
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if a == "--" {
             // The options end; `timeout`'s duration still follows.
