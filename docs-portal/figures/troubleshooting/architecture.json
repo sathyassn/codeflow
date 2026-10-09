@@ -5,8 +5,8 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty checks fall into six groups by the surface they read, and only nine of them can fail; the other eleven warn at most.",
-    "title": "The twenty checks, by what they read",
+    "idea": "The twenty-one checks fall into six groups by the surface they read, and only nine of them can fail; the other twelve warn at most.",
+    "title": "The twenty-one checks, by what they read",
     "kicker": "Doctor checks",
     "caption": "A FAIL comes only from hooks, config, permissions, the policy source, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
     "states": [
@@ -33,12 +33,12 @@
         "value": true
       },
       {
-        "claim": "the other eleven warn at most",
+        "claim": "the other twelve warn at most",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the warn sentence",
         "check": {
           "kind": "contains",
-          "text": "The other eleven warn"
+          "text": "The other twelve warn"
         },
         "value": true
       },
@@ -159,6 +159,23 @@
           "style": "mono",
           "for": [
             "g1c2"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 518,
+          "cy": 65,
+          "r": 7,
+          "id": "g1c3"
+        },
+        {
+          "text": "startup-files",
+          "x": 534,
+          "y": 70,
+          "style": "mono",
+          "for": [
+            "g1c3"
           ]
         },
         {
@@ -480,7 +497,7 @@
       "marks": "same",
       "reason": "Each surface stays one row of the same marks at phone width, with its name on its own line above its checks.",
       "width": 360,
-      "height": 510,
+      "height": 538,
       "draw": [
         {
           "text": "Git hooks and CI",
@@ -588,31 +605,48 @@
           ]
         },
         {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 26,
+          "cy": 141,
+          "r": 7,
+          "id": "g1c3"
+        },
+        {
+          "text": "startup-files",
+          "x": 40,
+          "y": 146,
+          "style": "mono",
+          "for": [
+            "g1c3"
+          ]
+        },
+        {
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 132,
+          "y1": 160,
           "x2": 352,
-          "y2": 132
+          "y2": 160
         },
         {
           "text": "Policy and config",
           "x": 8,
-          "y": 156,
+          "y": 184,
           "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
           "cx": 26,
-          "cy": 179,
+          "cy": 207,
           "r": 7,
           "id": "g2c0"
         },
         {
           "text": "config",
           "x": 40,
-          "y": 184,
+          "y": 212,
           "style": "mono",
           "for": [
             "g2c0"
@@ -622,14 +656,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 117,
-          "cy": 179,
+          "cy": 207,
           "r": 7,
           "id": "g2c1"
         },
         {
           "text": "permissions",
           "x": 131,
-          "y": 184,
+          "y": 212,
           "style": "mono",
           "for": [
             "g2c1"
@@ -639,14 +673,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 26,
-          "cy": 207,
+          "cy": 235,
           "r": 7,
           "id": "g2c2"
         },
         {
           "text": "policy-source",
           "x": 40,
-          "y": 212,
+          "y": 240,
           "style": "mono",
           "for": [
             "g2c2"
@@ -656,14 +690,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 184,
-          "cy": 207,
+          "cy": 235,
           "r": 7,
           "id": "g2c3"
         },
         {
           "text": "adopter-fit",
           "x": 200,
-          "y": 212,
+          "y": 240,
           "style": "mono",
           "for": [
             "g2c3"
@@ -673,28 +707,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 226,
+          "y1": 254,
           "x2": 352,
-          "y2": 226
+          "y2": 254
         },
         {
           "text": "Delegates, models, network",
           "x": 8,
-          "y": 250,
+          "y": 278,
           "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
           "cx": 26,
-          "cy": 273,
+          "cy": 301,
           "r": 7,
           "id": "g3c0"
         },
         {
           "text": "delegates",
           "x": 40,
-          "y": 278,
+          "y": 306,
           "style": "mono",
           "for": [
             "g3c0"
@@ -704,14 +738,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 142,
-          "cy": 273,
+          "cy": 301,
           "r": 7,
           "id": "g3c1"
         },
         {
           "text": "model-bindings",
           "x": 156,
-          "y": 278,
+          "y": 306,
           "style": "mono",
           "for": [
             "g3c1"
@@ -721,14 +755,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 26,
-          "cy": 301,
+          "cy": 329,
           "r": 7,
           "id": "g3c2"
         },
         {
           "text": "delegate-roundtrip",
           "x": 40,
-          "y": 306,
+          "y": 334,
           "style": "mono",
           "for": [
             "g3c2"
@@ -738,14 +772,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 218,
-          "cy": 301,
+          "cy": 329,
           "r": 7,
           "id": "g3c3"
         },
         {
           "text": "network",
           "x": 232,
-          "y": 306,
+          "y": 334,
           "style": "mono",
           "for": [
             "g3c3"
@@ -755,28 +789,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 320,
+          "y1": 348,
           "x2": 352,
-          "y2": 320
+          "y2": 348
         },
         {
           "text": "Repository, managed files",
           "x": 8,
-          "y": 344,
+          "y": 372,
           "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
           "cx": 26,
-          "cy": 367,
+          "cy": 395,
           "r": 7,
           "id": "g4c0"
         },
         {
           "text": "repo-integrity",
           "x": 40,
-          "y": 372,
+          "y": 400,
           "style": "mono",
           "for": [
             "g4c0"
@@ -786,14 +820,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 185,
-          "cy": 367,
+          "cy": 395,
           "r": 7,
           "id": "g4c1"
         },
         {
           "text": "managed-drift",
           "x": 199,
-          "y": 372,
+          "y": 400,
           "style": "mono",
           "for": [
             "g4c1"
@@ -803,14 +837,14 @@
           "state": "canfail",
           "shape": "circle",
           "cx": 26,
-          "cy": 395,
+          "cy": 423,
           "r": 7,
           "id": "g4c2"
         },
         {
           "text": "id-registry",
           "x": 40,
-          "y": 400,
+          "y": 428,
           "style": "mono",
           "for": [
             "g4c2"
@@ -820,28 +854,28 @@
           "deco": "rule",
           "shape": "line",
           "x1": 8,
-          "y1": 414,
+          "y1": 442,
           "x2": 352,
-          "y2": 414
+          "y2": 442
         },
         {
           "text": "Customization, tests",
           "x": 8,
-          "y": 438,
+          "y": 466,
           "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
           "cx": 26,
-          "cy": 461,
+          "cy": 489,
           "r": 7,
           "id": "g5c0"
         },
         {
           "text": "customization",
           "x": 40,
-          "y": 466,
+          "y": 494,
           "style": "mono",
           "for": [
             "g5c0"
@@ -851,14 +885,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 176,
-          "cy": 461,
+          "cy": 489,
           "r": 7,
           "id": "g5c1"
         },
         {
           "text": "instructions",
           "x": 190,
-          "y": 466,
+          "y": 494,
           "style": "mono",
           "for": [
             "g5c1"
@@ -868,14 +902,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 26,
-          "cy": 489,
+          "cy": 517,
           "r": 7,
           "id": "g5c2"
         },
         {
           "text": "reading",
           "x": 40,
-          "y": 494,
+          "y": 522,
           "style": "mono",
           "for": [
             "g5c2"
@@ -885,14 +919,14 @@
           "state": "warnonly",
           "shape": "circle",
           "cx": 126,
-          "cy": 489,
+          "cy": 517,
           "r": 7,
           "id": "g5c3"
         },
         {
           "text": "test-config",
           "x": 140,
-          "y": 494,
+          "y": 522,
           "style": "mono",
           "for": [
             "g5c3"
@@ -915,7 +949,7 @@
         [
           "Harness wiring",
           "none",
-          "`claude`, `codex`, `grok`"
+          "`claude`, `codex`, `grok`, `startup-files`"
         ],
         [
           "Policy and config",
