@@ -184,11 +184,16 @@ mod tests {
             homes_from(msys(), os.clone(), true),
             [PathBuf::from("C:\\Users\\u"), profile.clone()]
         );
-        // Elsewhere `/c/Users/u` is a plain absolute path.
-        assert_eq!(
-            homes_from(msys(), os, false),
-            [PathBuf::from("/c/Users/u"), profile]
-        );
+        // Elsewhere `/c/Users/u` is a plain absolute path. A Windows host
+        // never reads with `windows` false (`home_from` passes
+        // `cfg!(windows)`), and there the path has no drive, so it is not
+        // absolute and the assertion would test an unreachable case.
+        if !cfg!(windows) {
+            assert_eq!(
+                homes_from(msys(), os, false),
+                [PathBuf::from("/c/Users/u"), profile]
+            );
+        }
         // On Windows one directory in two letter cases is one home.
         let upper = std::env::temp_dir().join("Home");
         let lower = std::env::temp_dir().join("home");
