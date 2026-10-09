@@ -803,7 +803,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "85fed765474ee77d2d85601f576d005eed7e36ce43b6123bdcf32f2d88413e01",
+      "sha256": "d5e46c0bf8a0304b8ca0856abc77fbda7d370adc7b030962073fd364a88e05e4",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-integration.md": {
@@ -1643,7 +1643,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "85fed765474ee77d2d85601f576d005eed7e36ce43b6123bdcf32f2d88413e01",
+      "sha256": "d5e46c0bf8a0304b8ca0856abc77fbda7d370adc7b030962073fd364a88e05e4",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-integration.md": {
@@ -1715,7 +1715,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "7db68a62e29c247125022a291fe1608bffb62d274cd69556ab64df38a769525d",
+      "sha256": "f1f9f972cadef440c5bf144c3bc17c7604c0bc95d319ff44db1a1e3d6206218e",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1793,7 +1793,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "2c2715a707d4f07d8fa557431dce0c6609d5db551b942452acd5586261b5b924",
+      "sha256": "fbedecb2752ab790a85d5db41044887df9f61f428a9514c4c0182becd0e6395e",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -1829,7 +1829,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "83bb020da9bdf4915050ddaec12312cd614db96c88ed5f91564124d3f096e3bd",
+      "sha256": "2051ba0b778486ffedbb505aaba283b878431dd40b171c89c860e8db4150bdb5",
       "exec": false
     },
     "CLAUDE.md": {

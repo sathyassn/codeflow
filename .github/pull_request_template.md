@@ -14,9 +14,10 @@
      never Mermaid. -->
 
 <!-- Every PR names its work. Where durable tracking is active: TSK-NNN, or
-     EPC-NNN for the breakdown PR and the PR to main. Where it is not: the
+     EPC-NNN for the breakdown PR and the PR to main. A planning amendment
+     names every epic it changes: Task: EPC-001, EPC-002. Where it is not: the
      name of the harness's tracked unit. A missing or empty line is refused. -->
-Task: `TSK-NNN | EPC-NNN | <unit name>`
+Task: `TSK-NNN | EPC-NNN | EPC-001, EPC-002 | <unit name>`
 
 ## Summary
 
