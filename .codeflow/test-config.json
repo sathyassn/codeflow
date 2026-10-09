@@ -230,9 +230,11 @@
       "narrow": [
         "scripts/release.py",
         "scripts/test_release.py",
+        "scripts/changelog_split.py",
         "scripts/fixtures/**",
         ".release/**",
-        "CHANGELOG.md"
+        "CHANGELOG.md",
+        "changelog.d/**"
       ]
     },
     {
