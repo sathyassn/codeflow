@@ -190,6 +190,19 @@ fn installed_hooks_refuse_shell_startup_writes_on_every_harness() {
             "git config --global alias.st '!sh -c x'",
             "env -S \"git config --global alias.x '!id'\"",
             "env -S'git config --global alias.x !id'",
+            // Launchers that run a command string or their command words.
+            "flock /tmp/l -c 'git config --global alias.x !id'",
+            "script -c 'git config --global alias.x !id' /dev/null",
+            "script -q /dev/null git config --global alias.x '!id'",
+            "watch 'git config --global alias.x !id'",
+            "parallel ::: 'git config --global alias.x !id'",
+            "parallel git config --global alias.x ::: '!id'",
+            "setsid sh -c 'git config --global alias.x !id'",
+            "unbuffer git config --global alias.x '!id'",
+            "xargs sh -c 'git config --global alias.x !id'",
+            "xargs -I{} git config --global alias.x '!id'",
+            "find . -exec sh -c 'git config --global alias.x !id' \\;",
+            "find . -execdir git config --global alias.x '!id' \\;",
         ] {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, "git.hook_integrity") {

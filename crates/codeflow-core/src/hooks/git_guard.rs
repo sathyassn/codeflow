@@ -4307,29 +4307,37 @@ fn expand_segments(segments: Vec<String>, out: &mut Vec<String>, depth: usize) {
     for seg in segments {
         let toks = command_argv(&seg);
         out.push(seg);
-        let Some(body) = carried_command(&toks) else {
+        let bodies = carried_commands(&toks);
+        if bodies.is_empty() {
             continue;
-        };
+        }
         if depth > NESTING_LIMIT {
             if !out.iter().any(|s| s == NESTING_UNREAD) {
                 out.push(NESTING_UNREAD.to_string());
             }
             continue;
         }
-        let mut inner = Vec::new();
-        split_into_segments(&body, &mut inner, depth, false);
-        expand_segments(inner, out, depth + 1);
+        for body in bodies {
+            let mut inner = Vec::new();
+            split_into_segments(&body, &mut inner, depth, false);
+            expand_segments(inner, out, depth + 1);
+        }
     }
 }
 
-/// The command text a simple command runs from a string it carries: the
+/// The command texts a simple command runs from what it carries: the
 /// command `env -S` splits ([`env_split_command`]), the body of a shell's
-/// `-c`, or the joined words of `eval`.
-fn carried_command(toks: &[String]) -> Option<String> {
+/// `-c`, the joined words of `eval`, and the command a launcher runs from a
+/// string or from its words: `flock`, `script`, `watch`, `parallel`,
+/// `setsid` and `unbuffer` ([`launcher_commands`]), and git or a command
+/// string run by `xargs` or `find -exec` (TSK-242 review round 14).
+fn carried_commands(toks: &[String]) -> Vec<String> {
     if let Some(command) = env_split_command(toks) {
-        return Some(command);
+        return vec![command];
     }
-    let (prog, args) = strip_launchers(toks)?;
+    let Some((prog, args)) = strip_launchers(toks) else {
+        return Vec::new();
+    };
     let name = basename(prog);
     if is_shell(name) {
         // `-c`/`--command`, or a clustered short flag containing `c`
@@ -4338,20 +4346,277 @@ fn carried_command(toks: &[String]) -> Option<String> {
         // sh -c ...`), which the body carries as its own leading `cd`
         // so every check that follows directories sees it (TSK-216
         // round 5).
-        let inner = shell_c_argument(args)?;
+        let Some(inner) = shell_c_argument(args) else {
+            return Vec::new();
+        };
         let mut moves = String::new();
         for dir in launcher_effects(toks).0 {
             moves.push_str("cd '");
             moves.push_str(&dir.replace('\'', "'\\''"));
             moves.push_str("' && ");
         }
-        Some(format!("{moves}{inner}"))
+        vec![format!("{moves}{inner}")]
     } else if name == "eval" {
         // `eval '<cmd>'` runs its (joined) arguments as a command.
-        Some(args.join(" "))
+        vec![args.join(" ")]
     } else {
-        None
+        launcher_commands(name, args)
     }
+}
+
+/// Words as shell text that reads back as the same words. Double quotes
+/// keep a `$` or a backtick live, so a later check still sees an expansion
+/// the words may hold.
+fn quote_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The commands the launcher `name` runs from `args`, as shell text: the
+/// string `flock FILE -c`, `script -c` and `watch` hand to a shell, the
+/// commands `parallel` builds from its template and `:::` inputs, and the
+/// command words after `flock FILE`, `script FILE` (BSD and macOS),
+/// `setsid` and `unbuffer`. For `xargs` and `find -exec`, whose command
+/// gets arguments the guard cannot see, only a git command or one that
+/// carries a command string, the forms git-guard judges there; the
+/// integrity checks read those wrappers on their own ([`wrapped_violation`]).
+/// Empty for any other program.
+fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
+    let judged = |words: &[String]| {
+        strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
+            || !carried_commands(words).is_empty()
+    };
+    match name {
+        "flock" => flock_command(args).into_iter().collect(),
+        "script" => script_command(args).into_iter().collect(),
+        "watch" => watch_command(args).into_iter().collect(),
+        "parallel" => parallel_commands(args),
+        "setsid" | "unbuffer" => {
+            let at = args
+                .iter()
+                .position(|a| !a.starts_with('-'))
+                .unwrap_or(args.len());
+            let words = &args[at..];
+            (!words.is_empty())
+                .then(|| quote_words(words))
+                .into_iter()
+                .collect()
+        }
+        "xargs" => xargs_command(args)
+            .filter(|words| judged(words))
+            .map(quote_words)
+            .into_iter()
+            .collect(),
+        "find" => args
+            .iter()
+            .enumerate()
+            .filter(|(_, word)| matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+            .filter_map(|(at, _)| {
+                let tail = &args[at + 1..];
+                let end = tail
+                    .iter()
+                    .position(|w| w == ";" || w == "+")
+                    .unwrap_or(tail.len());
+                let words = &tail[..end];
+                judged(words).then(|| quote_words(words))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The command `flock` runs: after its options (`-w` and `-E` take a
+/// value) and the lock file, either `-c CMD` or `--command CMD`, a string
+/// run by `sh -c`, or the command words. `None` with no command.
+fn flock_command(args: &[String]) -> Option<String> {
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        match a {
+            "--" => {
+                at += 1;
+                break;
+            }
+            // Not valid before the file, but judged all the same.
+            "-c" | "--command" => return args.get(at + 1).cloned(),
+            "-w" | "-E" | "--wait" | "--timeout" | "--conflict-exit-code" => at += 2,
+            _ if a.starts_with('-') && a.len() > 1 => at += 1,
+            _ => break,
+        }
+    }
+    let rest = args.get(at + 1..).unwrap_or_default();
+    match rest.first().map(String::as_str) {
+        Some("-c" | "--command") => rest.get(1).cloned(),
+        Some(_) => Some(quote_words(rest)),
+        None => None,
+    }
+}
+
+/// The command `script` runs: a `-c CMD` or `--command CMD` string
+/// (util-linux, whose options may follow the file), else the command words
+/// after the file (BSD and macOS: `script -q FILE CMD ...`). The scan stops
+/// at the command words, so a `-c` there is the command's own. `None` with
+/// no command.
+fn script_command(args: &[String]) -> Option<String> {
+    // Options that take a value: `-t TIME` (BSD) and util-linux's logs.
+    const VALUED_LONG: &[&str] = &[
+        "--log-in",
+        "--log-out",
+        "--log-io",
+        "--log-timing",
+        "--logging-format",
+        "--echo",
+        "--output-limit",
+    ];
+    let mut file_seen = false;
+    let mut options = true;
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if options && a == "--" {
+            options = false;
+            at += 1;
+            continue;
+        }
+        if options && a.starts_with("--") {
+            if a == "--command" {
+                return args.get(at + 1).cloned();
+            }
+            if let Some(command) = a.strip_prefix("--command=") {
+                return Some(command.to_string());
+            }
+            at += 1 + usize::from(VALUED_LONG.contains(&a));
+            continue;
+        }
+        if let Some(cluster) = a.strip_prefix('-').filter(|c| options && !c.is_empty()) {
+            at += 1;
+            for (offset, letter) in cluster.char_indices() {
+                let attached = &cluster[offset + letter.len_utf8()..];
+                match letter {
+                    'c' if attached.is_empty() => return args.get(at).cloned(),
+                    'c' => return Some(attached.to_string()),
+                    'B' | 'E' | 'I' | 'O' | 'm' | 'T' | 't' => {
+                        if attached.is_empty() {
+                            at += 1;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        if !file_seen {
+            file_seen = true;
+            at += 1;
+            continue;
+        }
+        return Some(quote_words(&args[at..]));
+    }
+    None
+}
+
+/// The string `watch` hands to `sh -c`: its words after its options (`-n`,
+/// `-q` and `-s` take a value), joined by blanks. `None` with no command.
+fn watch_command(args: &[String]) -> Option<String> {
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if a == "--" {
+            at += 1;
+            break;
+        }
+        if !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        let valued = matches!(a, "--interval" | "--equexit" | "--shotsdir")
+            || (!a.starts_with("--") && a.len() == 2 && a.ends_with(['n', 'q', 's']));
+        at += 1 + usize::from(valued);
+    }
+    let words = args.get(at..).unwrap_or_default();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input, quoted as one word, put in for `{}` or after it;
+/// with no template,
+/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
+/// same way. `::::` names input files, which the guard cannot read.
+fn parallel_commands(args: &[String]) -> Vec<String> {
+    const VALUED: &[&str] = &[
+        "-j",
+        "-P",
+        "-S",
+        "-a",
+        "-d",
+        "-E",
+        "-I",
+        "-N",
+        "-n",
+        "-L",
+        "-l",
+        "-s",
+        "-C",
+        "--jobs",
+        "--sshlogin",
+        "--arg-file",
+        "--delimiter",
+        "--colsep",
+        "--max-args",
+        "--max-lines",
+        "--max-chars",
+        "--tmpdir",
+        "--results",
+        "--joblog",
+        "--timeout",
+        "--delay",
+        "--retries",
+        "--tagstring",
+        "--workdir",
+        "--wd",
+        "--basefile",
+        "--return",
+        "--halt",
+        "--memfree",
+        "--load",
+        "--block",
+        "--sshloginfile",
+        "--env",
+    ];
+    let separator = |w: &str| matches!(w, ":::" | ":::+" | "::::" | "::::+" | "--");
+    let mut at = 0;
+    while let Some(a) = args.get(at).map(String::as_str) {
+        if separator(a) || !a.starts_with('-') || a.len() < 2 {
+            break;
+        }
+        at += 1 + usize::from(VALUED.contains(&a));
+    }
+    let rest = args.get(at..).unwrap_or_default();
+    let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
+    let template = rest[..end].join(" ");
+    let mut inputs = Vec::new();
+    let mut files = false;
+    for word in &rest[end..] {
+        if separator(word) {
+            files = word.starts_with("::::");
+        } else if !files {
+            inputs.push(word.as_str());
+        }
+    }
+    if template.is_empty() {
+        return inputs.into_iter().map(str::to_string).collect();
+    }
+    let mut commands = vec![template.clone()];
+    for input in inputs {
+        // parallel quotes an input it puts into the template.
+        let input = quote_words(&[input.to_string()]);
+        commands.push(if template.contains("{}") {
+            template.replace("{}", &input)
+        } else {
+            format!("{template} {input}")
+        });
+    }
+    commands
 }
 
 /// Where an `env -S` option word puts the string env splits.
@@ -4399,13 +4664,6 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// more env options, assignments or a shell `-c`, so the text is expanded
 /// like any other command. `None` when no launcher in front uses `-S`.
 fn env_split_command(tokens: &[String]) -> Option<String> {
-    let quote = |words: &[String]| {
-        words
-            .iter()
-            .map(|w| format!("\"{}\"", w.replace('\\', "\\\\").replace('"', "\\\"")))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
     let assignment = |t: &str| {
         t.split_once('=')
             .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
@@ -4437,8 +4695,8 @@ fn env_split_command(tokens: &[String]) -> Option<String> {
                 let rest = tokens.get(after..).unwrap_or_default();
                 return Some(format!(
                     "{} {operand} {}",
-                    quote(&tokens[..idx]),
-                    quote(rest)
+                    quote_words(&tokens[..idx]),
+                    quote_words(rest)
                 ));
             }
             if matches!(
@@ -10732,6 +10990,63 @@ mod tests {
                 assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
             }
         }
+    }
+
+    #[test]
+    fn launchers_that_run_a_command_carry_it_to_the_git_checks() {
+        // Review round fourteen, residual launchers: the string `flock -c`,
+        // `script -c` and `watch` hand to a shell, the commands `parallel`
+        // builds, the command words after `flock FILE`, `script FILE`,
+        // `setsid` and `unbuffer`, and git or a command string under
+        // `xargs` and `find -exec`.
+        let p = default_policy();
+        let refused = [
+            "flock /tmp/l -c 'git config --global alias.x !id'",
+            "flock -w 5 /tmp/l --command 'git config --global alias.x !id'",
+            "flock /tmp/l git config --global alias.x '!id'",
+            "script -c 'git config --global alias.x !id' /dev/null",
+            "script -qc 'git config --global alias.x !id' /dev/null",
+            "script --command='git config --global alias.x !id' /dev/null",
+            "script -q /dev/null git config --global alias.x '!id'",
+            "script -q /dev/null sh -c 'git config --global alias.x !id'",
+            "watch 'git config --global alias.x !id'",
+            "watch -n 1 git config --global alias.x '!id'",
+            "parallel ::: 'git config --global alias.x !id'",
+            "parallel git config --global alias.x ::: '!id'",
+            "parallel 'git config --global {} !id' ::: alias.x",
+            "parallel -j 2 sh -c ::: 'git config --global alias.x !id'",
+            "parallel git config --global alias.x -- '!id'",
+            "setsid sh -c 'git config --global alias.x !id'",
+            "setsid -f git config --global alias.x '!id'",
+            "unbuffer sh -c 'git config --global alias.x !id'",
+            "unbuffer -p git config --global alias.x '!id'",
+            "xargs sh -c 'git config --global alias.x !id'",
+            "xargs -I{} git config --global alias.x '!id'",
+            "find . -exec sh -c 'git config --global alias.x !id' \\;",
+            "find . -execdir git config --global alias.x '!id' \\;",
+            "find . -name x -ok git config --global alias.x '!id' {} +",
+        ];
+        for cmd in refused {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "flock /tmp/l -c 'git status'",
+            "script -q /dev/null git status",
+            "script -q /dev/null git -c color.ui=never log",
+            "watch git status",
+            "parallel echo ::: a b",
+            "setsid git config --global user.name Test",
+            "xargs -I{} git config --global user.name Test",
+            "find . -name '*.rs' -exec ls {} \\;",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+        // `xargs` and `find -exec` hand over only git or a command string:
+        // another program's arguments come from input the guard cannot see.
+        assert_eq!(expand_commands("printf x | xargs rm").len(), 2);
+        assert_eq!(expand_commands("find . -exec rm {} +").len(), 1);
     }
 
     #[test]

@@ -110,8 +110,27 @@ The guards read a line as the commands it runs: the body of a shell `-c`,
 an `eval` and the string `env -S` splits (`--split-string`, `-S'cmd'`) are
 judged like the same commands at the top of the line, each nested body in
 turn, up to eight levels; deeper text refuses the line (review round 14).
-git-guard reads them the same way. The guards refuse under
-`security.shell_startup`, whatever the integrity level:
+git-guard reads them the same way. That reading covers the command a
+launcher runs: the string `flock FILE -c`, `script -c` and `watch` hand to
+a shell, the commands `parallel` builds from its template and `:::`
+inputs, the command words after `flock FILE`, `script FILE` (BSD and
+macOS), `setsid` and `unbuffer`, and git or a command string run by
+`xargs` or `find -exec`. Three launchers stay named residuals, which the
+guards do not judge:
+
+- `ssh HOST CMD` runs the command on another host, whose files these
+  guards do not protect; `ssh localhost` reaches this one only through a
+  login the operator set up.
+- `tmux` and `screen` hand a command to a server process through many
+  subcommands and bindings (`new-session`, `send-keys`, `respawn-pane`),
+  which the guard does not model.
+- `make --eval` adds makefile text whose recipes and `$(shell ...)` calls
+  run, and any Makefile can hold the same recipes, so no small rule reads
+  it; a Makefile written and run on a line that names a class file is
+  refused by the staged-run rule below.
+
+The guards refuse under `security.shell_startup`, whatever the integrity
+level:
 
 - a redirect, copy, link, move, in-place edit, `tee`, `dd` or interpreter
   call that names a file of the class, in any spelling the guard expands
