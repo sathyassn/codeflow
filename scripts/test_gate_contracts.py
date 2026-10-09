@@ -83,6 +83,16 @@ class GateContracts(unittest.TestCase):
             # suite a crates change owes.
             self.assertIn('codeflow test --mode quick --strict', source)
             self.assertIn('codeflow test --mode essential --strict', source)
+            # Pin each command to its stage, so swapping the two prompts fails.
+            review = source[source.index("review: gate('review',"):source.index("qa: gate('qa',")]
+            verify = source[source.index("qa: gate('qa',"):source.index('Then check every acceptance criterion')]
+            self.assertIn('codeflow test --mode quick --strict', review)
+            self.assertNotIn('--mode essential', review)
+            self.assertIn(
+                '`codeflow test --mode essential --strict` when a target in `.codeflow/test-config.json` '
+                'defines an `essential` mode, else `codeflow test --mode quick --strict`',
+                verify,
+            )
             self.assertIn('primary runs the full gate once on the exact landing candidate', source)
         self.assertEqual(read('assets/base/claude/workflows/pipeline.workflow.js'), read('.claude/workflows/pipeline.workflow.js'))
 
