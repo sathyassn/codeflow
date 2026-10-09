@@ -285,30 +285,24 @@ by a human on evidenced-green checks.
 
 ### shell startup files
 
-A function or alias in a shell startup file runs under every later command,
-while the guards judge each command by the name it spells: `git` can run a
-planted `git()` function the guards never see. So an agent session may not
-write one: the sandboxes deny the writes where they run, and the guards
-refuse the forms they can read (issue 86, TSK-242).
+A function or alias planted in a shell startup file runs under every later
+command, which the guards judge by its name. The sandboxes deny these writes
+where they run, and the guards refuse the forms they can read (issue 86,
+TSK-242).
 
 - **The class.** The action table's `startup_paths`: the bash, zsh, ksh,
-  fish and PowerShell startup files and directories in the home, the
-  readline, tmux, screen, direnv and `~/.ssh/rc` files, the system ones under
-  `/etc`, and `.envrc` in any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME`
-  move the matching entries when they are set. A relative `ZDOTDIR` names a
-  different directory wherever zsh starts, so with one set the zsh file
-  names are protected in every directory.
+  fish, PowerShell, readline, tmux, screen, direnv and `~/.ssh/rc` files and
+  directories in the home, the system ones under `/etc`, and `.envrc` in
+  any directory. `$ZDOTDIR` and `$XDG_CONFIG_HOME` move the matching
+  entries; a relative `ZDOTDIR` protects the zsh names in every directory.
 - **The git configuration files.** The table's `git_config_paths`: the
   default user and system files (`~/.gitconfig`, `~/.config/git/config`,
-  `/etc/gitconfig`, `/usr/local/etc/gitconfig`,
-  `/opt/homebrew/etc/gitconfig`), whose keys can make every later git
-  command run a program. Claude and Codex get the same entries as the
-  startup class; Grok gets none, since its deny also blocks the reads git
-  makes on every command.
-- **Containment comes from the sandbox.** The guards are the backstop. On
-  a line that names a protected file they refuse any form they cannot
-  resolve, so a new launcher or option spelling does not slip past them;
-  a spelling that names no protected file is left to the sandbox.
+  `/etc/gitconfig` and the `/usr/local` and Homebrew ones), whose keys can
+  make every later git command run a program. Claude and Codex get the same
+  entries; Grok gets none, since its deny also blocks the reads git makes.
+- **The closed rule.** On a line that names a protected file, the guards
+  refuse any form they cannot resolve; a spelling that names none is left
+  to the sandbox.
 
 | Harness | Native containment | Guards |
 |---|---|---|
@@ -316,18 +310,17 @@ refuse the forms they can read (issue 86, TSK-242).
 | Codex | `cf-guard` and `cf-builder` keep every home and `/etc` entry and the workspace root's `.envrc` read only | exec-guard on Bash, edit-guard on `apply_patch`, `Edit` and `Write` |
 | Grok Build | the `workspace` sandbox leaves the home unwritable | exec-guard on Bash, edit-guard on `write` and `search_replace` |
 
-The guards refuse the forms they can read under `security.shell_startup`,
-at every integrity level, and git-guard refuses a git setting that can run a
-program where every repository reads it, under `git.hook_integrity`. The
-forms each rule refuses, what that costs and what stays open on each
-harness are in the
-[policy reference](../policy-reference.md#rules-with-no-key).
+exec-guard refuses the writes it can read to a startup file under
+`security.shell_startup` at every integrity level, and to a git
+configuration file under `git.hook_integrity`, as git-guard does for a git
+setting that can run a program in every repository. The
+[policy reference](../policy-reference.md#rules-with-no-key) lists the
+forms, their cost and what stays open per harness.
 
-`codeflow doctor --check startup-files` reports a project whose settings
-lack the class, select another Codex profile, or let the selected profile
-or `cf-builder` write a class path or a path above or below one, a moved `ZDOTDIR` or
-`XDG_CONFIG_HOME`, and the files the home's startup files source from
-outside the class.
+`codeflow doctor --check startup-files` reports settings that leave a class
+path writable, a moved `ZDOTDIR` or `XDG_CONFIG_HOME`, and files the home's
+startup files source from outside the class; the
+[troubleshooting](../troubleshooting.md) table lists each warning.
 
 ### how far each plane reaches
 

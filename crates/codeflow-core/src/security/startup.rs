@@ -21,6 +21,11 @@
 //! Copier trees, link text at its landing place, preservation and dereference
 //! semantics, and long-option prefixes are also outside this backstop.
 //! A sandbox that denies the writes is the containment for those.
+//!
+//! The same shell check judges a second class, the default user and system
+//! git configuration files (`git_config_paths`, `Class::git_config`),
+//! under `git.hook_integrity`: a key planted there runs a program in every
+//! repository. Which file a `git config` write opens stays git-guard's.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -33,6 +38,7 @@ use crate::hooks::git_guard::{
     redirect_writes, run_dirs_from_home, shell_tokens, startup_glob_paths, strip_launchers,
     strip_reserved_words, unresolved_word, word_readings,
 };
+use crate::hooks::policy::PolicyLevel;
 use crate::hooks::Violation;
 
 /// The rule id of every finding here.
@@ -242,10 +248,33 @@ pub(crate) struct Class {
 }
 
 impl Class {
-    /// The class for these locations.
+    /// The startup class for these locations.
     #[must_use]
     pub(crate) fn new(env: &StartupEnv) -> Self {
-        let table = &actions::table().startup_paths;
+        // Names a reader of the code may meet without the directory part.
+        Self::from_paths(
+            &actions::table().startup_paths,
+            env,
+            &["config.fish", "profile.ps1"],
+        )
+    }
+
+    /// The default user and system git configuration files
+    /// (`git_config_paths`) as a second class, judged by the same shell
+    /// check: a key planted in one runs a program in every repository. The
+    /// extra names match [`super::unresolved::gitconfig_target`]: a
+    /// `gitconfig` in any `etc` directory and a `git/config` below a
+    /// configuration directory.
+    #[must_use]
+    pub(crate) fn git_config(env: &StartupEnv) -> Self {
+        Self::from_paths(
+            &actions::table().git_config_paths,
+            env,
+            &["etc/gitconfig", "git/config"],
+        )
+    }
+
+    fn from_paths(table: &actions::StartupPaths, env: &StartupEnv, names: &[&str]) -> Self {
         let mut entries = Vec::new();
         let mut anywhere_zsh = Vec::new();
         let mut needles = Vec::new();
@@ -305,12 +334,7 @@ impl Class {
             needles.push(name.to_lowercase());
             entries.push(Entry::Name(name.to_lowercase()));
         }
-        // Names a reader of the code may meet without the directory part.
-        needles.extend(
-            ["config.fish", "profile.ps1"]
-                .iter()
-                .map(|s| (*s).to_string()),
-        );
+        needles.extend(names.iter().map(|s| (*s).to_string()));
         Self {
             entries,
             homes: env
@@ -639,10 +663,42 @@ enum Judged {
     Ordinary,
 }
 
+/// Which class a pass of the shell check judges: the startup files, or the
+/// default user and system git configuration files. The checks are the
+/// same; the noun, the rule and the sanctioned path follow the class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Startup,
+    GitConfig,
+}
+
+impl Kind {
+    /// The class's file, as a refusal names it.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Startup => "shell startup file",
+            Self::GitConfig => "user or system git config file",
+        }
+    }
+
+    /// The same, for more than one file.
+    fn nouns(self) -> &'static str {
+        match self {
+            Self::Startup => "shell startup files",
+            Self::GitConfig => "user or system git config files",
+        }
+    }
+}
+
 /// The facts of one command line that every word is judged against.
 #[derive(Clone)]
 struct Line<'a> {
     class: &'a Class,
+    /// The class [`Line::class`] holds.
+    kind: Kind,
+    /// The level of `git.hook_integrity`, the rule a git configuration
+    /// finding carries.
+    integrity: PolicyLevel,
     env: &'a StartupEnv,
     text: &'a str,
     /// Literal values the line assigns (`p=~/.zshrc`), so `"$p"` reads
@@ -658,7 +714,28 @@ struct Line<'a> {
 }
 
 impl Line<'_> {
-    /// The startup file `text` names, read as written and with the line's
+    /// A finding about this line's class: `security.shell_startup`, which
+    /// always blocks, for a startup file; `git.hook_integrity` at its policy
+    /// level for a user or system git configuration file, the rule a direct
+    /// `git config --global` write of a code-running key refuses under.
+    fn finding(&self, message: String) -> Violation {
+        match self.kind {
+            Kind::Startup => finding(message),
+            Kind::GitConfig => Violation::new(
+                "git.hook_integrity",
+                self.integrity,
+                message,
+                crate::remedy::HOOK_INTEGRITY.remedy(),
+            ),
+        }
+    }
+
+    /// The class file, as a refusal names it.
+    fn noun(&self) -> &'static str {
+        self.kind.noun()
+    }
+
+    /// The protected file `text` names, read as written and with the line's
     /// literal assignments filled in: a body that spells `$p` after
     /// `p=src/.envrc` names the file the shell hands it (review of
     /// e4536456b).
@@ -967,7 +1044,7 @@ impl Line<'_> {
     /// the home, `/etc` or a startup directory.
     fn unresolved_near_class(&self, word: &str, dirs: &[PathBuf]) -> Option<String> {
         if let Some(name) = self.class.named_in(self.text) {
-            return Some(format!("the line names `{name}`"));
+            return Some(format!("the line names the {} `{name}`", self.noun()));
         }
         if dirs
             .iter()
@@ -1179,16 +1256,67 @@ fn finding(message: String) -> Violation {
     Violation::always_blocking(RULE, message, SANCTIONED)
 }
 
-/// Judge a shell command line for writes to the startup class.
+/// Judge a shell command line for writes to the startup class and to the
+/// default user and system git configuration files, the second refusing
+/// under `git.hook_integrity` at block level.
 #[must_use]
 pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
-    let class = Class::new(env);
+    evaluate_with(command, cwd, env, PolicyLevel::Block)
+}
+
+/// [`evaluate`] with the level of `git.hook_integrity` the project set,
+/// which a finding about a git configuration file carries. The startup
+/// class is judged first; its rule always blocks.
+#[must_use]
+pub fn evaluate_with(
+    command: &str,
+    cwd: &Path,
+    env: &StartupEnv,
+    integrity: PolicyLevel,
+) -> Vec<Violation> {
     let expanded = expand_commands_read(command);
+    let startup = Class::new(env);
+    let found = judge_class(
+        command,
+        cwd,
+        env,
+        &expanded,
+        &startup,
+        Kind::Startup,
+        integrity,
+    );
+    if !found.is_empty() || !integrity.is_active() {
+        return found;
+    }
+    let git = Class::git_config(env);
+    judge_class(
+        command,
+        cwd,
+        env,
+        &expanded,
+        &git,
+        Kind::GitConfig,
+        integrity,
+    )
+}
+
+/// One pass of the shell check over one class.
+fn judge_class(
+    command: &str,
+    cwd: &Path,
+    env: &StartupEnv,
+    expanded: &crate::hooks::git_guard::Expanded,
+    class: &Class,
+    kind: Kind,
+    integrity: PolicyLevel,
+) -> Vec<Violation> {
     let segments = &expanded.segments;
     // `cd ~` lands in the home the class is built from.
     let run = run_dirs_from_home(segments, cwd, env.home.clone());
     let mut line = Line {
-        class: &class,
+        class,
+        kind,
+        integrity,
         env,
         text: command,
         assigned: BTreeMap::new(),
@@ -1198,16 +1326,19 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
     };
     line.assigned = literal_assignments(segments);
     line.staged = staged_name(segments, &line).is_some();
-    if let Some(v) = direnv_trust(segments) {
-        return vec![v];
-    }
-    if let Some(v) = startup_environment(segments) {
-        return vec![v];
+    if kind == Kind::Startup {
+        if let Some(v) = direnv_trust(segments) {
+            return vec![v];
+        }
+        if let Some(v) = startup_environment(segments) {
+            return vec![v];
+        }
     }
     for code in super::outward::interpreter_bodies(command) {
         if let Some(name) = line.names(&code) {
-            return vec![finding(format!(
-                "interpreter code names the shell startup file `{name}`, which it can write"
+            return vec![line.finding(format!(
+                "interpreter code names the {} `{name}`, which it can write",
+                line.noun()
             ))];
         }
     }
@@ -1222,9 +1353,7 @@ pub fn evaluate(command: &str, cwd: &Path, env: &StartupEnv) -> Vec<Violation> {
             return vec![v];
         }
     }
-    closed_rule(segments, &expanded, &line)
-        .into_iter()
-        .collect()
+    closed_rule(segments, expanded, &line).into_iter().collect()
 }
 
 /// Variables whose value is a command that a reader or git runs: an editor,
@@ -1255,6 +1384,7 @@ const COMMAND_VARIABLES: &[&str] = &[
 /// `export PAGER=cmd`) whose command names a startup file. This reads every
 /// segment, not only staged lines: the command runs without any produced text.
 fn command_valued_variable(segment: &str, line: &Line<'_>) -> Option<Violation> {
+    let noun = line.noun();
     let words = command_argv(segment);
     // `git --config-env=core.fsmonitor=VAR` takes the setting from `VAR`.
     let mut config_env = words.iter().enumerate().filter_map(|(at, word)| {
@@ -1266,18 +1396,37 @@ fn command_valued_variable(segment: &str, line: &Line<'_>) -> Option<Violation> 
         let value = line.assigned.get(var)?;
         Some((var, line.names(value)?))
     }) {
-        return Some(finding(format!(
-            "`--config-env` takes a git setting from `{var}`, a command that names the shell startup file `{class}`"
+        return Some(line.finding(format!(
+            "`--config-env` takes a git setting from `{var}`, a command that names the {noun} `{class}`"
         )));
     }
     words.iter().find_map(|word| {
         let (name, value) = word.split_once('=')?;
-        if !(COMMAND_VARIABLES.contains(&name) || name.starts_with("GIT_CONFIG_VALUE_")) {
+        // `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n` set a git key for the
+        // command as `git -c` does, and are judged the same way.
+        if let Some(n) = name.strip_prefix("GIT_CONFIG_VALUE_") {
+            let key_name = format!("GIT_CONFIG_KEY_{n}=");
+            let key = words
+                .iter()
+                .find_map(|w| w.strip_prefix(key_name.as_str()))
+                .or_else(|| {
+                    line.assigned
+                        .get(key_name.trim_end_matches('='))
+                        .map(String::as_str)
+                })
+                .unwrap_or_default();
+            return config_setting_problem(&format!("`{name}`"), key, value, line).map(|why| {
+                line.finding(format!(
+                    "{why}, which a program the line runs would execute"
+                ))
+            });
+        }
+        if !COMMAND_VARIABLES.contains(&name) {
             return None;
         }
         let class = line.names(value)?;
-        Some(finding(format!(
-            "`{name}` is set to a command that names the shell startup file `{class}`, which a program the line runs would execute"
+        Some(line.finding(format!(
+            "`{name}` is set to a command that names the {noun} `{class}`, which a program the line runs would execute"
         )))
     })
 }
@@ -1590,12 +1739,13 @@ fn assigns_program_variable(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
     };
+    // Windows reads `Path` as `PATH`.
     name.starts_with("LD_")
         || name.starts_with("DYLD_")
+        || name.eq_ignore_ascii_case("PATH")
         || matches!(
             name,
-            "PATH"
-                | "SHELL"
+            "SHELL"
                 | "BASH_ENV"
                 | "ENV"
                 | "PROMPT_COMMAND"
@@ -2022,10 +2172,11 @@ fn closed_rule(
     line: &Line<'_>,
 ) -> Option<Violation> {
     let name = class_named(segments, line)?;
+    let noun = line.noun();
     let reads_class = |word: &str| line.names(word).is_some();
     super::unresolved::unresolved_form(expanded, &reads_class).map(|form| {
-        finding(format!(
-            "the line names the shell startup file `{name}`, and {form}, so it could write that file out of the guard's sight; run that command in a call that does not name the file"
+        line.finding(format!(
+            "the line names the {noun} `{name}`, and {form}, so it could write that file out of the guard's sight; run that command in a call that does not name the file"
         ))
     })
 }
@@ -2034,6 +2185,7 @@ fn closed_rule(
 /// names a startup file and produces text.
 fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
     let name = staged_name(segments, line)?;
+    let noun = line.noun();
     segments.iter().find_map(|segment| {
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
@@ -2043,16 +2195,16 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
             .cloned()
             .or_else(|| words.iter().find_map(|w| staged_variable(w, line)))
         {
-            return Some(finding(format!(
-                "text this call produces names the shell startup file `{name}`, and the line sets `{word}`, which changes the program that runs; read the file in its own call"
+            return Some(line.finding(format!(
+                "text this call produces names the {noun} `{name}`, and the line sets `{word}`, which changes the program that runs; read the file in its own call"
             )));
         }
         // `env -S 'cmd'` leaves no program behind: the reader judges the
         // string as its own segments, each held to this rule in turn.
         let (program, args) = strip_launchers(&words)?;
         (!data_reader(program, args, line)).then(|| {
-            finding(format!(
-                "text this call produces names the shell startup file `{name}`, and the line runs `{program}`, which is not a data reader, so it could run or apply that text; read the file in its own call"
+            line.finding(format!(
+                "text this call produces names the {noun} `{name}`, and the line runs `{program}`, which is not a data reader, so it could run or apply that text; read the file in its own call"
             ))
         })
     })
@@ -2060,6 +2212,7 @@ fn staged_run(segments: &[String], line: &Line<'_>) -> Option<Violation> {
 
 /// The writes one simple command makes.
 fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
+    let noun = line.noun();
     let mut tokens = command_argv(segment);
     strip_reserved_words(&mut tokens);
     let raw = shell_tokens(segment);
@@ -2079,13 +2232,11 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     for target in redirects.targets.iter().chain(&redirects.unread) {
         match line.judge(target, &dirs) {
             Judged::Class(label) => {
-                return Some(finding(format!(
-                    "a redirect writes the shell startup file `{label}`"
-                )))
+                return Some(line.finding(format!("a redirect writes the {noun} `{label}`")))
             }
             Judged::Unresolved(word) => {
                 if let Some(why) = line.unresolved_near_class(&word, &dirs) {
-                    return Some(finding(format!(
+                    return Some(line.finding(format!(
                         "a redirect writes `{word}`, which the guard cannot resolve, and {why}"
                     )));
                 }
@@ -2093,8 +2244,8 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
             Judged::Placement(_) | Judged::Ordinary => {
                 if line.unknown.is_some() && !target.starts_with(['/', '~', '$']) {
                     if let Some(file) = line.names(target) {
-                        return Some(finding(format!(
-                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the shell startup file `{file}`"
+                        return Some(line.finding(format!(
+                            "a redirect runs where the guard cannot tell the directory, and `{target}` could name the {noun} `{file}`"
                         )));
                     }
                 }
@@ -2105,9 +2256,17 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
     let name = basename(program);
     if name == "git" {
         if let Some(why) = git_setting_violation(args, line) {
-            return Some(finding(format!(
+            return Some(line.finding(format!(
                 "{why}, which a program the line runs would execute"
             )));
+        }
+        // Which file a `git config` write opens and whether its key runs
+        // anything is git-guard's judgment (AC-5): a known-safe key at user
+        // scope passes there, and a code-running key refuses.
+        if line.kind == Kind::GitConfig
+            && git_subcommand(args).is_some_and(|(sub, _)| sub == "config")
+        {
+            return None;
         }
     }
     if reads_only(name, args) {
@@ -2124,8 +2283,8 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
                 .iter()
                 .any(|w| line.substitute(w).contains(['$', '`', '\u{1}', '\u{2}']))
         {
-            return Some(finding(format!(
-                "`{name}` runs a script the guard cannot read, and the line names a shell startup file"
+            return Some(line.finding(format!(
+                "`{name}` runs a script the guard cannot read, and the line names a {noun}"
             )));
         }
         return None;
@@ -2150,8 +2309,8 @@ fn segment_violation(segment: &str, line: &Line<'_>) -> Option<Violation> {
             !path_like(value_of(word))
                 && line.substitute(word).contains(['$', '`', '\u{1}', '\u{2}'])
         }) {
-            return Some(finding(format!(
-                "`{name}` is given text `{code}` whose expansion the guard cannot resolve, and the line names a shell startup file"
+            return Some(line.finding(format!(
+                "`{name}` is given text `{code}` whose expansion the guard cannot resolve, and the line names a {noun}"
             )));
         }
     }
@@ -2336,9 +2495,10 @@ fn git_globals<'a>(args: &'a [String], rest: &[String]) -> &'a [String] {
 /// setting runs nothing; a command setting may only name an ordinary viewer
 /// on a line that produces text; any other setting refuses there.
 fn config_setting_problem(label: &str, key: &str, value: &str, line: &Line<'_>) -> Option<String> {
+    let noun = line.noun();
     let value = line.substitute(value);
     if let Some(class) = line.names(&value) {
-        return Some(format!("{label} names the shell startup file `{class}`"));
+        return Some(format!("{label} names the {noun} `{class}`"));
     }
     if line.names(line.text).is_some() && unresolved_word(&value) {
         return Some(format!("{label} has a value the guard cannot read"));
@@ -2370,6 +2530,7 @@ const GIT_EXEC_DIRS: &[&str] = &[
 /// call is not a reader, or `None` when every setting is harmless. See
 /// [`config_setting_problem`] for the key and value rules.
 fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
+    let noun = line.noun();
     let (_, rest) = git_subcommand(args)?;
     let globals = git_globals(args, rest);
     let near_class = line.names(line.text).is_some();
@@ -2404,9 +2565,7 @@ fn git_setting_violation(args: &[String], line: &Line<'_>) -> Option<String> {
             // exits; the word after it is read as the subcommand.
             let value = line.substitute(value);
             if let Some(class) = line.names(&value) {
-                Some(format!(
-                    "`--exec-path` names the shell startup file `{class}`"
-                ))
+                Some(format!("`--exec-path` names the {noun} `{class}`"))
             } else if near_class && unresolved_word(&value) {
                 Some("`--exec-path` has a value the guard cannot read".to_string())
             } else {
@@ -2484,6 +2643,7 @@ fn path_like(word: &str) -> bool {
 /// One argument of a program that may write: a path in the class, an
 /// unresolved path near it, or code that names a startup file.
 fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> Option<Violation> {
+    let noun = line.noun();
     // `key=value` operands (`dd of=FILE`) name a path in their value.
     if !word.starts_with('-') {
         if let Some((key, value)) = word.split_once('=') {
@@ -2508,8 +2668,8 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
     let value = value_of(word);
     if !path_like(value) {
         if let Some(file) = line.names(word) {
-            return Some(finding(format!(
-                "`{name}` is given text that names the shell startup file `{file}`, which it can write"
+            return Some(line.finding(format!(
+                "`{name}` is given text that names the {noun} `{file}`, which it can write"
             )));
         }
         return None;
@@ -2523,19 +2683,19 @@ fn word_violation(name: &str, word: &str, line: &Line<'_>, dirs: &[PathBuf]) -> 
         value
     };
     match line.judge(value, dirs) {
-        Judged::Class(label) => Some(finding(format!(
-            "`{name}` targets the shell startup file `{label}`"
-        ))),
+        Judged::Class(label) => {
+            Some(line.finding(format!("`{name}` targets the {noun} `{label}`")))
+        }
         Judged::Unresolved(w) => line.unresolved_near_class(&w, dirs).map(|why| {
-            finding(format!(
+            line.finding(format!(
                 "`{name}` takes `{w}`, which the guard cannot resolve, and {why}"
             ))
         }),
         Judged::Placement(_) | Judged::Ordinary => {
             if line.unknown.is_some() && !value.starts_with(['/', '~', '$']) {
                 if let Some(file) = line.names(value) {
-                    return Some(finding(format!(
-                        "`{name}` runs where the guard cannot tell the directory, and `{value}` could name the shell startup file `{file}`"
+                    return Some(line.finding(format!(
+                        "`{name}` runs where the guard cannot tell the directory, and `{value}` could name the {noun} `{file}`"
                     )));
                 }
             }
@@ -2637,6 +2797,7 @@ fn copy_judgment(
     line: &Line<'_>,
     dirs: &[PathBuf],
 ) -> Option<Violation> {
+    let (noun, nouns) = (line.noun(), line.kind.nouns());
     let CopyCall { dest, sources } = call;
     let dest = dest.as_str();
     let recursive =
@@ -2647,13 +2808,11 @@ fn copy_judgment(
     let dest_judged = line.judge(dest, dirs);
     match &dest_judged {
         Judged::Class(label) => {
-            return Some(finding(format!(
-                "`{name}` writes the shell startup file `{label}`"
-            )))
+            return Some(line.finding(format!("`{name}` writes the {noun} `{label}`")))
         }
         Judged::Unresolved(w) => {
             if let Some(why) = line.unresolved_near_class(w, dirs) {
-                return Some(finding(format!(
+                return Some(line.finding(format!(
                     "`{name}` writes to `{w}`, which the guard cannot resolve, and {why}"
                 )));
             }
@@ -2679,8 +2838,8 @@ fn copy_judgment(
         if existing_dir && !base.is_empty() {
             let landing = format!("{}/{base}", dest.trim_end_matches('/'));
             if let Judged::Class(label) = line.judge(&landing, dirs) {
-                return Some(finding(format!(
-                    "`{name}` places `{source}` at the shell startup file `{label}`"
+                return Some(line.finding(format!(
+                    "`{name}` places `{source}` at the {noun} `{label}`"
                 )));
             }
         }
@@ -2694,13 +2853,13 @@ fn copy_judgment(
                 || (recursive
                     && (source.ends_with('/') || source.ends_with("/.") || source == ".")));
         if contents {
-            return Some(finding(format!(
-                "`{name}` copies the contents of `{source}` into `{dest_dir}`, where shell startup files live"
+            return Some(line.finding(format!(
+                "`{name}` copies the contents of `{source}` into `{dest_dir}`, where {nouns} live"
             )));
         }
         if tree && !existing_dir {
-            return Some(finding(format!(
-                "`{name}` puts the tree `{source}` at `{dest_dir}`, above shell startup files"
+            return Some(line.finding(format!(
+                "`{name}` puts the tree `{source}` at `{dest_dir}`, above {nouns}"
             )));
         }
         if base.is_empty() || !existing_dir {
@@ -2709,13 +2868,13 @@ fn copy_judgment(
         let landing = format!("{}/{base}", dest.trim_end_matches('/'));
         match line.judge(&landing, dirs) {
             Judged::Class(label) => {
-                return Some(finding(format!(
-                    "`{name}` places `{source}` at the shell startup file `{label}`"
+                return Some(line.finding(format!(
+                    "`{name}` places `{source}` at the {noun} `{label}`"
                 )))
             }
             Judged::Placement(p) if tree => {
-                return Some(finding(format!(
-                    "`{name}` puts the tree `{source}` at `{p}`, above shell startup files"
+                return Some(line.finding(format!(
+                    "`{name}` puts the tree `{source}` at `{p}`, above {nouns}"
                 )))
             }
             _ => {}
@@ -2732,6 +2891,7 @@ fn placing_violation(
     line: &Line<'_>,
     dirs: &[PathBuf],
 ) -> Option<Violation> {
+    let noun = line.noun();
     let placing = PLACING.contains(&name)
         || (name == "find" && !reads_only(name, args))
         || matches!(name, "xargs" | "parallel");
@@ -2771,15 +2931,15 @@ fn placing_violation(
             continue;
         }
         if let Judged::Placement(dir) = line.judge(value, dirs) {
-            return Some(finding(format!(
-                "`{name}` writes into `{dir}`, where it can place a shell startup file it does not name"
+            return Some(line.finding(format!(
+                "`{name}` writes into `{dir}`, where it can place a {noun} it does not name"
             )));
         }
     }
     for dir in dirs {
         if let Some(p) = line.class.placement(dir) {
-            return Some(finding(format!(
-                "`{name}` runs in `{p}`, where it can place a shell startup file it does not name"
+            return Some(line.finding(format!(
+                "`{name}` runs in `{p}`, where it can place a {noun} it does not name"
             )));
         }
     }
@@ -2794,7 +2954,7 @@ fn placing_violation(
                 .as_deref()
                 .is_some_and(|h| line.text.contains(&shown(h)));
         if spelled {
-            return Some(finding(format!(
+            return Some(line.finding(format!(
                 "`{name}` runs where the guard cannot tell the directory, on a line that names the home or `/etc`"
             )));
         }

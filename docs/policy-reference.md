@@ -139,13 +139,20 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
 - `flock`, `script`, `watch`, `setsid` or `unbuffer` with a command the
   reader does not parse;
 - a GNU-prefixed launcher, and a search path set for the command
-  (`PATH=...`, `env -P`);
+  (`PATH=...` in any letter case, since Windows reads `Path` as `PATH`,
+  and `env -P`);
+- a writer option the guard does not list: `rsync`, `scp`, `tar`, `zip`,
+  `unzip`, `curl`, `wget`, `patch` and `install` have options that run a
+  program or read a configuration, so only the options the guard lists
+  pass and any other refuses (`zip -TT`, `rsync --rsync-path`, `tar -I`,
+  `scp -S`, `curl -K`, `wget -e`, `patch -g`, `install -s`), with no
+  keyword list to extend (review round 16);
 - any other program the guard does not know to run nothing of its own,
   such as `npm`, `make`, `tmux`, `ssh`, an interpreter or `trap`.
 
 The guard reads data readers used as one, `git`, `gh`, the writers whose
-targets it judges (`cp`, `mv`, `tee`, `tar`, `curl` and the like) when no
-option runs a program, shells and `eval` with a body it reads, builtins,
+targets it judges (`cp`, `mv`, `tee`, `tar`, `curl` and the like) when it
+knows every option given, shells and `eval` with a body it reads, builtins,
 and `source` of the startup file itself. Only the command word counts as
 an expansion, so a resolved read keeps its verdict (`grep "$PAT"
 ~/.zshrc`, `sh -c 'grep "$PAT" ~/.zshrc'`). The rule needs the file named
@@ -283,6 +290,21 @@ keys match by exact name. Repository-scope settings, unsets and
 reads pass. git has many keys that run a program and adds more, so a list
 of them always missed one (review round ten); an unknown key costs a
 refusal the operator can clear by setting it by hand.
+
+exec-guard judges the default user and system git configuration files
+(`git_config_paths`) as a second class of the startup check, under
+`git.hook_integrity` at its level (review round 16). Every form the
+startup section lists refuses for them too, with a message that names a
+user or system git config file: a redirect, a writer that targets one
+(`curl -o`, `wget -O`, `ditto`, `patch`, `tar -cf`, `scp`, `touch`), a
+relative `.gitconfig` where the directory is unknown (`cd "$HOME" &&
+printf x >> .gitconfig`), a `git -c` or `GIT_CONFIG_VALUE_n` value that
+names one, a staged run and the closed rule. Which file a `git config`
+write opens and whether its key runs anything stay git-guard's judgment,
+so `git config --file ~/.gitconfig user.name x` passes. The cost matches
+the startup class: text that names the file given to a program that is not
+a reader refuses, such as a `git commit -m` message that mentions
+`~/.gitconfig`; pass that text in a file (`git commit -F`).
 
 A write into a file counts as user or system scope unless the file is a
 repository's own configuration: a `config` or `config.worktree` in a git

@@ -34,8 +34,8 @@ const BUILTINS: &[&str] = &[
 ];
 
 /// Programs that write or remove the files they name, whose targets the
-/// guards judge, and that run no command unless an option asks for one
-/// ([`writer_runs_nothing`]).
+/// guards judge, and that run no command unless an option asks for one.
+/// Their options are read through [`writer_option`].
 const WRITERS: &[&str] = &[
     "cp",
     "mv",
@@ -69,19 +69,481 @@ const WRITERS: &[&str] = &[
     "trash-put",
 ];
 
-/// Words in a long option of a writer that make it run a program
-/// (`--rsh`, `--use-compress-program`, `--to-command`, `--strip-program`,
-/// `--checkpoint-action=exec=`).
-const RUNNING_OPTIONS: &[&str] = &[
-    "command",
-    "cmd",
-    "exec",
-    "program",
-    "script",
-    "rsh",
-    "askpass",
-    "checkpoint",
+/// The options of a writer that the guards know: short letters that take
+/// no value, short letters that take one (the rest of the word, or the next
+/// word when the letter ends it), whole short words (`wget -nc`), and long
+/// names. Each of them runs nothing and reads no configuration that could
+/// name another target.
+struct Known {
+    flags: &'static str,
+    valued: &'static str,
+    words: &'static [&'static str],
+    long: &'static [&'static str],
+}
+
+/// The options known for each writer that has an option which runs a
+/// program or reads a configuration: `rsync -e` and `--rsync-path`, `scp
+/// -S`, `-o`, `-F` and `-D`, `tar -I`, `-F` and `--to-command`, `zip -TT`,
+/// `curl -K`, `wget -e`, `patch -e` and `-g`, `install -s`. Any option not
+/// listed refuses on a line that names a protected target, so a writer
+/// option the list misses fails closed (review round 16). The other
+/// writers (`cp`, `mv`, `ln`, `tee`, `dd` and the like) have no such
+/// option, and every option of theirs is read as known.
+const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
+    (
+        &["rsync"],
+        Known {
+            flags: "avrlptgoDzhPnquciHAXSxRWEmOJLkKbIyF80sCdUN",
+            valued: "BTf@",
+            words: &[],
+            long: &[
+                "archive",
+                "verbose",
+                "quiet",
+                "recursive",
+                "links",
+                "perms",
+                "times",
+                "group",
+                "owner",
+                "devices",
+                "specials",
+                "compress",
+                "human-readable",
+                "progress",
+                "partial",
+                "partial-dir",
+                "dry-run",
+                "update",
+                "checksum",
+                "itemize-changes",
+                "hard-links",
+                "acls",
+                "xattrs",
+                "sparse",
+                "one-file-system",
+                "relative",
+                "whole-file",
+                "executability",
+                "prune-empty-dirs",
+                "omit-dir-times",
+                "delete",
+                "delete-after",
+                "delete-before",
+                "delete-during",
+                "delete-excluded",
+                "exclude",
+                "exclude-from",
+                "include",
+                "include-from",
+                "files-from",
+                "filter",
+                "from0",
+                "backup",
+                "backup-dir",
+                "suffix",
+                "inplace",
+                "append",
+                "append-verify",
+                "copy-links",
+                "copy-unsafe-links",
+                "safe-links",
+                "keep-dirlinks",
+                "ignore-existing",
+                "ignore-times",
+                "size-only",
+                "existing",
+                "stats",
+                "info",
+                "mkpath",
+                "chmod",
+                "chown",
+                "temp-dir",
+                "timeout",
+                "bwlimit",
+                "max-size",
+                "min-size",
+                "out-format",
+                "log-file",
+                "link-dest",
+                "compare-dest",
+                "copy-dest",
+                "numeric-ids",
+                "protect-args",
+                "secluded-args",
+                "no-perms",
+                "no-owner",
+                "no-group",
+                "no-times",
+                "dirs",
+                "cvs-exclude",
+                "fuzzy",
+                "atimes",
+                "crtimes",
+                "modify-window",
+                "remove-source-files",
+                "list-only",
+            ],
+        },
+    ),
+    (
+        &["scp"],
+        Known {
+            flags: "rpqvC346BOTA",
+            valued: "PlicJX",
+            words: &[],
+            long: &[],
+        },
+    ),
+    (
+        &["tar", "bsdtar", "gtar"],
+        Known {
+            flags: "AcdrtuxajJzZkmOpPSvwWhilBGMnoUqyRH",
+            valued: "fCTXbgKLNVs",
+            words: &[],
+            long: &[
+                "create",
+                "extract",
+                "get",
+                "list",
+                "append",
+                "update",
+                "diff",
+                "compare",
+                "file",
+                "directory",
+                "verbose",
+                "gzip",
+                "gunzip",
+                "bzip2",
+                "xz",
+                "lzma",
+                "zstd",
+                "auto-compress",
+                "keep-old-files",
+                "skip-old-files",
+                "overwrite",
+                "preserve-permissions",
+                "same-permissions",
+                "absolute-names",
+                "to-stdout",
+                "touch",
+                "dereference",
+                "strip-components",
+                "exclude",
+                "exclude-from",
+                "exclude-vcs",
+                "files-from",
+                "null",
+                "owner",
+                "group",
+                "mode",
+                "mtime",
+                "numeric-owner",
+                "no-same-owner",
+                "no-same-permissions",
+                "sort",
+                "format",
+                "wildcards",
+                "anchored",
+                "transform",
+                "xattrs",
+                "acls",
+                "one-file-system",
+                "totals",
+                "no-recursion",
+                "recursion",
+                "warning",
+                "blocking-factor",
+                "label",
+                "sparse",
+                "ignore-zeros",
+                "unlink-first",
+                "show-transformed-names",
+                "no-xattrs",
+                "no-acls",
+                "options",
+            ],
+        },
+    ),
+    (
+        &["zip"],
+        Known {
+            flags: "rqvjyufmdDXlkoAgFeJ0123456789$@",
+            valued: "xibntPZsO",
+            words: &["-sf", "-FS", "-qq"],
+            long: &[
+                "recurse-paths",
+                "quiet",
+                "verbose",
+                "junk-paths",
+                "symlinks",
+                "update",
+                "freshen",
+                "move",
+                "no-dir-entries",
+                "no-extra",
+                "exclude",
+                "include",
+                "encrypt",
+                "delete",
+                "filesync",
+                "test-only",
+            ],
+        },
+    ),
+    (
+        &["unzip"],
+        Known {
+            flags: "onqvltjaCLXcpzZVMKUWDT",
+            valued: "dPx",
+            words: &["-qq", "-aa", "-LL", "-UU", "-DD"],
+            long: &[],
+        },
+    ),
+    (
+        &["curl"],
+        Known {
+            flags: "sSfLOJkviIqgGZN#0123456RlBnjpaMh",
+            valued: "oHXduAemCxwrTFbcDEUYyztQP",
+            words: &[],
+            long: &[
+                "silent",
+                "show-error",
+                "fail",
+                "fail-with-body",
+                "fail-early",
+                "location",
+                "location-trusted",
+                "output",
+                "output-dir",
+                "create-dirs",
+                "remote-name",
+                "remote-name-all",
+                "remote-header-name",
+                "insecure",
+                "verbose",
+                "include",
+                "head",
+                "header",
+                "request",
+                "data",
+                "data-raw",
+                "data-binary",
+                "data-urlencode",
+                "data-ascii",
+                "form",
+                "form-string",
+                "json",
+                "user-agent",
+                "referer",
+                "max-time",
+                "connect-timeout",
+                "retry",
+                "retry-delay",
+                "retry-max-time",
+                "retry-all-errors",
+                "compressed",
+                "proto",
+                "proto-redir",
+                "tlsv1.2",
+                "tlsv1.3",
+                "http1.1",
+                "http2",
+                "url",
+                "get",
+                "upload-file",
+                "dump-header",
+                "write-out",
+                "continue-at",
+                "range",
+                "user",
+                "oauth2-bearer",
+                "cacert",
+                "capath",
+                "cert",
+                "key",
+                "no-progress-meter",
+                "progress-bar",
+                "globoff",
+                "max-redirs",
+                "noproxy",
+                "proxy",
+                "ipv4",
+                "ipv6",
+                "disable",
+                "no-buffer",
+                "max-filesize",
+                "limit-rate",
+                "resolve",
+                "cookie",
+                "cookie-jar",
+                "junk-session-cookies",
+                "netrc",
+                "netrc-optional",
+                "stderr",
+                "trace",
+                "trace-ascii",
+                "list-only",
+                "append",
+                "help",
+                "version",
+                "manual",
+                "ssl-reqd",
+                "speed-limit",
+                "speed-time",
+            ],
+        },
+    ),
+    (
+        &["wget"],
+        Known {
+            flags: "qvcNkprmKEShHLbxF",
+            valued: "OoaPtTwUiBlARDQYIX",
+            words: &["-nc", "-nv", "-nd", "-nH", "-np"],
+            long: &[
+                "quiet",
+                "verbose",
+                "no-verbose",
+                "continue",
+                "timestamping",
+                "output-document",
+                "output-file",
+                "append-output",
+                "directory-prefix",
+                "tries",
+                "timeout",
+                "wait",
+                "waitretry",
+                "random-wait",
+                "user-agent",
+                "header",
+                "no-check-certificate",
+                "recursive",
+                "level",
+                "no-parent",
+                "mirror",
+                "page-requisites",
+                "convert-links",
+                "adjust-extension",
+                "input-file",
+                "no-clobber",
+                "no-directories",
+                "no-host-directories",
+                "cut-dirs",
+                "show-progress",
+                "progress",
+                "limit-rate",
+                "user",
+                "password",
+                "post-data",
+                "post-file",
+                "method",
+                "body-data",
+                "body-file",
+                "max-redirect",
+                "https-only",
+                "inet4-only",
+                "inet6-only",
+                "spider",
+                "server-response",
+                "accept",
+                "reject",
+                "domains",
+                "content-disposition",
+                "retry-connrefused",
+                "quota",
+                "no-cache",
+                "no-cookies",
+                "load-cookies",
+                "save-cookies",
+                "keep-session-cookies",
+                "referer",
+                "compression",
+                "no-config",
+                "force-directories",
+                "span-hosts",
+                "force-html",
+                "base",
+            ],
+        },
+    ),
+    (
+        &["patch"],
+        Known {
+            flags: "bcEflnNRstTuvZ",
+            valued: "FVxYzBDdiopr",
+            words: &[],
+            long: &[
+                "forward",
+                "reverse",
+                "batch",
+                "force",
+                "silent",
+                "quiet",
+                "dry-run",
+                "unified",
+                "context",
+                "normal",
+                "strip",
+                "directory",
+                "input",
+                "output",
+                "reject-file",
+                "backup",
+                "no-backup-if-mismatch",
+                "backup-if-mismatch",
+                "remove-empty-files",
+                "posix",
+                "verbose",
+                "ignore-whitespace",
+                "merge",
+                "fuzz",
+                "binary",
+                "set-time",
+                "set-utc",
+                "follow-symlinks",
+                "read-only",
+                "prefix",
+                "suffix",
+                "basename-prefix",
+                "version-control",
+                "ifdef",
+                "reject-format",
+                "quoting-style",
+            ],
+        },
+    ),
+    (
+        &["install"],
+        Known {
+            flags: "cdCDpvbTMUS",
+            valued: "mogtBfhlN",
+            words: &[],
+            long: &[
+                "mode",
+                "owner",
+                "group",
+                "target-directory",
+                "no-target-directory",
+                "directory",
+                "preserve-timestamps",
+                "compare",
+                "verbose",
+                "backup",
+                "suffix",
+                "preserve-context",
+            ],
+        },
+    ),
 ];
+
+fn known_options(name: &str) -> Option<&'static Known> {
+    KNOWN_OPTIONS
+        .iter()
+        .find(|(names, _)| names.contains(&name))
+        .map(|(_, known)| known)
+}
 
 /// The first form on the line the guard cannot resolve, as words for a
 /// refusal; `None` when every command on it is read. `names_target` tells
@@ -120,7 +582,7 @@ fn segment_form(words: &[String], names_target: &dyn Fn(&str) -> bool) -> Option
     // A search path set for the command picks which program its name runs.
     if let Some(path) = words[..program_at]
         .iter()
-        .find(|w| w.starts_with("PATH=") || w.as_str() == "-P" || w.starts_with("--path"))
+        .find(|w| assigns_path(w) || w.as_str() == "-P" || w.starts_with("--path"))
     {
         return Some(format!(
             "`{path}` picks which program the command's name runs"
@@ -178,7 +640,11 @@ fn segment_form(words: &[String], names_target: &dyn Fn(&str) -> bool) -> Option
         "flock" | "script" | "watch" | "setsid" | "unbuffer" => launcher_commands(name, args)
             .is_empty()
             .then(|| format!("`{name}` runs a command the guard does not read")),
-        _ if WRITERS.contains(&name) && writer_runs_nothing(name, args) => None,
+        _ if WRITERS.contains(&name) => writer_option(name, args).map(|option| {
+            format!(
+                "`{name}` is given `{option}`, an option the guard does not know, which could run a command or pick another target"
+            )
+        }),
         _ if reader_program(program, args) => None,
         _ => Some(format!(
             "`{program}` is a program the guard does not read, which can run a command of its own"
@@ -210,30 +676,55 @@ fn find_commands(args: &[String]) -> Vec<&[String]> {
         .collect()
 }
 
-/// Whether a writer runs no program of its own: no long option that names
-/// one ([`RUNNING_OPTIONS`]), and none of rsync's `-e`, tar's `-I` or `-F`,
-/// or scp's `-S`, `-o` or `-F`.
-fn writer_runs_nothing(name: &str, args: &[String]) -> bool {
-    let short = |letters: &[char]| {
-        args.iter().any(|a| {
-            a.strip_prefix('-')
-                .filter(|c| !c.starts_with('-'))
-                .is_some_and(|c| c.contains(letters))
-        })
-    };
-    let long = args.iter().any(|a| {
-        a.strip_prefix("--").is_some_and(|option| {
-            let option = option.to_lowercase();
-            RUNNING_OPTIONS.iter().any(|word| option.contains(word))
-        })
-    });
-    !long
-        && !match name {
-            "rsync" => short(&['e']),
-            "tar" | "bsdtar" | "gtar" => short(&['I', 'F']),
-            "scp" => short(&['S', 'o', 'F']),
-            _ => false,
+/// The first option of a writer call that [`known_options`] does not list,
+/// or `None` when every option is known. A `tar` key without a dash
+/// (`tar cf x.tar`) is read as a run of short letters.
+fn writer_option(name: &str, args: &[String]) -> Option<String> {
+    let known = known_options(name)?;
+    let tar = matches!(name, "tar" | "bsdtar" | "gtar");
+    let mut skip = false;
+    for (at, arg) in args.iter().enumerate() {
+        if std::mem::take(&mut skip) {
+            continue;
         }
+        let a = arg.as_str();
+        if a == "--" {
+            break;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            let option = long.split_once('=').map_or(long, |(n, _)| n);
+            if !known.long.contains(&option) {
+                return Some(a.to_string());
+            }
+            continue;
+        }
+        let letters = match a.strip_prefix('-') {
+            Some(rest) if !rest.is_empty() => rest,
+            _ if at == 0 && tar && !a.is_empty() && a.chars().all(|c| c.is_ascii_alphabetic()) => a,
+            _ => continue,
+        };
+        if known.words.contains(&a) {
+            continue;
+        }
+        for (i, c) in letters.char_indices() {
+            if known.valued.contains(c) {
+                // The value is the rest of the word, or the next word.
+                skip = i + c.len_utf8() == letters.len() && letters != a;
+                break;
+            }
+            if !known.flags.contains(c) {
+                return Some(a.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Whether `word` assigns the search path. The name is compared without
+/// case: Windows reads `Path` as `PATH` (review round 16).
+fn assigns_path(word: &str) -> bool {
+    word.split_once('=')
+        .is_some_and(|(name, _)| name.eq_ignore_ascii_case("PATH"))
 }
 
 /// A word as a refusal shows it: a lifted substitution reads as `$(...)`.
@@ -341,8 +832,27 @@ mod tests {
             ("bash r.sh", "`bash r.sh` runs a script"),
             ("echo x | sh", "`sh` reads the commands"),
             ("source ./r.sh", "`source ./r.sh` runs a script"),
-            ("rsync -e 'sh x' a b", "`rsync` is a program"),
-            ("tar --to-command=sh -xf a.tar", "`tar` is a program"),
+            ("rsync -e 'sh x' a b", "`rsync` is given `-e`"),
+            (
+                "tar --to-command=sh -xf a.tar",
+                "`tar` is given `--to-command=sh`",
+            ),
+            // Review round 16: a writer option the guard does not know
+            // refuses without a keyword in its name.
+            ("zip -TT x a.zip b", "`zip` is given `-TT`"),
+            (
+                "rsync --rsync-path x a b",
+                "`rsync` is given `--rsync-path`",
+            ),
+            ("rsync -avM--x a b", "`rsync` is given `-avM--x`"),
+            ("tar cIf x a.tar b", "`tar` is given `cIf`"),
+            ("scp -S x a b", "`scp` is given `-S`"),
+            ("curl -K cfg -o out", "`curl` is given `-K`"),
+            ("wget -e x -O out", "`wget` is given `-e`"),
+            ("patch -g1 a", "`patch` is given `-g1`"),
+            ("install -s a b", "`install` is given `-s`"),
+            ("Path=/tmp/x cat ~/.zshrc", "`Path=/tmp/x` picks"),
+            ("path=/tmp/x cat ~/.zshrc", "`path=/tmp/x` picks"),
             ("script -q /dev/null", "`script` runs a command"),
             ("trap 'true' EXIT", "`trap` is a program"),
             ("PATH=/tmp/x cat ~/.zshrc", "`PATH=/tmp/x` picks"),
@@ -380,6 +890,20 @@ mod tests {
             "timeout 5 git status",
             "cd /tmp && ls",
             "export X=1; echo $X",
+            "FOO=1 cat ~/.zshrc",
+            // Writer options the guard knows, with their values.
+            "curl -fsSL -o out.txt https://example.invalid/x",
+            "curl -s -H 'Accept: x' --output out.txt https://example.invalid/x",
+            "wget -q -nc -O out.txt https://example.invalid/x",
+            "tar -czf a.tgz -C src .",
+            "tar xzf a.tgz",
+            "rsync -av --delete --exclude target a/ b/",
+            "zip -rq a.zip src",
+            "unzip -qo a.zip -d out",
+            "patch -p1 -i fix.diff",
+            "install -m 644 a b",
+            "scp -P 2222 a host:b",
+            "cp -a a b",
         ] {
             assert_eq!(form(line), None, "{line}");
         }

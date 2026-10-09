@@ -428,11 +428,14 @@ erratum below, never an edit of the section.
   as that scope, and so does a repository's own file that is a symbolic
   link to another file, since git writes through the link. A second table,
   `git_config_paths`, adds the default user and system git configuration
-  files to the same Claude and Codex entries. On a line that names a
+  files to the same Claude and Codex entries, and exec-guard refuses the
+  shell writes it can read to those files as it does for a startup file,
+  under `git.hook_integrity`. On a line that names a
   startup file or a user or system git configuration write, the guards
   refuse any form they cannot resolve, such as an expansion used as the
-  command word, `xargs` feeding git, a `parallel` template, `tmux` or a
-  program they do not know to run nothing, and they now read a literal
+  command word, `xargs` feeding git, a `parallel` template, `tmux`, a
+  writer option they do not list or a program they do not know to run
+  nothing, and they now read a literal
   the line assigned before a `sh -c "$CMD"`, env's `\_` separator,
   `flock --command=` and the GNU-prefixed launchers (`gtimeout`); a line
   that names no target is a stated residual. Every guard now skips the git global options that take
