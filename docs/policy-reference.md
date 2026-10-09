@@ -107,27 +107,55 @@ startup files outside the agent session.
 ### What security.shell_startup refuses
 
 The guards read a line as the commands it runs: the body of a shell `-c`,
-an `eval` and the string `env -S` splits (`--split-string`, `-S'cmd'`) are
-judged like the same commands at the top of the line, each nested body in
-turn, up to eight levels; deeper text refuses the line (review round 14).
-git-guard reads them the same way. That reading covers the command a
-launcher runs: the string `flock FILE -c`, `script -c` and `watch` hand to
-a shell, the commands `parallel` builds from its template and `:::`
-inputs, the command words after `flock FILE`, `script FILE` (BSD and
-macOS), `setsid` and `unbuffer`, and git or a command string run by
-`xargs` or `find -exec`. Three launchers stay named residuals, which the
-guards do not judge:
+an `eval` and the string `env -S` splits (`--split-string`, `-S'cmd'`, at
+blanks and at env's `\_` escape) are judged like the same commands at the
+top of the line, each nested body in turn, up to eight levels; deeper text
+refuses the line (review round 14). A literal the line assigned before the
+use is filled in, so `CMD='...'; sh -c "$CMD"`, `eval "$CMD"` and `$CMD`
+as the command word are read as the commands the literal holds (review
+round 15). git-guard reads them the same way. That reading covers the
+command a launcher runs: the string `flock FILE -c` (also `-cCMD` and
+`--command=CMD`), `script -c` and `watch` hand to a shell, the commands
+`parallel` builds from its template and `:::` inputs, the command words
+after `flock FILE`, `script FILE` (BSD and macOS), `setsid` and
+`unbuffer`, git or a command string run by `xargs` or `find -exec`, and
+the command after a launcher under its GNU name (`gtimeout`, `gnice`,
+`gnohup`, `gstdbuf`, `genv`).
 
-- `ssh HOST CMD` runs the command on another host, whose files these
-  guards do not protect; `ssh localhost` reaches this one only through a
-  login the operator set up.
-- `tmux` and `screen` hand a command to a server process through many
-  subcommands and bindings (`new-session`, `send-keys`, `respawn-pane`),
-  which the guard does not model.
-- `make --eval` adds makefile text whose recipes and `$(shell ...)` calls
-  run, and any Makefile can hold the same recipes, so no small rule reads
-  it; a Makefile written and run on a line that names a class file is
-  refused by the staged-run rule below.
+The programs that can run a command form an open set, so the guards do
+not list them. They close the set from the other side (the closed rule,
+TSK-242): on a line that names a startup file, every program must be one
+the guard reads, and a form it cannot resolve refuses, naming the form:
+
+- an expansion used as the command word with no literal assigned before
+  it (`$CMD`, `${X:-sh}`, `$(...)`), which covers `eval "$X"` and
+  `sh -c "$X"`;
+- a shell given a script file or reading its commands from standard
+  input (`bash r.sh`, `| sh`);
+- `xargs` or `find -exec` running a program that is not a data reader,
+  since its arguments come from input or from the file tree, and
+  `parallel`, whose commands come from a template (`{}`, `{1}`, an `-I`
+  string) and its inputs;
+- `flock`, `script`, `watch`, `setsid` or `unbuffer` with a command the
+  reader does not parse;
+- a GNU-prefixed launcher, and a search path set for the command
+  (`PATH=...`, `env -P`);
+- any other program the guard does not know to run nothing of its own,
+  such as `npm`, `make`, `tmux`, `ssh`, an interpreter or `trap`.
+
+The guard reads data readers used as one, `git`, `gh`, the writers whose
+targets it judges (`cp`, `mv`, `tee`, `tar`, `curl` and the like) when no
+option runs a program, shells and `eval` with a body it reads, builtins,
+and `source` of the startup file itself. Only the command word counts as
+an expansion, so a resolved read keeps its verdict (`grep "$PAT"
+~/.zshrc`, `sh -c 'grep "$PAT" ~/.zshrc'`). The rule needs the file named
+on the line; a spelling that names none is a residual, listed below. Its
+cost is an ordinary line that names a startup file and runs a program the
+guard does not read, such as `source ~/.zshrc && npm test`; run that
+program in a call that does not name the file. The task record lists the
+measured refusals. `ssh HOST CMD`, `tmux`, `screen` and `make --eval` were
+residuals the guard did not judge; beside a named file they now refuse as
+programs it does not read.
 
 The guards refuse under `security.shell_startup`, whatever the integrity
 level:
@@ -156,9 +184,10 @@ level:
   refused in that use: `awk` with `-f`, `-i`, `-E`, `-e`, `system`, a pipe,
   `>>`, a `>` after `print` or an `@`; `sed` with `-f`, an `e`, `w` or `r` command,
   or a `w` or `e` flag on `s///`; `sort -o`; `uniq` or `xxd` with an output operand; `base64 -o`.
-  Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, an
-  `env -S` string, a variable that picks the program (`PATH`, `GIT_*`,
-  `PAGER`) and any program or option the guard does not know are refused.
+  Shells, interpreters, script tools, wrappers, `find -exec`, `xargs`, a
+  variable that picks the program (`PATH`, `GIT_*`, `PAGER`) and any
+  program or option the guard does not know are refused; the commands an
+  `env -S` string holds are held to the same rule.
   The refusal names the program: read the class file in its own call. The
   rule also refuses ordinary lines that only read, such as `cp b.txt
   docs/a.txt` or `cargo test` after a redirect of a class file, `| vim -`,
@@ -224,7 +253,20 @@ new copier option is a residual, not a new member of the startup class.
 ### Git settings that can run a program
 
 git-guard refuses a user- or system-scope git setting that is not known to
-run nothing, under `git.hook_integrity`: a key that runs a program, such as
+run nothing, under `git.hook_integrity`, in every form the guard reads
+(direct, through a launcher it parses or one under its GNU name, inside a
+shell `-c` or `eval` body or an `env -S` string, with the line's earlier
+literals filled in). The closed rule above guards it too: a line that
+names such a write and carries a form the guard cannot resolve refuses,
+naming the form. A line names one with a default user or system git
+configuration path (`~/.gitconfig`, `~/.config/git/config`, a `gitconfig`
+in any `etc` directory, a `git/config` below a configuration directory), a
+`GIT_CONFIG` variable, or `git config` with `--global`, `--system`,
+`--file` or `--blob` and a key not known to run nothing or no key the
+line shows: `printf ... | xargs git config`, `tmux new-session -d 'git
+config --global alias.x !id'` and `parallel ' {1}' ::: 'git config ...'`
+refuse, while `gtimeout 5 git config --global user.name x` passes. A
+setting git-guard refuses is: a key that runs a program, such as
 an alias, `core.pager`, `credential.helper`, `difftool.<tool>.path` or
 `gpg.ssh.defaultKeyCommand`, and any key the classification does not know,
 such as `safe.directory` or `init.templateDir`. The known-safe keys
@@ -296,12 +338,50 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
 - **Every harness.** The text guard does not inspect links inside a copied
   or moved tree, judge link text from where it lands, emulate dereference
   and preserve option semantics, or recognize long-option prefixes beyond
-  exact names. Everything built at run time remains outside it, including
-  a path assembled by a program, a path an interpreter reads from its
-  environment at run time (`export p=~/.zshrc; python3 -c
-  'open(os.environ["p"])'`), a script written in one call and run in
-  another, and a git location (`GIT_DIR`, `GIT_COMMON_DIR`) exported in an
-  earlier tool call, which the hook never sees. It does not read archive contents. The sandboxes on all three
+  exact names. Everything built at run time on a line that names no
+  protected target remains outside it, including a path assembled by a
+  program from pieces (`python3 -c` joining `"."+"zsh"+"rc"`, kept as an
+  allowed regression), a path an interpreter reads from an environment
+  variable exported in an earlier call, a script written in one call and
+  run in another, and a git location (`GIT_DIR`, `GIT_COMMON_DIR`)
+  exported in an earlier tool call, which the hook never sees. The same
+  shape on a line that names the target (`export p=~/.zshrc; python3 -c
+  'open(os.environ["p"])'`) is refused by the closed rule.
+- **Every harness, the closed rule.** A spelling the guard does not read
+  and that names no protected target on the line is a named residual: a
+  review finding of that shape is recorded, not a blocker, while a form
+  this page says the guard reads is still a blocker when it slips
+  through. The sandbox holds such a write when the resolved path is
+  outside the writable root or matches a deny. These stay open: a path
+  inside a writable root; an include file in the workspace that a user
+  configuration pulls in (issue 88); a code-running key set at repository
+  scope, which an allowed `git status` then runs; a workspace symbolic
+  link to a protected file, which no sandbox was tested against; a seat
+  with no sandbox; Claude's unsandboxed retry, since the presets set
+  `allowUnsandboxedCommands` and the `security.sandbox_retry` keys are not
+  read yet; commands in `excludedCommands`; `sandbox.filesystem.disabled`
+  set at user, managed or CLI scope; native Windows Claude; Grok's
+  Windows stub; and a hard-linked repository `config` on a git that
+  writes the file in place (git 2.53.0 replaces it and breaks the link).
+- **Git configuration files.** The action table's `git_config_paths`
+  holds the default user and system files: `~/.gitconfig`,
+  `~/.config/git/config`, `/etc/gitconfig`, `/usr/local/etc/gitconfig` and
+  `/opt/homebrew/etc/gitconfig`. Claude gets `Edit` denies and sandbox
+  `denyWrite` entries for them and Codex gets read-only entries, which
+  `codeflow doctor` checks. git reads its system file under the prefix it
+  was built with, so another prefix, a relocated `XDG_CONFIG_HOME` or
+  `GIT_CONFIG_GLOBAL` has no entry; git-guard and edit-guard judge those
+  by scope instead. Grok gets no entry: a Grok deny blocks reads too, and
+  git reads these files on every command; its `workspace` profile already
+  leaves the home unwritable to a seat launched in its worktree, while a
+  git configuration file inside that working directory stays writable.
+  The cost of the entries for ordinary work is the Claude `Edit` deny and
+  a writable root that contains one of the files. `git config --global`
+  of a safe key from a sandboxed Bash in the project was already outside
+  the writable root, git-guard allows that key, and the operator's own
+  shell is outside every harness sandbox. `gh auth setup-git`, `git lfs
+  install` and `git maintenance` rewrite the global file and were not
+  run here. It does not read archive contents. The sandboxes on all three
   harnesses hold writes into the unwritable home; an unsandboxed seat stays
   open. Relocated startup files and writable workspace paths have the
   limits listed below. An interpreter call whose code names a startup file

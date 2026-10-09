@@ -522,7 +522,14 @@ while the guards judge each command by the name it spells.
    entries and the read-only entries of the Codex `cf-guard` profile, which
    `cf-builder` extends. Grok's `workspace` sandbox already leaves the home
    unwritable; a nested `.envrc` has no Grok rule, since a Grok deny also
-   blocks reads.
+   blocks reads. The table's `git_config_paths` adds the default user and
+   system git configuration files (`~/.gitconfig`, `~/.config/git/config`,
+   `/etc/gitconfig`, `/usr/local/etc/gitconfig`,
+   `/opt/homebrew/etc/gitconfig`) to the same Claude and Codex entries
+   (2026-10-09); Grok gets none, since git reads them on every command.
+   Another install prefix, a relocated configuration, a seat with no
+   sandbox, Claude's unsandboxed retry, `excludedCommands`,
+   `sandbox.filesystem.disabled` and native Windows Claude are residuals.
 3. **The guards are a bounded text backstop, with no relief.** exec-guard
    and edit-guard refuse visible writes under `security.shell_startup`,
    which has no policy key and holds at every integrity level: the operator
@@ -537,8 +544,14 @@ while the guards judge each command by the name it spells.
    a file in place of a git directory's configuration. The guard does not inspect
    a link inside a copied or moved tree, judge link text from where it
    lands, emulate dereference and preserve option semantics, or recognize
-   long-option prefixes beyond exact names. Everything built at run time
-   remains outside it. The sandboxes on all three harnesses hold writes
+   long-option prefixes beyond exact names. The programs that can run a
+   command are an open set, so the guards close it from the other side
+   (2026-10-09): on a line that names a startup file or a user or system
+   git configuration write, a form the guard cannot resolve refuses, such
+   as an expansion used as the command word, a command read from input or
+   built from a template, or a program it does not know to run nothing.
+   Everything built at run time on a line that names no target remains
+   outside it. The sandboxes on all three harnesses hold writes
    into the unwritable home; an unsandboxed seat stays open. The limits for
    relocated startup files and writable workspace paths are listed in
    `docs/policy-reference.md`. For reviewers, a new copier

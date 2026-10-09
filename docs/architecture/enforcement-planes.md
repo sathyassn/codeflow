@@ -298,7 +298,17 @@ refuse the forms they can read (issue 86, TSK-242).
   move the matching entries when they are set. A relative `ZDOTDIR` names a
   different directory wherever zsh starts, so with one set the zsh file
   names are protected in every directory.
-- **Containment comes from the sandbox.** The guards are the backstop.
+- **The git configuration files.** The table's `git_config_paths`: the
+  default user and system files (`~/.gitconfig`, `~/.config/git/config`,
+  `/etc/gitconfig`, `/usr/local/etc/gitconfig`,
+  `/opt/homebrew/etc/gitconfig`), whose keys can make every later git
+  command run a program. Claude and Codex get the same entries as the
+  startup class; Grok gets none, since its deny also blocks the reads git
+  makes on every command.
+- **Containment comes from the sandbox.** The guards are the backstop. On
+  a line that names a protected file they refuse any form they cannot
+  resolve, so a new launcher or option spelling does not slip past them;
+  a spelling that names no protected file is left to the sandbox.
 
 | Harness | Native containment | Guards |
 |---|---|---|
