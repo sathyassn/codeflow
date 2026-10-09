@@ -769,6 +769,18 @@
    ".envrc"
   ]
  },
+ "git_config_paths": {
+  "why": "The default user and system git configuration files (TSK-242). A key planted in one, such as an alias or `core.fsmonitor`, runs a program in every repository on a later git command the guards judge by name. These are the default paths only: git reads its system file under the prefix it was built with and every file a configuration includes, so another prefix, a relocated `XDG_CONFIG_HOME` or `GIT_CONFIG_GLOBAL`, and an include target are named residuals that git-guard and edit-guard judge instead. Grok gets no entry: a Grok deny blocks reads as well as writes, and git reads these files on every command.",
+  "home": [
+   ".gitconfig",
+   ".config/git/config"
+  ],
+  "absolute": [
+   "/etc/gitconfig",
+   "/usr/local/etc/gitconfig",
+   "/opt/homebrew/etc/gitconfig"
+  ]
+ },
  "delegate_denies": {
   "why": "Written by `codeflow delegate init` into the task-scoped `--settings` file. A delegated Claude seat never leaves the sandbox: the parameter rule refuses every unsandboxed retry in every mode without a prompt (CC permissions, 'Match by input parameter'; CC sandboxing, 'The unsandboxed retry escape hatch').",
   "claude": [

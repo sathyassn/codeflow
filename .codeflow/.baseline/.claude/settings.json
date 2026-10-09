@@ -217,6 +217,11 @@
       "Edit(//etc/paths)",
       "Edit(//etc/paths.d/**)",
       "Edit(//**/.envrc)",
+      "Edit(~/.gitconfig)",
+      "Edit(~/.config/git/config)",
+      "Edit(//etc/gitconfig)",
+      "Edit(//usr/local/etc/gitconfig)",
+      "Edit(//opt/homebrew/etc/gitconfig)",
       "Bash(sudo *)",
       "Bash(su *)",
       "Bash(doas *)",
@@ -433,7 +438,12 @@
         "/etc/fish",
         "/etc/environment",
         "/etc/paths",
-        "/etc/paths.d"
+        "/etc/paths.d",
+        "~/.gitconfig",
+        "~/.config/git/config",
+        "/etc/gitconfig",
+        "/usr/local/etc/gitconfig",
+        "/opt/homebrew/etc/gitconfig"
       ]
     },
     "credentials": {

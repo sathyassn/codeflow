@@ -161,13 +161,17 @@ pub struct ActionTable {
     pub sandbox_read_denies: Vec<String>,
     /// The shell startup class (issue 86, TSK-242).
     pub startup_paths: StartupPaths,
+    /// The default user and system git configuration files (TSK-242), in
+    /// the same shape as the startup class.
+    pub git_config_paths: StartupPaths,
     /// The delegate settings fragment.
     pub delegate_denies: DelegateDenies,
 }
 
-/// The shell startup files and the files that run commands when a shell or
-/// terminal starts (TSK-242). An entry ending in `/` is a directory and
-/// everything below it.
+/// A class of protected paths the presets generate denies from (TSK-242):
+/// the shell startup files and the files that run commands when a shell or
+/// terminal starts, and the default user and system git configuration
+/// files. An entry ending in `/` is a directory and everything below it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartupPaths {
@@ -178,6 +182,7 @@ pub struct StartupPaths {
     /// Absolute system paths.
     pub absolute: Vec<String>,
     /// File names protected in every directory.
+    #[serde(default)]
     pub anywhere: Vec<String>,
 }
 
@@ -285,8 +290,8 @@ impl ActionTable {
 
     /// The Claude `permissions.deny` array, in its required order: the read
     /// groups (each group's denies, then its carve-outs), the `Edit` denies
-    /// of the enforcement paths and of the shell startup class, then the
-    /// families.
+    /// of the enforcement paths, the shell startup class and the default git
+    /// configuration files, then the families.
     #[must_use]
     pub fn claude_deny(&self) -> Vec<String> {
         self.claude_read_groups
@@ -295,6 +300,7 @@ impl ActionTable {
             .chain(&self.claude_edit_denies)
             .cloned()
             .chain(self.startup_paths.claude_edit_denies())
+            .chain(self.git_config_paths.claude_edit_denies())
             .chain(self.family_rules(Decision::Deny))
             .collect()
     }
@@ -342,7 +348,12 @@ impl ActionTable {
             }
         }
         let deny_write = array_at(filesystem, "denyWrite");
-        for path in self.startup_paths.sandbox_write_denies() {
+        for path in self
+            .startup_paths
+            .sandbox_write_denies()
+            .into_iter()
+            .chain(self.git_config_paths.sandbox_write_denies())
+        {
             let path = Value::String(path);
             if !deny_write.contains(&path) {
                 deny_write.push(path);

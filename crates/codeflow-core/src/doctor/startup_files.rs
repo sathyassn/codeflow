@@ -125,12 +125,21 @@ fn literal(word: &str, home: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The protected classes the presets carry, with the words a finding uses:
+/// the shell startup class and the default git configuration files.
+fn classes() -> [(&'static str, &'static actions::StartupPaths); 2] {
+    let table = actions::table();
+    [
+        ("shell startup", &table.startup_paths),
+        ("git configuration", &table.git_config_paths),
+    ]
+}
+
 /// The class rules missing from the project's Claude settings and Codex
 /// profile, as listed rules. An absent or unreadable file is named, never
 /// read as a pass, and the Codex profile counts only when it is the one
 /// selected with no `sandbox_mode` key to shadow it.
 fn missing_rules(root: &Path) -> Vec<String> {
-    let table = &actions::table().startup_paths;
     let mut missing = Vec::new();
     let claude_file = ".claude/settings.json";
     match std::fs::read_to_string(root.join(claude_file)) {
@@ -144,26 +153,26 @@ fn missing_rules(root: &Path) -> Vec<String> {
                         .is_some_and(|a| a.iter().any(|r| r.as_str() == Some(rule)))
                 };
                 let deny = &value["permissions"]["deny"];
-                let lost = table
-                    .claude_edit_denies()
-                    .iter()
-                    .filter(|rule| !has(deny, rule))
-                    .count();
-                if lost > 0 {
-                    missing.push(format!(
-                        "{claude_file} lacks {lost} shell startup `Edit` denies"
-                    ));
-                }
                 let write = &value["sandbox"]["filesystem"]["denyWrite"];
-                let lost = table
-                    .sandbox_write_denies()
-                    .iter()
-                    .filter(|path| !has(write, path))
-                    .count();
-                if lost > 0 {
-                    missing.push(format!(
-                        "{claude_file} lacks {lost} shell startup sandbox `denyWrite` entries"
-                    ));
+                for (label, table) in classes() {
+                    let lost = table
+                        .claude_edit_denies()
+                        .iter()
+                        .filter(|rule| !has(deny, rule))
+                        .count();
+                    if lost > 0 {
+                        missing.push(format!("{claude_file} lacks {lost} {label} `Edit` denies"));
+                    }
+                    let lost = table
+                        .sandbox_write_denies()
+                        .iter()
+                        .filter(|path| !has(write, path))
+                        .count();
+                    if lost > 0 {
+                        missing.push(format!(
+                            "{claude_file} lacks {lost} {label} sandbox `denyWrite` entries"
+                        ));
+                    }
                 }
             }
             Err(_) => missing.push(format!("{claude_file} does not parse")),
@@ -219,7 +228,6 @@ fn missing_rules(root: &Path) -> Vec<String> {
 /// and any `write` grant in that chain on a path above a class entry, which
 /// may reopen it (review round two).
 fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
-    let table = &actions::table().startup_paths;
     let profiles = value.get("permissions");
     let mut chain = Vec::new();
     let mut name = selected.to_string();
@@ -244,26 +252,30 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
             .find_map(|profile| filesystem(profile).and_then(|fs| fs.get(path)))
             .and_then(toml::Value::as_str)
     };
-    let paths: Vec<String> = table
-        .home
-        .iter()
-        .map(|e| format!("~/{}", e.trim_end_matches('/')))
-        .chain(
-            table
-                .absolute
-                .iter()
-                .map(|e| e.trim_end_matches('/').to_string()),
-        )
-        .collect();
     let mut gaps = Vec::new();
-    let open = paths
-        .iter()
-        .filter(|path| !matches!(entry(path), Some("read" | "deny" | "none")))
-        .count();
-    if open > 0 {
-        gaps.push(format!(
-            ".codex/config.toml's `{selected}` profile leaves {open} shell startup paths writable"
-        ));
+    let mut paths: Vec<String> = Vec::new();
+    for (label, table) in classes() {
+        let class: Vec<String> = table
+            .home
+            .iter()
+            .map(|e| format!("~/{}", e.trim_end_matches('/')))
+            .chain(
+                table
+                    .absolute
+                    .iter()
+                    .map(|e| e.trim_end_matches('/').to_string()),
+            )
+            .collect();
+        let open = class
+            .iter()
+            .filter(|path| !matches!(entry(path), Some("read" | "deny" | "none")))
+            .count();
+        if open > 0 {
+            gaps.push(format!(
+                ".codex/config.toml's `{selected}` profile leaves {open} {label} paths writable"
+            ));
+        }
+        paths.extend(class);
     }
     let roots = chain.iter().find_map(|profile| {
         filesystem(profile)
@@ -310,7 +322,7 @@ fn codex_profile_gaps(value: &toml::Value, selected: &str) -> Vec<String> {
                 .any(|c| near(c, &grant) || near(&grant, c) || grant.is_empty())
             {
                 gaps.push(format!(
-                    "the `{profile}` profile grants write on `{path}`, on, above or below shell startup paths"
+                    "the `{profile}` profile grants write on `{path}`, on, above or below shell startup or git configuration paths"
                 ));
             }
         }
@@ -483,7 +495,7 @@ pub(super) fn check(opts: &Options) -> CheckResult {
         Some(remedy) => (Status::Warn(remedy), parts.join("; ")),
         None => (
             Status::Pass,
-            "the shell startup class is in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
+            "the shell startup class and the default git configuration files are in the project's Claude settings and selected Codex profile (listed rules; native enforcement is not observed here), and the home's startup files source nothing outside it (direct `source` lines only)".to_string(),
         ),
     };
     CheckResult {
@@ -535,9 +547,16 @@ mod tests {
         std::fs::write(root.join(".claude/settings.json"), "{}").unwrap();
         std::fs::write(root.join(".codex/config.toml"), "").unwrap();
         let missing = missing_rules(root);
-        // Edit denies, denyWrite, no profile selected, cf-guard
-        // entries, the workspace root `.envrc`.
-        assert_eq!(missing.len(), 5, "{missing:?}");
+        // Edit denies, denyWrite and cf-guard entries of each class (the
+        // shell startup files and the default git configuration files),
+        // no profile selected, the workspace root `.envrc`.
+        assert_eq!(missing.len(), 8, "{missing:?}");
+        assert!(
+            missing
+                .iter()
+                .any(|m| m.contains("git configuration `Edit` denies")),
+            "{missing:?}"
+        );
         let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
         std::fs::copy(
             shipped.join("settings/default.json"),

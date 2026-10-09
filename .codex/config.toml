@@ -151,6 +151,17 @@ glob_scan_max_depth = 6
 "/etc/environment" = "read"
 "/etc/paths" = "read"
 "/etc/paths.d" = "read"
+# The default user and system git configuration files are read only too
+# (TSK-242): a key planted there, such as an alias or `core.fsmonitor`,
+# runs a program in every repository. Generated from `git_config_paths`;
+# git reads them, so they are `read`, never `deny`. Another install prefix,
+# a relocated `XDG_CONFIG_HOME` or `GIT_CONFIG_GLOBAL` and include targets
+# are named residuals that git-guard judges instead.
+"~/.gitconfig" = "read"
+"~/.config/git/config" = "read"
+"/etc/gitconfig" = "read"
+"/usr/local/etc/gitconfig" = "read"
+"/opt/homebrew/etc/gitconfig" = "read"
 
 # Secret files are denied at the workspace root only. A wildcard in a
 # directory part (`**/.env`, `*/.env`) makes Codex deny deleting and renaming

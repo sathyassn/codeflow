@@ -204,25 +204,32 @@ fn codex_launch_text_follows_the_builder_and_reviewer_decisions() {
     }
 }
 
-/// TSK-242: every shell startup path in the action table is read only in
-/// `cf-guard`, which `cf-builder` extends without reopening any of them,
-/// and the workspace root's `.envrc` is read only.
+/// TSK-242: every shell startup path and default git configuration path in
+/// the action table is read only in `cf-guard`, which `cf-builder` extends
+/// without reopening any of them, and the workspace root's `.envrc` is read
+/// only.
 #[test]
 fn cf_guard_and_cf_builder_keep_shell_startup_files_read_only() {
     let cfg = shipped_config();
     let fs = cf_guard(&cfg, "filesystem");
-    let table = &codeflow_core::security::actions::table().startup_paths;
-    let expected: Vec<String> = table
-        .home
+    let actions = codeflow_core::security::actions::table();
+    let table = &actions.startup_paths;
+    let expected: Vec<String> = [table, &actions.git_config_paths]
         .iter()
-        .map(|e| format!("~/{}", e.trim_end_matches('/')))
-        .chain(
-            table
-                .absolute
+        .flat_map(|class| {
+            class
+                .home
                 .iter()
-                .map(|e| e.trim_end_matches('/').to_string()),
-        )
+                .map(|e| format!("~/{}", e.trim_end_matches('/')))
+                .chain(
+                    class
+                        .absolute
+                        .iter()
+                        .map(|e| e.trim_end_matches('/').to_string()),
+                )
+        })
         .collect();
+    assert!(expected.iter().any(|p| p.ends_with("etc/gitconfig")));
     for path in &expected {
         assert_eq!(
             fs.get(path).and_then(toml::Value::as_str),
