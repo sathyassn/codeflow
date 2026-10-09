@@ -304,7 +304,11 @@ write opens and whether its key runs anything stay git-guard's judgment,
 so `git config --file ~/.gitconfig user.name x` passes. The cost matches
 the startup class: text that names the file given to a program that is not
 a reader refuses, such as a `git commit -m` message that mentions
-`~/.gitconfig`; pass that text in a file (`git commit -F`).
+`~/.gitconfig`; pass that text in a file (`git commit -F`). A bare
+`git/config` token, the XDG file below a configuration directory, counts
+the same way and refuses in that text too; it ends the path it names, so
+`src/git/config.rs` and a `git/config/` directory are other paths and pass
+(review round 17).
 
 A write into a file counts as user or system scope unless the file is a
 repository's own configuration: a `config` or `config.worktree` in a git
@@ -315,11 +319,15 @@ build's `~/etc/gitconfig`) and every file a configuration includes, so a
 list of user and system files always missed one (review round eleven).
 `--file`, `-f`, `--blob` and, for a call with no scope option, the file
 `GIT_CONFIG` names are judged this way. The cost is a refusal for a project
-fixture or scratch file given a key not known to run nothing. A shell
-write or native edit of a `gitconfig` in any `etc` directory is refused
-with the user's own files, which include the `.gitconfig` of every home a
-shell of this user may read: `HOME`, and `USERPROFILE` where it names
-another directory.
+fixture or scratch file given a key not known to run nothing. edit-guard
+refuses a native edit of a `gitconfig` in any `etc` directory with the
+user's own files, which include the `.gitconfig` of every home a shell of
+this user may read: `HOME`, and `USERPROFILE` where it names another
+directory. The shell guards refuse a write only to the default paths in
+`git_config_paths` and those homes' files; a shell write to a `gitconfig`
+under another prefix (`~/etc/gitconfig`, `/opt/local/etc/gitconfig`) is the
+residual AC-6 names, held by the sandbox where that path is outside the
+writable root (review round 17).
 
 A default, `--local` or `--worktree` write is judged by the file git opens:
 the `config` of the git directory the call selects (through `-C`,

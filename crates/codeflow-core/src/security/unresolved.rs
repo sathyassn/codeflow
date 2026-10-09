@@ -19,7 +19,7 @@
 //! where one runs.
 
 use super::git::{config_kind, ConfigKind};
-use super::startup::{mentions, reader_program};
+use super::startup::{mentions, mentions_path_end, reader_program, PATH_END_NEEDLES};
 use crate::hooks::git_guard::{
     basename, command_argv, expands, gnu_prefixed, is_shell, launcher_commands, launcher_name,
     shell_c_argument, strip_launchers, strip_reserved_words, xargs_command, Expanded,
@@ -677,14 +677,18 @@ fn find_commands(args: &[String]) -> Vec<&[String]> {
 }
 
 /// The first option of a writer call that [`known_options`] does not list,
-/// or `None` when every option is known. A `tar` key without a dash
-/// (`tar cf x.tar`) is read as a run of short letters.
+/// or `None` when every option is known. A short option takes its value
+/// from the rest of its word, or from the next word when it ends the word.
+/// A `tar` key without a dash (`tar cfI x.tar cmd`) is a run of letters
+/// read whole: each letter that takes a value takes the next word, in
+/// order, so a letter after `f` is still judged (review round 17).
 fn writer_option(name: &str, args: &[String]) -> Option<String> {
     let known = known_options(name)?;
     let tar = matches!(name, "tar" | "bsdtar" | "gtar");
-    let mut skip = false;
+    let mut skip = 0usize;
     for (at, arg) in args.iter().enumerate() {
-        if std::mem::take(&mut skip) {
+        if skip > 0 {
+            skip -= 1;
             continue;
         }
         let a = arg.as_str();
@@ -698,18 +702,26 @@ fn writer_option(name: &str, args: &[String]) -> Option<String> {
             }
             continue;
         }
-        let letters = match a.strip_prefix('-') {
-            Some(rest) if !rest.is_empty() => rest,
-            _ if at == 0 && tar && !a.is_empty() && a.chars().all(|c| c.is_ascii_alphabetic()) => a,
-            _ => continue,
-        };
         if known.words.contains(&a) {
             continue;
         }
+        if at == 0 && tar && !a.is_empty() && !a.starts_with('-') {
+            for c in a.chars() {
+                if known.valued.contains(c) {
+                    skip += 1;
+                } else if !known.flags.contains(c) {
+                    return Some(a.to_string());
+                }
+            }
+            continue;
+        }
+        let Some(letters) = a.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
+            continue;
+        };
         for (i, c) in letters.char_indices() {
             if known.valued.contains(c) {
                 // The value is the rest of the word, or the next word.
-                skip = i + c.len_utf8() == letters.len() && letters != a;
+                skip = usize::from(i + c.len_utf8() == letters.len());
                 break;
             }
             if !known.flags.contains(c) {
@@ -749,7 +761,13 @@ pub(crate) fn gitconfig_target(text: &str) -> Option<String> {
         .chain(&table.absolute)
         .map(|entry| entry.trim_end_matches('/').to_lowercase())
         .chain(["etc/gitconfig".to_string(), "git/config".to_string()])
-        .find(|needle| mentions(&lower, needle));
+        .find(|needle| {
+            if PATH_END_NEEDLES.contains(&needle.as_str()) {
+                mentions_path_end(&lower, needle)
+            } else {
+                mentions(&lower, needle)
+            }
+        });
     if let Some(needle) = named {
         return Some(format!("the git configuration file `{needle}`"));
     }
@@ -846,6 +864,12 @@ mod tests {
             ),
             ("rsync -avM--x a b", "`rsync` is given `-avM--x`"),
             ("tar cIf x a.tar b", "`tar` is given `cIf`"),
+            // Review round 17: each letter of a dashless tar key that takes
+            // a value takes the next word, and the letters after it are
+            // still judged.
+            ("tar cfI a.tar x b", "`tar` is given `cfI`"),
+            ("tar cfF a.tar x b", "`tar` is given `cfF`"),
+            ("tar cfLF a.tar 1 x b", "`tar` is given `cfLF`"),
             ("scp -S x a b", "`scp` is given `-S`"),
             ("curl -K cfg -o out", "`curl` is given `-K`"),
             ("wget -e x -O out", "`wget` is given `-e`"),
@@ -897,6 +921,9 @@ mod tests {
             "wget -q -nc -O out.txt https://example.invalid/x",
             "tar -czf a.tgz -C src .",
             "tar xzf a.tgz",
+            "tar cfv a.tar README",
+            "tar cf a.tar README",
+            "tar -czf a.tgz README",
             "rsync -av --delete --exclude target a/ b/",
             "zip -rq a.zip src",
             "unzip -qo a.zip -d out",
@@ -932,6 +959,7 @@ mod tests {
             "printf '%s\\n' --global | xargs git config",
             "tmux new-session -d 'git config --global core.pager x'",
             "git config --file=/tmp/x include.path y",
+            "vim git/config",
         ] {
             assert!(gitconfig_target(line).is_some(), "{line}");
         }
@@ -943,6 +971,10 @@ mod tests {
             "git config alias.x '!id'",
             "pip config --global set global.index-url x",
             "gtimeout 5 git status",
+            // Review round 17: `git/config` ends the path it names.
+            "vim src/git/config.rs",
+            "vim docs/git/config.md",
+            "ls lib/git/config/",
         ] {
             assert_eq!(gitconfig_target(line), None, "{line}");
         }

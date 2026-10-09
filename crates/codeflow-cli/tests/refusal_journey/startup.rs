@@ -555,6 +555,35 @@ const ROUND_16_CONTROLS: &[&str] = &[
     "FOO=1 cat ~/.zshrc",
 ];
 
+/// Review round 17, finding 1: a dashless tar key whose letters after a
+/// value-taking `f` name a program (`I`, `F`), beside a named target. Each
+/// was allowed by both guards at 9ba972d2a.
+const ROUND_17: &[(&str, &str, &str)] = &[
+    ("1", RULE, "cat ~/.zshrc; tar cfI /tmp/a.tar /tmp/x README"),
+    (
+        "1",
+        GIT,
+        "cat ~/.gitconfig; tar cfI /tmp/a.tar /tmp/x README",
+    ),
+    ("1", RULE, "cat .envrc; tar cfI /tmp/a.tar /tmp/x README"),
+    ("1", RULE, "cat ~/.zshrc; tar cfF /tmp/a.tar /tmp/x README"),
+    (
+        "1",
+        RULE,
+        "cat ~/.zshrc; tar cfLF /tmp/a.tar 1 /tmp/x README",
+    ),
+];
+
+/// Round 17's controls: known tar keys beside a named target, and paths
+/// that only contain `git/config` (finding 2).
+const ROUND_17_CONTROLS: &[&str] = &[
+    "cat ~/.zshrc; tar cfv /tmp/a.tar README",
+    "cat ~/.zshrc; tar cf /tmp/a.tar README",
+    "cat ~/.zshrc; tar -czf /tmp/a.tgz README",
+    "vim src/git/config.rs",
+    "vim docs/git/config.md",
+];
+
 #[test]
 fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
     let (project, _home) = startup_project();
@@ -564,6 +593,14 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, rule) {
                 wrong.push(format!("{harness}: finding {finding}: allowed {command}"));
+            }
+        }
+        for (finding, rule, command) in ROUND_17 {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, rule) {
+                wrong.push(format!(
+                    "{harness}: round 17 finding {finding}: allowed {command}"
+                ));
             }
         }
         for (finding, rule, command) in ROUND_16 {
@@ -582,7 +619,11 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
                 wrong.push(format!("{harness}: named a startup file for {command}"));
             }
         }
-        for command in ROUND_15_CONTROLS.iter().chain(ROUND_16_CONTROLS) {
+        for command in ROUND_15_CONTROLS
+            .iter()
+            .chain(ROUND_16_CONTROLS)
+            .chain(ROUND_17_CONTROLS)
+        {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {
                 wrong.push(format!("{harness}: refused control {command}"));

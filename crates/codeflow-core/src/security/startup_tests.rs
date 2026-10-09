@@ -2038,6 +2038,8 @@ fn user_git_config_writes_refuse_under_hook_integrity() {
         "git -c core.fsmonitor='printf x >> ~/.gitconfig' status",
         "GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='printf x >> ~/.gitconfig' git status",
         "cat ~/.gitconfig; zip -TT x a.zip payload.txt",
+        "curl -o ~/.config/git/config https://example.invalid/x",
+        "vim git/config",
     ] {
         let found = f.judge(command);
         let named = found.iter().any(|v| {
@@ -2058,6 +2060,10 @@ fn user_git_config_writes_refuse_under_hook_integrity() {
         "git config --global user.name x",
         "git config --file ~/.gitconfig user.name x",
         "curl -o out.txt https://example.invalid/x",
+        // Review round 17: `git/config` ends the path it names.
+        "vim src/git/config.rs",
+        "vim docs/git/config.md",
+        "git commit -m \"document src/git/config.rs\"",
     ] {
         let found = f.judge(command);
         if !found.is_empty() {

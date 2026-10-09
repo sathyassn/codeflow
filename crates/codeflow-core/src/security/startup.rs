@@ -455,10 +455,22 @@ impl Class {
         let text = text.replace('\\', "/").to_lowercase();
         self.needles
             .iter()
-            .find(|needle| mentions(&text, needle))
+            .find(|needle| {
+                if PATH_END_NEEDLES.contains(&needle.as_str()) {
+                    mentions_path_end(&text, needle)
+                } else {
+                    mentions(&text, needle)
+                }
+            })
             .cloned()
     }
 }
+
+/// Needles that name the file only where the path ends there: `git/config`
+/// is git's configuration below a configuration directory, while
+/// `src/git/config.rs` or a `git/config/` directory is another path (review
+/// round 17).
+pub(crate) const PATH_END_NEEDLES: &[&str] = &["git/config"];
 
 /// Whether `text` holds a tilde word that names a home: `~`, `~/x` or `~user`.
 /// A directory-stack word (`~1`, `~+1`, `~-`) does not.
@@ -497,6 +509,17 @@ pub(crate) fn mentions(text: &str, needle: &str) -> bool {
         let before = text[..at].chars().next_back();
         let after = text[at + needle.len()..].chars().next();
         before.is_none_or(|c| !(name_char(c) || c == '.')) && after.is_none_or(|c| !name_char(c))
+    })
+}
+
+/// [`mentions`], where a following `.` or `/` also makes a different path.
+pub(crate) fn mentions_path_end(text: &str, needle: &str) -> bool {
+    let name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-');
+    text.match_indices(needle).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + needle.len()..].chars().next();
+        before.is_none_or(|c| !(name_char(c) || c == '.'))
+            && after.is_none_or(|c| !(name_char(c) || matches!(c, '.' | '/')))
     })
 }
 
