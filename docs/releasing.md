@@ -122,9 +122,7 @@ Concurrency:
 ### codeflow's own releases
 
 - The version source of truth is the reviewed impact annotations next to the
-  pending entries: in the fragments under `changelog.d/`, or, once a reviewed
-  `assemble` has written them, in the one undated pending CHANGELOG section
-  (ADR-0082).
+  pending entries, in `changelog.d/` fragments or the assembled section.
 - The cumulative target is the latest verified public version, bumped once by
   the highest remaining pending impact.
 - `Cargo.toml [workspace.package] version` and the lock and scaffold stamps
@@ -334,23 +332,9 @@ key to make the hook pass.
 
 ### Pending entries, local checks and repairs
 
-Each pull request writes its pending entries in its own fragment,
-`changelog.d/<name>.md`, never in `CHANGELOG.md` (ADR-0082). Two pull requests
-that each add a fragment touch different files, so the merge of `main` that
-each owes after another lands stays clean and its review carries. A shared
-section put every open pull request's entry in the same lines, and each
-landing forced a hand-resolved merge and a fresh review on the others.
-
-```text
-### Fixed
-
-<!-- codeflow:release-impact patch -->
-- **Label of the entry.** What changed, for a user, in the
-  `CHANGELOG.md` style.
-```
-
 | Fragment rule | Detail |
 |---|---|
+| Where | Each pull request writes its pending entries in its own fragment under `changelog.d/`, never in `CHANGELOG.md`, so open pull requests never meet in one section (ADR-0082). [Contributing](CONTRIBUTING.md#releasing) has an example and how an older open pull request moves its entries |
 | Name | `changelog.d/<name>.md`, the name of letters, digits, `.`, `_` and `-`, by convention the task id (`TSK-264.md`); no other file and no subfolder under `changelog.d/` |
 | Content | Only the kind headings `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed` and `### Security`, each at most once; under each, one or more labelled entries, each directly after its impact marker. No other `#` line, no text outside an entry, no `legacy-group` marker |
 | Composition | `release.py` composes the fragments into the pending section every check reads: the kinds in the order above, empty kinds left out, then fragments by file name in byte order, then entries in file order, under the published baseline bumped once by the highest impact. Zero-pad numbered names, as `000-01` |
@@ -360,19 +344,7 @@ landing forced a hand-resolved merge and a fresh review on the others.
 | `assemble` | `python3 scripts/release.py assemble --repository sathyassn/codeflow` writes the composed section into `CHANGELOG.md` above the newest published section, removes the fragments and runs `sync`. Its PR declares `Impact: none`: every entry keeps its label, impact and bytes. Run it last, just before publication: a PR that adds an entry after it lands writes into the section again, or runs `assemble` itself |
 | Publication | `release-notes`, which the dispatch runs, refuses a source that still holds a fragment |
 
-An open pull request written before fragments moves its entries at the merge
-of `main` it owes: take `main`'s `CHANGELOG.md` in the conflict, then run
-`python3 scripts/changelog_split.py --only-new-against origin/main --name
-TSK-NNN --from HEAD`. It writes the entries whose labels `main` lacks into
-`changelog.d/TSK-NNN.md` and lists, under `edited`, every entry the pull
-request changed under a label `main` already carries, with the fragment that
-carries it; apply each of those edits to that fragment by hand. Then commit
-the merge, run `sync`, and check that `preflight` and `check-pr` pass with
-the same `Impact`. The merge was resolved by hand, so it needs one fresh
-review.
-
-`check-pr` matches pending entries by label, in fragments and in a written
-section alike.
+`check-pr` matches pending entries by label.
 
 | Case | How `check-pr` treats it |
 |---|---|
@@ -411,8 +383,8 @@ The first two planes are the local planes:
 | Path table | `crates/codeflow-core/src/workgraph/path_sets.toml`, which `codeflow ci` also reads for the adopter-facing set |
 
 **Typed repair.** When the base fails its own release state and the proposed
-merge passes, `check-pr` accepts a PR that changes only `CHANGELOG.md`, the
-fragments under `changelog.d/` and the version stamps of the coupled files. Any other PR onto a broken base is
+merge passes, `check-pr` accepts a PR that changes only `CHANGELOG.md`, its
+fragments and the version stamps of the coupled files. Any other PR onto a broken base is
 refused until the repair lands.
 
 | Typed repair rule | Detail |
@@ -501,8 +473,7 @@ Changing the YAML alone does not verify the rotation.
      while behaving read-only.
 2. Refresh against the current target before merge. The human merger requires
    the fresh check described in the Merge row of Architecture.
-3. Before the tag, land a reviewed PR that runs `release.py assemble`
-   (`Impact: none`), then render the notes from the final assembled source:
+3. Before the tag, render the notes from the final assembled source:
 
    ```sh
    python3 scripts/release.py release-notes --ref <source> --source <source> \
@@ -586,10 +557,10 @@ CodeFlow's routes for a critical defect:
 
 | A maintenance branch, such as `release/3.0` for a 3.0.1 patch, would change | Where | What it needs |
 |---|---|---|
-| Publication guard: the dispatch must run on `main` | `.github/workflows/release-plan-authority.yml:41`; `scripts/release.py:2160` | accept a second ref |
-| Publication guard: the source must be the current `main` tip | `.github/workflows/release-plan-authority.yml:43`; `scripts/release.py:2143` | accept a source that is not `main` |
-| Publication guard: the source must be a PR merged into `main` | `scripts/release.py:2181` | accept a merge into the branch |
-| One pending section, bumped once from the published baseline | `scripts/release.py:817`, `scripts/release.py:830` | a second live `CHANGELOG.md` section and target |
+| Publication guard: the dispatch must run on `main` | `.github/workflows/release-plan-authority.yml:41`; `scripts/release.py:2173` | accept a second ref |
+| Publication guard: the source must be the current `main` tip | `.github/workflows/release-plan-authority.yml:43`; `scripts/release.py:2156` | accept a source that is not `main` |
+| Publication guard: the source must be a PR merged into `main` | `scripts/release.py:2194` | accept a merge into the branch |
+| One pending section, bumped once from the published baseline | `scripts/release.py:830`, `scripts/release.py:843` | a second live `CHANGELOG.md` section and target |
 | Branch protection | repository settings | rules for the new branch |
 | A fix that applies to both lines | each such pull request | landed twice, once per line |
 | Loosening a publication guard | the rows above | a security-relevant operator decision, taken with this cost stated, never a step taken under pressure |
