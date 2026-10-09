@@ -827,7 +827,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "6f4d094dbef21af055c336a4002818e88bd6b4ed14cfa820351d38a37805ee8c",
+      "sha256": "b8dc3320c1d9dc833a8ee01ba688c8ffc01d8ead0670c850069b4ab3d40b0ff1",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -1721,7 +1721,7 @@
     ".codeflow/rules/workflow-discipline.md": {
       "src": "rules/workflow-discipline.md",
       "ownership": "managed",
-      "sha256": "a34f2f77911162bed41c8343b2bd6a7559c2d7811ca0185f25bdee26c412e9ad",
+      "sha256": "66bc59f35cd2255694c149b91cb74a981e93245e1a3f3d3e4db4e4656d21d2b7",
       "exec": false
     },
     ".codeflow/rules/worktrees.md": {

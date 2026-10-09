@@ -102,9 +102,9 @@ after merging the base reviews the whole unit again at the new head.
    and any claim in the summary or PR body not backed by the diff, including
    a reach claim with no consumers checked, a working default with no label
    or reversal, and encoded operator guidance that departs from its source.
-   If every
-   criterion passes but the result the task names is not reached, that is an
-   `axis: spec` finding that returns the task to planning, not an approval.
+   If every criterion passes but the result the task names is not reached,
+   that is an `axis: spec` finding that returns the task to planning, not an
+   approval.
    Require the named impact set and, for a defect fix, the mechanism
    sentence and a regression test that fails before the fix and passes after
    (`.claude/skills/cf-model-orchestrator/resources/quality/findings.md`).

@@ -65,10 +65,10 @@ the work that depends on it moves on an interim state: a working default
 when an operator answer is pending and your recommended answer is
 reversible, labelled where it lands with what reverses it; the conservative
 state when the answer is not reversible or the fact cannot be verified yet,
-stated with what clears it. Neither takes the operator-owned step, and an interim state that
-others rely on is recorded where the work is tracked (at the standard and
-full tiers, `autonomy.md` "While a question is open" has the rule). A lost
-seat or route gets bounded recovery, then an explicit
+stated with what clears it. Neither takes the operator-owned step, and an
+interim state that others rely on is recorded where the work is tracked (at
+the standard and full tiers, `autonomy.md` "While a question is open" has
+the rule). A lost seat or route gets bounded recovery, then an explicit
 limitation, never a silent solo run. A cancellation stops the work and
 preserves approvals, evidence and dirty state for disposition; a resume
 rechecks the facts that may have changed. Honor a red check. An unfinished CI job is missing
