@@ -273,7 +273,7 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
   provider. On GitHub it requires a PR and the required checks on an
   up-to-date branch, blocks force-push and deletion, and reports anything
   the plan tier cannot apply.
-- `codeflow doctor` runs twenty-one health checks on the repository and the
+- `codeflow doctor` runs twenty-two health checks on the repository and the
   tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |

@@ -449,7 +449,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e07657535282fd86a07d9a9e8448774007ea24b960ac4e25c508e79cd38ffee8",
+      "sha256": "9d5fd9c56e9881e780e8a1d8a278e6a1734c7c953a76f4d9ffe0702f47843dd6",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -635,7 +635,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
+      "sha256": "6b0d78dcadcc47d6b1cd3d8245fccf18fd73e90b479a0d92421764aa997a8a7e",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -803,7 +803,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "8ae79515739bf177d4346d177ae9ae2a2b6acf5ae7bee7da68c8d0818a611bbe",
+      "sha256": "87340d1491de5f7e3cd152a6a00c4ebcccea13d92f5541c5f96c5290d9af14bc",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-integration.md": {
@@ -839,7 +839,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "0c6306b957f02c4547235ed1fc913c286e6008f4c356c566d4248c28e18c9d1d",
+      "sha256": "1708498b0eeec46c4be4f443eaff799fedfb5c006b3bb343bc62faabcfa06a20",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1289,7 +1289,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e07657535282fd86a07d9a9e8448774007ea24b960ac4e25c508e79cd38ffee8",
+      "sha256": "9d5fd9c56e9881e780e8a1d8a278e6a1734c7c953a76f4d9ffe0702f47843dd6",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1475,7 +1475,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
+      "sha256": "6b0d78dcadcc47d6b1cd3d8245fccf18fd73e90b479a0d92421764aa997a8a7e",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1643,7 +1643,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "8ae79515739bf177d4346d177ae9ae2a2b6acf5ae7bee7da68c8d0818a611bbe",
+      "sha256": "87340d1491de5f7e3cd152a6a00c4ebcccea13d92f5541c5f96c5290d9af14bc",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-integration.md": {
@@ -1715,7 +1715,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "b2bde1c18cd12c7e2a6a13f801173d53f55465b3dcee026f51d7b8c1e8e6059c",
+      "sha256": "868c1b4d48738155fbedc4f8c907e19cffadb0902f4a923d35981bcb89c15160",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {
@@ -1775,7 +1775,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "45926077f01cd332dc314f9454e6fb40df2826c23e3fafe6d301bacc44ef6889",
+      "sha256": "908465840e315f60551fd914aa7e4a6c706080c83d0bec227268030194651e68",
       "exec": false
     },
     ".codex/hooks.json": {
@@ -1793,7 +1793,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "bcb1f23f54c8830575722753c07504f9a89c6e2416b03febfed6a46d874b6907",
+      "sha256": "827bea39b357684b03339bc85463fccd6f39de66c1891d4971498d75f5398ad3",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -1829,7 +1829,7 @@
     "AGENTS.md": {
       "src": "AGENTS.full.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "83bb020da9bdf4915050ddaec12312cd614db96c88ed5f91564124d3f096e3bd",
+      "sha256": "2051ba0b778486ffedbb505aaba283b878431dd40b171c89c860e8db4150bdb5",
       "exec": false
     },
     "CLAUDE.md": {

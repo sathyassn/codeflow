@@ -65,4 +65,4 @@ stands. Integration lines keep `codeflow integrate` and the batch candidate.
 ## Architecture impact
 
 `docs/architecture.md`: the doctor check table names `remote-perimeter`
-(21 checks).
+(22 checks).
