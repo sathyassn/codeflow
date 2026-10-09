@@ -40,7 +40,7 @@ The stages, in order, with the actor for each:
 
 | Stage | Who acts | Gate it must satisfy |
 |---|---|---|
-| Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry |
+| Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry, in the PR's own fragment under `changelog.d/` |
 | Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor |
 | Merge | A human | PR CI checks the actual proposed merge tree, and the human merger requires the fresh check |
 | Dispatch | A human with current write, maintain or admin permission | A dry run passes, then a dispatch with the `vX.Y.Z` tag |
@@ -122,7 +122,9 @@ Concurrency:
 ### codeflow's own releases
 
 - The version source of truth is the reviewed impact annotations next to the
-  entries in the one undated pending CHANGELOG section.
+  pending entries: in the fragments under `changelog.d/`, or, once a reviewed
+  `assemble` has written them, in the one undated pending CHANGELOG section
+  (ADR-0082).
 - The cumulative target is the latest verified public version, bumped once by
   the highest remaining pending impact.
 - `Cargo.toml [workspace.package] version` and the lock and scaffold stamps
@@ -332,7 +334,45 @@ key to make the hook pass.
 
 ### Pending entries, local checks and repairs
 
-`check-pr` matches pending entries by label.
+Each pull request writes its pending entries in its own fragment,
+`changelog.d/<name>.md`, never in `CHANGELOG.md` (ADR-0082). Two pull requests
+that each add a fragment touch different files, so the merge of `main` that
+each owes after another lands stays clean and its review carries. A shared
+section put every open pull request's entry in the same lines, and each
+landing forced a hand-resolved merge and a fresh review on the others.
+
+```text
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **Label of the entry.** What changed, for a user, in the
+  `CHANGELOG.md` style.
+```
+
+| Fragment rule | Detail |
+|---|---|
+| Name | `changelog.d/<name>.md`, the name of letters, digits, `.`, `_` and `-`, by convention the task id (`TSK-264.md`); no other file and no subfolder under `changelog.d/` |
+| Content | Only the kind headings `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed` and `### Security`, each at most once; under each, one or more labelled entries, each directly after its impact marker. No other `#` line, no text outside an entry, no `legacy-group` marker |
+| Composition | `release.py` composes the fragments into the pending section every check reads: the kinds in the order above, empty kinds left out, then fragments by file name in byte order, then entries in file order, under the published baseline bumped once by the highest impact. Zero-pad numbered names, as `000-01` |
+| One carrier | A tree holds its pending entries in fragments or in one written pending section, never both; `check-pr` and `check-state` refuse both, naming the fragments and `assemble` |
+| A refusal | Names the fragment: a label two fragments share, a heading or kind it does not allow, an entry without a heading, marker or label, or a misnamed file |
+| `sync` | Stamps the version the fragments bump to and writes no section |
+| `assemble` | `python3 scripts/release.py assemble --repository sathyassn/codeflow` writes the composed section into `CHANGELOG.md` above the newest published section, removes the fragments and runs `sync`. Its PR declares `Impact: none`: every entry keeps its label, impact and bytes. Run it last, just before publication: a PR that adds an entry after it lands writes into the section again, or runs `assemble` itself |
+| Publication | `release-notes`, which the dispatch runs, refuses a source that still holds a fragment |
+
+An open pull request written before fragments moves its entries at the merge
+of `main` it owes: take `main`'s `CHANGELOG.md` in the conflict, then run
+`python3 scripts/changelog_split.py --only-new-against origin/main --name
+TSK-NNN --from HEAD`. It writes the entries whose labels `main` lacks into
+`changelog.d/TSK-NNN.md` and lists, under `edited`, every entry the pull
+request changed under a label `main` already carries, with the fragment that
+carries it; apply each of those edits to that fragment by hand. Then commit
+the merge, run `sync`, and check that `preflight` and `check-pr` pass with
+the same `Impact`. The merge was resolved by hand, so it needs one fresh
+review.
+
+`check-pr` matches pending entries by label, in fragments and in a written
+section alike.
 
 | Case | How `check-pr` treats it |
 |---|---|
@@ -341,9 +381,9 @@ key to make the hook pass.
 | Extent | An entry is the whole bullet as Markdown renders it, including unindented lines that continue its paragraph |
 | Comparison | The checker cannot prove that a change keeps an entry's meaning, so entries compare byte for byte and a rewrap is an edit too. In code and nested Markdown, whitespace carries meaning |
 | A new label | An addition |
-| A missing label | A withdrawal, which needs the `Withdrawal` field |
+| A missing label | A withdrawal, which needs the `Withdrawal` field. Removing a fragment withdraws its labels |
 | A changed body or impact under a kept label | An edit of that item, assessed at its impact like an addition, whatever the declaration |
-| The entry moves under another heading with its bytes unchanged | Not an edit |
+| The entry moves under another heading, or between a fragment and the written section, with its bytes unchanged | Not an edit |
 | A lowered impact | Needs `Withdrawal` |
 | A renamed label | A withdrawal plus an addition |
 | A note outside entries, such as the upgrade steps | Carries no impact and is judged in review |
@@ -364,22 +404,22 @@ The first two planes are the local planes:
 | What they judge against | The recorded bootstrap and the local stable tags. They say "not checked against the host" |
 | Published tags | Every local stable tag counts as published, so a pending version never reuses one |
 | Preflight range | The branch against its pull request target: a task branch's `integration_target`, else `main` |
-| Missing entry warning | The preflight warns when that range touches behavior paths with no pending entry added or edited and no `Impact: none` in the local PR draft named by `CODEFLOW_PR_DRAFT` |
+| Missing entry warning | The preflight warns when that range touches behavior paths with no pending entry added or edited, in a fragment or the section, and no `Impact: none` in the local PR draft named by `CODEFLOW_PR_DRAFT` |
 | Work in progress | A missing entry never blocks a work-in-progress push |
 | Base already invalid | The preflight only warns, so it does not catch every new break there. The pull request job does |
 | Behavior paths | Every path outside `docs/`, `project-management/` and the record templates, with the skill trees always included |
 | Path table | `crates/codeflow-core/src/workgraph/path_sets.toml`, which `codeflow ci` also reads for the adopter-facing set |
 
 **Typed repair.** When the base fails its own release state and the proposed
-merge passes, `check-pr` accepts a PR that changes only `CHANGELOG.md` and the
-version stamps of the coupled files. Any other PR onto a broken base is
+merge passes, `check-pr` accepts a PR that changes only `CHANGELOG.md`, the
+fragments under `changelog.d/` and the version stamps of the coupled files. Any other PR onto a broken base is
 refused until the repair lands.
 
 | Typed repair rule | Detail |
 |---|---|
 | Coupled files | `Cargo.toml`, `Cargo.lock`, `.codeflow/project.toml`, `.codeflow/manifest.json`, `AGENTS.md`, `CLAUDE.md`, and the managed baselines of the last two with their manifest hashes, which `sync` writes together |
 | Configuration | Comes from the base, so a repair that changes `.release/config.json` is refused. The output names the invariant repaired |
-| Pending entries | A repair keeps every existing pending entry byte for byte. An edit waits for its own PR |
+| Pending entries | A repair keeps every existing pending entry byte for byte. It may remove a whole fragment, a withdrawal of its labels, and never edits one. An edit waits for its own PR |
 | Baselines and manifest | When a repair touches a managed baseline or the manifest, each baseline carries the one managed stamp of the release version and the manifest records its exact hash |
 | Still enforced | Published sections are held to their exact public source. Version non-reuse and the impact floors still apply |
 | Authority for history | The base is always judged by the configuration it carries. A PR never supplies the authority for the history it is judged against |
@@ -448,8 +488,8 @@ Changing the YAML alone does not verify the rotation.
 
 ### Same-PR preparation and deliberate publication
 
-1. Add curated notes and adjacent impact markers to the undated pending version
-   section in the normal work PR. Then run
+1. Add curated notes and adjacent impact markers in the normal work PR's own
+   fragment, `changelog.d/<task id>.md`. Then run
    `python3 scripts/release.py sync --repository sathyassn/codeflow`.
    - It discovers public state read-only and calculates from the latest
      verified public release.
@@ -461,7 +501,8 @@ Changing the YAML alone does not verify the rotation.
      while behaving read-only.
 2. Refresh against the current target before merge. The human merger requires
    the fresh check described in the Merge row of Architecture.
-3. Before the tag, render the notes from the final assembled source:
+3. Before the tag, land a reviewed PR that runs `release.py assemble`
+   (`Impact: none`), then render the notes from the final assembled source:
 
    ```sh
    python3 scripts/release.py release-notes --ref <source> --source <source> \

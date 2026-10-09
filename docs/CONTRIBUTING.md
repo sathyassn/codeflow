@@ -74,7 +74,8 @@ for a critical bug are in [releasing](releasing.md#critical-issues).
 
 Each work PR carries its release state (ADR-0062):
 
-- a labelled pending `CHANGELOG.md` entry with its impact marker
+- a labelled pending changelog entry with its impact marker, in the PR's own
+  fragment `changelog.d/<task id>.md` (ADR-0082)
 - the coupled version stamps
 
 `scripts/release.py` checks both. Conventional commit markers set a floor for
