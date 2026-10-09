@@ -90,6 +90,10 @@ struct Known {
     long: &'static [&'static str],
     env_options: &'static [&'static str],
     env_refused: &'static [&'static str],
+    /// The options whose value is a directory the writer puts files it
+    /// does not name into (`-C`, `--directory`), judged by the placement
+    /// check from the same scan (review round 19).
+    dirs: &'static [&'static str],
 }
 
 /// The options known for each writer that has an option which runs a
@@ -196,7 +200,13 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "list-only",
             ],
             env_options: &[],
-            env_refused: &["RSYNC_RSH", "RSYNC_CONNECT_PROG", "SSH_ASKPASS"],
+            env_refused: &[
+                "RSYNC_RSH",
+                "RSYNC_CONNECT_PROG",
+                "RSYNC_SHELL",
+                "SSH_ASKPASS",
+            ],
+            dirs: &[],
         },
     ),
     (
@@ -208,6 +218,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             long: &[],
             env_options: &[],
             env_refused: &["SSH_ASKPASS"],
+            dirs: &[],
         },
     ),
     (
@@ -281,6 +292,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             ],
             env_options: &["TAR_OPTIONS"],
             env_refused: &["TAPE", "TAR_READER_OPTIONS", "TAR_WRITER_OPTIONS"],
+            dirs: &["-C", "--directory"],
         },
     ),
     (
@@ -309,6 +321,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             ],
             env_options: &["ZIPOPT", "ZIP", "ZIP_OPTS"],
             env_refused: &[],
+            dirs: &[],
         },
     ),
     (
@@ -320,6 +333,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             long: &[],
             env_options: &["UNZIP", "UNZIPOPT", "UNZIP_OPTS"],
             env_refused: &[],
+            dirs: &["-d"],
         },
     ),
     (
@@ -416,6 +430,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             ],
             env_options: &[],
             env_refused: &["CURL_HOME", "XDG_CONFIG_HOME", "SSLKEYLOGFILE", "QLOGDIR"],
+            dirs: &["--output-dir"],
         },
     ),
     (
@@ -491,6 +506,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             ],
             env_options: &[],
             env_refused: &["WGETRC", "SYSTEM_WGETRC"],
+            dirs: &["-P", "--directory-prefix"],
         },
     ),
     (
@@ -544,6 +560,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
                 "VERSION_CONTROL",
                 "PATCH_VERSION_CONTROL",
             ],
+            dirs: &["-d", "--directory"],
         },
     ),
     (
@@ -568,6 +585,7 @@ const KNOWN_OPTIONS: &[(&[&str], Known)] = &[
             ],
             env_options: &[],
             env_refused: &["STRIPBIN", "SIMPLE_BACKUP_SUFFIX", "VERSION_CONTROL"],
+            dirs: &[],
         },
     ),
 ];
@@ -593,19 +611,7 @@ pub(crate) fn unresolved_form(
             shown(word)
         ));
     }
-    // Every `NAME=value` on the line, prefixed, exported or bare: a writer
-    // reads its environment as well as its arguments (review round 18).
-    let assigned: Vec<(String, String)> = expanded
-        .segments
-        .iter()
-        .flat_map(|segment| command_argv(segment))
-        .filter_map(|word| {
-            let (name, value) = word.split_once('=')?;
-            (name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-            .then(|| (name.to_string(), value.to_string()))
-        })
-        .collect();
+    let assigned = line_assignments(&expanded.segments);
     expanded.segments.iter().find_map(|segment| {
         if segment == NESTING_UNREAD {
             return Some("it nests commands deeper than the guard reads".to_string());
@@ -614,6 +620,21 @@ pub(crate) fn unresolved_form(
         strip_reserved_words(&mut words);
         segment_form(&words, names_target, &assigned)
     })
+}
+
+/// Every `NAME=value` on the line, prefixed, exported or bare: a writer
+/// reads its environment as well as its arguments (review round 18).
+pub(crate) fn line_assignments(segments: &[String]) -> Vec<(String, String)> {
+    segments
+        .iter()
+        .flat_map(|segment| command_argv(segment))
+        .filter_map(|word| {
+            let (name, value) = word.split_once('=')?;
+            (name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+            .then(|| (name.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 /// The unresolved form of one simple command, or `None` when the guard
@@ -724,35 +745,66 @@ fn find_commands(args: &[String]) -> Vec<&[String]> {
 }
 
 /// The first option of a writer call that [`known_options`] does not list,
-/// or `None` when every option is known. A short option takes its value
-/// from the rest of its word, or from the next word when it ends the word.
-/// A `tar` key without a dash (`tar cfI x.tar cmd`) is a run of letters
-/// read whole: each letter that takes a value takes the next word, in
-/// order, so a letter after `f` is still judged (review round 17).
+/// or `None` when every option is known ([`scan_writer`]).
+fn writer_option(name: &str, args: &[String]) -> Option<String> {
+    scan_writer(name, args)?.unknown
+}
+
+/// What one pass over a writer's arguments reads: the first option the
+/// table does not list, and each option with its value.
+struct Scan {
+    unknown: Option<String>,
+    values: Vec<(String, String)>,
+}
+
+/// Read a writer's arguments with [`known_options`]; `None` for a program
+/// with no entry. A short option takes its value from the rest of its
+/// word, or from the next word when it ends the word. A `tar` key without
+/// a dash (`tar cfI x.tar cmd`) is a run of letters read whole: each letter
+/// that takes a value takes the next word, in order, so a letter after `f`
+/// is still judged (review round 17).
 ///
 /// A letter takes the next word as its value only when that word is not
 /// an option itself (review round 18): the tar dialects disagree on which
 /// letters take one (BSD `-L` is a flag, GNU `-s` is one), and a word the
 /// table took as a value would otherwise hide an option that runs a
 /// program. A lone `-` is an operand, and a value such as rsync's
-/// `- *.o` filter rule is not an option.
-fn writer_option(name: &str, args: &[String]) -> Option<String> {
+/// `- *.o` filter rule is not an option. The scan stops at the first
+/// unknown option. The values feed the placement check, so an option the
+/// table reads is never read without its value (review round 19).
+fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
     let known = known_options(name)?;
     let tar = matches!(name, "tar" | "bsdtar" | "gtar");
-    let mut pending = 0usize;
+    let mut scan = Scan {
+        unknown: None,
+        values: Vec::new(),
+    };
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     for (at, arg) in args.iter().enumerate() {
         let a = arg.as_str();
-        if pending > 0 && !option_like(a) {
-            pending -= 1;
-            continue;
+        if !option_like(a) {
+            if let Some(option) = pending.pop_front() {
+                scan.values.push((option, a.to_string()));
+                continue;
+            }
         }
         if a == "--" {
             break;
         }
         if let Some(long) = a.strip_prefix("--") {
-            let option = long.split_once('=').map_or(long, |(n, _)| n);
+            let (option, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
             if !known.long.contains(&option) {
-                return Some(a.to_string());
+                scan.unknown = Some(a.to_string());
+                break;
+            }
+            let option = format!("--{option}");
+            match value {
+                Some(value) => scan.values.push((option, value.to_string())),
+                // A long option named as a directory takes the next word.
+                None if known.dirs.contains(&option.as_str()) => pending.push_back(option),
+                None => {}
             }
             continue;
         }
@@ -762,9 +814,10 @@ fn writer_option(name: &str, args: &[String]) -> Option<String> {
         if at == 0 && tar && !a.is_empty() && !a.starts_with('-') {
             for c in a.chars() {
                 if known.valued.contains(c) {
-                    pending += 1;
+                    pending.push_back(format!("-{c}"));
                 } else if !known.flags.contains(c) {
-                    return Some(a.to_string());
+                    scan.unknown = Some(a.to_string());
+                    return Some(scan);
                 }
             }
             continue;
@@ -775,18 +828,52 @@ fn writer_option(name: &str, args: &[String]) -> Option<String> {
         let letters = &a[1..];
         for (i, c) in letters.char_indices() {
             if known.valued.contains(c) {
-                // The value is the rest of the word, or the next word.
-                if i + c.len_utf8() == letters.len() {
-                    pending += 1;
+                let rest = &letters[i + c.len_utf8()..];
+                if rest.is_empty() {
+                    pending.push_back(format!("-{c}"));
+                } else {
+                    scan.values.push((format!("-{c}"), rest.to_string()));
                 }
                 break;
             }
             if !known.flags.contains(c) {
-                return Some(a.to_string());
+                scan.unknown = Some(a.to_string());
+                return Some(scan);
             }
         }
     }
-    None
+    Some(scan)
+}
+
+/// The directories a placing writer is told to put files it does not name
+/// into: the values of the options its entry lists in `dirs`, from its
+/// arguments and from each variable it reads as options. `None` for a
+/// program with no entry, whose options the guard does not read.
+pub(crate) fn writer_dirs(
+    name: &str,
+    args: &[String],
+    assigned: &[(String, String)],
+) -> Option<Vec<String>> {
+    let known = known_options(name)?;
+    let mut lists = vec![args.to_vec()];
+    for (var, value) in assigned {
+        if known.env_options.contains(&var.as_str()) {
+            // The value comes before the command line, so a tar key there
+            // is not the first word.
+            let mut read = vec!["-".to_string()];
+            read.extend(value.split_whitespace().map(str::to_string));
+            lists.push(read);
+        }
+    }
+    Some(
+        lists
+            .iter()
+            .filter_map(|list| scan_writer(name, list))
+            .flat_map(|scan| scan.values)
+            .filter(|(option, _)| known.dirs.contains(&option.as_str()))
+            .map(|(_, value)| value)
+            .collect(),
+    )
 }
 
 /// Whether `word` is an option rather than a value: a `-` followed by a
@@ -996,6 +1083,7 @@ mod tests {
                 "reads `TAR_OPTIONS`",
             ),
             ("RSYNC_RSH=p rsync -a f host:d", "reads `RSYNC_RSH`"),
+            ("RSYNC_SHELL=p rsync -a f d", "reads `RSYNC_SHELL`"),
             (
                 "CURL_HOME=/tmp/x curl -o out https://example.invalid",
                 "reads `CURL_HOME`",
@@ -1073,6 +1161,42 @@ mod tests {
 
     /// Review round 18: a writer entry declares the environment it reads,
     /// or is named here with the reason it reads none.
+    /// Placement directories come from the same scan as the option check:
+    /// clustered letters, attached values, dashless tar keys and option
+    /// variables (review round 19).
+    #[test]
+    fn placement_directories_come_from_the_writer_scan() {
+        let words = |line: &str| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let dirs = |name: &str, line: &str, env: &[(&str, &str)]| {
+            let env: Vec<(String, String)> = env
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect();
+            writer_dirs(name, &words(line), &env)
+        };
+        let some = |list: &[&str]| Some(list.iter().map(|d| (*d).to_string()).collect::<Vec<_>>());
+        assert_eq!(dirs("tar", "-xC$HOME -f a", &[]), some(&["$HOME"]));
+        assert_eq!(dirs("tar", "xfC a ~", &[]), some(&["~"]));
+        assert_eq!(dirs("tar", "-x --directory d -f a", &[]), some(&["d"]));
+        assert_eq!(
+            dirs("tar", "-xf a", &[("TAR_OPTIONS", "-C ~")]),
+            some(&["~"])
+        );
+        assert_eq!(dirs("unzip", "-od~ a", &[]), some(&["~"]));
+        assert_eq!(dirs("unzip", "-o a", &[("UNZIP", "-d ~")]), some(&["~"]));
+        assert_eq!(dirs("unzip", "a", &[("UNZIP", "-qq")]), some(&[]));
+        assert_eq!(dirs("patch", "-d$HOME -p1", &[]), some(&["$HOME"]));
+        assert_eq!(dirs("wget", "-P ~ u", &[]), some(&["~"]));
+        assert_eq!(dirs("curl", "--output-dir=d -O u", &[]), some(&["d"]));
+        assert_eq!(dirs("tar", "-xC ./build -f a", &[]), some(&["./build"]));
+        assert_eq!(dirs("7z", "x a -o~", &[]), None);
+        assert_eq!(dirs("cpio", "-idm -D ~", &[]), None);
+    }
+
     #[test]
     fn writers_declare_their_environment() {
         for (names, known) in KNOWN_OPTIONS {

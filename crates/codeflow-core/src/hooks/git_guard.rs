@@ -4141,11 +4141,22 @@ fn direct_write_violation(
 ) -> Option<Violation> {
     let write_args = match cmd {
         "find" => find_mutating_roots(args),
-        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" | "install" => {
-            Some(args)
-        }
+        "rm" | "unlink" | "mv" | "tee" | "truncate" | "shred" | "chmod" | "chown" => Some(args),
         _ => None,
     };
+    // `install` writes its destination, as `cp` does; a source it copies
+    // from stays in place (review round 19).
+    let installed = (cmd == "install").then(|| install_destinations(args));
+    if let Some(p) = installed.as_deref().and_then(|paths| {
+        arg_integrity_path(paths, cwd, payload_cwd)
+            .map(str::to_string)
+            .or_else(|| unresolved_names_enforcement(paths, line, cwd, payload_cwd))
+    }) {
+        return Some(hook_integrity_violation(
+            level,
+            format!("`install` writes the integrity path `{p}`"),
+        ));
+    }
     if let Some(p) = write_args.and_then(|paths| {
         if paths.is_empty() && cmd == "find" {
             token_integrity_path(".", cwd, payload_cwd).map(str::to_string)
@@ -4223,6 +4234,85 @@ fn direct_write_violation(
         }
     }
     None
+}
+
+/// The paths an `install` call writes: with `-d` every operand (each is a
+/// directory it makes); with `-t DIR` each source's name in `DIR`;
+/// otherwise the last operand, and each source's name inside it in case it
+/// is a directory. `-D` only makes the leading directories of that
+/// destination. Options that take a value (`-m`, `-o`, `-g`, `-S`, `-t`
+/// and their long forms) are skipped with it.
+fn install_destinations(args: &[String]) -> Vec<String> {
+    let mut operands: Vec<&str> = Vec::new();
+    let mut target: Option<String> = None;
+    let mut directories = false;
+    let mut words = args.iter().map(String::as_str);
+    let mut options = true;
+    while let Some(word) = words.next() {
+        if !options || word == "-" || !word.starts_with('-') {
+            operands.push(word);
+            continue;
+        }
+        if word == "--" {
+            options = false;
+        } else if let Some(long) = word.strip_prefix("--") {
+            let (name, value) = long
+                .split_once('=')
+                .map_or((long, None), |(n, v)| (n, Some(v)));
+            match name {
+                "directory" => directories = true,
+                "target-directory" => {
+                    target = value
+                        .map(str::to_string)
+                        .or_else(|| words.next().map(str::to_string));
+                }
+                "mode" | "owner" | "group" | "suffix" | "strip-program" if value.is_none() => {
+                    words.next();
+                }
+                _ => {}
+            }
+        } else {
+            let letters = &word[1..];
+            for (at, c) in letters.char_indices() {
+                match c {
+                    'd' => directories = true,
+                    'm' | 'o' | 'g' | 'S' | 't' => {
+                        let rest = &letters[at + 1..];
+                        let value = if rest.is_empty() {
+                            words.next().map(str::to_string)
+                        } else {
+                            Some(rest.to_string())
+                        };
+                        if c == 't' {
+                            target = value;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let inside = |dir: &str, source: &str| {
+        let base = source
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(source);
+        format!("{}/{base}", dir.trim_end_matches('/'))
+    };
+    if directories {
+        return operands.iter().map(|o| (*o).to_string()).collect();
+    }
+    if let Some(dir) = target {
+        return operands.iter().map(|o| inside(&dir, o)).collect();
+    }
+    let Some((dest, sources)) = operands.split_last() else {
+        return Vec::new();
+    };
+    std::iter::once((*dest).to_string())
+        .chain(sources.iter().map(|s| inside(dest, s)))
+        .collect()
 }
 
 /// The git configuration a link, copy or move puts a file in place of: its
@@ -15031,6 +15121,31 @@ mod tests {
         // Nothing there: unresolved.
         assert!(read("missing", false).is_none());
         assert!(read("$R", false).is_none());
+    }
+
+    /// `install` writes its destination; the sources it copies from stay in
+    /// place (review round 19).
+    #[test]
+    fn install_writes_only_its_destination() {
+        let words = |line: &str| {
+            line.split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        for (line, written) in [
+            ("-m 644 a/rc /tmp/bak", vec!["/tmp/bak", "/tmp/bak/rc"]),
+            ("-o root -g wheel a/rc b", vec!["b", "b/rc"]),
+            ("-ma=r a/rc b", vec!["b", "b/rc"]),
+            ("--mode 644 a/rc b", vec!["b", "b/rc"]),
+            ("-t dir a/rc b/x", vec!["dir/rc", "dir/x"]),
+            ("--target-directory=dir a/rc", vec!["dir/rc"]),
+            ("-Dt dir a/rc", vec!["dir/rc"]),
+            ("-D a/rc deep/b", vec!["deep/b", "deep/b/rc"]),
+            ("-d one two", vec!["one", "two"]),
+            ("-- -m b", vec!["b", "b/-m"]),
+        ] {
+            assert_eq!(install_destinations(&words(line)), written, "{line}");
+        }
     }
 }
 

@@ -512,6 +512,20 @@ fn placing_into_the_home_refuses() {
         "wget -P ~ https://example.invalid/x",
         "ditto dots ~",
         "stow -t ~ shell",
+        // Placement read from the writer scan: clustered letters, attached
+        // values, option variables, and placing programs the guard does not
+        // read (review round 19).
+        "tar -xC$HOME -f bundle.tar",
+        "bsdtar -xC~ -f bundle.tar",
+        "tar xfC bundle.tar ~",
+        "UNZIP=\"-d $HOME\" unzip -o dots.zip",
+        "UNZIPOPT='-d ~' unzip dots.zip",
+        "unzip -od~ dots.zip",
+        "TAR_OPTIONS=\"-C $HOME\" tar -xf bundle.tar",
+        "patch -d$HOME -p1 < fix.diff",
+        "7z x dots.7z -o$HOME",
+        "7z x dots.7z -o/etc",
+        "cpio -idm -D ~ < dots.cpio",
     ] {
         assert!(refused(&f.judge(command)), "{command}");
     }
@@ -553,6 +567,13 @@ fn placing_into_the_home_refuses() {
         "git checkout -- .",
         "curl -sSL https://example.invalid/x",
         "cp -r assets ~/work/project/out",
+        "tar -xC ./build -f bundle.tar",
+        "UNZIP=-qq unzip dots.zip",
+        "TAR_OPTIONS=-v tar -xf bundle.tar",
+        "7z x dots.7z -o./build",
+        "patch -d ./src -p1 < fix.diff",
+        "tar -cf /tmp/b.tar ~/notes",
+        "cat ~/.zshrc",
     ] {
         let found = f.judge(command);
         assert!(!refused(&found), "{command}: {found:?}");

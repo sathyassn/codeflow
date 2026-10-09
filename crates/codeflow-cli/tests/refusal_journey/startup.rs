@@ -655,6 +655,48 @@ const ROUND_18_CONTROLS: &[&str] = &[
     "ZIPOPT=-q zip a.zip f",
 ];
 
+/// Round 19: placement read from the writer scan (clustered letters,
+/// attached values, option variables), placing programs the guard does not
+/// read, `RSYNC_SHELL`, and `install` judged by its destination. The last
+/// field says the line refuses on both guards, not only on one.
+const ROUND_19: &[(&str, &str, &str, bool)] = &[
+    ("B", RULE, "tar -xC$HOME -f payload.tar", false),
+    ("B", RULE, "UNZIP=\"-d $HOME\" unzip -o payload.zip", false),
+    (
+        "B",
+        RULE,
+        "TAR_OPTIONS=\"-C $HOME\" tar -xf payload.tar",
+        false,
+    ),
+    ("B", RULE, "patch -d$HOME -p1 < payload.diff", false),
+    ("B", RULE, "7z x payload.7z -o$HOME", false),
+    ("B", RULE, "tar -xf payload.tar -C ~", false),
+    ("B", RULE, "unzip -d ~ payload.zip", false),
+    ("B", RULE, "cd \"$HOME\" && tar -xf payload.tar", false),
+    (
+        "M1",
+        GIT,
+        "RSYNC_SHELL=/tmp/x rsync -a ~/.gitconfig /tmp/y",
+        true,
+    ),
+    ("M2", GIT, "install /tmp/x ~/.gitconfig", true),
+    ("M2", GIT, "install -t ~ .gitconfig", true),
+    ("M2", GIT, "install -D /tmp/x ~/.gitconfig", true),
+];
+
+/// Round 19's controls: a placement inside the project, an option variable
+/// that moves nothing, a plain read, a plain copy out of the git config, and
+/// `install` reading the git config as its source.
+const ROUND_19_CONTROLS: &[&str] = &[
+    "tar -xC ./build -f payload.tar",
+    "UNZIP=-qq unzip payload.zip",
+    "cat ~/.zshrc",
+    "rsync -a ~/.gitconfig /tmp/y",
+    "install -m 644 ~/.gitconfig /tmp/bak",
+    "install -t /tmp/bak ~/.gitconfig",
+    "install -D ~/.gitconfig /tmp/bak/g",
+];
+
 #[test]
 fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
     let (project, _home) = startup_project();
@@ -682,6 +724,20 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
                 ));
             }
         }
+        for (finding, rule, command, both) in ROUND_19 {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            let refusing = outputs
+                .iter()
+                .filter(|o| {
+                    o.status.code() == Some(2) && String::from_utf8_lossy(&o.stderr).contains(rule)
+                })
+                .count();
+            if refusing < if *both { 2 } else { 1 } {
+                wrong.push(format!(
+                    "{harness}: round 19 finding {finding}: {refusing} guards refused {command}"
+                ));
+            }
+        }
         for (finding, rule, command) in ROUND_16 {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, rule) {
@@ -703,6 +759,7 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_16_CONTROLS)
             .chain(ROUND_17_CONTROLS)
             .chain(ROUND_18_CONTROLS)
+            .chain(ROUND_19_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {
@@ -712,6 +769,16 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
     }
     // Grok's own shell tool, in its camelCase payload.
     for (_, rule, command) in ROUND_16.iter().chain(ROUND_18) {
+        let payload = json!({
+            "toolName": "run_terminal_command",
+            "cwd": project.root,
+            "toolInput": {"command": command},
+        });
+        if !refused_with(&project.replay_payload("grok", "Bash", &payload), rule) {
+            wrong.push(format!("grok run_terminal_command: allowed {command}"));
+        }
+    }
+    for (_, rule, command, _) in ROUND_19 {
         let payload = json!({
             "toolName": "run_terminal_command",
             "cwd": project.root,

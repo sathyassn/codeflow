@@ -154,8 +154,8 @@ the guard reads, and a form it cannot resolve refuses, naming the form:
   `UNZIPOPT` and `UNZIP_OPTS` for `unzip`, `TAR_OPTIONS` for `tar`) is
   judged by the same list, so `ZIPOPT='-T -TT cmd'` refuses; a variable that
   names a program, a configuration or a file the writer uses refuses
-  whatever its value (`RSYNC_RSH`, `RSYNC_CONNECT_PROG` and `SSH_ASKPASS`
-  for `rsync`, `SSH_ASKPASS` for `scp`, `TAPE`, `TAR_READER_OPTIONS` and
+  whatever its value (`RSYNC_RSH`, `RSYNC_CONNECT_PROG`, `RSYNC_SHELL` and
+  `SSH_ASKPASS` for `rsync`, `SSH_ASKPASS` for `scp`, `TAPE`, `TAR_READER_OPTIONS` and
   `TAR_WRITER_OPTIONS` for `tar`, `CURL_HOME`, `XDG_CONFIG_HOME`,
   `SSLKEYLOGFILE` and `QLOGDIR` for `curl`, `WGETRC` and `SYSTEM_WGETRC`
   for `wget`, `PATCH_GET`, `SIMPLE_BACKUP_SUFFIX`, `VERSION_CONTROL` and
@@ -188,7 +188,14 @@ level:
   (`~`, `$HOME`, `${HOME}`, `$ZDOTDIR`, braces, globs, case) and through
   symbolic links;
 - an archive, sync, download or checkout that writes into the home, `/etc`
-  or a startup directory, where it can place a file it does not name;
+  or a startup directory, where it can place a file it does not name. The
+  directory comes from the same reading as the writer options above:
+  clustered and attached letters (`tar -xC$HOME`, `patch -d$HOME`), tar's
+  dashless keys and the option environment (`UNZIP="-d $HOME"`,
+  `TAR_OPTIONS="-C $HOME"`), each writer's entry naming the options that
+  carry a directory. A placing program the guard has no entry for
+  (`7z`, `cpio`, `stow`) refuses on a line that names the home or `/etc`,
+  since any of its options could carry it there (review round 19);
 - a path the guard cannot resolve near the class, such as `~/$NAME`;
 - code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
   class file once the line's own literal assignments are filled in
@@ -317,7 +324,11 @@ relative `.gitconfig` where the directory is unknown (`cd "$HOME" &&
 printf x >> .gitconfig`), a `git -c` or `GIT_CONFIG_VALUE_n` value that
 names one, a staged run and the closed rule. Which file a `git config`
 write opens and whether its key runs anything stay git-guard's judgment,
-so `git config --file ~/.gitconfig user.name x` passes. The cost matches
+so `git config --file ~/.gitconfig user.name x` passes. Both guards judge
+`install` as a copy: only its destination is written (the last operand,
+or each source's name in a `-t` directory), so `install -m 644
+~/.gitconfig /tmp/bak` passes and `install /tmp/x ~/.gitconfig` refuses
+(review round 19). The cost matches
 the startup class: text that names the file given to a program that is not
 a reader refuses, such as a `git commit -m` message that mentions
 `~/.gitconfig`; pass that text in a file (`git commit -F`). A bare

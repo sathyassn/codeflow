@@ -734,6 +734,9 @@ struct Line<'a> {
     /// The line names a class file and produces text: a command on it may
     /// run what the call wrote ([`staged_run`]).
     staged: bool,
+    /// Every `NAME=value` the line sets, which a writer may read as options
+    /// ([`super::unresolved::line_assignments`]).
+    environment: Vec<(String, String)>,
 }
 
 impl Line<'_> {
@@ -1346,6 +1349,7 @@ fn judge_class(
         dirs: run.dirs.clone(),
         unknown: run.unknown.clone(),
         staged: false,
+        environment: super::unresolved::line_assignments(segments),
     };
     line.assigned = literal_assignments(segments);
     line.staged = staged_name(segments, &line).is_some();
@@ -2934,14 +2938,35 @@ fn placing_violation(
     }
     // Where the program puts the files it does not name: its working
     // directory, unless an option moves it there or the call places none.
-    let shifts = placing_dirs(name, args)?;
+    let spelled = || {
+        tilde_names_a_home(line.text)
+            || ["$HOME", "${HOME}", "/etc"]
+                .iter()
+                .any(|marker| line.text.contains(marker))
+            || line
+                .env
+                .home
+                .as_deref()
+                .is_some_and(|h| line.text.contains(&shown(h)))
+    };
+    let shifts = match placing_dirs(name, args, line) {
+        Ok(shifts) => shifts?,
+        // A placing program whose options the guard does not read could be
+        // told to place into a directory the line names (review round 19).
+        Err(()) if spelled() => {
+            return Some(line.finding(format!(
+                "`{name}` puts files where its options say, the guard does not read its options, and the line names the home or `/etc`"
+            )));
+        }
+        Err(()) => Vec::new(),
+    };
     let mut unknown = line.unknown.is_some();
     let mut dirs = dirs.to_vec();
     for dir in shifts {
         dirs = dirs
             .iter()
             .filter_map(|d| {
-                let moved = line.expand(dir, d);
+                let moved = line.expand(&dir, d);
                 unknown |= moved.is_none();
                 moved
             })
@@ -2966,21 +2991,10 @@ fn placing_violation(
             )));
         }
     }
-    if unknown {
-        let spelled = tilde_names_a_home(line.text)
-            || ["$HOME", "${HOME}", "/etc"]
-                .iter()
-                .any(|marker| line.text.contains(marker))
-            || line
-                .env
-                .home
-                .as_deref()
-                .is_some_and(|h| line.text.contains(&shown(h)));
-        if spelled {
-            return Some(line.finding(format!(
-                "`{name}` runs where the guard cannot tell the directory, on a line that names the home or `/etc`"
-            )));
-        }
+    if unknown && spelled() {
+        return Some(line.finding(format!(
+            "`{name}` runs where the guard cannot tell the directory, on a line that names the home or `/etc`"
+        )));
     }
     None
 }
@@ -2991,8 +3005,12 @@ fn placing_violation(
 /// working tree, a tar that does not extract, a download to a named file,
 /// a copy into its named destination. An empty list means the working
 /// directory itself. A path the call names is judged word by word either
-/// way.
-fn placing_dirs<'a>(name: &str, args: &'a [String]) -> Option<Vec<&'a str>> {
+/// way. A writer's directories come from the scan its option table drives,
+/// clustered letters, a dashless tar key and the variables it reads as
+/// options included ([`super::unresolved::writer_dirs`], review round 19);
+/// `Err` marks a placing program with no table entry, whose options the
+/// guard does not read.
+fn placing_dirs(name: &str, args: &[String], line: &Line<'_>) -> Result<Option<Vec<String>>, ()> {
     let has = |names: &[&str]| {
         args.iter().any(|a| {
             names
@@ -3000,23 +3018,24 @@ fn placing_dirs<'a>(name: &str, args: &'a [String]) -> Option<Vec<&'a str>> {
                 .any(|n| a == n || a.starts_with(&format!("{n}=")))
         })
     };
-    match name {
+    let writer = || super::unresolved::writer_dirs(name, args, &line.environment).ok_or(());
+    Ok(match name {
         "git" => {
             if git_subcommand(args).is_some_and(|(sub, _)| GIT_KEEPS_WORKTREE.contains(&sub)) {
-                return None;
+                return Ok(None);
             }
-            Some(git_dirs(args))
+            Some(git_dirs(args).into_iter().map(str::to_string).collect())
         }
         "tar" | "bsdtar" | "gtar" => {
-            tar_extracts(args).then(|| option_values(args, &["-C", "--directory"]))
+            let dirs = writer()?;
+            tar_extracts(args).then_some(dirs)
         }
-        "unzip" => Some(option_values(args, &["-d"])),
         "wget" if has(&["-O", "--output-document"]) => None,
-        "wget" => Some(option_values(args, &["-P", "--directory-prefix"])),
-        "curl" => Some(option_values(args, &["--output-dir"])),
         "rsync" | "scp" | "ditto" => None,
+        _ if PLACING.contains(&name) => Some(writer()?),
+        // `find`, `xargs` and `parallel` place in the working directory.
         _ => Some(Vec::new()),
-    }
+    })
 }
 
 /// Whether a tar call extracts, or its mode cannot be told (fail closed).
@@ -3042,28 +3061,6 @@ fn tar_extracts(args: &[String]) -> bool {
         }
     }
     !other_mode
-}
-
-/// The values of the named options, as `-C DIR`, `-CDIR`, `--dir=DIR` or
-/// `--dir DIR`.
-fn option_values<'a>(args: &'a [String], names: &[&str]) -> Vec<&'a str> {
-    let mut out = Vec::new();
-    for (at, arg) in args.iter().enumerate() {
-        for name in names {
-            if arg == name {
-                if let Some(value) = args.get(at + 1) {
-                    out.push(value.as_str());
-                }
-            } else if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-                out.push(value);
-            } else if !name.starts_with("--") {
-                if let Some(value) = arg.strip_prefix(name).filter(|v| !v.is_empty()) {
-                    out.push(value);
-                }
-            }
-        }
-    }
-    out
 }
 
 /// The class entry a native edit targets, for edit-guard.
