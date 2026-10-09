@@ -694,8 +694,12 @@ def dist_problems(config_path: Path | None = None, release: Path | None = None) 
 PRESENT_ONLY = "        if: matrix.part == 'present'"
 STEP_TIMEOUT = re.compile(r"^ {8}timeout-minutes: ([1-9][0-9]*)$", re.M)
 BOUNDED_DEPS = re.compile(r"sudo timeout --kill-after=\S+ (\S+) .*install-deps")
-BROWSER_INSTALL = re.compile(r'"\$cli" install\s')
-BOUNDED_BROWSERS = re.compile(r'timeout --kill-after=\S+ (\S+) .*"\$cli" install\s')
+# Any spelling of the browser install counts: the committed step calls the
+# locked CLI as `"$cli" install`, and `npx playwright install` or
+# `playwright-core install` reaches the same download.
+BROWSER_INSTALL = re.compile(r'(?:"\$cli"|\bplaywright(?:-core)?)\s+install(?:\s|$)', re.M)
+BOUNDED_BROWSERS = re.compile(
+    r'timeout --kill-after=\S+ (\S+) .*(?:"\$cli"|\bplaywright(?:-core)?)\s+install(?:\s|$)')
 # TSK-254 AC-2: each install attempt is bounded at 10 minutes.
 ATTEMPT_LIMIT = re.compile(r"^([1-9][0-9]*)([sm])$")
 MAX_ATTEMPT_SECONDS = 600

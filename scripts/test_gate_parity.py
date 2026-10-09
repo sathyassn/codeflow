@@ -569,6 +569,21 @@ class TimeoutAndPlaywrightControls(unittest.TestCase):
         self.assertNotIn("install-deps chromium", only_browsers)
         self.assert_problem(only_browsers, "browser `install`")
 
+    def test_every_spelling_of_the_browser_install_is_bounded(self):
+        """An `npx playwright install` or `playwright-core install` line is
+        the same download as the committed `"$cli" install`, so it needs the
+        same 10 minute attempt bound."""
+        self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
+        for spelling in ("npx playwright install chromium firefox webkit",
+                         "npx playwright-core install chromium",
+                         "npx playwright install"):
+            with self.subTest(spelling=spelling):
+                extra = WORKFLOW.replace(self.BROWSERS, self.BROWSERS + "\n            " + spelling)
+                self.assert_problem(extra, "browser `install`", "10 minutes")
+                bounded = WORKFLOW.replace(
+                    self.BROWSERS, self.BROWSERS + "\n            timeout --kill-after=30s 10m " + spelling)
+                self.assertEqual(self.problems(bounded), [], spelling)
+
     def test_a_playwright_step_on_every_part_is_refused(self):
         cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
         self.assertEqual(WORKFLOW.count(cache), 1)
