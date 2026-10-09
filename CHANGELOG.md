@@ -297,8 +297,8 @@ erratum below, never an edit of the section.
   `essential`, so an unattended run costs that suite once; the review stage
   keeps the quick gate, and an existing
   `.claude/workflows/pipeline.workflow.js` is user-owned and unchanged. A
-  shortcut never weakens a guard, gate, policy, credential path or input
-  validation. The model evaluation kit adds three requirements and cases.
+  shortcut never weakens a guard, hook, gate, policy, credential path,
+  input validation or other security control. The model evaluation kit adds three requirements and cases.
   The `cf-develop` and `cf-reviewer` reading guidelines rise by 256 bytes
   each, and the per-task reading chain guideline rises from 128 KiB to 130
   KiB, because these duties reach every task.
