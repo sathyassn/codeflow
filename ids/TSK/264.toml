@@ -1,0 +1,11 @@
+id = "TSK-264"
+uid = "982b6788-8e07-4b62-b47b-d00182854cd4"
+kind = "TSK"
+title = "Each pull request carries its changelog entry in its own fragment"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-10-09T00:25:46Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
