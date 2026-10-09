@@ -2628,6 +2628,11 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
 }
 
 /// The `-C` directories among git's global options, in order.
+///
+/// Kept apart from the writer scan (review round 20): git has no writer
+/// entry, its global options are the `GLOBAL_VALUE_OPTIONS` table that
+/// [`git_subcommand`] reads too, and git takes `-C` only as a separate
+/// word (git 2.53.0 rejects `-C<dir>`), so a glued form places nothing.
 fn git_dirs(args: &[String]) -> Vec<&str> {
     let mut dirs = Vec::new();
     let mut at = 0;
@@ -2741,6 +2746,11 @@ struct CopyCall {
 /// Split sources from the destination, recognizing exact target-directory
 /// options and a short table of operand-taking options. Do not emulate a
 /// copier's dereference, preservation or long-option abbreviation rules.
+///
+/// Kept apart from the writer scan (review round 20): `cp`, `mv`, `ln` and
+/// `ditto` have no writer entry, and the entries record which long options
+/// exist but not which take the next word, so an operand reader built on
+/// them would take the value of `--suffix .bak` as the destination.
 fn copy_call(name: &str, args: &[String]) -> Option<CopyCall> {
     if !COPIERS.contains(&name) {
         return None;
@@ -2925,22 +2935,14 @@ fn placing_violation(
     if !placing || COPIERS.contains(&name) && name != "rsync" {
         return None;
     }
-    if name == "curl"
-        && !args.iter().any(|a| {
-            matches!(
-                a.as_str(),
-                "-O" | "--remote-name" | "-J" | "--remote-name-all"
-            ) || (a.starts_with('-') && !a.starts_with("--") && a.contains('O'))
-        })
-    {
-        // Without a remote name, curl writes only the files it names.
-        return None;
-    }
     // Where the program puts the files it does not name: its working
     // directory, unless an option moves it there or the call places none.
+    let read = super::unresolved::writer_read(name, args, &line.environment);
+    // Whether the line names the home, `/etc` or a startup directory: by a
+    // marker, or by a word or option value that expands to one.
     let spelled = || {
         tilde_names_a_home(line.text)
-            || ["$HOME", "${HOME}", "/etc"]
+            || ["$HOME", "${HOME}", "$ZDOTDIR", "${ZDOTDIR}", "/etc"]
                 .iter()
                 .any(|marker| line.text.contains(marker))
             || line
@@ -2948,8 +2950,23 @@ fn placing_violation(
                 .home
                 .as_deref()
                 .is_some_and(|h| line.text.contains(&shown(h)))
+            || args
+                .iter()
+                .map(|word| value_of(word))
+                .chain(
+                    read.iter()
+                        .flat_map(|r| r.values.iter().map(|(_, v)| v.as_str())),
+                )
+                .filter(|word| path_like(word))
+                .any(|word| {
+                    dirs.iter().any(|d| {
+                        line.expand(word, d)
+                            .is_some_and(|path| line.class.placement(&path).is_some())
+                    })
+                })
     };
-    let shifts = match placing_dirs(name, args, line) {
+    let unlisted = read.as_ref().and_then(|read| read.unknown.clone());
+    let shifts = match placing_dirs(name, args, read.as_ref()) {
         Ok(shifts) => shifts?,
         // A placing program whose options the guard does not read could be
         // told to place into a directory the line names (review round 19).
@@ -2960,8 +2977,24 @@ fn placing_violation(
         }
         Err(()) => Vec::new(),
     };
+    // The closed rule for placement: an option the guard does not read
+    // could be the one that moves a call that places files into a
+    // directory the line names, so on such a line it refuses, as a
+    // program with no entry does (review round 20).
+    if let Some(option) = unlisted.as_deref().filter(|_| spelled()) {
+        return Some(line.finding(format!(
+            "`{name}` is given `{option}`, an option the guard does not read, on a line that names the home or `/etc`, where it can place a {noun} it does not name"
+        )));
+    }
     let mut unknown = line.unknown.is_some();
     let mut dirs = dirs.to_vec();
+    // With an unlisted option the directory the scan read may not be the
+    // one the call uses, so where it runs is judged too.
+    let runs_in = if unlisted.is_some() {
+        dirs.clone()
+    } else {
+        Vec::new()
+    };
     for dir in shifts {
         dirs = dirs
             .iter()
@@ -2972,6 +3005,7 @@ fn placing_violation(
             })
             .collect();
     }
+    dirs.extend(runs_in);
     let dirs = dirs.as_slice();
     for word in args {
         let value = value_of(word);
@@ -3007,18 +3041,21 @@ fn placing_violation(
 /// directory itself. A path the call names is judged word by word either
 /// way. A writer's directories come from the scan its option table drives,
 /// clustered letters, a dashless tar key and the variables it reads as
-/// options included ([`super::unresolved::writer_dirs`], review round 19);
-/// `Err` marks a placing program with no table entry, whose options the
-/// guard does not read.
-fn placing_dirs(name: &str, args: &[String], line: &Line<'_>) -> Result<Option<Vec<String>>, ()> {
-    let has = |names: &[&str]| {
-        args.iter().any(|a| {
-            names
-                .iter()
-                .any(|n| a == n || a.starts_with(&format!("{n}=")))
-        })
+/// options included ([`super::unresolved::writer_read`], review round 19);
+/// so do tar's mode, curl's remote name and wget's named output (review
+/// round 20). `Err` marks a placing program with no table entry, whose
+/// options the guard does not read.
+fn placing_dirs(
+    name: &str,
+    args: &[String],
+    read: Option<&super::unresolved::WriterRead>,
+) -> Result<Option<Vec<String>>, ()> {
+    let flagged =
+        |names: &[&str]| read.is_some_and(|r| r.flags.iter().any(|f| names.contains(&f.as_str())));
+    let valued = |names: &[&str]| {
+        read.is_some_and(|r| r.values.iter().any(|(o, _)| names.contains(&o.as_str())))
     };
-    let writer = || super::unresolved::writer_dirs(name, args, &line.environment).ok_or(());
+    let dirs = || read.map(|r| r.dirs.clone()).ok_or(());
     Ok(match name {
         "git" => {
             if git_subcommand(args).is_some_and(|(sub, _)| GIT_KEEPS_WORKTREE.contains(&sub)) {
@@ -3027,40 +3064,46 @@ fn placing_dirs(name: &str, args: &[String], line: &Line<'_>) -> Result<Option<V
             Some(git_dirs(args).into_iter().map(str::to_string).collect())
         }
         "tar" | "bsdtar" | "gtar" => {
-            let dirs = writer()?;
-            tar_extracts(args).then_some(dirs)
+            let dirs = dirs()?;
+            // The mode comes from the letters the scan read as options, so
+            // an attached archive name is never read as one (review round
+            // 20); a call with no mode it can tell extracts (fail closed).
+            let extracts = flagged(&["-x", "--extract", "--get"])
+                || !flagged(&[
+                    "-c",
+                    "-t",
+                    "-r",
+                    "-u",
+                    "-d",
+                    "--create",
+                    "--list",
+                    "--append",
+                    "--update",
+                    "--diff",
+                    "--compare",
+                    "--delete",
+                ]);
+            extracts.then_some(dirs)
         }
-        "wget" if has(&["-O", "--output-document"]) => None,
+        // Without a remote name, curl writes only the files it names.
+        "curl"
+            if !flagged(&[
+                "-O",
+                "--remote-name",
+                "-J",
+                "--remote-header-name",
+                "--remote-name-all",
+            ]) =>
+        {
+            None
+        }
+        // A download to a named file places nothing else.
+        "wget" if valued(&["-O", "--output-document"]) => None,
         "rsync" | "scp" | "ditto" => None,
-        _ if PLACING.contains(&name) => Some(writer()?),
+        _ if PLACING.contains(&name) => Some(dirs()?),
         // `find`, `xargs` and `parallel` place in the working directory.
         _ => Some(Vec::new()),
     })
-}
-
-/// Whether a tar call extracts, or its mode cannot be told (fail closed).
-fn tar_extracts(args: &[String]) -> bool {
-    let mut other_mode = false;
-    for (at, arg) in args.iter().enumerate() {
-        if let Some(long) = arg.strip_prefix("--") {
-            match long.split('=').next().unwrap_or(long) {
-                "extract" | "get" => return true,
-                "create" | "list" | "append" | "update" | "diff" | "compare" | "delete" => {
-                    other_mode = true;
-                }
-                _ => {}
-            }
-        } else if let Some(cluster) = arg.strip_prefix('-').or((at == 0).then_some(arg.as_str())) {
-            // A short cluster (`-xzf`), or the old style first word (`xzf`).
-            if cluster.contains('x') {
-                return true;
-            }
-            if cluster.contains(['c', 't', 'r', 'u', 'd']) {
-                other_mode = true;
-            }
-        }
-    }
-    !other_mode
 }
 
 /// The class entry a native edit targets, for edit-guard.

@@ -751,10 +751,20 @@ fn writer_option(name: &str, args: &[String]) -> Option<String> {
 }
 
 /// What one pass over a writer's arguments reads: the first option the
-/// table does not list, and each option with its value.
+/// table does not list, each option with its value, each option read
+/// without one, and the operands.
 struct Scan {
     unknown: Option<String>,
     values: Vec<(String, String)>,
+    flags: Vec<String>,
+    operands: Vec<String>,
+}
+
+impl Scan {
+    /// Note an option the table does not list; the first one names the form.
+    fn unlisted(&mut self, word: &str) {
+        self.unknown.get_or_insert_with(|| word.to_string());
+    }
 }
 
 /// Read a writer's arguments with [`known_options`]; `None` for a program
@@ -769,18 +779,26 @@ struct Scan {
 /// letters take one (BSD `-L` is a flag, GNU `-s` is one), and a word the
 /// table took as a value would otherwise hide an option that runs a
 /// program. A lone `-` is an operand, and a value such as rsync's
-/// `- *.o` filter rule is not an option. The scan stops at the first
-/// unknown option. The values feed the placement check, so an option the
-/// table reads is never read without its value (review round 19).
+/// `- *.o` filter rule is not an option.
+///
+/// An option the table does not list is recorded and the scan goes on,
+/// through the rest of its short cluster and the later words, read as a
+/// flag: a directory option after it is still read, so an unlisted option
+/// cannot hide where the call places files (review round 20). The values
+/// feed the placement check, so an option the table reads is never read
+/// without its value (review round 19).
 fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
     let known = known_options(name)?;
     let tar = matches!(name, "tar" | "bsdtar" | "gtar");
     let mut scan = Scan {
         unknown: None,
         values: Vec::new(),
+        flags: Vec::new(),
+        operands: Vec::new(),
     };
     let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
-    for (at, arg) in args.iter().enumerate() {
+    let mut words = args.iter().enumerate();
+    while let Some((at, arg)) = words.next() {
         let a = arg.as_str();
         if !option_like(a) {
             if let Some(option) = pending.pop_front() {
@@ -789,40 +807,47 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
             }
         }
         if a == "--" {
+            scan.operands.extend(words.map(|(_, w)| w.clone()));
             break;
         }
         if let Some(long) = a.strip_prefix("--") {
             let (option, value) = long
                 .split_once('=')
                 .map_or((long, None), |(n, v)| (n, Some(v)));
-            if !known.long.contains(&option) {
-                scan.unknown = Some(a.to_string());
-                break;
+            let listed = known.long.contains(&option);
+            if !listed {
+                scan.unlisted(a);
             }
             let option = format!("--{option}");
             match value {
                 Some(value) => scan.values.push((option, value.to_string())),
                 // A long option named as a directory takes the next word.
-                None if known.dirs.contains(&option.as_str()) => pending.push_back(option),
-                None => {}
+                None if listed && known.dirs.contains(&option.as_str()) => {
+                    pending.push_back(option);
+                }
+                None => scan.flags.push(option),
             }
             continue;
         }
         if known.words.contains(&a) {
+            scan.flags.push(a.to_string());
             continue;
         }
         if at == 0 && tar && !a.is_empty() && !a.starts_with('-') {
             for c in a.chars() {
                 if known.valued.contains(c) {
                     pending.push_back(format!("-{c}"));
-                } else if !known.flags.contains(c) {
-                    scan.unknown = Some(a.to_string());
-                    return Some(scan);
+                } else {
+                    if !known.flags.contains(c) {
+                        scan.unlisted(a);
+                    }
+                    scan.flags.push(format!("-{c}"));
                 }
             }
             continue;
         }
         if !option_like(a) {
+            scan.operands.push(a.to_string());
             continue;
         }
         let letters = &a[1..];
@@ -837,43 +862,74 @@ fn scan_writer(name: &str, args: &[String]) -> Option<Scan> {
                 break;
             }
             if !known.flags.contains(c) {
-                scan.unknown = Some(a.to_string());
-                return Some(scan);
+                scan.unlisted(a);
             }
+            scan.flags.push(format!("-{c}"));
         }
     }
     Some(scan)
 }
 
-/// The directories a placing writer is told to put files it does not name
-/// into: the values of the options its entry lists in `dirs`, from its
-/// arguments and from each variable it reads as options. `None` for a
-/// program with no entry, whose options the guard does not read.
-pub(crate) fn writer_dirs(
+/// A writer call as the scan reads it, from its arguments and from each
+/// variable it reads as options ([`writer_read`]).
+pub(crate) struct WriterRead {
+    /// Where the call is told to put files it does not name: the values
+    /// of the options its entry lists in `dirs`.
+    pub(crate) dirs: Vec<String>,
+    /// Every option read without a value (`-x`, `--extract`).
+    pub(crate) flags: Vec<String>,
+    /// Every option read with its value.
+    pub(crate) values: Vec<(String, String)>,
+    /// The operands on the command line.
+    pub(crate) operands: Vec<String>,
+    /// The first option the table does not list.
+    pub(crate) unknown: Option<String>,
+}
+
+/// Read a writer call with the shared scan: its command line, then each
+/// variable the line assigns that the writer reads as more options. `None`
+/// for a program with no entry, whose options the guard does not read.
+pub(crate) fn writer_read(
     name: &str,
     args: &[String],
     assigned: &[(String, String)],
-) -> Option<Vec<String>> {
+) -> Option<WriterRead> {
     let known = known_options(name)?;
+    let mut read = WriterRead {
+        dirs: Vec::new(),
+        flags: Vec::new(),
+        values: Vec::new(),
+        operands: Vec::new(),
+        unknown: None,
+    };
     let mut lists = vec![args.to_vec()];
     for (var, value) in assigned {
         if known.env_options.contains(&var.as_str()) {
             // The value comes before the command line, so a tar key there
             // is not the first word.
-            let mut read = vec!["-".to_string()];
-            read.extend(value.split_whitespace().map(str::to_string));
-            lists.push(read);
+            let mut list = vec!["-".to_string()];
+            list.extend(value.split_whitespace().map(str::to_string));
+            lists.push(list);
         }
     }
-    Some(
-        lists
-            .iter()
-            .filter_map(|list| scan_writer(name, list))
-            .flat_map(|scan| scan.values)
-            .filter(|(option, _)| known.dirs.contains(&option.as_str()))
-            .map(|(_, value)| value)
-            .collect(),
-    )
+    for (index, list) in lists.iter().enumerate() {
+        let scan = scan_writer(name, list)?;
+        if read.unknown.is_none() {
+            read.unknown = scan.unknown;
+        }
+        read.dirs.extend(
+            scan.values
+                .iter()
+                .filter(|(option, _)| known.dirs.contains(&option.as_str()))
+                .map(|(_, value)| value.clone()),
+        );
+        read.values.extend(scan.values);
+        read.flags.extend(scan.flags);
+        if index == 0 {
+            read.operands = scan.operands;
+        }
+    }
+    Some(read)
 }
 
 /// Whether `word` is an option rather than a value: a `-` followed by a
@@ -1176,7 +1232,7 @@ mod tests {
                 .iter()
                 .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
                 .collect();
-            writer_dirs(name, &words(line), &env)
+            writer_read(name, &words(line), &env).map(|read| read.dirs)
         };
         let some = |list: &[&str]| Some(list.iter().map(|d| (*d).to_string()).collect::<Vec<_>>());
         assert_eq!(dirs("tar", "-xC$HOME -f a", &[]), some(&["$HOME"]));
@@ -1195,6 +1251,24 @@ mod tests {
         assert_eq!(dirs("tar", "-xC ./build -f a", &[]), some(&["./build"]));
         assert_eq!(dirs("7z", "x a -o~", &[]), None);
         assert_eq!(dirs("cpio", "-idm -D ~", &[]), None);
+        // An unlisted option does not end the scan: a directory after it,
+        // or later in its cluster, is still read (review round 20).
+        assert_eq!(
+            dirs("tar", "-x --no-mac-metadata -C$HOME -f a", &[]),
+            some(&["$HOME"])
+        );
+        assert_eq!(dirs("unzip", "-uod~ a", &[]), some(&["~"]));
+        assert_eq!(dirs("patch", "-t -g0 -d$HOME -i f", &[]), some(&["$HOME"]));
+        assert_eq!(
+            dirs("tar", "-xf a", &[("TAR_OPTIONS", "--no-mac-metadata -C~")]),
+            some(&["~"])
+        );
+        assert_eq!(dirs("wget", "--connect-timeout=5 -P~ u", &[]), some(&["~"]));
+        let read = writer_read("tar", &words("-czf/tmp/box.tar -C d ."), &[]).unwrap();
+        assert!(read.flags.contains(&"-c".to_string()), "{:?}", read.flags);
+        assert!(!read.flags.contains(&"-x".to_string()), "{:?}", read.flags);
+        let read = writer_read("unzip", &words("-uod d a"), &[]).unwrap();
+        assert_eq!(read.unknown.as_deref(), Some("-uod"));
     }
 
     #[test]

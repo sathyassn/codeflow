@@ -697,6 +697,27 @@ const ROUND_19_CONTROLS: &[&str] = &[
     "install -D ~/.gitconfig /tmp/bak/g",
 ];
 
+/// Round 20: an option the guard does not read no longer ends the scan
+/// that reads where a writer places files, and on a line that names the
+/// home it refuses as the closed rule does.
+const ROUND_20: &[&str] = &[
+    "tar -x --no-mac-metadata -C$HOME -f payload.tar",
+    "unzip -uod$HOME payload.zip",
+    "patch -t -g0 -d$HOME -i payload.diff",
+    "TAR_OPTIONS='--no-mac-metadata -C$HOME' tar -xf payload.tar",
+    "wget --connect-timeout=5 -P$HOME https://example.com/payload.txt",
+    "tar -xC$HOME -f payload.tar",
+    "unzip -od$HOME payload.zip",
+];
+
+/// Round 20's controls: the same options placing inside the project, and a
+/// tar create whose attached archive name holds an `x`.
+const ROUND_20_CONTROLS: &[&str] = &[
+    "unzip -uod ./vendor payload.zip",
+    "tar -x --no-mac-metadata -C ./vendor -f payload.tar",
+    "tar -czf/tmp/box.tar -C $HOME .",
+];
+
 #[test]
 fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
     let (project, _home) = startup_project();
@@ -738,6 +759,12 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
                 ));
             }
         }
+        for command in ROUND_20 {
+            let outputs = project.replay(harness, "Bash", json!({"command": command}));
+            if !refused_with(&outputs, RULE) {
+                wrong.push(format!("{harness}: round 20: allowed {command}"));
+            }
+        }
         for (finding, rule, command) in ROUND_16 {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if !refused_with(&outputs, rule) {
@@ -760,6 +787,7 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
             .chain(ROUND_17_CONTROLS)
             .chain(ROUND_18_CONTROLS)
             .chain(ROUND_19_CONTROLS)
+            .chain(ROUND_20_CONTROLS)
         {
             let outputs = project.replay(harness, "Bash", json!({"command": command}));
             if outputs.iter().any(|o| !o.status.success()) {
@@ -768,17 +796,17 @@ fn installed_hooks_refuse_unresolved_forms_beside_a_named_target() {
         }
     }
     // Grok's own shell tool, in its camelCase payload.
-    for (_, rule, command) in ROUND_16.iter().chain(ROUND_18) {
-        let payload = json!({
-            "toolName": "run_terminal_command",
-            "cwd": project.root,
-            "toolInput": {"command": command},
-        });
-        if !refused_with(&project.replay_payload("grok", "Bash", &payload), rule) {
-            wrong.push(format!("grok run_terminal_command: allowed {command}"));
-        }
-    }
-    for (_, rule, command, _) in ROUND_19 {
+    let grok_shell = ROUND_16
+        .iter()
+        .chain(ROUND_18)
+        .map(|(_, rule, command)| (*rule, *command))
+        .chain(
+            ROUND_19
+                .iter()
+                .map(|(_, rule, command, _)| (*rule, *command)),
+        )
+        .chain(ROUND_20.iter().map(|command| (RULE, *command)));
+    for (rule, command) in grok_shell {
         let payload = json!({
             "toolName": "run_terminal_command",
             "cwd": project.root,

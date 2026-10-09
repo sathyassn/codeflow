@@ -4242,6 +4242,11 @@ fn direct_write_violation(
 /// is a directory. `-D` only makes the leading directories of that
 /// destination. Options that take a value (`-m`, `-o`, `-g`, `-S`, `-t`
 /// and their long forms) are skipped with it.
+///
+/// Kept apart from the writer scan (review round 20): the `install` entry
+/// records which long options exist but not which take the next word, so
+/// an operand reader built on it would read `--suffix .bak` after the
+/// operands as the destination.
 fn install_destinations(args: &[String]) -> Vec<String> {
     let mut operands: Vec<&str> = Vec::new();
     let mut target: Option<String> = None;

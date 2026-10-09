@@ -526,6 +526,14 @@ fn placing_into_the_home_refuses() {
         "7z x dots.7z -o$HOME",
         "7z x dots.7z -o/etc",
         "cpio -idm -D ~ < dots.cpio",
+        // An option the guard does not read, before the directory or on a
+        // line that names the home (review round 20).
+        "tar -x --no-mac-metadata -C$HOME -f bundle.tar",
+        "unzip -uod$HOME dots.zip",
+        "patch -t -g0 -d$HOME -i fix.diff",
+        "TAR_OPTIONS='--no-mac-metadata -C$HOME' tar -xf bundle.tar",
+        "wget --connect-timeout=5 -P$HOME https://example.invalid/x",
+        "tar --ext -C ~ -f bundle.tar",
     ] {
         assert!(refused(&f.judge(command)), "{command}");
     }
@@ -574,6 +582,10 @@ fn placing_into_the_home_refuses() {
         "patch -d ./src -p1 < fix.diff",
         "tar -cf /tmp/b.tar ~/notes",
         "cat ~/.zshrc",
+        "unzip -uod ./vendor dots.zip",
+        "tar -x --no-mac-metadata -C ./vendor -f bundle.tar",
+        "tar -czf/tmp/box.tar -C $HOME .",
+        "wget -qO- https://example.invalid/x",
     ] {
         let found = f.judge(command);
         assert!(!refused(&found), "{command}: {found:?}");

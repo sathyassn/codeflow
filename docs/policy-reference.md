@@ -195,7 +195,13 @@ level:
   `TAR_OPTIONS="-C $HOME"`), each writer's entry naming the options that
   carry a directory. A placing program the guard has no entry for
   (`7z`, `cpio`, `stow`) refuses on a line that names the home or `/etc`,
-  since any of its options could carry it there (review round 19);
+  since any of its options could carry it there (review round 19). An
+  option a writer's entry does not list is read past, so a directory after
+  it still counts, and a call that places files and carries such an option
+  refuses on a line that names the home, `/etc` or a startup directory
+  (`tar -x --no-mac-metadata -C$HOME`, review round 20). Tar's mode comes
+  from the same reading, so an archive name attached to `-f` is never read
+  as a mode letter;
 - a path the guard cannot resolve near the class, such as `~/$NAME`;
 - code given to an interpreter, `awk`, `xargs` or `find -exec` that names a
   class file once the line's own literal assignments are filled in
