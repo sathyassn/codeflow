@@ -145,8 +145,8 @@ pub struct CiArgs {
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub workflow sets it from
-/// `github.event.pull_request.body`).
+/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
+/// it from the pull request's current body, read by its `body` step).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// A violation tagged with the commit it came from (`None` for branch-name and
