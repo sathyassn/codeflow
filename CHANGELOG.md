@@ -289,8 +289,10 @@ erratum below, never an edit of the section.
   branch's live rules through `gh` and warns when they require no checks,
   do not require an up-to-date branch, or miss a listed check, and when
   only rules that someone can bypass require a listed check or the
-  up-to-date setting; without `gh`, the network or a GitHub `origin`, or
-  when it cannot read a bypass list that decides the answer, it is a note.
+  up-to-date setting; without `gh`, the network or a GitHub `origin`, with
+  an empty or blank `git.required_checks` list or a policy file that does
+  not parse, or when it cannot read a bypass list that decides the answer,
+  it is a note.
   Nothing changes on a host until you run `codeflow remote protect` or turn
   the setting on yourself (ADR-0081). The git rules say a pull request is
   ready when its checks ran on the current target tip; `codeflow update`
