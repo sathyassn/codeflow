@@ -33,7 +33,7 @@
         "derive": "the Grok Build row",
         "check": {
           "kind": "contains",
-          "text": "| Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload |"
+          "text": "| Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload;"
         },
         "value": true
       },

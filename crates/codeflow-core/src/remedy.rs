@@ -624,6 +624,16 @@ catalog! {
     /// Project context still at its template placeholders.
     DOCTOR_CUSTOMIZATION = Step::Edit("{path}"),
         "replace the template placeholders in {path} with this project's context (the /cf-customize skill checks it against the project)";
+    /// Harness settings without the shell startup class (TSK-242).
+    DOCTOR_STARTUP_PRESETS = Step::Codeflow("codeflow update"),
+        "run `codeflow update` so .claude/settings.json and .codex/config.toml carry the shell startup class, resolving any `.new` file it writes";
+    /// Files the home's startup files source from outside the class.
+    DOCTOR_STARTUP_SOURCED = Step::Edit("{path}"),
+        "the operator, in {path}, moves what each named line sources into a protected startup path (such as ~/.zsh/, ~/.bashrc.d/ or ~/.config/fish/conf.d/) or inlines it, so the guards and sandboxes protect it; an agent session may not edit a startup file";
+    /// `ZDOTDIR` or `XDG_CONFIG_HOME` moved away from where the denies point.
+    /// Only the operator changes them: they are set in a startup file.
+    DOCTOR_STARTUP_RELOCATED = Step::Edit("~/.zshenv"),
+        "the operator sets ZDOTDIR and XDG_CONFIG_HOME back to their defaults in ~/.zshenv or wherever they are exported, since an agent session may not edit a startup file; until then the generated rules cover only the default locations, and the operator can add `Edit` denies and `sandbox.filesystem.denyWrite` entries for the moved files to .claude/settings.json and read entries to the Codex profile";
     /// An instruction chain over Codex's limit.
     DOCTOR_INSTRUCTIONS = Step::Edit("AGENTS.md"),
         "move project detail out of the project section of AGENTS.md into files it points at";

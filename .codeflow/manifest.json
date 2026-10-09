@@ -449,7 +449,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e07657535282fd86a07d9a9e8448774007ea24b960ac4e25c508e79cd38ffee8",
+      "sha256": "9d5fd9c56e9881e780e8a1d8a278e6a1734c7c953a76f4d9ffe0702f47843dd6",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -635,7 +635,7 @@
     ".agents/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
+      "sha256": "6b0d78dcadcc47d6b1cd3d8245fccf18fd73e90b479a0d92421764aa997a8a7e",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -839,7 +839,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "0c6306b957f02c4547235ed1fc913c286e6008f4c356c566d4248c28e18c9d1d",
+      "sha256": "1708498b0eeec46c4be4f443eaff799fedfb5c006b3bb343bc62faabcfa06a20",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1289,7 +1289,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "e07657535282fd86a07d9a9e8448774007ea24b960ac4e25c508e79cd38ffee8",
+      "sha256": "9d5fd9c56e9881e780e8a1d8a278e6a1734c7c953a76f4d9ffe0702f47843dd6",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1475,7 +1475,7 @@
     ".claude/skills/cf-model-orchestrator/resources/routing/transport.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/routing/transport.md",
       "ownership": "managed",
-      "sha256": "64430067aba56371386fdf4dabef1e8ba3f2e0674e68bf00a377a8f2334079d6",
+      "sha256": "6b0d78dcadcc47d6b1cd3d8245fccf18fd73e90b479a0d92421764aa997a8a7e",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/task-graph.md": {
@@ -1775,7 +1775,7 @@
     ".codex/config.toml": {
       "src": "codex/config.toml",
       "ownership": "managed",
-      "sha256": "45926077f01cd332dc314f9454e6fb40df2826c23e3fafe6d301bacc44ef6889",
+      "sha256": "908465840e315f60551fd914aa7e4a6c706080c83d0bec227268030194651e68",
       "exec": false
     },
     ".codex/hooks.json": {
