@@ -188,10 +188,18 @@ fn branch_line(root: &Path) -> Option<String> {
 
 fn work_line(root: &Path) -> Option<String> {
     let pm = root.join("project-management");
-    if !pm.join("epics").is_dir() && !pm.join("tasks").is_dir() {
+    if !crate::workgraph::layout::records_folder_is_linked(&pm)
+        && !pm.join("epics").is_dir()
+        && !pm.join("tasks").is_dir()
+    {
         return None;
     }
-    let store = MarkdownStore::new(&pm).ok()?;
+    // A store refused for a linked folder says so instead of dropping the
+    // work line (issue 94).
+    let store = match MarkdownStore::new(&pm) {
+        Ok(store) => store,
+        Err(error) => return Some(format!("work: records unreadable: {error}")),
+    };
     let epics = store.list_epics(EpicFilter::default()).ok()?;
     let tasks = store.list_tasks(TaskFilter::default()).ok()?;
     let active_epics = epics
@@ -478,6 +486,75 @@ mod tests {
         .unwrap();
         let digest = generate(dir.path());
         assert!(digest.contains("the discipline layer"));
+    }
+
+    /// Issue 94: a linked `project-management` gets no folders created
+    /// where it points, and the digest says why the work line is missing.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_project_management_is_named_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(outside.path().join("epics")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("project-management")).unwrap();
+        let line = work_line(dir.path()).unwrap();
+        assert!(
+            line.starts_with("work: records unreadable:")
+                && line.contains("project-management is a symbolic link"),
+            "{line}"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+
+        // An empty or dangling target is named too, never silently skipped.
+        std::fs::remove_dir(outside.path().join("epics")).unwrap();
+        let empty = work_line(dir.path()).unwrap();
+        assert!(
+            empty.contains("project-management is a symbolic link"),
+            "{empty}"
+        );
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        let dangling = dir.path().join("dangling");
+        std::fs::remove_file(dir.path().join("project-management")).unwrap();
+        std::os::unix::fs::symlink(&dangling, dir.path().join("project-management")).unwrap();
+        let line = work_line(dir.path()).unwrap();
+        assert!(
+            line.contains("project-management is a symbolic link"),
+            "{line}"
+        );
+        assert!(!dangling.exists());
+    }
+
+    /// The Windows form of issue 94: an empty or dangling junction at
+    /// `project-management` is named in the digest and nothing is created
+    /// where it points.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_at_project_management_is_named_not_written() {
+        for dangling in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let target = outside.path().join("pm");
+            std::fs::create_dir(&target).unwrap();
+            let pm = dir.path().join("project-management");
+            std::fs::create_dir(&pm).unwrap();
+            let redirect =
+                crate::bounded_file::confined::windows::tests::junction(&pm, &target).unwrap();
+            if dangling {
+                std::fs::remove_dir(&target).unwrap();
+            }
+            let line = work_line(dir.path()).unwrap();
+            assert!(
+                line.starts_with("work: records unreadable:")
+                    && line.contains("project-management is a symbolic link"),
+                "dangling {dangling}: {line}"
+            );
+            if dangling {
+                assert!(!target.exists());
+            } else {
+                assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            }
+            drop(redirect);
+        }
     }
 
     #[test]
