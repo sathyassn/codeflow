@@ -63,3 +63,9 @@ For material feedback, record:
 Preserve the reviewed version and rationale through normal versioned project
 records. A local correction that does not change accepted direction collapses
 to the existing task and fidelity evidence.
+
+A same-family design approval and a cross-family review are separate duties;
+when both are configured, both are required. A project's committed design
+co-owner gives the approval (`codeflow models resolve --duty
+design-approval`); record it apart from the reviews, and never count it as
+the independent review.

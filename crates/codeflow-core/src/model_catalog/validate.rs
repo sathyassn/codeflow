@@ -273,6 +273,11 @@ impl Catalog {
         }
         for (id, duty) in &self.duties {
             nonempty(id, "duty")?;
+            if id == super::DESIGN_APPROVAL {
+                return Err(format!(
+                    "duty {id} is engine-owned and comes from the project design authority"
+                ));
+            }
             if duty.required.is_empty() {
                 return Err(format!("duty {id} has no required participant"));
             }

@@ -1566,6 +1566,164 @@ pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, 
     read(&tree)
 }
 
+/// A project file as committed on a task's integration target.
+#[derive(Debug, Clone)]
+pub struct AnchoredFile {
+    /// The task's declared integration target.
+    pub target: String,
+    /// The merge-base of `HEAD` and the target, where the file was read.
+    pub base: String,
+    /// The file's bytes there; `None` when the target does not carry it.
+    pub content: Option<Vec<u8>>,
+}
+
+/// Read `path` as committed at the merge-base of `HEAD` and the integration
+/// target the task's committed `HEAD` record declares. Neither the working
+/// tree nor the task branch's own commits confer what this returns: only a
+/// file already on the target does.
+///
+/// # Errors
+/// Rejects malformed ids, an uncommitted task, an unstable or unresolved
+/// target, a standalone record the target does not carry whose history
+/// declares another target or cannot be read, a non-regular file and a
+/// file over 1 MiB.
+pub fn anchored_project_file(
+    repo_root: &Path,
+    task_id: &str,
+    path: &str,
+) -> Result<AnchoredFile, String> {
+    const MAX_BYTES: usize = 1024 * 1024;
+    if !is_canonical_task_format_id(task_id) {
+        return Err("design authority requires a canonical task id".into());
+    }
+    let repo = Repository::discover(repo_root).map_err(|e| e.to_string())?;
+    let head = repo
+        .head()
+        .and_then(|r| r.peel_to_commit())
+        .map_err(|e| e.to_string())?;
+    let record = format!("project-management/tasks/{task_id}.md");
+    let entry = head
+        .tree()
+        .map_err(|e| e.to_string())?
+        .get_path(Path::new(&record))
+        .map_err(|_| format!("task {task_id} not committed"))?;
+    if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
+        return Err("task record must be a regular file".into());
+    }
+    let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+    let content = String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string())?;
+    let target = parse_record(&content, RecordKind::Task)?
+        .integration_target
+        .ok_or("task has no integration_target")?;
+    if !is_stable_work_target(&target) {
+        return Err("task integration target must be a stable non-task branch".into());
+    }
+    // The task must pass the planning anchor rule that `codeflow work start`
+    // applies on its own task branch: a task on the anchor must declare the
+    // target it declares there, so a rewritten target cannot borrow another
+    // line's file, and a standalone record arriving with its own pull
+    // request is judged at the head. Only the target's file is then read.
+    let branch = repo
+        .head()
+        .ok()
+        .filter(git2::Reference::is_branch)
+        .and_then(|reference| reference.shorthand().ok().map(str::to_owned))
+        .ok_or("design authority is read only on the task's own branch")?;
+    let base = check_work_start_for_branch(repo_root, task_id, &target, &branch)
+        .map_err(|e| e.to_string())?
+        .merge_base;
+    let base = Oid::from_str(&base).map_err(|e| e.to_string())?;
+    let tree = repo
+        .find_commit(base)
+        .and_then(|commit| commit.tree())
+        .map_err(|e| e.to_string())?;
+    // Accepted as a standalone record new at the head: the target does not
+    // carry it, so only a record that never declared another target counts.
+    // A retarget is not a new arrival.
+    if tree.get_path(Path::new(&record)).is_err() {
+        refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
+    }
+    let content = match tree.get_path(Path::new(path)) {
+        Err(_) => None,
+        Ok(entry) => {
+            if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
+                return Err(format!("{path} on {target} must be a regular file"));
+            }
+            let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
+            if blob.size() > MAX_BYTES {
+                return Err(format!("{path} on {target} exceeds {MAX_BYTES} bytes"));
+            }
+            Some(blob.content().to_vec())
+        }
+    };
+    Ok(AnchoredFile {
+        target,
+        base: base.to_string(),
+        content,
+    })
+}
+
+/// The tail of a retarget refusal, which design authority reports even when
+/// the working tree carries no block of its own.
+pub const RETARGET_REFUSAL: &str = "a rewritten target confers no authority";
+
+/// Refuse when any version of `record` that `head` reaches declares an
+/// integration target other than `target`. One walk reads that one path per
+/// commit and parses each distinct version once. A history that cannot be
+/// read in full (a shallow clone, a graft or replace ref, an unreadable
+/// commit or version) refuses.
+fn refuse_retarget(
+    repo: &Repository,
+    head: Oid,
+    record: &str,
+    task_id: &str,
+    target: &str,
+) -> Result<(), String> {
+    let unreadable =
+        |reason: String| format!("the history of task {task_id} cannot be read: {reason}");
+    if repo.is_shallow() {
+        return Err(unreadable("this clone is shallow".into()));
+    }
+    if let Some(overlay) = super::release_line::history_overlay(repo).map_err(unreadable)? {
+        return Err(unreadable(format!("this clone has {overlay}")));
+    }
+    let mut walk = repo.revwalk().map_err(|e| unreadable(e.to_string()))?;
+    walk.push(head).map_err(|e| unreadable(e.to_string()))?;
+    let mut seen = std::collections::HashSet::new();
+    for commit in walk {
+        let commit = commit
+            .and_then(|id| repo.find_commit(id))
+            .map_err(|e| unreadable(e.to_string()))?;
+        let tree = commit.tree().map_err(|e| unreadable(e.to_string()))?;
+        let entry = match tree.get_path(Path::new(record)) {
+            Ok(entry) => entry,
+            Err(e) if e.code() == git2::ErrorCode::NotFound => continue,
+            Err(e) => return Err(unreadable(e.to_string())),
+        };
+        if !seen.insert(entry.id()) {
+            continue;
+        }
+        let version = repo
+            .find_blob(entry.id())
+            .map_err(|e| e.to_string())
+            .and_then(|blob| String::from_utf8(blob.content().to_vec()).map_err(|e| e.to_string()))
+            .and_then(|text| parse_record(&text, RecordKind::Task))
+            .map_err(|e| unreadable(format!("{record} at {}: {e}", commit.id())))?;
+        if let Some(declared) = version
+            .integration_target
+            .as_deref()
+            .filter(|declared| !declared.trim().is_empty())
+            .filter(|declared| logical_target(declared) != logical_target(target))
+        {
+            return Err(format!(
+                "an earlier version of task {task_id} declares integration target \
+                 '{declared}', not '{target}'; {RETARGET_REFUSAL}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The commit the check reads: `head` when a caller names one (CI's pull
 /// request head), else the checkout's `HEAD`.
 fn head_commit(repo: &Repository, head: Option<&str>) -> Result<Oid, WorkStartError> {

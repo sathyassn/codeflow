@@ -676,6 +676,7 @@ fn models_real_resolutions_preserve_engine_json_and_exit_status() {
                 exclusions,
                 observed_ids: &observations,
                 trigger_facts: &[],
+                area: None,
                 requested_override: None,
                 operator_override: None,
             })
@@ -757,6 +758,10 @@ fn models_help_describes_context_output_and_whole_version_exclusions() {
         (
             "--exclude",
             "`selector:<id>` excludes the whole version across harnesses",
+        ),
+        (
+            "--area",
+            "Review area for a project standing review; unit-review and body-review only",
         ),
     ] {
         assert!(help.contains(flag));

@@ -148,6 +148,12 @@ Who holds which design duty:
   direction or fidelity-approval authority.
 - Another family designs only under an explicit task-specific operator
   override. Claude absence alone is not one.
+- A project may name a later line of the Claude design owner seat as a
+  standing design co-owner or consultant in `.codeflow/model-selection.json`
+  schema 2, committed on the task's integration target. The co-owner designs
+  after the first line and gives the `design-approval` duty, which is
+  separate from the cross-family review and never counts as it; when both
+  are configured, both are required.
 - Codex challenges feasibility and fidelity, and both approve the exact plan.
 - Review anchors blocking design findings in the accepted brief, intent,
   accessibility target or observed behavior rather than taste.

@@ -65,6 +65,10 @@ Each part owns one thing:
 - Standard and full projects also own `.codeflow/model-selection.json`. Leave
   it absent or empty to use those defaults. An override maps only a stable role
   to a promoted local binding ID.
+- Schema 2 of that file may also name a later line of the design owner seat
+  as a design co-owner or consultant, and standing extra-family reviewers by
+  area. Neither adds a model, selector or designation; the cf-model-orchestrator
+  model-overrides reference describes both.
 - Run `codeflow doctor --check model-bindings` before using an override. The
   entire selection fails closed rather than partly applying when a record is
   missing, ineligible, unsupported, drifted, or would collapse the two primary
