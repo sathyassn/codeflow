@@ -6,6 +6,17 @@
 //! in `git.protected_branches`. Exact branch names use the branch-protection
 //! API; glob patterns use repository rulesets (which support fnmatch).
 //!
+//! Required status checks are always strict: a pull request merges only on
+//! checks that ran on a branch up to date with its base, so two pull
+//! requests each green on an older base cannot both land untested together
+//! (TSK-261). The check names come from `git.required_checks`, defaulting to
+//! the shipped CI job names. The live rules are read before anything is
+//! written: every active repository ruleset that already targets the branch
+//! is updated in place, never duplicated, and a classic protection PUT
+//! carries the settings this command does not own. Ruleset ref patterns are
+//! matched as GitHub matches them (the `fnmatch` submodule); a ruleset whose pattern
+//! cannot be read blocks the new ruleset or classic write for that branch.
+//!
 //! Legible degradation is the contract here (charter principle 8, AC #4):
 //! anything the provider plan cannot apply — the canonical case being a
 //! private repo on a GitHub Free plan returning HTTP 403 "Upgrade to GitHub
@@ -19,6 +30,21 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use serde_json::{json, Value};
+
+use crate::hooks::policy::DEFAULT_REQUIRED_CHECKS;
+
+mod fnmatch;
+
+/// The GitHub App id of GitHub Actions. Ruleset status checks pin it, so a
+/// required check passes only when GitHub Actions reported it, as the
+/// shipped workflows do; a check without an integration id would accept
+/// the same context from any source.
+pub const GITHUB_ACTIONS_APP_ID: u64 = 15368;
+
+/// Rulesets read per page when looking for the one that targets a branch.
+const RULESET_PAGE_SIZE: usize = 100;
 
 /// Outcome status of a protect run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +130,9 @@ pub struct BranchRule {
     /// The registry data profile (SPC-013 R-6, R-22): applied as a ruleset
     /// so it holds before the branch exists and never touches `main`.
     pub data_profile: bool,
+    /// The status check names required, on an up-to-date branch, when
+    /// [`require_status_checks`](BranchRule::require_status_checks) holds.
+    pub required_checks: Vec<String>,
 }
 
 impl BranchRule {
@@ -132,7 +161,14 @@ impl BranchRule {
             block_force_push: true,
             block_deletion: true,
             data_profile: true,
+            required_checks: Vec::new(),
         }
+    }
+
+    /// Whether the rule requires named status checks.
+    #[must_use]
+    pub fn requires_checks(&self) -> bool {
+        self.require_status_checks && !self.required_checks.is_empty()
     }
 
     fn intent_lines(&self) -> Vec<String> {
@@ -143,8 +179,11 @@ impl BranchRule {
         if self.require_pr {
             v.push("require a pull request before merging".to_string());
         }
-        if self.require_status_checks {
-            v.push("require status checks to pass before merging".to_string());
+        if self.requires_checks() {
+            v.push(format!(
+                "require status checks to pass on a branch that is up to date with its base: {}",
+                self.required_checks.join(", ")
+            ));
         }
         if self.block_force_push {
             v.push("block force pushes".to_string());
@@ -198,6 +237,26 @@ impl ProtectionPlan {
         let force = blocks("force_push_protected");
         let delete = blocks("delete_protected");
         let push = blocks("push_to_protected");
+        let named: Vec<String> = git
+            .get("required_checks")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let required_checks = if named.is_empty() {
+            DEFAULT_REQUIRED_CHECKS
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        } else {
+            named
+        };
 
         let rules = branches
             .into_iter()
@@ -208,6 +267,7 @@ impl ProtectionPlan {
                 block_force_push: force,
                 block_deletion: delete,
                 data_profile: false,
+                required_checks: required_checks.clone(),
             })
             .collect();
         Self { rules }
@@ -240,6 +300,10 @@ impl ProtectionPlan {
                 lines.push(format!("  - {intent}"));
             }
         }
+        lines.push(
+            "every active repository ruleset that already targets a branch is updated in place, and then no second ruleset or branch protection is added"
+                .to_string(),
+        );
         ProtectReport {
             status: ProtectStatus::DryRun,
             lines,
@@ -325,17 +389,6 @@ impl RemoteProvider for ManualChecklistProvider {
 // GitHub adapter (gh CLI)
 // ---------------------------------------------------------------------------
 
-/// The CI job contexts a codeflow-scaffolded repo exposes — the job `name:`
-/// values in the shipped `codeflow-ci.yml`. Pinned as required status checks so
-/// a PR cannot merge until these jobs actually run and pass; an empty `contexts`
-/// array would require *nothing*, leaving "require status checks" toothless.
-const REQUIRED_CI_CONTEXTS: &[&str] = &[
-    "codeflow gates",
-    "secret scan",
-    "security review",
-    "commit standards",
-];
-
 /// GitHub adapter, shelling out to the `gh` CLI for auth and transport.
 pub struct GithubProvider {
     gh: PathBuf,
@@ -395,47 +448,257 @@ impl GithubProvider {
         }
     }
 
-    /// Identify the repo (`owner/name`, visibility) via `gh repo view`.
-    fn repo_info(&self) -> Result<(String, bool), String> {
-        let out = self.run_gh(&["repo", "view", "--json", "nameWithOwner,isPrivate"], None)?;
-        let v: serde_json::Value =
+    /// Identify the repo (`owner/name`, visibility, default branch) via
+    /// `gh repo view`.
+    fn repo_info(&self) -> Result<RepoInfo, String> {
+        let out = self.run_gh(
+            &[
+                "repo",
+                "view",
+                "--json",
+                "nameWithOwner,isPrivate,defaultBranchRef",
+            ],
+            None,
+        )?;
+        let v: Value =
             serde_json::from_str(&out).map_err(|e| format!("gh repo view parse: {e}"))?;
         let nwo = v
             .get("nameWithOwner")
-            .and_then(serde_json::Value::as_str)
+            .and_then(Value::as_str)
             .ok_or_else(|| "gh repo view: nameWithOwner missing".to_string())?
             .to_string();
-        let private = v
-            .get("isPrivate")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        Ok((nwo, private))
+        let private = v.get("isPrivate").and_then(Value::as_bool).unwrap_or(false);
+        let default_branch = v
+            .pointer("/defaultBranchRef/name")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        Ok(RepoInfo {
+            nwo,
+            private,
+            default_branch,
+        })
     }
 
-    fn branch_protection_body(rule: &BranchRule) -> String {
-        serde_json::json!({
-            "required_status_checks": if rule.require_status_checks {
-                serde_json::json!({ "strict": true, "contexts": REQUIRED_CI_CONTEXTS })
-            } else {
-                serde_json::Value::Null
+    /// Every repository ruleset that is active and already targets
+    /// `pattern`, read in full (the list does not carry `enforcement`):
+    /// see [`ruleset_targets`]. A ruleset that is `disabled` or only
+    /// `evaluate`s enforces nothing, so it neither counts as the branch's
+    /// ruleset nor stops the search. An active ruleset whose ref pattern
+    /// cannot be read is returned apart, described.
+    fn rulesets_for(
+        &self,
+        nwo: &str,
+        pattern: &str,
+        default_branch: Option<&str>,
+    ) -> Result<LiveRulesets, String> {
+        // Page until a short page, so a repository with more rulesets than
+        // one page holds is still searched in full.
+        let mut found = LiveRulesets::default();
+        let mut page = 1;
+        loop {
+            let list = self.run_gh(
+                &[
+                    "api",
+                    &format!("repos/{nwo}/rulesets?per_page={RULESET_PAGE_SIZE}&page={page}"),
+                ],
+                None,
+            )?;
+            // A page that is not a list was not read; taking it as empty
+            // would add a second ruleset beside one already there.
+            let Ok(Value::Array(summaries)) = serde_json::from_str::<Value>(&list) else {
+                return Err(format!("page {page} of the rulesets is not a JSON list"));
+            };
+            for summary in &summaries {
+                let ours = summary.get("target").and_then(Value::as_str) == Some("branch")
+                    && summary
+                        .get("source_type")
+                        .and_then(Value::as_str)
+                        .is_none_or(|source| source == "Repository");
+                let Some(id) = summary.get("id").and_then(Value::as_u64).filter(|_| ours) else {
+                    continue;
+                };
+                let full = self.run_gh(&["api", &format!("repos/{nwo}/rulesets/{id}")], None)?;
+                let full: Value =
+                    serde_json::from_str(&full).map_err(|e| format!("ruleset {id} parse: {e}"))?;
+                if full.get("enforcement").and_then(Value::as_str) != Some("active") {
+                    continue;
+                }
+                match ruleset_targets(&full, pattern, default_branch) {
+                    Targeting::Targets => found.targeting.push(full),
+                    Targeting::Misses => {}
+                    Targeting::Unexplained(why) => found
+                        .unexplained
+                        .push(format!("ruleset {}: {why}", ruleset_label(&full))),
+                }
+            }
+            if summaries.len() < RULESET_PAGE_SIZE {
+                return Ok(found);
+            }
+            page += 1;
+        }
+    }
+
+    /// The live classic protection of `branch`, or `None` when the branch
+    /// is not protected (HTTP 404).
+    fn live_protection(&self, nwo: &str, branch: &str) -> Result<Option<Value>, String> {
+        match self.run_gh(
+            &["api", &format!("repos/{nwo}/branches/{branch}/protection")],
+            None,
+        ) {
+            // A body that does not parse was not read; a PUT built without
+            // it would drop every setting it could not see.
+            Ok(out) => match serde_json::from_str::<Value>(&out) {
+                Ok(body @ Value::Object(_)) => Ok(Some(body)),
+                _ => Err(format!(
+                    "the classic protection of {branch} is not a JSON object"
+                )),
             },
+            Err(e) if e.contains("404") || e.contains("Branch not protected") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The classic branch-protection PUT body. Required checks are strict.
+    /// The PUT replaces the whole protection, so every setting this command
+    /// does not own is carried from `live` (TSK-261): conversation
+    /// resolution, linear history, lock, fork syncing, creation blocking,
+    /// push restrictions, the review settings, and checks already required.
+    fn branch_protection_body(rule: &BranchRule, live: Option<&Value>) -> String {
+        let live = live.unwrap_or(&Value::Null);
+        let mut body = json!({
+            "required_status_checks": Self::classic_status_checks(rule, live),
             "enforce_admins": true,
-            "required_pull_request_reviews": if rule.require_pr {
-                serde_json::json!({ "required_approving_review_count": 0 })
-            } else {
-                serde_json::Value::Null
-            },
-            "restrictions": serde_json::Value::Null,
+            "required_pull_request_reviews": Self::classic_reviews(rule, live),
+            "restrictions": Self::classic_restrictions(live),
             "allow_force_pushes": !rule.block_force_push,
             "allow_deletions": !rule.block_deletion,
-        })
-        .to_string()
+        });
+        for key in [
+            "required_conversation_resolution",
+            "required_linear_history",
+            "lock_branch",
+            "allow_fork_syncing",
+            "block_creations",
+        ] {
+            if let Some(enabled) = live
+                .pointer(&format!("/{key}/enabled"))
+                .and_then(Value::as_bool)
+            {
+                body[key] = Value::Bool(enabled);
+            }
+        }
+        body.to_string()
     }
 
-    fn ruleset_body(rule: &BranchRule) -> String {
+    /// The classic `required_status_checks`: strict, with the rule's checks
+    /// added to those the live protection already requires (and, where it
+    /// pins checks to apps, pinned to GitHub Actions).
+    fn classic_status_checks(rule: &BranchRule, live: &Value) -> Value {
+        let live_checks = live.get("required_status_checks").filter(|v| v.is_object());
+        let mut contexts: Vec<String> = live_checks
+            .and_then(|checks| checks.get("contexts"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect();
+        if !rule.requires_checks() {
+            return live_checks.map_or(Value::Null, |checks| {
+                json!({
+                    "strict": checks.get("strict").and_then(Value::as_bool).unwrap_or(false),
+                    "contexts": contexts,
+                })
+            });
+        }
+        for name in &rule.required_checks {
+            if !contexts.contains(name) {
+                contexts.push(name.clone());
+            }
+        }
+        let mut body = json!({ "strict": true, "contexts": contexts });
+        if let Some(checks) = live_checks
+            .and_then(|checks| checks.get("checks"))
+            .and_then(Value::as_array)
+            .filter(|checks| !checks.is_empty())
+        {
+            let mut checks = checks.clone();
+            for name in &rule.required_checks {
+                if !checks
+                    .iter()
+                    .any(|c| c.get("context").and_then(Value::as_str) == Some(name))
+                {
+                    checks.push(json!({ "context": name, "app_id": GITHUB_ACTIONS_APP_ID }));
+                }
+            }
+            body["checks"] = Value::Array(checks);
+        }
+        body
+    }
+
+    /// The classic review settings: the live ones when present, else no
+    /// required approvals when the rule requires a pull request.
+    fn classic_reviews(rule: &BranchRule, live: &Value) -> Value {
+        match live
+            .get("required_pull_request_reviews")
+            .filter(|v| v.is_object())
+        {
+            Some(reviews) => {
+                let mut kept = json!({});
+                for key in [
+                    "dismiss_stale_reviews",
+                    "require_code_owner_reviews",
+                    "require_last_push_approval",
+                    "required_approving_review_count",
+                ] {
+                    if let Some(value) = reviews.get(key) {
+                        kept[key] = value.clone();
+                    }
+                }
+                // The live object lists people, teams and apps as objects;
+                // the PUT takes their logins and slugs.
+                for key in ["dismissal_restrictions", "bypass_pull_request_allowances"] {
+                    if let Some(list) = reviews.get(key).filter(|v| v.is_object()) {
+                        kept[key] = Self::principals(list);
+                    }
+                }
+                kept
+            }
+            None if rule.require_pr => json!({ "required_approving_review_count": 0 }),
+            None => Value::Null,
+        }
+    }
+
+    /// The live push restrictions in the PUT form, or none.
+    fn classic_restrictions(live: &Value) -> Value {
+        live.get("restrictions")
+            .filter(|v| v.is_object())
+            .map_or(Value::Null, Self::principals)
+    }
+
+    /// A live `users`/`teams`/`apps` object in the PUT form: logins for
+    /// users, slugs for teams and apps.
+    fn principals(list: &Value) -> Value {
+        let names = |key: &str, field: &str| -> Vec<Value> {
+            list.get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get(field).cloned())
+                .collect()
+        };
+        json!({
+            "users": names("users", "login"),
+            "teams": names("teams", "slug"),
+            "apps": names("apps", "slug"),
+        })
+    }
+
+    /// The ruleset rules the plan intends for `rule`.
+    fn ruleset_rules(rule: &BranchRule) -> Vec<Value> {
         let mut rules = Vec::new();
         if rule.require_pr {
-            rules.push(serde_json::json!({
+            rules.push(json!({
                 "type": "pull_request",
                 "parameters": {
                     "required_approving_review_count": 0,
@@ -446,13 +709,31 @@ impl GithubProvider {
                 }
             }));
         }
+        if rule.requires_checks() {
+            rules.push(json!({
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": true,
+                    "do_not_enforce_on_create": false,
+                    "required_status_checks": rule
+                        .required_checks
+                        .iter()
+                        .map(|name| json!({ "context": name, "integration_id": GITHUB_ACTIONS_APP_ID }))
+                        .collect::<Vec<_>>()
+                }
+            }));
+        }
         if rule.block_force_push {
-            rules.push(serde_json::json!({ "type": "non_fast_forward" }));
+            rules.push(json!({ "type": "non_fast_forward" }));
         }
         if rule.block_deletion {
-            rules.push(serde_json::json!({ "type": "deletion" }));
+            rules.push(json!({ "type": "deletion" }));
         }
-        serde_json::json!({
+        rules
+    }
+
+    fn ruleset_body(rule: &BranchRule) -> String {
+        json!({
             "name": format!("codeflow protect {}", rule.pattern),
             "target": "branch",
             "enforcement": "active",
@@ -462,9 +743,138 @@ impl GithubProvider {
                     "exclude": []
                 }
             },
-            "rules": rules,
+            "rules": Self::ruleset_rules(rule),
         })
         .to_string()
+    }
+
+    /// The PUT body that brings an existing ruleset up to `rule`: its own
+    /// rules, parameters, name, conditions and bypass list stay; a rule type
+    /// it lacks is added; its required status checks become strict and gain
+    /// any missing name, pinned to GitHub Actions.
+    fn ruleset_update_body(existing: &Value, rule: &BranchRule) -> String {
+        let mut rules: Vec<Value> = existing
+            .get("rules")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for intended in Self::ruleset_rules(rule) {
+            let kind = intended
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let Some(current) = rules
+                .iter_mut()
+                .find(|r| r.get("type").and_then(Value::as_str) == Some(kind))
+            else {
+                rules.push(intended);
+                continue;
+            };
+            if kind != "required_status_checks" {
+                continue;
+            }
+            let parameters = &mut current["parameters"];
+            parameters["strict_required_status_checks_policy"] = Value::Bool(true);
+            let mut checks = parameters
+                .get("required_status_checks")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for name in &rule.required_checks {
+                if !checks
+                    .iter()
+                    .any(|c| c.get("context").and_then(Value::as_str) == Some(name))
+                {
+                    checks
+                        .push(json!({ "context": name, "integration_id": GITHUB_ACTIONS_APP_ID }));
+                }
+            }
+            parameters["required_status_checks"] = Value::Array(checks);
+        }
+        json!({ "rules": rules }).to_string()
+    }
+
+    /// Apply one rule: update every active ruleset that already targets
+    /// it, else create a ruleset (glob or data profile) or PUT classic
+    /// protection. Returns the mechanism applied and a note for each
+    /// ruleset whose ref pattern could not be read. While such a ruleset
+    /// is the only candidate, nothing is written: it may already target
+    /// the branch.
+    fn apply_rule(
+        &self,
+        repo: &RepoInfo,
+        rule: &BranchRule,
+    ) -> Result<(String, Vec<String>), String> {
+        let nwo = &repo.nwo;
+        let live = self.rulesets_for(nwo, &rule.pattern, repo.default_branch.as_deref())?;
+        let notes: Vec<String> = live
+            .unexplained
+            .iter()
+            .map(|why| {
+                format!(
+                    "{why}; it was not updated, so check by hand whether it targets {}",
+                    rule.pattern
+                )
+            })
+            .collect();
+        if live.targeting.is_empty() && !live.unexplained.is_empty() {
+            return Err(format!(
+                "{}; it may already target this branch, so no ruleset or branch protection was added",
+                live.unexplained.join("; ")
+            ));
+        }
+        if !live.targeting.is_empty() {
+            let mut updated = Vec::new();
+            for ruleset in &live.targeting {
+                let id = ruleset
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "ruleset without an id".to_string())?;
+                self.run_gh(
+                    &[
+                        "api",
+                        "-X",
+                        "PUT",
+                        &format!("repos/{nwo}/rulesets/{id}"),
+                        "--input",
+                        "-",
+                    ],
+                    Some(&Self::ruleset_update_body(ruleset, rule)),
+                )?;
+                updated.push(ruleset_label(ruleset));
+            }
+            return Ok((
+                format!("updated ruleset {} in place", updated.join(", ")),
+                notes,
+            ));
+        }
+        if rule.uses_ruleset() {
+            self.run_gh(
+                &[
+                    "api",
+                    "-X",
+                    "POST",
+                    &format!("repos/{nwo}/rulesets"),
+                    "--input",
+                    "-",
+                ],
+                Some(&Self::ruleset_body(rule)),
+            )?;
+            return Ok(("applied ruleset".to_string(), notes));
+        }
+        let protection = self.live_protection(nwo, &rule.pattern)?;
+        self.run_gh(
+            &[
+                "api",
+                "-X",
+                "PUT",
+                &format!("repos/{nwo}/branches/{}/protection", rule.pattern),
+                "--input",
+                "-",
+            ],
+            Some(&Self::branch_protection_body(rule, protection.as_ref())),
+        )?;
+        Ok(("applied branch protection".to_string(), notes))
     }
 
     /// Classify a failed gh call into a precise limitation message.
@@ -490,13 +900,99 @@ impl GithubProvider {
     }
 }
 
+/// What `gh repo view` says about the repository.
+struct RepoInfo {
+    nwo: String,
+    private: bool,
+    default_branch: Option<String>,
+}
+
+/// The active repository rulesets read for one policy branch.
+#[derive(Default)]
+struct LiveRulesets {
+    /// Those that target the branch, read in full.
+    targeting: Vec<Value>,
+    /// One line for each whose ref pattern could not be read.
+    unexplained: Vec<String>,
+}
+
+/// How a full ruleset relates to a policy branch.
+#[derive(Debug, PartialEq, Eq)]
+enum Targeting {
+    Targets,
+    Misses,
+    /// A ref pattern it depends on could not be read, with why.
+    Unexplained(String),
+}
+
+/// `'name' (id)` for a full ruleset.
+fn ruleset_label(ruleset: &Value) -> String {
+    let name = ruleset
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("unnamed");
+    let id = ruleset
+        .get("id")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    format!("'{name}' ({id})")
+}
+
+/// Whether a full ruleset targets `pattern`: one of its includes matches
+/// the branch and none of its excludes does. An entry matches when it is
+/// `~ALL`, `~DEFAULT_BRANCH` with `pattern` the default branch, the branch
+/// ref itself, or an fnmatch pattern the ref `refs/heads/<pattern>` fits,
+/// matched as GitHub matches it ([`fnmatch`]). When the answer depends on
+/// an entry that cannot be read, it is unexplained, never a miss.
+fn ruleset_targets(ruleset: &Value, pattern: &str, default_branch: Option<&str>) -> Targeting {
+    let names = |list: &str| -> Vec<&str> {
+        ruleset
+            .pointer(&format!("/conditions/ref_name/{list}"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect()
+    };
+    let reference = format!("refs/heads/{pattern}");
+    let entry_matches = |entry: &str| -> Result<bool, String> {
+        match entry {
+            "~ALL" => Ok(true),
+            "~DEFAULT_BRANCH" => Ok(default_branch == Some(pattern)),
+            entry if entry == reference => Ok(true),
+            entry => fnmatch::matches(entry, &reference)
+                .map_err(|why| format!("its ref pattern '{entry}' {why}")),
+        }
+    };
+    // Any entry that matches settles the list; else an unreadable one
+    // leaves it open.
+    let any = |list: &str| -> Result<bool, String> {
+        let mut unreadable = None;
+        for entry in names(list) {
+            match entry_matches(entry) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(why) => {
+                    unreadable.get_or_insert(why);
+                }
+            }
+        }
+        unreadable.map_or(Ok(false), Err)
+    };
+    match (any("include"), any("exclude")) {
+        (Ok(false), _) | (_, Ok(true)) => Targeting::Misses,
+        (Ok(true), Ok(false)) => Targeting::Targets,
+        (Err(why), _) | (_, Err(why)) => Targeting::Unexplained(why),
+    }
+}
+
 impl RemoteProvider for GithubProvider {
     fn name(&self) -> &'static str {
         "github"
     }
 
     fn apply(&self, plan: &ProtectionPlan) -> ProtectReport {
-        let (nwo, private) = match self.repo_info() {
+        let repo = match self.repo_info() {
             Ok(info) => info,
             Err(e) => {
                 return ProtectReport {
@@ -511,61 +1007,35 @@ impl RemoteProvider for GithubProvider {
         };
 
         let mut lines = vec![format!(
-            "repo: {nwo} ({})",
-            if private { "private" } else { "public" }
+            "repo: {} ({})",
+            repo.nwo,
+            if repo.private { "private" } else { "public" }
         )];
         let mut limitations = Vec::new();
         let mut failed_rules = Vec::new();
 
         for rule in &plan.rules {
-            let result = if rule.uses_ruleset() {
-                self.run_gh(
-                    &[
-                        "api",
-                        "-X",
-                        "POST",
-                        &format!("repos/{nwo}/rulesets"),
-                        "--input",
-                        "-",
-                    ],
-                    Some(&Self::ruleset_body(rule)),
-                )
-            } else {
-                self.run_gh(
-                    &[
-                        "api",
-                        "-X",
-                        "PUT",
-                        &format!("repos/{nwo}/branches/{}/protection", rule.pattern),
-                        "--input",
-                        "-",
-                    ],
-                    Some(&Self::branch_protection_body(rule)),
-                )
-            };
-            match result {
-                Ok(_) => {
-                    let mechanism = if rule.uses_ruleset() {
-                        "ruleset"
-                    } else {
-                        "branch protection"
-                    };
+            match self.apply_rule(&repo, rule) {
+                Ok((mechanism, notes)) => {
                     lines.push(format!(
-                        "applied {mechanism} for {}: {}",
+                        "{mechanism} for {}: {}",
                         rule.pattern,
                         rule.intent_lines().join(", ")
                     ));
-                    if rule.require_status_checks {
+                    if rule.requires_checks() {
                         lines.push(format!(
-                            "  note: {} requires these CI status checks to pass before merge: {} \
-                             (the shipped codeflow-ci.yml job names; adjust if yours differ)",
+                            "  note: {} requires these status checks to pass on a branch that is up to date with its base: {} \
+                             (git.required_checks, by default the shipped codeflow-ci.yml job names)",
                             rule.pattern,
-                            REQUIRED_CI_CONTEXTS.join(", ")
+                            rule.required_checks.join(", ")
                         ));
+                    }
+                    for note in notes {
+                        lines.push(format!("  note: {note}"));
                     }
                 }
                 Err(e) => {
-                    limitations.push(Self::limitation_for(&rule.pattern, &e, private));
+                    limitations.push(Self::limitation_for(&rule.pattern, &e, repo.private));
                     failed_rules.push(rule.clone());
                 }
             }
@@ -760,7 +1230,12 @@ mod tests {
     #[test]
     fn test_github_applies_when_gh_succeeds() {
         let dir = tempfile::tempdir().unwrap();
-        let gh = write_shim(dir.path(), "printf '%s' '{}'\nexit 0");
+        // The rulesets list is a JSON array on GitHub; every other call
+        // answers an empty object.
+        let gh = write_shim(
+            dir.path(),
+            "case \"$2\" in *rulesets\\?*) printf '%s' '[]' ;; *) printf '%s' '{}' ;; esac\nexit 0",
+        );
         let path = write_policy(dir.path(), r#"["main", "release/*"]"#);
         let plan = ProtectionPlan::from_policy_file(&path);
 
@@ -841,20 +1316,27 @@ mod tests {
         assert!(msg.contains("HTTP 502"));
     }
 
-    #[test]
-    fn test_branch_protection_body_pins_real_ci_contexts() {
-        // An empty `contexts` array requires no named check — "require status
-        // checks" would be toothless. Pin the shipped codeflow-ci.yml job names.
-        let rule = BranchRule {
+    fn main_rule(required_checks: &[&str]) -> BranchRule {
+        BranchRule {
             pattern: "main".into(),
             require_pr: true,
             require_status_checks: true,
             block_force_push: true,
             block_deletion: true,
             data_profile: false,
-        };
+            required_checks: required_checks.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn test_branch_protection_body_pins_real_ci_contexts() {
+        // An empty `contexts` array requires no named check: "require status
+        // checks" would be toothless. Pin the shipped codeflow-ci.yml job names,
+        // required on an up-to-date branch.
+        let rule = main_rule(DEFAULT_REQUIRED_CHECKS);
         let body: serde_json::Value =
-            serde_json::from_str(&GithubProvider::branch_protection_body(&rule)).unwrap();
+            serde_json::from_str(&GithubProvider::branch_protection_body(&rule, None)).unwrap();
+        assert_eq!(body["required_status_checks"]["strict"], true);
         let contexts = body["required_status_checks"]["contexts"]
             .as_array()
             .expect("contexts is an array");
@@ -870,6 +1352,504 @@ mod tests {
                 "missing required context {expected}"
             );
         }
+    }
+
+    #[test]
+    fn an_empty_check_list_emits_no_status_check_rule() {
+        let rule = main_rule(&[]);
+        let classic: serde_json::Value =
+            serde_json::from_str(&GithubProvider::branch_protection_body(&rule, None)).unwrap();
+        assert!(classic["required_status_checks"].is_null(), "{classic}");
+        let ruleset: serde_json::Value =
+            serde_json::from_str(&GithubProvider::ruleset_body(&rule)).unwrap();
+        assert!(
+            !ruleset["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["type"] == "required_status_checks"),
+            "{ruleset}"
+        );
+    }
+
+    #[test]
+    fn the_dry_run_names_strict_checks_from_the_policy_or_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_policy(dir.path(), r#"["main"]"#);
+        let text = ProtectionPlan::from_policy_file(&path)
+            .dry_run_report("github")
+            .render();
+        assert!(
+            text.contains(
+                "require status checks to pass on a branch that is up to date with its base: \
+                 codeflow gates, secret scan, security review, commit standards"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("updated in place"), "{text}");
+        std::fs::write(
+            &path,
+            r#"{ "git": { "protected_branches": ["main"], "required_checks": ["build", "windows"] } }"#,
+        )
+        .unwrap();
+        let text = ProtectionPlan::from_policy_file(&path)
+            .dry_run_report("github")
+            .render();
+        assert!(
+            text.contains("up to date with its base: build, windows"),
+            "{text}"
+        );
+    }
+
+    /// A `gh` stand-in that serves a host's live rules from files and logs
+    /// every write: `writes` holds `<METHOD> <path>` per line and `bodies`
+    /// the matching request body.
+    #[cfg(unix)]
+    struct Host {
+        dir: tempfile::TempDir,
+        gh: PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl Host {
+        fn new(rulesets: &str, by_id: &[(u64, &str)], protection: Option<&str>) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let d = dir.path().display().to_string();
+            std::fs::write(dir.path().join("rulesets.json"), rulesets).unwrap();
+            for (id, body) in by_id {
+                std::fs::write(dir.path().join(format!("ruleset-{id}.json")), body).unwrap();
+            }
+            if let Some(body) = protection {
+                std::fs::write(dir.path().join("protection.json"), body).unwrap();
+            }
+            let script = format!(
+                r#"#!/bin/sh
+d='{d}'
+case "$*" in
+  "repo view"*) printf '%s' '{{"nameWithOwner":"o/r","isPrivate":false,"defaultBranchRef":{{"name":"main"}}}}' ;;
+  "repo") exit 0 ;;
+  "api -X "*) printf '%s %s\n' "$3" "$4" >> "$d/writes"; cat >> "$d/bodies"; printf '\n' >> "$d/bodies"; printf '{{}}' ;;
+  "api repos/o/r/rulesets?per_page=100"*)
+    page="${{2##*&page=}}"
+    case "$page" in "$2") page=1 ;; esac
+    if [ "$page" = 1 ]; then cat "$d/rulesets.json";
+    elif [ -f "$d/rulesets-$page.json" ]; then cat "$d/rulesets-$page.json";
+    else printf '[]'; fi ;;
+  "api repos/o/r/rulesets/"*) cat "$d/ruleset-${{2##*/}}.json" ;;
+  "api repos/o/r/branches/"*"/protection")
+    if [ -f "$d/protection.json" ]; then cat "$d/protection.json"; else echo 'gh: Branch not protected (HTTP 404)' >&2; exit 1; fi ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+"#
+            );
+            let gh = dir.path().join("gh");
+            std::fs::write(&gh, script).unwrap();
+            let mut perms = std::fs::metadata(&gh).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&gh, perms).unwrap();
+            wait_until_executable(&gh);
+            Self { dir, gh }
+        }
+
+        fn apply(&self, branches: &str) -> ProtectReport {
+            let path = write_policy(self.dir.path(), branches);
+            let plan = ProtectionPlan::from_policy_file(&path);
+            GithubProvider::with_gh(&self.gh, self.dir.path()).apply(&plan)
+        }
+
+        fn writes(&self) -> Vec<(String, serde_json::Value)> {
+            let read = |name: &str| {
+                std::fs::read_to_string(self.dir.path().join(name)).unwrap_or_default()
+            };
+            read("writes")
+                .lines()
+                .zip(read("bodies").lines())
+                .map(|(call, body)| (call.to_string(), serde_json::from_str(body).unwrap()))
+                .collect()
+        }
+    }
+
+    /// The live shape of a ruleset that targets the default branch with six
+    /// GitHub Actions checks and no strict policy (this repository's
+    /// "main required checks" on 2026-10-08).
+    #[cfg(unix)]
+    const LIVE_RULESET: &str = r#"{"id":24379074,"name":"main required checks","target":"branch","source_type":"Repository","enforcement":"active","conditions":{"ref_name":{"exclude":[],"include":["~DEFAULT_BRANCH"]}},"rules":[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":false,"do_not_enforce_on_create":false,"required_status_checks":[{"context":"codeflow gates","integration_id":15368},{"context":"commit standards","integration_id":15368},{"context":"release impact","integration_id":15368},{"context":"secret scan","integration_id":15368},{"context":"security review","integration_id":15368},{"context":"windows","integration_id":15368}]}}],"bypass_actors":[]}"#;
+
+    /// The live classic protection of this repository's `main` on
+    /// 2026-10-08: conversation resolution on, no required checks.
+    #[cfg(unix)]
+    const LIVE_PROTECTION: &str = r#"{"required_pull_request_reviews":{"dismiss_stale_reviews":false,"require_code_owner_reviews":false,"require_last_push_approval":false,"required_approving_review_count":0},"required_signatures":{"enabled":false},"enforce_admins":{"enabled":false},"required_linear_history":{"enabled":false},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"block_creations":{"enabled":false},"required_conversation_resolution":{"enabled":true},"lock_branch":{"enabled":false},"allow_fork_syncing":{"enabled":false}}"#;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_glob_ruleset_requires_strict_checks_pinned_to_github_actions() {
+        let host = Host::new("[]", &[], None);
+        let report = host.apply(r#"["release/*"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].0, "POST repos/o/r/rulesets");
+        let rule = writes[0].1["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["type"] == "required_status_checks")
+            .cloned()
+            .unwrap_or_else(|| panic!("no required_status_checks rule: {}", writes[0].1));
+        assert_eq!(
+            rule["parameters"]["strict_required_status_checks_policy"],
+            true
+        );
+        let checks: Vec<(String, u64)> = rule["parameters"]["required_status_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["context"].as_str().unwrap().to_string(),
+                    c["integration_id"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            checks,
+            DEFAULT_REQUIRED_CHECKS
+                .iter()
+                .map(|name| (name.to_string(), 15368))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classic_protection_is_strict_and_keeps_conversation_resolution() {
+        let host = Host::new("[]", &[], Some(LIVE_PROTECTION));
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].0, "PUT repos/o/r/branches/main/protection");
+        let body = &writes[0].1;
+        assert_eq!(body["required_conversation_resolution"], true, "{body}");
+        assert_eq!(body["required_status_checks"]["strict"], true, "{body}");
+        assert_eq!(
+            body["required_status_checks"]["contexts"],
+            serde_json::json!(DEFAULT_REQUIRED_CHECKS)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classic_protection_keeps_dismissal_restrictions_and_bypass_allowances() {
+        let mut live: serde_json::Value = serde_json::from_str(LIVE_PROTECTION).unwrap();
+        live["required_pull_request_reviews"]["dismissal_restrictions"] = serde_json::json!({
+            "url": "https://api.github.com/x",
+            "users": [{ "login": "alice", "id": 1 }],
+            "teams": [{ "slug": "leads", "id": 2 }],
+            "apps": [{ "slug": "triage-bot", "id": 3 }]
+        });
+        live["required_pull_request_reviews"]["bypass_pull_request_allowances"] = serde_json::json!({
+            "users": [{ "login": "bob", "id": 4 }],
+            "teams": [],
+            "apps": [{ "slug": "release-bot", "id": 5 }]
+        });
+        let host = Host::new("[]", &[], Some(&live.to_string()));
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        let reviews = &writes[0].1["required_pull_request_reviews"];
+        assert_eq!(
+            reviews["dismissal_restrictions"],
+            serde_json::json!({ "users": ["alice"], "teams": ["leads"], "apps": ["triage-bot"] }),
+            "{reviews}"
+        );
+        assert_eq!(
+            reviews["bypass_pull_request_allowances"],
+            serde_json::json!({ "users": ["bob"], "teams": [], "apps": ["release-bot"] }),
+            "{reviews}"
+        );
+    }
+
+    /// A live read that answers with a body that does not parse was not
+    /// read: protect writes nothing rather than add a second ruleset or a
+    /// classic PUT that drops the settings it could not see.
+    #[cfg(unix)]
+    #[test]
+    fn an_unparsable_live_read_writes_nothing() {
+        let list = Host::new("<html>", &[], None);
+        let report = list.apply(r#"["release/*"]"#);
+        assert_eq!(
+            report.status,
+            ProtectStatus::Degraded,
+            "{}",
+            report.render()
+        );
+        assert!(list.writes().is_empty(), "{:?}", list.writes());
+
+        let protection = Host::new("[]", &[], Some("<html>"));
+        let report = protection.apply(r#"["main"]"#);
+        assert_eq!(
+            report.status,
+            ProtectStatus::Degraded,
+            "{}",
+            report.render()
+        );
+        assert!(protection.writes().is_empty(), "{:?}", protection.writes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ruleset_on_a_later_page_is_updated_not_duplicated() {
+        let filler: Vec<serde_json::Value> = (1..=RULESET_PAGE_SIZE as u64)
+            .map(|id| {
+                serde_json::json!({
+                    "id": id, "name": format!("tags {id}"), "target": "tag",
+                    "source_type": "Repository"
+                })
+            })
+            .collect();
+        let host = Host::new(
+            &serde_json::to_string(&filler).unwrap(),
+            &[(24_379_074, LIVE_RULESET)],
+            Some(LIVE_PROTECTION),
+        );
+        std::fs::write(
+            host.dir.path().join("rulesets-2.json"),
+            r#"[{"id":24379074,"name":"main required checks","target":"branch","source_type":"Repository"}]"#,
+        )
+        .unwrap();
+        let report = host.apply(r#"["main"]"#);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/24379074");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_ruleset_is_updated_in_place_and_never_duplicated() {
+        let list = r#"[{"id":24379074,"name":"main required checks","target":"branch","source_type":"Repository"},{"id":24379101,"name":"release tags","target":"tag","source_type":"Repository"}]"#;
+        let host = Host::new(list, &[(24_379_074, LIVE_RULESET)], Some(LIVE_PROTECTION));
+        let report = host.apply(r#"["main"]"#);
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert!(
+            text.contains("updated ruleset 'main required checks' (24379074) in place for main"),
+            "{text}"
+        );
+        // One write, to that ruleset: no second ruleset, no classic PUT.
+        let writes = host.writes();
+        assert_eq!(writes.len(), 1, "{writes:?}");
+        assert_eq!(writes[0].0, "PUT repos/o/r/rulesets/24379074");
+        let rules = writes[0].1["rules"].as_array().unwrap();
+        let kinds: Vec<&str> = rules.iter().map(|r| r["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "required_status_checks",
+                "pull_request",
+                "non_fast_forward",
+                "deletion"
+            ]
+        );
+        let checks = &rules[0]["parameters"];
+        assert_eq!(checks["strict_required_status_checks_policy"], true);
+        // The six live checks stay, with their integration id, and none is added.
+        let live: serde_json::Value = serde_json::from_str(LIVE_RULESET).unwrap();
+        assert_eq!(
+            checks["required_status_checks"],
+            live["rules"][0]["parameters"]["required_status_checks"]
+        );
+        assert!(writes[0].1.get("bypass_actors").is_none());
+    }
+
+    /// `LIVE_RULESET` with another id, enforcement and ref conditions.
+    #[cfg(unix)]
+    fn ruleset_with(id: u64, enforcement: &str, include: &[&str], exclude: &[&str]) -> String {
+        let mut ruleset: serde_json::Value = serde_json::from_str(LIVE_RULESET).unwrap();
+        ruleset["id"] = id.into();
+        ruleset["name"] = format!("ruleset {id}").into();
+        ruleset["enforcement"] = enforcement.into();
+        ruleset["conditions"]["ref_name"] = serde_json::json!({
+            "include": include, "exclude": exclude
+        });
+        ruleset.to_string()
+    }
+
+    /// Apply `main` against rulesets that are all branch rulesets of the
+    /// repository; each is `(id, enforcement, include, exclude)`. Returns
+    /// the write calls.
+    #[cfg(unix)]
+    fn writes_against(rulesets: &[(u64, &str, &[&str], &[&str])]) -> Vec<String> {
+        let (report, writes) = apply_against(r#"["main"]"#, rulesets);
+        assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+        writes
+    }
+
+    /// Apply the policy `branches` against branch rulesets of the
+    /// repository, each `(id, enforcement, include, exclude)`, with no
+    /// classic protection. Returns the report and the write calls.
+    #[cfg(unix)]
+    fn apply_against(
+        branches: &str,
+        rulesets: &[(u64, &str, &[&str], &[&str])],
+    ) -> (ProtectReport, Vec<String>) {
+        let bodies: Vec<(u64, String)> = rulesets
+            .iter()
+            .map(|(id, enforcement, include, exclude)| {
+                (*id, ruleset_with(*id, enforcement, include, exclude))
+            })
+            .collect();
+        let list: Vec<serde_json::Value> = rulesets
+            .iter()
+            .map(|(id, ..)| {
+                serde_json::json!({
+                    "id": id, "name": format!("ruleset {id}"), "target": "branch",
+                    "source_type": "Repository"
+                })
+            })
+            .collect();
+        let by_id: Vec<(u64, &str)> = bodies.iter().map(|(id, b)| (*id, b.as_str())).collect();
+        let host = Host::new(&serde_json::to_string(&list).unwrap(), &by_id, None);
+        let report = host.apply(branches);
+        let writes = host.writes().into_iter().map(|(call, _)| call).collect();
+        (report, writes)
+    }
+
+    /// Round 3 of the PR 127 review: GitHub matches `refs/heads/**` as one
+    /// segment, so it does not cover `release/*`. That ruleset is left
+    /// alone and the policy branch gets its own ruleset.
+    #[cfg(unix)]
+    #[test]
+    fn a_trailing_double_star_does_not_cover_a_nested_policy_branch() {
+        for branches in [r#"["release/*"]"#, r#"["feature/foo"]"#] {
+            let (report, writes) =
+                apply_against(branches, &[(8, "active", &["refs/heads/**"], &[])]);
+            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            let expected = if branches.contains('*') {
+                "POST repos/o/r/rulesets"
+            } else {
+                "PUT repos/o/r/branches/feature/foo/protection"
+            };
+            assert_eq!(writes, [expected], "{branches}");
+        }
+        // One segment below refs/heads/ is covered and updated in place.
+        let (_, writes) = apply_against(r#"["main"]"#, &[(8, "active", &["refs/heads/**"], &[])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/8"]);
+    }
+
+    /// GitHub's documented form for crossing slashes, `qa**/**/*`, targets
+    /// `qa/foo` and `qa/foo/bar`, so that ruleset is updated in place.
+    #[cfg(unix)]
+    #[test]
+    fn the_glued_double_star_form_is_updated_in_place() {
+        for branches in [r#"["qa/foo"]"#, r#"["qa/foo/bar"]"#] {
+            let (report, writes) =
+                apply_against(branches, &[(9, "active", &["refs/heads/qa**/**/*"], &[])]);
+            assert_eq!(report.status, ProtectStatus::Applied, "{}", report.render());
+            assert_eq!(writes, ["PUT repos/o/r/rulesets/9"], "{branches}");
+        }
+    }
+
+    /// A ref pattern this matcher cannot read leaves the ruleset
+    /// unexplained: it may target the branch, so nothing is written and
+    /// the report names the ruleset and its pattern.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_ref_pattern_blocks_the_fall_through_write() {
+        for include in ["refs/heads/[^m]*", "refs/heads/[ma"] {
+            let (report, writes) = apply_against(r#"["main"]"#, &[(10, "active", &[include], &[])]);
+            let text = report.render();
+            assert_eq!(report.status, ProtectStatus::Degraded, "{text}");
+            assert!(writes.is_empty(), "{include}: {writes:?}");
+            assert!(text.contains("ruleset 10"), "{text}");
+            assert!(text.contains(include), "{text}");
+        }
+        // A readable ruleset that targets the branch is still updated, and
+        // the unreadable one is reported beside it.
+        let (report, writes) = apply_against(
+            r#"["main"]"#,
+            &[
+                (10, "active", &["refs/heads/[^m]*"], &[]),
+                (11, "active", &["~DEFAULT_BRANCH"], &[]),
+            ],
+        );
+        let text = report.render();
+        assert_eq!(report.status, ProtectStatus::Applied, "{text}");
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/11"]);
+        assert!(text.contains("refs/heads/[^m]*"), "{text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_disabled_ruleset_listed_first_is_skipped_for_the_active_one() {
+        let writes = writes_against(&[
+            (1, "disabled", &["refs/heads/main"], &[]),
+            (2, "evaluate", &["~DEFAULT_BRANCH"], &[]),
+            (3, "active", &["~DEFAULT_BRANCH"], &[]),
+        ]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/3"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_active_ruleset_that_targets_the_branch_is_updated() {
+        let writes = writes_against(&[
+            (1, "active", &["refs/heads/main"], &[]),
+            (2, "disabled", &["~ALL"], &[]),
+            (3, "active", &["~ALL"], &[]),
+        ]);
+        assert_eq!(
+            writes,
+            ["PUT repos/o/r/rulesets/1", "PUT repos/o/r/rulesets/3"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ruleset_that_includes_all_branches_is_updated_without_a_classic_put() {
+        let writes = writes_against(&[(5, "active", &["~ALL"], &[])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/5"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_fnmatch_include_that_matches_the_branch_is_updated() {
+        for include in ["refs/heads/ma*", "refs/heads/*", "refs/heads/m?in"] {
+            let writes = writes_against(&[(6, "active", &[include], &[])]);
+            assert_eq!(writes, ["PUT repos/o/r/rulesets/6"], "{include}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_fnmatch_include_that_does_not_match_the_branch_is_left_alone() {
+        for include in ["refs/heads/release/*", "refs/heads/ma", "refs/tags/*"] {
+            let writes = writes_against(&[(6, "active", &[include], &[])]);
+            assert_eq!(
+                writes,
+                ["PUT repos/o/r/branches/main/protection"],
+                "{include}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exclude_that_removes_the_branch_leaves_the_ruleset_alone() {
+        for exclude in ["refs/heads/main", "refs/heads/m*", "~DEFAULT_BRANCH"] {
+            let writes = writes_against(&[(7, "active", &["~ALL"], &[exclude])]);
+            assert_eq!(
+                writes,
+                ["PUT repos/o/r/branches/main/protection"],
+                "{exclude}"
+            );
+        }
+        // An exclude of another branch does not.
+        let writes = writes_against(&[(7, "active", &["~ALL"], &["refs/heads/dev"])]);
+        assert_eq!(writes, ["PUT repos/o/r/rulesets/7"]);
     }
 
     #[cfg(unix)]

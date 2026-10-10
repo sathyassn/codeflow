@@ -13,7 +13,7 @@ use std::path::Path;
 
 use codeflow_core::hooks::{GitPolicy, Violation};
 use codeflow_core::workgraph::acceptance::{
-    pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
+    is_correction, pull_request_findings_judged, Criteria, Finding, FROZEN_RULE, SCOPE_NOTE,
 };
 use codeflow_core::workgraph::amendment::AMENDMENT_RULE;
 use codeflow_core::workgraph::release_line;
@@ -62,7 +62,9 @@ pub(super) fn dispatch(
         Ok(found) => {
             for found in found {
                 if found.note {
-                    let remedy = if found.rule == FROZEN_RULE {
+                    let remedy = if is_correction(&found) {
+                        codeflow_core::remedy::CRITERIA_CORRECTION.remedy()
+                    } else if found.rule == FROZEN_RULE {
                         codeflow_core::remedy::CRITERIA_DELTA.remedy()
                     } else if found.rule == AMENDMENT_RULE {
                         codeflow_core::remedy::PLANNING_AMENDMENT.remedy()
@@ -216,7 +218,9 @@ fn unscoped(error: &str) -> String {
 /// Criteria may change only in a planning amendment (ADR-0078), on a
 /// validated epic line (R-52) or on the workspace root branch the target's
 /// policy names, decided from the validated class, never from the branch
-/// prefix alone. Without a class (no pull request body, as the pre-push
+/// prefix alone. A tracked range may also correct the criteria text of a
+/// completed standalone task it names or follows up (ADR-0080), off that
+/// task's own branch. Without a class (no pull request body, as the pre-push
 /// hook runs), the range must itself carry only what a planning amendment
 /// may, `AGENTS.md`'s managed block read from the target at the base, on a
 /// branch that carries no task; or be the root branch or a verified epic
@@ -230,13 +234,18 @@ fn criteria(
     // A release range is judged by `judge` and does not reach here; were it
     // to, the release pull request keeps its task's criteria as tracked work.
     if let Some(Class::Tracked { task_id } | Class::ReleaseIntegration { task_id }) = class {
-        return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, task_id);
+        let own_branch = task_id_from_branch(root, branch).as_deref() == Some(task_id.as_str());
+        return codeflow_core::workgraph::acceptance::task_criteria(
+            root, range.base, task_id, own_branch,
+        );
     }
     // Without a pull request body (a push), a task branch's only valid class
     // is its own task, so it may change that task's criteria as its PR may.
     if class.is_none() {
         if let Some(task_id) = task_id_from_branch(root, branch) {
-            return codeflow_core::workgraph::acceptance::task_criteria(root, range.base, &task_id);
+            return codeflow_core::workgraph::acceptance::task_criteria(
+                root, range.base, &task_id, true,
+            );
         }
     }
     let amendable = match class {
@@ -287,7 +296,7 @@ fn violation(git: &GitPolicy, found: Finding) -> super::TaggedViolation {
         Violation::always_blocking(
             found.rule,
             found.message,
-            "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria",
+            "another task's criteria change by its own PR or by a planning amendment that names its epic; a reopened task keeps its criteria; a completed standalone task's criteria text is corrected by a pull request of planning records only whose `Task:` line names it or its follow-up, keeping every criterion and tag (ADR-0080)",
         )
     } else if found.rule == AMENDMENT_RULE {
         Violation::always_blocking(

@@ -379,8 +379,8 @@ class GatePartControls(unittest.TestCase):
             "working directory": (WORKFLOW.replace(step, step + "        working-directory: docs\n"),
                                   self.GATE_STEP_EXACT),
             "no pinned shell": (WORKFLOW.replace(step + "        shell: bash\n", step), self.GATE_STEP_EXACT),
-            "job continue-on-error": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                       "    runs-on: ubuntu-24.04\n    continue-on-error: true\n    strategy:\n"),
+            "job continue-on-error": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                       "    timeout-minutes: 45\n    continue-on-error: true\n    strategy:\n"),
                                       self.OWN_KEYS),
         })
 
@@ -392,8 +392,8 @@ class GatePartControls(unittest.TestCase):
             "spaced if": (WORKFLOW.replace(step, step + "        if : false\n"), self.GATE_STEP_EXACT),
             "quoted continue-on-error": (WORKFLOW.replace(step, step + "        'continue-on-error': true\n"),
                                          self.GATE_STEP_EXACT),
-            "quoted job key": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                "    runs-on: ubuntu-24.04\n    'continue-on-error': true\n    strategy:\n"),
+            "quoted job key": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                "    timeout-minutes: 45\n    'continue-on-error': true\n    strategy:\n"),
                                self.OWN_KEYS),
             "escaped BASH_ENV": (WORKFLOW.replace("\njobs:\n", "\nenv:\n  \"BASH\\u005fENV\": ./skip.sh\n\njobs:\n"),
                                  self.TOP_LEVEL),
@@ -435,8 +435,8 @@ class GatePartControls(unittest.TestCase):
             "workflow defaults": (WORKFLOW.replace(top, "\ndefaults:\n  run:\n    shell: bash -n {0}\n" + top),
                                   self.TOP_LEVEL),
             "workflow env": (WORKFLOW.replace(top, "\nenv:\n  BASH_ENV: ./skip.sh\n" + top), self.TOP_LEVEL),
-            "gates job defaults": (WORKFLOW.replace("    runs-on: ubuntu-24.04\n    strategy:\n",
-                                                    "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n"
+            "gates job defaults": (WORKFLOW.replace("    timeout-minutes: 45\n    strategy:\n",
+                                                    "    timeout-minutes: 45\n    defaults:\n      run:\n"
                                                     "        shell: bash -n {0}\n    strategy:\n"),
                                    self.OWN_KEYS),
             "merge key": (WORKFLOW.replace("        shell: bash\n        env:\n          LLVM",
@@ -480,6 +480,428 @@ class SharedInstallControls(unittest.TestCase):
         problems = parity.shared_install_problems(mutated(unordered))
         self.assertTrue(any("'docs-portal'" in p and "does not require 'docs-portal-deps'" in p for p in problems),
                         problems)
+
+
+class TimeoutAndPlaywrightControls(unittest.TestCase):
+    """TSK-254: every job has its own timeout, and only the present part
+    touches Playwright, through the pinned steps (PLAYWRIGHT_STEPS)."""
+
+    def problems(self, workflow: str) -> list[str]:
+        return parity.timeout_problems(workflow) + parity.playwright_problems(workflow)
+
+    def assert_problem(self, workflow: str, *needles: str) -> None:
+        self.assertNotEqual(workflow, WORKFLOW, "the control must change the workflow")
+        problems = self.problems(workflow)
+        self.assertTrue(any(all(n in p for n in needles) for p in problems),
+                        f"{needles} not in {problems}")
+
+    def test_the_committed_workflow_bounds_every_job_and_confines_playwright(self):
+        self.assertEqual(self.problems(WORKFLOW), [])
+        jobs = parity.jobs_section(WORKFLOW)
+        self.assertIn("gates", jobs)
+        self.assertNotIn("pull_request", jobs, "trigger keys are not jobs")
+
+    def test_a_job_without_its_own_whole_minute_timeout_is_refused(self):
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        self.assertEqual(WORKFLOW.count(journeys), 1)
+        self.assert_problem(WORKFLOW.replace(journeys, "    runs-on: windows-latest\n"),
+                            "job 'windows-journeys'", "timeout-minutes")
+        for value in ("0", "${{ 360 }}", "'30'", "30.5"):
+            with self.subTest(value=value):
+                self.assert_problem(WORKFLOW.replace(journeys, f"    runs-on: windows-latest\n    timeout-minutes: {value}\n"),
+                                    "job 'windows-journeys'")
+        self.assert_problem(WORKFLOW.replace(journeys, journeys + "    timeout-minutes: 15\n"),
+                            "job 'windows-journeys'", "exactly one")
+
+    def test_a_timeout_above_the_ac1_bound_is_refused(self):
+        """AC-1: a hung job frees its runner inside 45 minutes, so GitHub's
+        six-hour default of 360 must not pass as a "positive whole number"."""
+        journeys = "    runs-on: windows-latest\n    timeout-minutes: 15\n"
+        self.assertEqual(parity.MAX_TIMEOUT_MINUTES, 45)
+        for value in ("360", "46", "100"):
+            with self.subTest(value=value):
+                workflow = WORKFLOW.replace(journeys, f"    runs-on: windows-latest\n    timeout-minutes: {value}\n")
+                self.assert_problem(workflow, "job 'windows-journeys'", "45 minutes")
+        at_bound = WORKFLOW.replace(journeys, "    runs-on: windows-latest\n    timeout-minutes: 45\n")
+        self.assertNotEqual(at_bound, WORKFLOW)
+        self.assertEqual(self.problems(at_bound), [], "45 itself is allowed")
+
+    def test_every_committed_workflow_and_template_is_within_the_bound(self):
+        self.assertEqual(parity.all_timeout_problems(), [])
+        values = []
+        for relative in parity.workflow_files():
+            text = (ROOT / relative).read_text()
+            values += [int(v) for v in re.findall(r"^ {4}timeout-minutes: (\d+)$", text, re.M)]
+        self.assertTrue(values)
+        self.assertLessEqual(max(values), parity.MAX_TIMEOUT_MINUTES)
+
+    INSTALL_HEAD = "      - name: Install Playwright browsers from the lockfile\n"
+    BROWSERS = 'if timeout --kill-after=30s 10m "$node" "$cli" install chromium firefox webkit'
+    CLI = "          cli=crates/codeflow-present/web/node_modules/playwright-core/cli.js\n"
+
+    def install_step(self) -> str:
+        start = WORKFLOW.index(self.INSTALL_HEAD)
+        end = WORKFLOW.index("          exit 1\n", start) + len("          exit 1\n")
+        return WORKFLOW[start:end]
+
+    def assert_unpinned(self, workflow: str) -> None:
+        """Refused, and the message names the pin a deliberate change edits."""
+        self.assert_problem(workflow, "PLAYWRIGHT_STEPS", "scripts/gate-parity.py")
+
+    def test_a_line_broken_install_without_a_step_timeout_is_refused(self):
+        """Round 9: the package and `install` on two lines, with no step
+        timeout, matched no same-line spelling and passed."""
+        broken = (self.INSTALL_HEAD + "        if: matrix.part == 'present'\n        run: |\n"
+                  "          npx playwright \\\n            install chromium firefox webkit\n")
+        self.assert_unpinned(WORKFLOW.replace(self.install_step(), broken))
+
+    def test_a_timeout_that_wraps_another_command_is_refused(self):
+        """Round 9: `timeout` wrapped `echo` on the install's own line."""
+        self.assertEqual(WORKFLOW.count(self.BROWSERS), 1)
+        self.assert_unpinned(WORKFLOW.replace(
+            self.BROWSERS, "if timeout --kill-after=30s 10m echo skip; npx playwright install chromium"))
+
+    def test_an_added_install_through_a_variable_is_refused(self):
+        self.assertEqual(WORKFLOW.count(self.CLI), 1)
+        self.assert_unpinned(WORKFLOW.replace(
+            self.CLI, self.CLI + '          PW=playwright\n          npx "$PW" install chromium\n'))
+
+    def test_a_new_step_naming_playwright_is_refused(self):
+        step = ("      - name: Warm the Playwright cache\n        if: matrix.part == 'present'\n"
+                "        run: ls ~/.cache/ms-playwright\n")
+        self.assert_unpinned(WORKFLOW.replace(self.INSTALL_HEAD, step + self.INSTALL_HEAD))
+        upper = step.replace("Playwright", "PLAYWRIGHT").replace("ms-playwright", "ms-browsers")
+        self.assert_unpinned(WORKFLOW.replace(self.INSTALL_HEAD, upper + self.INSTALL_HEAD))
+        self.assert_unpinned(WORKFLOW.replace(self.install_step(), self.install_step() * 2))
+
+    def test_any_edit_to_a_pinned_step_is_refused(self):
+        """The forms the earlier text checks chased are each a change to the
+        pinned text, so each is refused the same way."""
+        install = self.install_step()
+        root = "sudo timeout --kill-after=30s 10m "
+        cases = {
+            "step timeout 360": install.replace("timeout-minutes: 25", "timeout-minutes: 360"),
+            "no step timeout": install.replace("        timeout-minutes: 25\n", ""),
+            "browser install unbounded": install.replace(
+                self.BROWSERS, self.BROWSERS.replace("timeout --kill-after=30s 10m ", "")),
+            "attempt limit 11m": install.replace(" 10m ", " 11m ", 1),
+            "apt-get outside a timeout": install.replace(root, root.split()[0] + " "),
+            "one attempt": install.replace("for attempt in 1 2; do", "for attempt in 1; do"),
+            "with-deps": install.replace('"$cli" install chromium', '"$cli" install --with-deps chromium'),
+            "every part": install.replace("        if: matrix.part == 'present'\n", ""),
+            "an extra spelling": install.replace(
+                self.BROWSERS, self.BROWSERS + "\n            npx playwright-core@1.49.0 install"),
+            "a bounded extra spelling": install.replace(
+                self.BROWSERS, self.BROWSERS + "\n            timeout --kill-after=30s 10m npx playwright install"),
+        }
+        for name, step in cases.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(step, install)
+                self.assert_unpinned(WORKFLOW.replace(install, step))
+        cache = "        if: matrix.part == 'present'\n        with:\n          path: ~/.cache/ms-playwright\n"
+        self.assertEqual(WORKFLOW.count(cache), 1)
+        self.assert_unpinned(WORKFLOW.replace(cache, cache.replace("        if: matrix.part == 'present'\n", "")))
+        noted = install.replace("          exit 1\n", "          # a note\n\n          exit 1   \n")
+        self.assertEqual(parity.playwright_problems(WORKFLOW.replace(install, noted)), [],
+                         "comments, blank lines and trailing spaces are not part of the pin")
+
+    def test_the_pin_keeps_the_ac2_bound(self):
+        """A deliberate edit to the pin still keeps AC-2: present only, no
+        --with-deps, a step timeout within the job bound, two attempts, and
+        each install under a timeout of at most 10 minutes."""
+        steps = parity.PLAYWRIGHT_STEPS
+        self.assertEqual(len(steps), 4)
+        self.assertTrue(all("        if: matrix.part == 'present'\n" in s for s in steps))
+        installs = [s for s in steps if s.startswith(self.INSTALL_HEAD)]
+        self.assertEqual(len(installs), 1)
+        install = installs[0]
+        self.assertNotIn("--with-deps", "".join(steps))
+        limit = re.search(r"^ {8}timeout-minutes: (\d+)$", install, re.M)
+        self.assertTrue(limit and int(limit.group(1)) <= parity.MAX_TIMEOUT_MINUTES)
+        self.assertIn("for attempt in 1 2; do", install)
+        self.assertIn(self.BROWSERS, install)
+        self.assertIn('sudo timeout --kill-after=30s 10m "$node" "$cli" install-deps chromium firefox webkit', install)
+        self.assertEqual([s for s in steps if s is not install and " install" in s], [],
+                         "only the install step installs")
+
+    def test_playwright_outside_the_gates_job_is_refused(self):
+        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        self.assertEqual(WORKFLOW.count(windows), 1)
+        self.assert_problem(WORKFLOW.replace(windows, "      - name: Install Playwright\n        run: npx playwright-core install\n" + windows),
+                            "job 'windows-tests'", "Playwright step")
+
+
+class EveryWorkflowTimeoutControls(unittest.TestCase):
+    """TSK-254: the timeout rule covers every workflow the repository runs
+    or ships, not only codeflow-ci.yml."""
+
+    OWN = {
+        ".github/workflows/codeflow-ci.yml", ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml", ".github/workflows/codeflow-release-integration.yml",
+        ".github/workflows/portal-pages.yml", ".github/workflows/release.yml",
+        ".github/workflows/release-main-recheck.yml", ".github/workflows/release-plan-authority.yml",
+        ".github/workflows/release-post-announce.yml",
+    }
+    SHIPPED = {"assets/base/ci/codeflow-ci.yml", "assets/base/ci/codeflow-policy.yml"}
+
+    def files(self) -> dict[str, str]:
+        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+
+    def problems(self, path: str, text: str) -> list[str]:
+        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+
+    def test_every_workflow_file_is_found_and_none_is_unbounded(self):
+        files = self.files()
+        self.assertEqual(set(files), self.OWN | self.SHIPPED, "bitbucket and generic CI files are not workflows")
+        self.assertEqual(parity.all_timeout_problems(), [])
+
+    def test_dropping_any_jobs_timeout_in_any_workflow_is_refused(self):
+        checked = 0
+        for path, text in self.files().items():
+            for name, job in parity.jobs_section(text).items():
+                line = next((l for l in job.splitlines() if parity.TIMEOUT_KEY.match(l)), None)
+                if line is None:
+                    continue
+                with self.subTest(path=path, job=name):
+                    mutated_text = text.replace(job, job.replace(line + "\n", "", 1), 1)
+                    self.assertNotEqual(mutated_text, text)
+                    problems = self.problems(path, mutated_text)
+                    self.assertTrue(any(f"job '{name}'" in p and path in p for p in problems), problems)
+                    checked += 1
+        self.assertGreaterEqual(checked, 25, "every capped job in every workflow is exercised")
+
+    def test_reusable_workflow_callers_are_checked_through_their_called_workflow(self):
+        release = self.files()[".github/workflows/release.yml"]
+        callers = [n for n, j in parity.jobs_section(release).items() if parity.CALLER_LINE.search(j)]
+        self.assertEqual(sorted(callers), ["custom-release-main-recheck", "custom-release-plan-authority",
+                                           "custom-release-post-announce"])
+        self.assertEqual(self.problems(".github/workflows/release.yml", release), [])
+        for called in ("release-main-recheck", "release-plan-authority", "release-post-announce"):
+            text = self.files()[f".github/workflows/{called}.yml"]
+            self.assertEqual(len(parity.jobs_section(text)), 1)
+            self.assertEqual(self.problems(called, text), [])
+            self.assertTrue(self.problems(called, text.replace("    timeout-minutes: 10\n", "")))
+
+    CALLER = "name: x\non: push\njobs:\n  call:\n    uses: {target}\n"
+    BOUNDED = "on: workflow_call\njobs:\n  one:\n    timeout-minutes: 5\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n"
+    UNBOUNDED = BOUNDED.replace("    timeout-minutes: 5\n", "")
+
+    def caller_problems(self, target: str, callee_files: dict[str, str] | None = None) -> list[str]:
+        """Check a one-job caller of `target` against a scratch tree holding `callee_files`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / "scripts").mkdir()
+            for name, text in (callee_files or {}).items():
+                (root / name).write_text(text)
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                return parity.timeout_problems(self.CALLER.format(target=target), "caller.yml")
+            finally:
+                parity.ROOT = original
+
+    def test_a_caller_is_exempt_only_when_it_calls_a_bounded_local_workflow(self):
+        ok = {".github/workflows/ok.yml": self.BOUNDED}
+        self.assertEqual(self.caller_problems("./.github/workflows/ok.yml", ok), [])
+        self.assertEqual(self.caller_problems("'./.github/workflows/ok.yml'  # bounded", ok), [])
+
+        remote = self.caller_problems("some-org/some-repo/.github/workflows/ci.yml@v1")
+        self.assertTrue(any("job 'call' in caller.yml" in p and "cannot open and bound" in p for p in remote), remote)
+        outside = self.caller_problems("./scripts/hang.yml", {"scripts/hang.yml": self.UNBOUNDED})
+        self.assertTrue(any("./scripts/hang.yml" in p for p in outside), outside)
+        pinned = self.caller_problems("./.github/workflows/ok.yml@main", ok)
+        self.assertTrue(pinned, "a local path with a ref is not a local call")
+        sideways = self.caller_problems("./.github/workflows/../../scripts/hang.yml", {"scripts/hang.yml": self.BOUNDED})
+        self.assertTrue(sideways, "a path that climbs out of .github/workflows is refused")
+        missing = self.caller_problems("./.github/workflows/gone.yml")
+        self.assertTrue(missing, "a callee that does not exist cannot be shown bounded")
+
+        hang = self.caller_problems("./.github/workflows/hang.yml", {".github/workflows/hang.yml": self.UNBOUNDED})
+        self.assertTrue(any("job 'call' in caller.yml" in p and "job 'one' in .github/workflows/hang.yml" in p
+                            for p in hang), hang)
+
+        loop = self.caller_problems("./.github/workflows/loop.yml", {
+            ".github/workflows/loop.yml": self.CALLER.format(target="./.github/workflows/loop.yml")})
+        self.assertTrue(any("calls itself again" in p for p in loop), loop)
+
+    def test_the_adopter_template_exempts_only_its_named_jobs(self):
+        path = "assets/base/ci/codeflow-ci.yml"
+        text = self.files()[path]
+        self.assertEqual(self.problems(path, text), [])
+        self.assertTrue(self.problems(path, text.replace("    timeout-minutes: 30\n", "", 1)))
+        self.assertTrue(parity.timeout_problems(text), "without the exemptions the unbounded jobs are named")
+        stale = parity.timeout_problems("jobs:\n  other:\n    timeout-minutes: 5\n", path, {"gates": "x"})
+        self.assertTrue(any("exempts job 'gates'" in p for p in stale), stale)
+
+    def test_a_new_workflow_without_timeouts_is_found_and_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / ".github" / "workflows" / "nightly.yml").write_text(
+                "name: nightly\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+            (root / "assets" / "base" / "ci" / "bitbucket-pipelines.yml").write_text("pipelines:\n  default: []\n")
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                self.assertEqual([p.as_posix() for p in parity.workflow_files()], [".github/workflows/nightly.yml"])
+                problems = parity.all_timeout_problems()
+            finally:
+                parity.ROOT = original
+        self.assertTrue(any("job 'build' in .github/workflows/nightly.yml" in p for p in problems), problems)
+
+    def test_the_dist_config_must_allow_the_hand_added_release_timeouts(self):
+        self.assertEqual(parity.dist_problems(), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "dist-workspace.toml"
+            for body in ('[dist]\nci = "github"\n', '[dist]\nallow-dirty = ["msi"]\n'):
+                config.write_text(body)
+                self.assertTrue(any("allow-dirty" in p for p in parity.dist_problems(config)), body)
+            # A string is not the list cargo-dist honors, and `in` on a string
+            # is a substring test.
+            for body in ('[dist]\nallow-dirty = "ci"\n', '[dist]\nallow-dirty = "preci"\n',
+                         '[dist]\nallow-dirty = ["preci"]\n', '[dist]\nallow-dirty = 5\n',
+                         '[dist]\nallow-dirty = []\n'):
+                config.write_text(body)
+                self.assertTrue(any("allow-dirty" in p for p in parity.dist_problems(config)), body)
+            config.write_text('[dist]\nallow-dirty = ["ci"]\n')
+            self.assertEqual(parity.dist_problems(config), [])
+            config.write_text('[dist]\nallow-dirty = ["msi", "ci"]\n')
+            self.assertEqual(parity.dist_problems(config), [])
+
+
+class JobHeaderControls(unittest.TestCase):
+    """TSK-254 review: a job GitHub runs must never be skipped by the line
+    reader. A header with a trailing comment or a quoted id is a job, and a
+    line at the job indent that is not a header is refused, not read past."""
+
+    PAGES = ".github/workflows/portal-pages.yml"
+    RELEASE = ".github/workflows/release.yml"
+    CI = ".github/workflows/codeflow-ci.yml"
+
+    def files(self) -> dict[str, str]:
+        return {path.as_posix(): (parity.ROOT / path).read_text() for path in parity.workflow_files()}
+
+    def problems(self, path: str, text: str) -> list[str]:
+        return parity.timeout_problems(text, path, parity.UNBOUNDED_BY_DESIGN.get(path))
+
+    def drop_timeout(self, text: str, job: str, header: str | None = None) -> str:
+        """`text` with the job's header rewritten as `header` and its timeout removed."""
+        body = parity.jobs_section(text)[job]
+        line = next(l for l in body.splitlines() if parity.TIMEOUT_KEY.match(l))
+        mutated = text.replace(f"  {job}:\n" + body, (header or f"  {job}:") + "\n" + body.replace(line + "\n", "", 1), 1)
+        self.assertNotEqual(mutated, text)
+        return mutated
+
+    def test_the_reviewers_three_mutations_name_the_unbounded_job(self):
+        files = self.files()
+        nightly = (files[self.PAGES].rstrip("\n")
+                   + "\n\n  nightly: # weekly\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n")
+        cases = {
+            "nightly appended with a trailing comment": (self.PAGES, nightly, "nightly"),
+            "plan header with a comment, timeout deleted": (
+                self.RELEASE, self.drop_timeout(files[self.RELEASE], "plan", "  plan: # first job"), "plan"),
+            "secret-scan header with a comment, timeout deleted": (
+                self.CI, self.drop_timeout(files[self.CI], "secret-scan", "  secret-scan: # scan"), "secret-scan"),
+        }
+        for name, (path, text, job) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.problems(path, files[path]), [])
+                found = self.problems(path, text)
+                self.assertTrue(any(f"job '{job}'" in p and "timeout-minutes" in p for p in found), found)
+
+    def test_a_quoted_job_id_is_a_job(self):
+        files = self.files()
+        for header in ('  "plan":', "  'plan':", '  "plan": # quoted'):
+            with self.subTest(header=header):
+                kept = files[self.RELEASE].replace("  plan:\n", header + "\n", 1)
+                self.assertIn("plan", parity.jobs_section(kept))
+                self.assertEqual(self.problems(self.RELEASE, kept), [], "a bounded quoted job passes")
+                found = self.problems(self.RELEASE, self.drop_timeout(files[self.RELEASE], "plan", header))
+                self.assertTrue(any("job 'plan'" in p and "timeout-minutes" in p for p in found), found)
+
+    def test_a_commented_out_header_cannot_hide_its_job(self):
+        """The body of `# plan:` folds into the job above, or under no job,
+        and repeats keys the job above already has."""
+        files = self.files()
+        for path, job in ((self.RELEASE, "plan"), (self.CI, "secret-scan")):
+            with self.subTest(job=job):
+                found = self.problems(path, self.drop_timeout(files[path], job, f"  # {job}:"))
+                self.assertTrue(any("repeats the key" in p or "under no job" in p for p in found), found)
+
+    def test_a_line_at_the_job_indent_that_is_not_a_header_is_refused(self):
+        base = "jobs:\n  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        for line in ("  nightly: {runs-on: ubuntu-latest}", "  nightly:#weekly", "  nightly: &anchor",
+                     "  - nightly:", "  ? nightly", "  night.ly:", '  "night ly":', "  nightly"):
+            with self.subTest(line=line):
+                found = parity.timeout_problems(base + line + "\n    runs-on: x\n")
+                self.assertTrue(any("is not a job id" in p for p in found), found)
+        found = parity.timeout_problems(base + " stray:\n")
+        self.assertTrue(any("job ids are indented two spaces" in p for p in found), found)
+        found = parity.timeout_problems(base + "\t  nightly:\n")
+        self.assertTrue(any("tab" in p for p in found), found)
+        found = parity.timeout_problems("jobs:\n    ok:\n      timeout-minutes: 5\n")
+        self.assertTrue(any("under no job id" in p for p in found), found)
+        self.assertEqual(parity.timeout_problems(base + "\n  # a comment\n\n"), [])
+
+    def test_a_repeated_job_or_top_level_jobs_key_is_refused(self):
+        job = "  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        found = parity.timeout_problems("jobs:\n" + job + job)
+        self.assertTrue(any("declared twice" in p for p in found), found)
+        found = parity.timeout_problems("jobs:\n" + job + "jobs:\n" + job)
+        self.assertTrue(any("more than one top-level `jobs:`" in p for p in found), found)
+        self.assertEqual(parity.timeout_problems("jobs: # all\n" + job), [])
+        self.assertEqual(parity.timeout_problems("jobs:\n" + job + "env:\n  a: b\n"), [])
+
+    def test_keys_under_a_job_are_read_or_refused(self):
+        job = "jobs:\n  ok:\n    timeout-minutes: 5\n    runs-on: x\n"
+        cases = {
+            "a repeated key": job + "    runs-on: y\n",
+            "a sequence at the key indent": job + "    - run: true\n",
+            "a flow mapping line": job + "    {a: b}\n",
+            "a key indented three spaces": job + "   steps:\n",
+            "inline steps": job + "    steps: [{run: true}]\n",
+            "a quoted step key": job + '    steps:\n      - "run": true\n',
+            "a quoted second step key": job + "    steps:\n      - name: x\n        'uses': ./a\n",
+            "a second timeout": job + "    timeout-minutes: 6\n",
+            "a quoted timeout key": job.replace("    timeout-minutes: 5\n", '    "timeout-minutes": 5\n'),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.assertTrue(parity.timeout_problems(text), name)
+        self.assertEqual(parity.timeout_problems(job + "    steps: # block\n      - run: true\n"), [])
+        self.assertEqual(parity.timeout_problems(job.replace("5\n", "5 # sized from the runs\n", 1)), [])
+
+    def test_a_column_zero_comment_does_not_end_a_job(self):
+        windows = "      - name: Install nextest\n        uses: taiki-e/install-action"
+        self.assertEqual(WORKFLOW.count(windows), 1)
+        step = "      - name: Install Playwright\n        run: npx playwright-core install\n"
+        for comment in ("# note", "#"):
+            with self.subTest(comment=comment):
+                found = parity.playwright_problems(WORKFLOW.replace(windows, f"{comment}\n" + step + windows))
+                self.assertTrue(any("job 'windows-tests'" in p and "Playwright step" in p for p in found), found)
+
+    def test_a_quoted_setup_node_value_is_still_a_setup_node_step(self):
+        job = '      - uses: "actions/setup-node@v4"\n        with:\n          node-version: 24.18.0\n'
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + job), [("24.18.0", [])])
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + job.replace('"', "'")), [("24.18.0", [])])
+        named = job.replace("- uses", "- name: n\n        uses")
+        self.assertEqual(parity.setup_node_steps("    steps:\n" + named), [("24.18.0", [])])
+
+    def test_a_template_with_a_quoted_jobs_key_is_still_a_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".github" / "workflows").mkdir(parents=True)
+            (root / "assets" / "base" / "ci").mkdir(parents=True)
+            (root / "assets" / "base" / "ci" / "quoted.yml").write_text('"jobs":\n  a:\n    runs-on: x\n')
+            original = parity.ROOT
+            parity.ROOT = root
+            try:
+                self.assertEqual([p.as_posix() for p in parity.workflow_files()], ["assets/base/ci/quoted.yml"])
+            finally:
+                parity.ROOT = original
 
 
 if __name__ == "__main__":

@@ -145,8 +145,8 @@ pub struct CiArgs {
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
-/// `--pr-body` nor `--pr-body-file` is given (the GitHub workflow sets it from
-/// `github.event.pull_request.body`).
+/// `--pr-body` nor `--pr-body-file` is given (the GitHub policy workflow sets
+/// it from the pull request's current body, read by its `body` step).
 const PR_BODY_ENV: &str = "CODEFLOW_PR_BODY";
 
 /// A violation tagged with the commit it came from (`None` for branch-name and
@@ -440,11 +440,27 @@ pub fn run(args: &CiArgs) -> i32 {
     } else {
         Vec::new()
     };
+    // One checked tree diff decides what the body may leave out; a range
+    // that could not be listed is code (TSK-135). Asked only with a body.
+    let change = pr_body.as_ref().map(|_| {
+        base_sha.as_deref().map_or(ChangeClass::CODE, |base| {
+            let inventory = change_class::range_inventory(&root, base, &head);
+            change_class::classify(
+                inventory.as_deref(),
+                // The target side's paths come from the policy authority.
+                &change_class::project_paths(
+                    &root,
+                    authority.as_ref().map_or(base, Authority::sha),
+                ),
+            )
+        })
+    });
     let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
         pr_context,
+        change.is_some_and(|class| class.light),
         &names,
         &base_candidates,
         &head,
@@ -478,19 +494,7 @@ pub fn run(args: &CiArgs) -> i32 {
     }
     if let Some(body) = &pr_body {
         let body = adopter::supply_sections(adoption.profile.as_ref(), body);
-        // One checked tree diff decides what the body may leave out; a range
-        // that could not be listed is code (TSK-135).
-        let class = base_sha.as_deref().map_or(ChangeClass::CODE, |base| {
-            let inventory = change_class::range_inventory(&root, base, &head);
-            change_class::classify(
-                inventory.as_deref(),
-                // The target side's paths come from the policy authority.
-                &change_class::project_paths(
-                    &root,
-                    authority.as_ref().map_or(base, Authority::sha),
-                ),
-            )
-        });
+        let class = change.unwrap_or(ChangeClass::CODE);
         // The hosted workflows pass the base as a commit id, so the branch
         // the pull request merges into (`--into`, or the host's PR-target
         // environment) decides protection as much as a named base does.
@@ -599,14 +603,17 @@ fn parse_level(text: &str) -> Result<PolicyLevel, String> {
 
 /// Pull request classification (TSK-104), which needs the body, and
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
-/// range: a completion is bound to the head it lands with. Returns whether
-/// the pull request is tracked work (TSK-133's visible-workgraph check).
+/// range: a completion is bound to the head it lands with. A tracked body
+/// also names that reviewed commit in an approving Reviews row (issue 121).
+/// `light` is the range's change class. Returns whether the pull request is
+/// tracked work (TSK-133's visible-workgraph check).
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn work_checks<'a>(
     root: &Path,
     git: &GitPolicy,
     pr_body: Option<&str>,
     pr_context: bool,
+    light: bool,
     names: &Names<'_>,
     base_candidates: &'a [String],
     head: &str,
@@ -679,6 +686,16 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    if let (Some(body), Some(classification::Class::Tracked { task_id })) =
+        (pr_body, class.as_ref())
+    {
+        if let Some(violation) = review_row_check(root, git, body, head, task_id, light) {
+            tagged.push(TaggedViolation {
+                sha: None,
+                violation,
+            });
+        }
+    }
     matches!(
         class,
         Some(
@@ -686,6 +703,57 @@ fn work_checks<'a>(
                 | classification::Class::ReleaseIntegration { .. }
         )
     )
+}
+
+/// A completed task's PR body approves the commit its acceptance block binds
+/// (issue 121): a review row naming an earlier head is the approval of a
+/// head the review did not cover. The record is read at `head`; no active
+/// block means the task is still in progress, and a light range may leave
+/// the Reviews section out or record none. The row check is `review_names_revision`, the
+/// one `work claim --on` uses.
+fn review_row_check(
+    root: &Path,
+    git: &GitPolicy,
+    body: &str,
+    head: &str,
+    task_id: &str,
+    light: bool,
+) -> Option<Violation> {
+    use codeflow_core::workgraph::record_text::acceptance_blocks;
+    let path = format!("project-management/tasks/{task_id}.md");
+    let out = codeflow_core::git::command()
+        .arg("-C")
+        .arg(root)
+        .args(["show", &format!("{head}:{path}")])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let record = String::from_utf8_lossy(&out.stdout);
+    let reviewed = acceptance_blocks(&record)
+        .into_iter()
+        .filter(|block| !block.is_superseded())
+        .filter_map(|block| block.parsed.ok())
+        .next_back()?
+        .reviewed;
+    let heading = adoption::mapped_sections(git, &["Reviews".into()]).remove(0);
+    // A light range may leave Reviews out or record `None: <reason>`; a row
+    // that names any other commit is still the wrong approval.
+    if light && pr_body::reviews_record_none(body, &heading) {
+        return None;
+    }
+    if pr_body::review_names_revision(body, &heading, &reviewed) {
+        return None;
+    }
+    Some(Violation::new(
+        codeflow_core::workgraph::acceptance::BINDING_RULE,
+        git.work_records_level(),
+        format!(
+            "{task_id}'s acceptance block binds the reviewed commit {reviewed}, and the {heading} section has no row approving it"
+        ),
+        codeflow_core::remedy::REVIEW_ROW_BINDING.with(&[("sha", &reviewed)]),
+    ))
 }
 
 /// The durable-record rows of the dispatch, in their append-only order

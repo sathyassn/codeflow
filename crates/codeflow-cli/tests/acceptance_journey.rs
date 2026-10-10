@@ -140,7 +140,10 @@ fn body(root: &Path, task: &str) -> String {
         .replace("- Coverage:", "- Coverage: not measured for this journey")
         .replace("- New tests:", "- New tests: none")
         .replace("- Not tested:", "- Not tested: Windows")
-        .replace("|  |  |  |", "| Reviewer | HEAD | approved |")
+        .replace(
+            "|  |  |  |",
+            &review_rows(root, "HEAD", "| Reviewer | HEAD | approved |"),
+        )
         .replace(
             "- Impact: `none | patch | minor | major`",
             "- Impact: minor",
@@ -1123,4 +1126,33 @@ fn a_push_and_its_pull_request_reach_the_same_journey_verdict() {
     let (pushed, said) = push(&root, &["origin", branch]);
     assert!(pushed, "the push with a journey was refused:\n{said}");
     assert!(!said.contains("work.journey_criterion"), "{said}");
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
 }

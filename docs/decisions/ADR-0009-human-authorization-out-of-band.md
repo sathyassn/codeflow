@@ -170,3 +170,12 @@ that did not exist. The env-var human override and the rest of this decision
 are unchanged. A policy file that still has the key loads with one
 deprecation warning, and `codeflow update` removes it. A future out-of-band
 factor needs its own ADR and key.
+
+## Note (2026-10-08)
+
+The repo-specific caveat in the 2026-07-03 note, that remote branch protection
+is unavailable on this repo, described the private, Free-plan repository at
+the time. The repository is public and `main` now requires a pull request, the
+CI checks and an up-to-date branch, so ADR-0081 is the current rule. The
+human-merge discipline still applies. (Append-only note; the text above is
+unchanged.)

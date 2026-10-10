@@ -85,12 +85,11 @@ each batch.
   its finder; a nit gets one disposition and never blocks. Review ends on
   evidence, never on a round count.
 - **The primary** assembles reviewed heads into a small batch candidate in
-  dependency order and inspects the resolved hunks and seams on product paths.
+  dependency order and inspects each landing merge.
   - It runs the full gate once on that exact candidate.
-  - The other lineage
-    reviews the integration effects only when the primary hand-resolved a
-    product hunk or two tasks touched one hotspot. Unit reviews are not
-    repeated.
+  - A clean merge does not reopen unit review; a
+    hand-resolved product hunk returns its task to a whole-unit review at its
+    new head.
   - Green moves the integration line. Red is diagnosed first, and a
     member leaves the batch only when evidence attributes the failure to it.
   - When the last batch has landed, the primary proves the epic once on the
@@ -101,7 +100,14 @@ each batch.
 
 - A standalone pull request is its own candidate. It lands on the integration
   line it targets, or, when it targets `main`, it is the pull request the
-  operator merges.
+  operator merges. Its required checks count only when they ran on the
+  current tip of `main`; under ADR-0081 the `main` ruleset requires an
+  up-to-date branch, so a pull request that is behind is updated first. A
+  clean update leaves a completed task's acceptance block standing only when
+  the pull request did not reopen its task; a hand-resolved update
+  invalidates it, and a pull request that reopened its task inside its own
+  range needs a new review and a new binding after the update (SPC-013 R-60,
+  R-119).
 - A later task may build on a predecessor's exact reviewed head before that
   predecessor lands, named with `--on TSK-NNN@<sha>`. The predecessor still
   lands first, and a change to it after review means a rebase and a recheck.
@@ -121,7 +127,7 @@ or CI runs.**
 |---|---|---|
 | Start | The task record exists and is anchored: in the epic's planning change, or, for a standalone task, at head on its own branch. Code predecessors are complete, or reviewed and pinned with `--on TSK-NNN@<sha>` | `codeflow work claim`, `codeflow work start`; CI applies the same read-only check once per pull request |
 | Pull request | A `Task:` line names the task (`Task: TSK-NNN`), or the epic for the breakdown PR and the PR into `main` (`Task: EPC-NNN`); a planning amendment names every epic it changes (`Task: EPC-001, EPC-002`). A pull request that names neither is refused, whatever it touches | `codeflow ci` |
-| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Every other record's criteria stay frozen | `codeflow ci` |
+| Criteria | The task may change its own criteria, and CI prints the change for the reviewer. Every other record's criteria stay frozen, except that a pull request of planning records only that names a completed standalone task, or its follow-up, may correct the wording of that task's criteria, keeping every criterion and tag (ADR-0080) | `codeflow ci` |
 | Evidence | The builder cites targeted tests and the quick gate (`codeflow test --mode quick`) with revision and command. The pull request stays a draft until its evidence exists | The reviewer |
 | Review | Every criterion not marked deferred has evidence on the reviewed revision, the needed checks are green, no material finding is open and every nit has a disposition | The other-lineage reviewer |
 | Landing | Each completion is bound to its reviewed commit. A merge from the first-parent line of the target tip the run is judged against (CI's base, never a local branch), whose recorded result equals the conflict-free automatic merge of its parents, keeps the binding, so the builder can take a moved target without a new review; any other later change unbinds it. Predecessors are complete at the merge base | `codeflow ci`, `codeflow task status complete` |

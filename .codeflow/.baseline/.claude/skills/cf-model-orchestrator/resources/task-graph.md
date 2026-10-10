@@ -134,7 +134,9 @@ the line does not name (ADR-0078). It lands once on `main`, and each
 integration line takes it by merging `main`.
 
 A task's own criteria change rides in its own PR, where CI prints the change
-for the reviewer.
+for the reviewer. A completed standalone task's criteria wording is corrected
+by a PR of planning records only that names the task or its follow-up,
+keeping every criterion and tag (ADR-0080).
 
 These remain execution evidence inside the approved graph:
 

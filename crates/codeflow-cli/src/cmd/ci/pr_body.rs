@@ -386,6 +386,32 @@ pub(crate) fn review_names_revision(body: &str, heading: &str, sha: &str) -> boo
         })
 }
 
+/// The Reviews section records no review: it names no commit and has no
+/// approving row, as `None: <reason>` does. Absent counts too.
+pub(crate) fn reviews_record_none(body: &str, heading: &str) -> bool {
+    let outline = sections(body);
+    let matching = matching_sections(&outline, heading);
+    let [section] = matching.as_slice() else {
+        return matching.is_empty();
+    };
+    let text = rendered_text(section.content(), false, false);
+    let names_commit = text
+        .split(|c: char| !c.is_ascii_hexdigit())
+        .any(|token| token.len() >= 7 && token.bytes().any(|b| b.is_ascii_digit()));
+    let approves = text.lines().any(|line| {
+        line.split('|')
+            .map(str::trim)
+            .rfind(|cell| !cell.is_empty())
+            .is_some_and(|verdict| {
+                matches!(
+                    verdict.to_ascii_lowercase().as_str(),
+                    "approved" | "approve"
+                )
+            })
+    });
+    !names_commit && !approves
+}
+
 /// A body over this many words draws the length warning (TSK-228).
 const BODY_WORD_LIMIT: usize = 1000;
 

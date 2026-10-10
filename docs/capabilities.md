@@ -266,15 +266,15 @@ area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
 epics: [EPC-001, EPC-002, EPC-003, EPC-020]
-adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
+adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054, ADR-0081]
 ```
 
 - `codeflow remote protect` applies the policy's `protected_branches` to the
-  provider. On GitHub it requires a PR and green CI, blocks force-push and
-  deletion, and reports anything the plan tier cannot apply.
-- `codeflow doctor` runs twenty-one health checks. They cover git hooks and CI,
-  harness wiring, policy and config, delegates and models, the repository and
-  managed files, and customization and test config.
+  provider. On GitHub it requires a PR and the required checks on an
+  up-to-date branch, blocks force-push and deletion, and reports anything
+  the plan tier cannot apply.
+- `codeflow doctor` runs twenty-two health checks on the repository and the
+  tools around it, including the default branch's host rules.
 
 | Doctor check | Reports |
 |---|---|
@@ -500,7 +500,7 @@ The work records a plan produces are judged by one core (SPC-013):
 | Work record rule | Behaviour |
 |---|---|
 | Planning anchor | `codeflow work start` checks the anchor of the task the branch carries on any work prefix except `plan/` and `integration/`: the epic's planning change, or the record at head for a standalone task whose record arrives in its own pull request; CI applies the same read-only merge-base check once per pull request, and the per-commit hook no longer does. Both report at the `git.work_planning` level, `block` by default or `warn`. A reviewed but incomplete predecessor is accepted only through `--on TSK-NNN@<sha>` |
-| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer |
+| Pull request class | with tracking on, `codeflow ci` classifies every pull request as tracked, a planning amendment of the epics its `Task:` line names (records, plans, docs and the `AGENTS.md` project section, ADR-0078), an epic's integration line or an automation profile; one that names no task and no epic is refused, and a task may change only its own criteria, which CI prints for the reviewer, or, in a range of planning records only, the wording of a completed standalone task's criteria when it names that task or its follow-up (ADR-0080) |
 | Readiness | one readiness core judges a task for `work next`, `work claim`, `work start`, `status`, `orient` and CI |
 | Claim scope | local branches, `origin`, the target's fetch remote and `git.claim_remotes` count as advisory claims; branches on other remotes remain information in `work next` and `work claim`, without making a task active or conflicting |
 | Record status | `task status`, `epic status` and `spec status` move records only by legal transitions; the same judge rules on hand edits (`validate --docs --since <ref>`) and on each record a pull request changes |

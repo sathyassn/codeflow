@@ -1,9 +1,10 @@
 ## Research, analysis and planning runs
 
 A research or analysis run fills no implementation field. Its output is
-recorded in its task: the question, the scope, the sources read, the claims
-with the evidence behind each, the remaining uncertainties, and the settled
-finding. A planning-only run describes the future implementation rather than
+recorded in its task: the question, the scope as briefed and as widened with
+why, the sources read, the claims with the evidence behind each, the evidence
+sought that would have broken the finding, the remaining uncertainties, and
+the settled finding. A planning-only run describes the future implementation rather than
 work performed in the current run. Never imply that proposed evidence was
 executed evidence.
 

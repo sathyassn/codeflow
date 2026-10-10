@@ -304,7 +304,20 @@ fn standalone_allocation_claim_start_complete_and_ci_is_one_pr() {
         root,
         &["commit", "-qm", "docs: complete standalone outcome"],
     );
-    succeeds(&cli(root, &["ci", "--base", "main", "--branch", &branch, "--pr-body", "Task: TSK-003\n## Summary\nDeliver the bounded fix.\n\n- the fix\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows."], None));
+    let completed = with_reviews(root, "HEAD", "Task: TSK-003\n## Summary\nDeliver the bounded fix.\n\n- the fix\n## Changes\n- Implement the fix.\n## Testing\nNot tested: Windows.");
+    succeeds(&cli(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--branch",
+            &branch,
+            "--pr-body",
+            &completed,
+        ],
+        None,
+    ));
     assert!(!cli(root, &["work", "start", "TSK-003"], None)
         .status
         .success());
@@ -415,7 +428,7 @@ fn base_checkout_ci_admits_the_standalone_route_and_a_task_pr() {
                 "--branch",
                 branch,
                 "--pr-body",
-                &body(id),
+                &with_reviews(root, head, &body(id)),
             ],
             None,
         );
@@ -1434,4 +1447,44 @@ fn a_successor_name_in_other_bytes_refuses_the_journey_rule() {
     let shown = text(&out);
     assert!(!out.status.success(), "the name passed:\n{shown}");
     assert!(shown.contains("not UTF-8"), "{shown}");
+}
+
+/// One approving Reviews row for the whole unit at each commit an acceptance
+/// block at `rev` binds (issue 121), or `fallback` when none is bound.
+fn review_rows(root: &Path, rev: &str, fallback: &str) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "grep",
+            "-h",
+            "-o",
+            "-E",
+            "reviewed: [0-9a-f]{40}",
+            rev,
+            "--",
+            "project-management",
+        ])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let rows: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().last())
+        .map(|sha| format!("| Reviewer | whole unit at {sha} | approved |"))
+        .collect();
+    if rows.is_empty() {
+        fallback.to_string()
+    } else {
+        rows.join("\n")
+    }
+}
+
+/// `body` with a Reviews section approving each bound commit at `rev`,
+/// unless it already has one or nothing is bound.
+fn with_reviews(root: &Path, rev: &str, body: &str) -> String {
+    let rows = review_rows(root, rev, "");
+    if rows.is_empty() || body.contains("## Reviews") {
+        body.to_string()
+    } else {
+        format!("{body}\n\n## Reviews\n\n| Reviewer | Scope | Verdict |\n|---|---|---|\n{rows}\n")
+    }
 }

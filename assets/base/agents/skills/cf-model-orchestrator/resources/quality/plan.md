@@ -16,6 +16,10 @@ APPROVALS: <each seat and the plan version it approved>
 SETTLED_DISSENT: <none | item | both verdicts | evidence | why reversible>
 ```
 
+`TEST_PLAN` names the cases that carry the risk, the reachable scenario
+classes left untested with the reason, any selected technique with its
+trigger, and whether a path meets the performance trigger.
+
 Approvals name the version they approve. The plan is approved once, for its
 shape; a later change needs fresh approval only when it changes the outcome,
 a cross-task interface, the dependency graph or a safety boundary.
